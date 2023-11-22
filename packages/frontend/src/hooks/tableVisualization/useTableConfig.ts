@@ -2,6 +2,7 @@ import {
     ApiQueryResults,
     ColumnProperties,
     ConditionalFormattingConfig,
+    DashboardFilters,
     Explore,
     getItemLabel,
     getItemMap,
@@ -17,6 +18,10 @@ import {
 import { createWorkerFactory, useWorker } from '@shopify/react-web-worker';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { TableColumn, TableHeader } from '../../components/common/Table/types';
+import {
+    getCalculationColumnFields,
+    useCalculateTotal,
+} from '../useCalculateTotal';
 import { isSummable } from '../useColumnTotals';
 import getDataAndColumns from './getDataAndColumns';
 
@@ -31,6 +36,9 @@ const useTableConfig = (
     columnOrder: string[],
     pivotDimensions: string[] | undefined,
     pivotTableMaxColumnLimit: number,
+    savedChartUuid?: string,
+    dashboardFilters?: DashboardFilters,
+    invalidateCache?: boolean,
 ) => {
     const [showColumnCalculation, setShowColumnCalculation] = useState<boolean>(
         !!tableChartConfig?.showColumnCalculation,
@@ -157,6 +165,26 @@ const useTableConfig = (
         pivotDimensions &&
         pivotDimensions.length > 0;
 
+    const metricsWithTotals = useMemo(() => {
+        if (!selectedItemIds) return [];
+        if (tableChartConfig?.showColumnCalculation === false) return [];
+        return getCalculationColumnFields(selectedItemIds, itemsMap);
+    }, [itemsMap, selectedItemIds, tableChartConfig?.showColumnCalculation]);
+
+    const { data: totalCalculations } = useCalculateTotal(
+        savedChartUuid
+            ? {
+                  savedChartUuid,
+                  fields: metricsWithTotals,
+                  dashboardFilters: dashboardFilters,
+                  invalidateCache,
+              }
+            : {
+                  metricQuery: resultsData?.metricQuery,
+                  explore: explore?.baseTable,
+                  fields: metricsWithTotals,
+              },
+    );
     const { rows, columns, error } = useMemo<{
         rows: ResultRow[];
         columns: Array<TableColumn | TableHeader>;
@@ -185,6 +213,7 @@ const useTableConfig = (
             getFieldLabelOverride,
             isColumnFrozen,
             columnOrder,
+            totalsFromWarehouse: totalCalculations,
         });
     }, [
         columnOrder,
@@ -196,6 +225,7 @@ const useTableConfig = (
         showTableNames,
         isColumnFrozen,
         getFieldLabelOverride,
+        totalCalculations,
     ]);
     const worker = useWorker(createWorker);
     const [pivotTableData, setPivotTableData] = useState<{
@@ -336,7 +366,7 @@ const useTableConfig = (
         [],
     );
 
-    const validTableConfig: TableChart = useMemo(
+    const validConfig: TableChart = useMemo(
         () => ({
             showColumnCalculation,
             showRowCalculation,
@@ -362,7 +392,7 @@ const useTableConfig = (
     return {
         selectedItemIds,
         columnOrder,
-        validTableConfig,
+        validConfig,
         showColumnCalculation,
         setShowColumnCalculation,
         showRowCalculation,

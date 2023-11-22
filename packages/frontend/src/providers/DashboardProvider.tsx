@@ -1,5 +1,6 @@
 import {
     ApiError,
+    applyDimensionOverrides,
     CacheMetadata,
     compressDashboardFiltersToParam,
     convertDashboardFiltersParamToDashboardFilters,
@@ -10,6 +11,8 @@ import {
     FilterableField,
     isDashboardChartTileType,
     SavedChartsInfoForDashboardAvailableFilters,
+    SchedulerFilterRule,
+    SortField,
 } from '@lightdash/common';
 import { min } from 'lodash-es';
 import React, {
@@ -30,7 +33,6 @@ import {
     useDashboardsAvailableFilters,
 } from '../hooks/dashboard/useDashboard';
 import {
-    applyDimensionOverrides,
     hasSavedFiltersOverrides,
     useSavedDashboardFiltersOverrides,
 } from '../hooks/useSavedDashboardFiltersOverrides';
@@ -38,6 +40,7 @@ import {
 const emptyFilters: DashboardFilters = {
     dimensions: [],
     metrics: [],
+    tableCalculations: [],
 };
 
 type DashboardContext = {
@@ -62,6 +65,7 @@ type DashboardContext = {
         filter: DashboardFilterRule,
         index: number,
         isTemporary: boolean,
+        isEditMode: boolean,
     ) => void;
     removeDimensionDashboardFilter: (
         index: number,
@@ -81,11 +85,15 @@ type DashboardContext = {
     allFilterableFields: FilterableField[] | undefined;
     filterableFieldsByTileUuid: Record<string, FilterableField[]> | undefined;
     hasChartTiles: boolean;
+    chartSort: Record<string, SortField[]>;
+    setChartSort: (sort: Record<string, SortField[]>) => void;
 };
 
 const Context = createContext<DashboardContext | undefined>(undefined);
 
-export const DashboardProvider: React.FC = ({ children }) => {
+export const DashboardProvider: React.FC<{
+    schedulerFilters?: SchedulerFilterRule[] | undefined;
+}> = ({ schedulerFilters, children }) => {
     const { search, pathname } = useLocation();
     const history = useHistory();
 
@@ -93,8 +101,30 @@ export const DashboardProvider: React.FC = ({ children }) => {
         dashboardUuid: string;
     }>();
 
-    const { data: dashboard, error: dashboardError } =
-        useDashboardQuery(dashboardUuid);
+    const { data: dashboard, error: dashboardError } = useDashboardQuery(
+        dashboardUuid,
+        {
+            select: (d) => {
+                if (schedulerFilters) {
+                    const overriddenDimensions = applyDimensionOverrides(
+                        d.filters,
+                        schedulerFilters,
+                        true,
+                    );
+
+                    return {
+                        ...d,
+                        filters: {
+                            ...d.filters,
+                            dimensions: overriddenDimensions,
+                        },
+                    };
+                }
+                return d;
+            },
+        },
+    );
+
     const [dashboardTiles, setDashboardTiles] = useState<Dashboard['tiles']>();
 
     const [haveTilesChanged, setHaveTilesChanged] = useState<boolean>(false);
@@ -109,6 +139,8 @@ export const DashboardProvider: React.FC = ({ children }) => {
     const [resultsCacheTimes, setResultsCacheTimes] = useState<Date[]>([]);
 
     const [invalidateCache, setInvalidateCache] = useState<boolean>(false);
+
+    const [chartSort, setChartSort] = useState<Record<string, SortField[]>>({});
 
     const {
         overridesForSavedDashboardFilters,
@@ -210,13 +242,13 @@ export const DashboardProvider: React.FC = ({ children }) => {
             dashboard?.filters &&
             hasSavedFiltersOverrides(overridesForSavedDashboardFilters)
         ) {
-            setDashboardFilters({
-                ...dashboard.filters,
+            setDashboardFilters((prevFilters) => ({
+                ...prevFilters,
                 dimensions: applyDimensionOverrides(
-                    dashboard.filters,
+                    prevFilters,
                     overridesForSavedDashboardFilters,
                 ),
-            });
+            }));
         }
     }, [dashboard?.filters, overridesForSavedDashboardFilters]);
 
@@ -307,6 +339,10 @@ export const DashboardProvider: React.FC = ({ children }) => {
                 ...dashboardFilters.metrics,
                 ...dashboardTemporaryFilters?.metrics,
             ],
+            tableCalculations: [
+                ...dashboardFilters.tableCalculations,
+                ...dashboardTemporaryFilters?.tableCalculations,
+            ],
         };
     }, [dashboardFilters, dashboardTemporaryFilters]);
 
@@ -327,6 +363,7 @@ export const DashboardProvider: React.FC = ({ children }) => {
             setFunction((previousFilters) => ({
                 dimensions: [...previousFilters.dimensions, filter],
                 metrics: previousFilters.metrics,
+                tableCalculations: previousFilters.tableCalculations,
             }));
             setHaveFiltersChanged(true);
         },
@@ -334,34 +371,45 @@ export const DashboardProvider: React.FC = ({ children }) => {
     );
 
     const updateDimensionDashboardFilter = useCallback(
-        (item: DashboardFilterRule, index: number, isTemporary: boolean) => {
+        (
+            item: DashboardFilterRule,
+            index: number,
+            isTemporary: boolean,
+            isEditMode: boolean,
+        ) => {
             const setFunction = isTemporary
                 ? setDashboardTemporaryFilters
                 : setDashboardFilters;
 
+            const isFilterSaved = dashboard?.filters.dimensions.some(
+                ({ id }) => id === item.id,
+            );
+
             setFunction((previousFilters) => {
                 if (!isTemporary) {
-                    const hasChanged = hasSavedFilterValueChanged(
-                        previousFilters.dimensions[index],
-                        item,
-                    );
-
-                    const isReverted =
-                        originalDashboardFilters.dimensions[index] &&
-                        !hasSavedFilterValueChanged(
-                            originalDashboardFilters.dimensions[index],
-                            item,
-                        );
-
-                    if (hasChanged) {
-                        addSavedFilterOverride(item);
-                    }
-
-                    if (isReverted) {
+                    if (isEditMode) {
                         removeSavedFilterOverride(item);
+                    } else {
+                        const isReverted =
+                            originalDashboardFilters.dimensions[index] &&
+                            !hasSavedFilterValueChanged(
+                                originalDashboardFilters.dimensions[index],
+                                item,
+                            );
+                        if (isReverted) {
+                            removeSavedFilterOverride(item);
+                        } else {
+                            const hasChanged = hasSavedFilterValueChanged(
+                                previousFilters.dimensions[index],
+                                item,
+                            );
+
+                            if (hasChanged && isFilterSaved) {
+                                addSavedFilterOverride(item);
+                            }
+                        }
                     }
                 }
-
                 return {
                     dimensions: [
                         ...previousFilters.dimensions.slice(0, index),
@@ -369,12 +417,14 @@ export const DashboardProvider: React.FC = ({ children }) => {
                         ...previousFilters.dimensions.slice(index + 1),
                     ],
                     metrics: previousFilters.metrics,
+                    tableCalculations: previousFilters.tableCalculations,
                 };
             });
             setHaveFiltersChanged(true);
         },
         [
             addSavedFilterOverride,
+            dashboard?.filters.dimensions,
             originalDashboardFilters.dimensions,
             removeSavedFilterOverride,
         ],
@@ -388,6 +438,7 @@ export const DashboardProvider: React.FC = ({ children }) => {
             setFunction((previousFilters) => ({
                 dimensions: previousFilters.dimensions,
                 metrics: [...previousFilters.metrics, filter],
+                tableCalculations: previousFilters.tableCalculations,
             }));
             setHaveFiltersChanged(true);
         },
@@ -411,6 +462,7 @@ export const DashboardProvider: React.FC = ({ children }) => {
                         ...previousFilters.dimensions.slice(index + 1),
                     ],
                     metrics: previousFilters.metrics,
+                    tableCalculations: previousFilters.tableCalculations,
                 };
             });
             setHaveFiltersChanged(true);
@@ -468,6 +520,8 @@ export const DashboardProvider: React.FC = ({ children }) => {
         filterableFieldsByTileUuid,
         allFilters,
         hasChartTiles,
+        chartSort,
+        setChartSort,
     };
     return <Context.Provider value={value}>{children}</Context.Provider>;
 };

@@ -1,3 +1,180 @@
+# [0.872.0](https://github.com/lightdash/lightdash/compare/0.871.2...0.872.0) (2023-11-22)
+
+
+### Features
+
+* improve sort ui ([#8044](https://github.com/lightdash/lightdash/issues/8044)) ([3dd2602](https://github.com/lightdash/lightdash/commit/3dd260237298348753a8fa25454b5a2927daf3c4))
+
+## [0.871.2](https://github.com/lightdash/lightdash/compare/0.871.1...0.871.2) (2023-11-22)
+
+
+### Bug Fixes
+
+* view underlying data with null pivot value ([#8028](https://github.com/lightdash/lightdash/issues/8028)) ([9eea34c](https://github.com/lightdash/lightdash/commit/9eea34c6e272691c634841d806e672921c4bc13e))
+
+## [0.871.1](https://github.com/lightdash/lightdash/compare/0.871.0...0.871.1) (2023-11-22)
+
+
+### Bug Fixes
+
+* explore search by fieldId to prioritise base table match over joined tables ([#8031](https://github.com/lightdash/lightdash/issues/8031)) ([8392b5e](https://github.com/lightdash/lightdash/commit/8392b5ee8a41a2d9523859691ead99fd74770bf4))
+
+# [0.871.0](https://github.com/lightdash/lightdash/compare/0.870.1...0.871.0) (2023-11-22)
+
+
+### Features
+
+* Add filters for table calculations ([#7846](https://github.com/lightdash/lightdash/issues/7846)) ([b4af616](https://github.com/lightdash/lightdash/commit/b4af6162dd73aaf648f548dfde424dc55e98e550))
+
+## [0.870.1](https://github.com/lightdash/lightdash/compare/0.870.0...0.870.1) (2023-11-21)
+
+
+### Bug Fixes
+
+* enable editing charts with errors ([#8022](https://github.com/lightdash/lightdash/issues/8022)) ([cc89758](https://github.com/lightdash/lightdash/commit/cc8975815156e0e37ad17ddecc7c364aeb43678f))
+
+# [0.870.0](https://github.com/lightdash/lightdash/compare/0.869.0...0.870.0) (2023-11-21)
+
+
+### Features
+
+* add send now scheduler filters to URL ([#8032](https://github.com/lightdash/lightdash/issues/8032)) ([794d5a3](https://github.com/lightdash/lightdash/commit/794d5a3a7055ae88fbf72cc1b53ccd0ae3e6e951))
+* show total column on results table ([#8030](https://github.com/lightdash/lightdash/issues/8030)) ([cb061be](https://github.com/lightdash/lightdash/commit/cb061be1e66aa2e65dc29e9b42d3d673c07a88f1))
+
+# [0.869.0](https://github.com/lightdash/lightdash/compare/0.868.2...0.869.0) (2023-11-21)
+
+
+### Features
+
+* total metrics ([#7981](https://github.com/lightdash/lightdash/issues/7981)) ([4e6abb9](https://github.com/lightdash/lightdash/commit/4e6abb9b10feed9ab935076142aa095bf563e11a))
+
+## [0.868.2](https://github.com/lightdash/lightdash/compare/0.868.1...0.868.2) (2023-11-21)
+
+
+### Bug Fixes
+
+* changing an unsaved filter won't delete it ([#8021](https://github.com/lightdash/lightdash/issues/8021)) ([012f367](https://github.com/lightdash/lightdash/commit/012f3675c78b2bafb52dbbb7fbd3e98b767b644e))
+
+## [0.868.1](https://github.com/lightdash/lightdash/compare/0.868.0...0.868.1) (2023-11-21)
+
+
+### Bug Fixes
+
+* validate email in recover password form ([#8027](https://github.com/lightdash/lightdash/issues/8027)) ([36113e8](https://github.com/lightdash/lightdash/commit/36113e8d1855b43fe135a2993722c4061ff40d3c))
+
+# [0.868.0](https://github.com/lightdash/lightdash/compare/0.867.0...0.868.0) (2023-11-21)
+
+
+### Features
+
+* can revert filters on dashboard scheduled delivery ([#8024](https://github.com/lightdash/lightdash/issues/8024)) ([f708d50](https://github.com/lightdash/lightdash/commit/f708d50ea099bbe437bfafa391327af105c56cf1))
+
+# [0.867.0](https://github.com/lightdash/lightdash/compare/0.866.0...0.867.0) (2023-11-21)
+
+
+### Features
+
+* enable dashboard scheduled delivery filters for csv export ([#7997](https://github.com/lightdash/lightdash/issues/7997)) ([fd73576](https://github.com/lightdash/lightdash/commit/fd73576734f5ae7311547d8707a5fbe387e16441))
+
+# [0.866.0](https://github.com/lightdash/lightdash/compare/0.865.5...0.866.0) (2023-11-21)
+
+
+### Features
+
+* dashboard filters with image format ([#7985](https://github.com/lightdash/lightdash/issues/7985)) ([ee92d16](https://github.com/lightdash/lightdash/commit/ee92d16ded1a3460585d21552d11b62474c14ac8))
+
+## [0.865.5](https://github.com/lightdash/lightdash/compare/0.865.4...0.865.5) (2023-11-20)
+
+
+### Bug Fixes
+
+* changing chart data requires dashboard refresh ([#7984](https://github.com/lightdash/lightdash/issues/7984)) ([eb44cb1](https://github.com/lightdash/lightdash/commit/eb44cb1ab27b9a1cfcebbe1aa8dddf5a92e42f49))
+
+## [0.865.4](https://github.com/lightdash/lightdash/compare/0.865.3...0.865.4) (2023-11-20)
+
+
+### Bug Fixes
+
+* get space access in batches along with explores on availableFilters ([#7986](https://github.com/lightdash/lightdash/issues/7986)) ([e27235e](https://github.com/lightdash/lightdash/commit/e27235eb77abb04ed91acadf2117c55b3d1d98b6))
+
+## [0.865.3](https://github.com/lightdash/lightdash/compare/0.865.2...0.865.3) (2023-11-17)
+
+
+### Bug Fixes
+
+* clicking enter adds incomplete filter value ([#7966](https://github.com/lightdash/lightdash/issues/7966)) ([e57c23a](https://github.com/lightdash/lightdash/commit/e57c23aed1293768a05d4cbc6cfd09b10e5012ec))
+
+## [0.865.2](https://github.com/lightdash/lightdash/compare/0.865.1...0.865.2) (2023-11-17)
+
+
+### Bug Fixes
+
+* fix custom dimension with width bin and table calculation ([#8010](https://github.com/lightdash/lightdash/issues/8010)) ([701ff88](https://github.com/lightdash/lightdash/commit/701ff888382ca38dc0f906fbd1c54fc83426b801))
+
+## [0.865.1](https://github.com/lightdash/lightdash/compare/0.865.0...0.865.1) (2023-11-17)
+
+
+### Bug Fixes
+
+* charts sometimes don' save to dashboards ([#8007](https://github.com/lightdash/lightdash/issues/8007)) ([4298b2d](https://github.com/lightdash/lightdash/commit/4298b2deeec14049bfa350b29c02bae1bde5a143))
+
+# [0.865.0](https://github.com/lightdash/lightdash/compare/0.864.1...0.865.0) (2023-11-17)
+
+
+### Features
+
+* add user error on chart parse failure ([#8003](https://github.com/lightdash/lightdash/issues/8003)) ([a96caaf](https://github.com/lightdash/lightdash/commit/a96caaf664816e93ccf0561e6e8f1c0843941923))
+
+## [0.864.1](https://github.com/lightdash/lightdash/compare/0.864.0...0.864.1) (2023-11-17)
+
+
+### Bug Fixes
+
+* dashboard sorting line charts ([#8005](https://github.com/lightdash/lightdash/issues/8005)) ([24f55c7](https://github.com/lightdash/lightdash/commit/24f55c7d1d8009f5ad3703e95a8f23124fe30812))
+
+# [0.864.0](https://github.com/lightdash/lightdash/compare/0.863.18...0.864.0) (2023-11-17)
+
+
+### Features
+
+* sort dashboard table ([#7957](https://github.com/lightdash/lightdash/issues/7957)) ([372b880](https://github.com/lightdash/lightdash/commit/372b880b5fd8aa2b3d283bbb115a193fbeb52c6c))
+
+## [0.863.18](https://github.com/lightdash/lightdash/compare/0.863.17...0.863.18) (2023-11-17)
+
+
+### Bug Fixes
+
+* delay on tooltips in dashboard filter results ([#7938](https://github.com/lightdash/lightdash/issues/7938)) ([53ee0a0](https://github.com/lightdash/lightdash/commit/53ee0a06a87af0f43af0a4d27a9166de1d8c743b))
+
+## [0.863.17](https://github.com/lightdash/lightdash/compare/0.863.16...0.863.17) (2023-11-16)
+
+
+### Bug Fixes
+
+* charts dashboards saved to the wrong place ([#8000](https://github.com/lightdash/lightdash/issues/8000)) ([592d3f0](https://github.com/lightdash/lightdash/commit/592d3f0bc6a0d87a7c0a587eb3c6c91ed32ac17d))
+
+## [0.863.16](https://github.com/lightdash/lightdash/compare/0.863.15...0.863.16) (2023-11-16)
+
+
+### Bug Fixes
+
+* improve ui for expired otp on VerifyEmailForm.tsx ([#7995](https://github.com/lightdash/lightdash/issues/7995)) ([2dc2742](https://github.com/lightdash/lightdash/commit/2dc274283fcf63c7b39bde2c009c8457d2e5a77a))
+
+## [0.863.15](https://github.com/lightdash/lightdash/compare/0.863.14...0.863.15) (2023-11-15)
+
+
+### Bug Fixes
+
+* drag and drop offset when reordering pie chart series ([#7968](https://github.com/lightdash/lightdash/issues/7968)) ([ed931b9](https://github.com/lightdash/lightdash/commit/ed931b9688c4df14e45df250ae087a94179c2058))
+
+## [0.863.14](https://github.com/lightdash/lightdash/compare/0.863.13...0.863.14) (2023-11-15)
+
+
+### Bug Fixes
+
+* don't show gsheets sync in schedulers list ([#7979](https://github.com/lightdash/lightdash/issues/7979)) ([8ac1818](https://github.com/lightdash/lightdash/commit/8ac1818d62ca66dc51afa1bc601bdba4e46ae54d))
+* run query stays on the right ([#7962](https://github.com/lightdash/lightdash/issues/7962)) ([23b91be](https://github.com/lightdash/lightdash/commit/23b91befacf121c3e4929721fd49f97f0964dff0))
+
 ## [0.863.13](https://github.com/lightdash/lightdash/compare/0.863.12...0.863.13) (2023-11-15)
 
 

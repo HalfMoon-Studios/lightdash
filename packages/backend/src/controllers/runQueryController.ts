@@ -6,6 +6,7 @@ import {
     CustomDimension,
     FieldId,
     MetricQuery,
+    MetricQueryRequest,
     MetricQueryResponse,
     SortField,
     TableCalculation,
@@ -43,6 +44,7 @@ type RunQueryRequest = {
     filters: {
         dimensions?: any;
         metrics?: any;
+        tableCalculations?: any;
     };
     sorts: SortField[]; // Sorts for the data
     limit: number; // Max number of rows to return from query
@@ -68,7 +70,7 @@ export class RunViewChartQueryController extends Controller {
     @Post('/explores/{exploreId}/runUnderlyingDataQuery')
     @OperationId('postRunUnderlyingDataQuery')
     async postUnderlyingData(
-        @Body() body: RunQueryRequest,
+        @Body() body: MetricQueryRequest,
         @Path() projectUuid: string,
         @Path() exploreId: string,
         @Request() req: express.Request,
@@ -110,7 +112,7 @@ export class RunViewChartQueryController extends Controller {
     @Post('/explores/{exploreId}/runQuery')
     @OperationId('RunMetricQuery')
     async runMetricQuery(
-        @Body() body: RunQueryRequest,
+        @Body() body: MetricQueryRequest,
         @Path() projectUuid: string,
         @Path() exploreId: string,
 

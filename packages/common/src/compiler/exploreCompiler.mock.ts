@@ -40,6 +40,7 @@ export const warehouseClientMock: WarehouseClient = {
                 return sql;
         }
     },
+    concatString: (...args) => `CONCAT(${args.join(', ')})`,
 };
 
 const sourceMock: Source = {
@@ -667,6 +668,7 @@ export const compiledSimpleJoinedExplore: Explore = {
             sqlOn: '${a.dim1} = ${b.dim1}',
             compiledSqlOn: '("a".dim1) = ("b".dim1)',
             type: undefined,
+            hidden: undefined,
         },
     ],
     tables: {
@@ -723,6 +725,7 @@ export const compiledSimpleJoinedExplore: Explore = {
             lineageGraph: {},
             groupLabel: undefined,
             source: sourceMock,
+            hidden: undefined,
         },
     },
 };
@@ -831,6 +834,7 @@ export const compiledJoinedExploreOverridingJoinAlias: Explore = {
             sqlOn: '${a.dim1} = ${custom_alias.dim1}',
             compiledSqlOn: '("a".dim1) = ("custom_alias".dim1)',
             type: undefined,
+            hidden: undefined,
         },
     ],
     tables: {
@@ -873,6 +877,7 @@ export const compiledJoinedExploreOverridingAliasAndLabel: Explore = {
             sqlOn: '${a.dim1} = ${custom_alias.dim1}',
             compiledSqlOn: '("a".dim1) = ("custom_alias".dim1)',
             type: undefined,
+            hidden: undefined,
         },
     ],
     tables: {
@@ -892,6 +897,49 @@ export const compiledJoinedExploreOverridingAliasAndLabel: Explore = {
                     tablesReferences: ['custom_alias'],
                 },
             },
+        },
+    },
+};
+
+export const exploreWithHiddenJoin: UncompiledExplore = {
+    ...exploreReferenceInJoin,
+    joinedTables: [
+        {
+            table: 'b',
+            sqlOn: '${a.dim1} = ${b.dim1}',
+            hidden: true,
+        },
+    ],
+};
+
+export const compiledExploreWithHiddenJoin: Explore = {
+    ...exploreReferenceInJoinCompiled,
+    joinedTables: [
+        {
+            table: 'b',
+            sqlOn: '${a.dim1} = ${b.dim1}',
+            compiledSqlOn: '("a".dim1) = ("b".dim1)',
+            type: undefined,
+            hidden: true,
+        },
+    ],
+    tables: {
+        ...exploreReferenceInJoinCompiled.tables,
+        b: {
+            ...exploreReferenceInJoinCompiled.tables.b,
+            dimensions: Object.entries(
+                exploreReferenceInJoinCompiled.tables.b.dimensions,
+            ).reduce(
+                (acc, [key, value]) => ({
+                    ...acc,
+                    [key]: {
+                        ...value,
+                        hidden: true,
+                    },
+                }),
+                {},
+            ),
+            hidden: true,
         },
     },
 };

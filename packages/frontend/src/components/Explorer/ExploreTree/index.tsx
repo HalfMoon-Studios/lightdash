@@ -60,7 +60,10 @@ const ExploreTree: FC<ExploreTreeProps> = ({
                 // Sorting explores by label
                 return tableA.label.localeCompare(tableB.label);
             })
-            .filter((table) => !(isSearching && !searchHasResults(table)));
+            .filter(
+                (table) =>
+                    !(isSearching && !searchHasResults(table)) && !table.hidden,
+            );
     }, [explore, searchHasResults, isSearching]);
 
     const missingCustomMetrics = useMemo(() => {
@@ -88,9 +91,10 @@ const ExploreTree: FC<ExploreTreeProps> = ({
 
             <Box style={{ flexGrow: 1, overflowY: 'auto' }}>
                 {tableTrees.length > 0 ? (
-                    tableTrees.map((table) => (
+                    tableTrees.map((table, index) => (
                         <TableTree
                             key={table.name}
+                            isOpenByDefault={index === 0}
                             searchQuery={search}
                             showTableLabel={
                                 Object.keys(explore.tables).length > 1

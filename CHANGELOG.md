@@ -1,3 +1,284 @@
+# [0.887.0](https://github.com/lightdash/lightdash/compare/0.886.1...0.887.0) (2023-11-30)
+
+
+### Features
+
+* move limit and run query button to sidebar and show limit warning ([#8152](https://github.com/lightdash/lightdash/issues/8152)) ([fb67450](https://github.com/lightdash/lightdash/commit/fb67450df005c76659811ec4e99afc2cd9adb99c))
+
+## [0.886.1](https://github.com/lightdash/lightdash/compare/0.886.0...0.886.1) (2023-11-30)
+
+
+### Bug Fixes
+
+* remove extra tooltip on dashboard title ([#8161](https://github.com/lightdash/lightdash/issues/8161)) ([3b955f5](https://github.com/lightdash/lightdash/commit/3b955f59110e7c265f0fc6ebb65b0559ea58d8c1))
+
+# [0.886.0](https://github.com/lightdash/lightdash/compare/0.885.3...0.886.0) (2023-11-30)
+
+
+### Features
+
+* share date zoom url ([#8151](https://github.com/lightdash/lightdash/issues/8151)) ([e6abc3c](https://github.com/lightdash/lightdash/commit/e6abc3ce8cf01487a2569f0e922fc6fcdd07551d))
+
+## [0.885.3](https://github.com/lightdash/lightdash/compare/0.885.2...0.885.3) (2023-11-30)
+
+
+### Bug Fixes
+
+* metadata runquery ([#8156](https://github.com/lightdash/lightdash/issues/8156)) ([a67e0ff](https://github.com/lightdash/lightdash/commit/a67e0ff3f77037693a524213508ff02e316f4c06))
+
+## [0.885.2](https://github.com/lightdash/lightdash/compare/0.885.1...0.885.2) (2023-11-30)
+
+
+### Bug Fixes
+
+* custom dimension sort validation ([#8143](https://github.com/lightdash/lightdash/issues/8143)) ([38b5f72](https://github.com/lightdash/lightdash/commit/38b5f72eebde06a2a3d72c4418b4638107a5e604))
+
+## [0.885.1](https://github.com/lightdash/lightdash/compare/0.885.0...0.885.1) (2023-11-29)
+
+
+### Bug Fixes
+
+* filter autocomplete scroll ([#8148](https://github.com/lightdash/lightdash/issues/8148)) ([58faa5a](https://github.com/lightdash/lightdash/commit/58faa5ae6bfd9ca29db38a33c264f9b1e2e7d7bc))
+
+# [0.885.0](https://github.com/lightdash/lightdash/compare/0.884.1...0.885.0) (2023-11-29)
+
+
+### Features
+
+* add indicator when a chart tile has been date zoomed ([#8144](https://github.com/lightdash/lightdash/issues/8144)) ([e8ce66f](https://github.com/lightdash/lightdash/commit/e8ce66fc329e6cf32cb3e7ebe5b23a4ba9219b8d))
+
+## [0.884.1](https://github.com/lightdash/lightdash/compare/0.884.0...0.884.1) (2023-11-29)
+
+
+### Bug Fixes
+
+* base table match when finding explore by table name ([#8140](https://github.com/lightdash/lightdash/issues/8140)) ([eb4d41b](https://github.com/lightdash/lightdash/commit/eb4d41b523fa85604e1856feb3d81dc6d1a41c6c))
+
+# [0.884.0](https://github.com/lightdash/lightdash/compare/0.883.1...0.884.0) (2023-11-29)
+
+
+### Features
+
+* support dbt 1.7 ([#8134](https://github.com/lightdash/lightdash/issues/8134)) ([dc3aadc](https://github.com/lightdash/lightdash/commit/dc3aadc520b34a5089a401f4a23037a8d2e5aec2))
+
+## [0.883.1](https://github.com/lightdash/lightdash/compare/0.883.0...0.883.1) (2023-11-28)
+
+
+### Bug Fixes
+
+* dont crash when column name contains a dot ([#8114](https://github.com/lightdash/lightdash/issues/8114)) ([091f10a](https://github.com/lightdash/lightdash/commit/091f10a25e8a2c46df5a3558bd2d5afe79612d2d))
+
+# [0.883.0](https://github.com/lightdash/lightdash/compare/0.882.1...0.883.0) (2023-11-28)
+
+
+### Features
+
+* add dashboard uuid to query tags ([#8129](https://github.com/lightdash/lightdash/issues/8129)) ([4d97009](https://github.com/lightdash/lightdash/commit/4d97009d4d352bf9172125f37188cd2d6dacab62))
+
+## [0.882.1](https://github.com/lightdash/lightdash/compare/0.882.0...0.882.1) (2023-11-28)
+
+
+### Bug Fixes
+
+* table calculation dimension ([#8133](https://github.com/lightdash/lightdash/issues/8133)) ([af626a6](https://github.com/lightdash/lightdash/commit/af626a6eb75c03442051b29c5d5948fe138cb43d))
+
+# [0.882.0](https://github.com/lightdash/lightdash/compare/0.881.1...0.882.0) (2023-11-28)
+
+
+### Features
+
+* add navigation to dbt semantic layer page ([#8127](https://github.com/lightdash/lightdash/issues/8127)) ([1c8eb15](https://github.com/lightdash/lightdash/commit/1c8eb15dc8b404007d447afdafe2cd89624a1a4e))
+
+## [0.881.1](https://github.com/lightdash/lightdash/compare/0.881.0...0.881.1) (2023-11-28)
+
+
+### Bug Fixes
+
+* date zoom on table calcs ([#8122](https://github.com/lightdash/lightdash/issues/8122)) ([16cf463](https://github.com/lightdash/lightdash/commit/16cf463e1693766d2afef52a23ff85ea985271f6))
+
+# [0.881.0](https://github.com/lightdash/lightdash/compare/0.880.0...0.881.0) (2023-11-28)
+
+
+### Features
+
+* invalidate charts with dates when date zooming ([#8083](https://github.com/lightdash/lightdash/issues/8083)) ([cb7bbce](https://github.com/lightdash/lightdash/commit/cb7bbce3a21a43043be1dc991d40821b4f64d89e)), closes [#8071](https://github.com/lightdash/lightdash/issues/8071)
+
+# [0.880.0](https://github.com/lightdash/lightdash/compare/0.879.0...0.880.0) (2023-11-28)
+
+
+### Features
+
+* add filter data to scheduler events ([#8112](https://github.com/lightdash/lightdash/issues/8112)) ([f4b6be5](https://github.com/lightdash/lightdash/commit/f4b6be53199cb739312c6683ae92b392e267af23))
+
+# [0.879.0](https://github.com/lightdash/lightdash/compare/0.878.1...0.879.0) (2023-11-28)
+
+
+### Features
+
+* display filter summary if not overridden ([#8084](https://github.com/lightdash/lightdash/issues/8084)) ([9aee6c9](https://github.com/lightdash/lightdash/commit/9aee6c93788dd08939b0d575a42744f213f45402))
+
+## [0.878.1](https://github.com/lightdash/lightdash/compare/0.878.0...0.878.1) (2023-11-28)
+
+
+### Bug Fixes
+
+* allow to edit seconds in time range picker ([#8106](https://github.com/lightdash/lightdash/issues/8106)) ([68d3b84](https://github.com/lightdash/lightdash/commit/68d3b842c3a4b89a1ac71823993d6e34111d6e18))
+* update refresh dbt button tooltip styles ([#8116](https://github.com/lightdash/lightdash/issues/8116)) ([596a60d](https://github.com/lightdash/lightdash/commit/596a60d18a7e39e5bc36867284395c809476c5cc))
+
+# [0.878.0](https://github.com/lightdash/lightdash/compare/0.877.2...0.878.0) (2023-11-28)
+
+
+### Features
+
+* add login and register links ([#8108](https://github.com/lightdash/lightdash/issues/8108)) ([4b6b9e9](https://github.com/lightdash/lightdash/commit/4b6b9e959874412834bcb8b8484be7fcf88b413a))
+
+## [0.877.2](https://github.com/lightdash/lightdash/compare/0.877.1...0.877.2) (2023-11-27)
+
+
+### Bug Fixes
+
+* count chart views in dashboard page ([#8102](https://github.com/lightdash/lightdash/issues/8102)) ([f7be28d](https://github.com/lightdash/lightdash/commit/f7be28db2b4292d319fa1482ab0951b579a02c22))
+
+## [0.877.1](https://github.com/lightdash/lightdash/compare/0.877.0...0.877.1) (2023-11-27)
+
+
+### Bug Fixes
+
+* hide date zoom if no dashboard tiles ([#8092](https://github.com/lightdash/lightdash/issues/8092)) ([c0d4eb1](https://github.com/lightdash/lightdash/commit/c0d4eb17f722aab204ade9aa2f31845cfe0896c0))
+
+# [0.877.0](https://github.com/lightdash/lightdash/compare/0.876.0...0.877.0) (2023-11-27)
+
+
+### Features
+
+* date zoom ([#8078](https://github.com/lightdash/lightdash/issues/8078)) ([82d0ff9](https://github.com/lightdash/lightdash/commit/82d0ff903d0f4865e74286d1aca45d6bf411b7d5))
+
+# [0.876.0](https://github.com/lightdash/lightdash/compare/0.875.4...0.876.0) (2023-11-27)
+
+
+### Features
+
+* hide joined tables ([#8088](https://github.com/lightdash/lightdash/issues/8088)) ([1ab6724](https://github.com/lightdash/lightdash/commit/1ab6724bb7c20dad4db6a3af25e51c9fc2fbde6c))
+
+## [0.875.4](https://github.com/lightdash/lightdash/compare/0.875.3...0.875.4) (2023-11-27)
+
+
+### Bug Fixes
+
+* ignore client_session_keep_alive ([#8099](https://github.com/lightdash/lightdash/issues/8099)) ([e6270d1](https://github.com/lightdash/lightdash/commit/e6270d1138781118be321aace603e5aa5bad87e0))
+
+## [0.875.3](https://github.com/lightdash/lightdash/compare/0.875.2...0.875.3) (2023-11-27)
+
+
+### Bug Fixes
+
+* add undefined value to posthog if no key ([#8101](https://github.com/lightdash/lightdash/issues/8101)) ([6f8e4b5](https://github.com/lightdash/lightdash/commit/6f8e4b5f33e76dbb38f31eaeefd1f19be80e7033))
+
+## [0.875.2](https://github.com/lightdash/lightdash/compare/0.875.1...0.875.2) (2023-11-24)
+
+
+### Bug Fixes
+
+* add missing tableCalculations type property ([#8086](https://github.com/lightdash/lightdash/issues/8086)) ([549cb19](https://github.com/lightdash/lightdash/commit/549cb191fd7539284b3e17badd649e2ade065d84))
+
+## [0.875.1](https://github.com/lightdash/lightdash/compare/0.875.0...0.875.1) (2023-11-24)
+
+
+### Bug Fixes
+
+* replace wrong function name call ([#8085](https://github.com/lightdash/lightdash/issues/8085)) ([7a2b010](https://github.com/lightdash/lightdash/commit/7a2b010a4a8891cd67b63d7f324a8cae722d8a2e))
+
+# [0.875.0](https://github.com/lightdash/lightdash/compare/0.874.1...0.875.0) (2023-11-24)
+
+
+### Features
+
+* collapse join tables by default ([#8074](https://github.com/lightdash/lightdash/issues/8074)) ([c1ce914](https://github.com/lightdash/lightdash/commit/c1ce9145ecf98e6ca2518cf191870c2a0d383271))
+
+## [0.874.1](https://github.com/lightdash/lightdash/compare/0.874.0...0.874.1) (2023-11-24)
+
+
+### Bug Fixes
+
+* handle disabled scheduled filters overrides ([#8059](https://github.com/lightdash/lightdash/issues/8059)) ([30f3a84](https://github.com/lightdash/lightdash/commit/30f3a84d6979ec3f50af99353d18f432bb57519b))
+
+# [0.874.0](https://github.com/lightdash/lightdash/compare/0.873.5...0.874.0) (2023-11-24)
+
+
+### Features
+
+* disable and clear date zoom on edit mode ([#8069](https://github.com/lightdash/lightdash/issues/8069)) ([33df9a8](https://github.com/lightdash/lightdash/commit/33df9a8c73269d777b57585f3e6600ed166d06d9))
+
+## [0.873.5](https://github.com/lightdash/lightdash/compare/0.873.4...0.873.5) (2023-11-24)
+
+
+### Bug Fixes
+
+* tsoa types generation with scheduler filter Omit ([#8082](https://github.com/lightdash/lightdash/issues/8082)) ([efbf9dd](https://github.com/lightdash/lightdash/commit/efbf9ddd8eb1ebdf39919a57ac6942122144c0a3))
+
+## [0.873.4](https://github.com/lightdash/lightdash/compare/0.873.3...0.873.4) (2023-11-24)
+
+
+### Bug Fixes
+
+* revert "fix: upgrade tsoa to 6.0.0-rc.5 ([#8072](https://github.com/lightdash/lightdash/issues/8072))" ([#8081](https://github.com/lightdash/lightdash/issues/8081)) ([d4f47a8](https://github.com/lightdash/lightdash/commit/d4f47a8b3a6162814fbea7e96f951838adfedbcf))
+
+## [0.873.3](https://github.com/lightdash/lightdash/compare/0.873.2...0.873.3) (2023-11-24)
+
+
+### Bug Fixes
+
+* remove calculate total from frontend on chart edit and view ([#8058](https://github.com/lightdash/lightdash/issues/8058)) ([725694b](https://github.com/lightdash/lightdash/commit/725694bfe150f3183f56252408ec2a7342c62c44))
+
+## [0.873.2](https://github.com/lightdash/lightdash/compare/0.873.1...0.873.2) (2023-11-24)
+
+
+### Bug Fixes
+
+* upgrade tsoa to 6.0.0-rc.5 ([#8072](https://github.com/lightdash/lightdash/issues/8072)) ([f43a327](https://github.com/lightdash/lightdash/commit/f43a3279f64acba916bdb36b04f996b9388773bf))
+
+## [0.873.1](https://github.com/lightdash/lightdash/compare/0.873.0...0.873.1) (2023-11-23)
+
+
+### Bug Fixes
+
+* concat redshift table calculation ([#8046](https://github.com/lightdash/lightdash/issues/8046)) ([2c4d525](https://github.com/lightdash/lightdash/commit/2c4d525f38a37ba2461063c6813896ff1a816f53))
+
+# [0.873.0](https://github.com/lightdash/lightdash/compare/0.872.4...0.873.0) (2023-11-23)
+
+
+### Features
+
+* add date zoom component ([#8063](https://github.com/lightdash/lightdash/issues/8063)) ([c696da0](https://github.com/lightdash/lightdash/commit/c696da064f872502d75e7ee0e010e73e903491ba))
+
+## [0.872.4](https://github.com/lightdash/lightdash/compare/0.872.3...0.872.4) (2023-11-23)
+
+
+### Bug Fixes
+
+* sync override type with the dashboard filter one ([#8062](https://github.com/lightdash/lightdash/issues/8062)) ([1c471b6](https://github.com/lightdash/lightdash/commit/1c471b6e189f4eebc98dc0167bd99f8cbc3761d0))
+
+## [0.872.3](https://github.com/lightdash/lightdash/compare/0.872.2...0.872.3) (2023-11-22)
+
+
+### Bug Fixes
+
+* change custom metric sorting with custom metric name ([#8002](https://github.com/lightdash/lightdash/issues/8002)) ([ab6762f](https://github.com/lightdash/lightdash/commit/ab6762f3fc071feafde706e05afc08852705085d))
+
+## [0.872.2](https://github.com/lightdash/lightdash/compare/0.872.1...0.872.2) (2023-11-22)
+
+
+### Bug Fixes
+
+* remove calculate total feature flag ([#8053](https://github.com/lightdash/lightdash/issues/8053)) ([bcf42f2](https://github.com/lightdash/lightdash/commit/bcf42f22bb318e3112fce6a073bd3a5e8bae86c7))
+
+## [0.872.1](https://github.com/lightdash/lightdash/compare/0.872.0...0.872.1) (2023-11-22)
+
+
+### Bug Fixes
+
+* dont save tileTargets in overrides and sync with state ([#8042](https://github.com/lightdash/lightdash/issues/8042)) ([0a73432](https://github.com/lightdash/lightdash/commit/0a7343245258a3e24d711265144c8ea868ae2ee7))
+
 # [0.872.0](https://github.com/lightdash/lightdash/compare/0.871.2...0.872.0) (2023-11-22)
 
 

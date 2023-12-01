@@ -3,14 +3,17 @@ import {
     ApiError,
     ApiQueryResults,
     DashboardFilters,
+    DateGranularity,
     getCustomDimensionId,
     MetricQuery,
     SortField,
 } from '@lightdash/common';
+import { useFeatureFlagEnabled } from 'posthog-js/react';
 import { useCallback, useMemo } from 'react';
-import { useMutation, useQuery } from 'react-query';
+import { useMutation, useQuery, useQueryClient } from 'react-query';
 import { useParams } from 'react-router-dom';
 import { lightdashApi } from '../api';
+import { useDashboardContext } from '../providers/DashboardProvider';
 import {
     convertDateDashboardFilters,
     convertDateFilters,
@@ -26,28 +29,49 @@ type QueryResultsProps = {
     chartUuid?: string;
 };
 
-// This API call will be used for getting charts in view mode and dashboard tiles
 const getChartResults = async ({
     chartUuid,
-    dashboardFilters,
     invalidateCache,
-    dashboardSorts,
 }: {
     chartUuid?: string;
-    dashboardFilters?: DashboardFilters;
     invalidateCache?: boolean;
     dashboardSorts?: SortField[];
 }) => {
-    return lightdashApi<ApiChartAndResults>({
+    return lightdashApi<ApiQueryResults>({
         url: `/saved/${chartUuid}/results`,
         method: 'POST',
         body: JSON.stringify({
-            dashboardFilters,
-            dashboardSorts,
             ...(invalidateCache && { invalidateCache: true }),
         }),
     });
 };
+
+const getChartAndResults = async ({
+    chartUuid,
+    dashboardUuid,
+    dashboardFilters,
+    invalidateCache,
+    dashboardSorts,
+    granularity,
+}: {
+    chartUuid?: string;
+    dashboardUuid: string;
+    dashboardFilters: DashboardFilters;
+    invalidateCache?: boolean;
+    dashboardSorts: SortField[];
+    granularity?: DateGranularity;
+}) =>
+    lightdashApi<ApiChartAndResults>({
+        url: `/saved/${chartUuid}/chart-and-results`,
+        method: 'POST',
+        body: JSON.stringify({
+            dashboardUuid,
+            dashboardFilters,
+            dashboardSorts,
+            granularity,
+            ...(invalidateCache && { invalidateCache: true }),
+        }),
+    });
 
 const getQueryResults = async ({
     projectUuid,
@@ -175,37 +199,81 @@ export const useUnderlyingDataResults = (
     });
 };
 
-// This hook will be used for getting charts in view mode and dashboard tiles
-export const useChartResults = (
+export const useChartAndResults = (
     chartUuid: string | null,
-    dashboardFilters?: DashboardFilters,
-    dashboardSorts?: SortField[],
+    dashboardUuid: string | null,
+    dashboardFilters: DashboardFilters,
+    dashboardSorts: SortField[],
     invalidateCache?: boolean,
+    granularity?: DateGranularity,
 ) => {
+    const setChartsWithDateZoomApplied = useDashboardContext(
+        (c) => c.setChartsWithDateZoomApplied,
+    );
+    const isDateZoomFeatureEnabled = useFeatureFlagEnabled('date-zoom');
+    const queryClient = useQueryClient();
+
     const sortKey =
         dashboardSorts
             ?.map((ds) => `${ds.fieldId}.${ds.descending}`)
             ?.join(',') || '';
-    const queryKey = [
-        'savedChartResults',
-        chartUuid,
-        dashboardFilters,
-        invalidateCache,
-        sortKey,
-    ];
+    const queryKey = useMemo(
+        () => [
+            'savedChartResults',
+            chartUuid,
+            dashboardUuid,
+            dashboardFilters,
+            invalidateCache,
+            sortKey,
+        ],
+        [chartUuid, dashboardUuid, dashboardFilters, invalidateCache, sortKey],
+    );
+    const apiChartAndResults =
+        queryClient.getQueryData<ApiChartAndResults>(queryKey);
+
     const timezoneFixFilters =
         dashboardFilters && convertDateDashboardFilters(dashboardFilters);
+    const hasADateDimension =
+        !!apiChartAndResults?.metricQuery?.metadata?.hasADateDimension;
 
-    return useQuery<ApiChartAndResults, ApiError>({
-        queryKey,
-        queryFn: () =>
-            getChartResults({
+    const fetchChartAndResults = useCallback(
+        () =>
+            getChartAndResults({
                 chartUuid: chartUuid!,
+                dashboardUuid: dashboardUuid!,
                 dashboardFilters: timezoneFixFilters,
                 invalidateCache,
                 dashboardSorts,
+                granularity,
             }),
-        enabled: !!chartUuid,
+        [
+            chartUuid,
+            dashboardUuid,
+            timezoneFixFilters,
+            invalidateCache,
+            dashboardSorts,
+            granularity,
+        ],
+    );
+
+    setChartsWithDateZoomApplied((prev) => {
+        if (isDateZoomFeatureEnabled && hasADateDimension) {
+            if (granularity) {
+                return (prev ?? new Set()).add(chartUuid!);
+            }
+            prev?.clear();
+            return prev;
+        }
+        return prev;
+    });
+
+    return useQuery<ApiChartAndResults, ApiError>({
+        queryKey:
+            isDateZoomFeatureEnabled && hasADateDimension && granularity
+                ? queryKey.concat([granularity])
+                : queryKey,
+        queryFn: fetchChartAndResults,
+        enabled: !!chartUuid && !!dashboardUuid,
         retry: false,
         refetchOnMount: false,
     });

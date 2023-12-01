@@ -20,7 +20,7 @@ import React, {
 import { Layout, Responsive, WidthProvider } from 'react-grid-layout';
 import { useHistory, useLocation, useParams } from 'react-router-dom';
 
-import { Box } from '@mantine/core';
+import { Box, Group } from '@mantine/core';
 import { useFeatureFlagEnabled } from 'posthog-js/react';
 import { useIntersection } from 'react-use';
 import DashboardHeader from '../components/common/Dashboard/DashboardHeader';
@@ -33,6 +33,7 @@ import LoomTile from '../components/DashboardTiles/DashboardLoomTile';
 import MarkdownTile from '../components/DashboardTiles/DashboardMarkdownTile';
 import EmptyStateNoTiles from '../components/DashboardTiles/EmptyStateNoTiles';
 import TileBase from '../components/DashboardTiles/TileBase/index';
+import { DateZoom } from '../features/dateZoom';
 import {
     appendNewTilesToBottom,
     useDuplicateDashboardMutation,
@@ -133,6 +134,7 @@ const Dashboard: FC = () => {
     );
     const isLazyLoadEnabled =
         !!isLazyLoadFeatureFlagEnabled && !(window as any).Cypress; // disable lazy load for e2e test
+    const isDateZoomFeatureFlagEnabled = useFeatureFlagEnabled('date-zoom');
     const history = useHistory();
     const { projectUuid, dashboardUuid, mode } = useParams<{
         projectUuid: string;
@@ -495,6 +497,8 @@ const Dashboard: FC = () => {
         }
     });
 
+    const hasDashboardTiles = dashboardTiles && dashboardTiles.length > 0;
+
     return (
         <>
             <Alert
@@ -568,9 +572,14 @@ const Dashboard: FC = () => {
                     />
                 }
             >
-                {dashboardChartTiles && dashboardChartTiles.length > 0 && (
-                    <DashboardFilter isEditMode={isEditMode} />
-                )}
+                <Group position="apart" align="flex-start" noWrap>
+                    {dashboardChartTiles && dashboardChartTiles.length > 0 && (
+                        <DashboardFilter isEditMode={isEditMode} />
+                    )}
+                    {hasDashboardTiles && isDateZoomFeatureFlagEnabled && (
+                        <DateZoom isEditMode={isEditMode} />
+                    )}
+                </Group>
 
                 <ResponsiveGridLayout
                     {...getResponsiveGridLayoutProps()}
@@ -598,7 +607,7 @@ const Dashboard: FC = () => {
                     })}
                 </ResponsiveGridLayout>
 
-                {dashboardTiles && dashboardTiles.length === 0 && (
+                {!hasDashboardTiles && (
                     <EmptyStateNoTiles
                         onAddTiles={handleAddTiles}
                         isEditMode={isEditMode}

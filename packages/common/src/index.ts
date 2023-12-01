@@ -17,6 +17,8 @@ import {
     FieldId,
     fieldId,
     FilterableField,
+    friendlyName,
+    isDimension,
     Metric,
     TableCalculation,
 } from './types/field';
@@ -655,6 +657,7 @@ export type HealthState = {
     customVisualizationsEnabled: boolean;
     hasSlack: boolean;
     hasHeadlessBrowser: boolean;
+    hasDbtSemanticLayer: boolean;
 };
 
 export enum DBFieldTypes {
@@ -705,6 +708,19 @@ export const getResultValueArray = (
         }, {}),
     );
 
+export const getDateGroupLabel = (
+    axisItem: Field | TableCalculation | CustomDimension,
+) => {
+    if (
+        isDimension(axisItem) &&
+        [DimensionType.DATE, DimensionType.TIMESTAMP].includes(axisItem.type) &&
+        axisItem.group
+    )
+        return friendlyName(axisItem.group);
+
+    return undefined;
+};
+
 export const getAxisName = ({
     isAxisTheSameForAllSeries,
     selectedAxisIndex,
@@ -726,13 +742,17 @@ export const getAxisName = ({
         (item) =>
             getItemId(item) === (series || [])[0]?.encode[axisReference].field,
     );
+    const dateGroupName = defaultItem
+        ? getDateGroupLabel(defaultItem)
+        : undefined;
     const fallbackSeriesName: string | undefined =
         series && series.length === 1
             ? series[0].name ||
               (defaultItem && getItemLabelWithoutTableName(defaultItem))
             : undefined;
+
     return !isAxisTheSameForAllSeries || selectedAxisIndex === axisIndex
-        ? axisName || fallbackSeriesName
+        ? axisName || dateGroupName || fallbackSeriesName
         : undefined;
 };
 

@@ -13,6 +13,7 @@ import {
     Select,
     Stack,
     Text,
+    Textarea,
     TextInput,
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
@@ -81,10 +82,8 @@ const ChartCreateModal: FC<ChartCreateModalProps> = ({
 
     const [shouldCreateNewSpace, setShouldCreateNewSpace] = useState(false);
 
-    const { data: spaces, isLoading: isLoadingSpaces } = useSpaceSummaries(
-        projectUuid,
-        true,
-        {
+    const { data: spaces, isInitialLoading: isLoadingSpaces } =
+        useSpaceSummaries(projectUuid, true, {
             staleTime: 0,
             onSuccess: (data) => {
                 if (data.length > 0) {
@@ -96,8 +95,7 @@ const ChartCreateModal: FC<ChartCreateModalProps> = ({
                     setShouldCreateNewSpace(true);
                 }
             },
-        },
-    );
+        });
     const showSpaceInput = shouldCreateNewSpace || spaces?.length === 0;
 
     const handleConfirm = useCallback(
@@ -214,9 +212,11 @@ const ChartCreateModal: FC<ChartCreateModalProps> = ({
                         {...form.getInputProps('name')}
                         data-testid="ChartCreateModal/NameInput"
                     />
-                    <TextInput
+                    <Textarea
                         label="Chart description"
                         placeholder="A few words to give your team some context"
+                        autosize
+                        maxRows={3}
                         {...form.getInputProps('description')}
                     />
                     {fromDashboard && fromDashboard.length > 0 && (

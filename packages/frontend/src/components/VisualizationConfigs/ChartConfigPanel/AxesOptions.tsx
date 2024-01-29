@@ -1,16 +1,14 @@
 import {
-    CustomDimension,
-    Field,
     getAxisName,
     getDateGroupLabel,
-    getItemId,
     getItemLabelWithoutTableName,
     isNumericItem,
-    TableCalculation,
+    ItemsMap,
 } from '@lightdash/common';
 import {
     Checkbox,
     Group,
+    NumberInput,
     SegmentedControl,
     Stack,
     Switch,
@@ -81,12 +79,11 @@ const AxisMinMax: FC<MinMaxProps> = ({ label, min, max, setMin, setMax }) => {
         </>
     );
 };
-
 type Props = {
-    items: (Field | TableCalculation | CustomDimension)[];
+    itemsMap: ItemsMap | undefined;
 };
 
-const AxesOptions: FC<Props> = ({ items }) => {
+const AxesOptions: FC<Props> = ({ itemsMap }) => {
     const { visualizationConfig } = useVisualizationContext();
 
     if (!isCartesianVisualizationConfig(visualizationConfig)) return null;
@@ -98,14 +95,18 @@ const AxesOptions: FC<Props> = ({ items }) => {
         setYAxisName,
         setYMinValue,
         setYMaxValue,
+        setXMinValue,
+        setXMaxValue,
         setShowGridX,
         setShowGridY,
         setInverseX,
+        setXAxisLabelRotation,
     } = visualizationConfig.chartConfig;
 
-    const xAxisField = items.find(
-        (item) => getItemId(item) === dirtyLayout?.xField,
-    );
+    const xAxisField =
+        itemsMap && dirtyLayout?.xField
+            ? itemsMap[dirtyLayout?.xField]
+            : undefined;
 
     const selectedAxisInSeries = Array.from(
         new Set(
@@ -120,9 +121,8 @@ const AxesOptions: FC<Props> = ({ items }) => {
         dirtyEchartsConfig?.series || []
     ).reduce<[boolean, boolean]>(
         (acc, series) => {
-            const seriesField = items.find(
-                (item) => getItemId(item) === series.encode.yRef.field,
-            );
+            if (!itemsMap) return acc;
+            const seriesField = itemsMap[series.encode.yRef.field];
             if (isNumericItem(seriesField)) {
                 acc[series.yAxisIndex || 0] = true;
             }
@@ -132,7 +132,7 @@ const AxesOptions: FC<Props> = ({ items }) => {
     );
 
     return (
-        <Stack spacing="xs">
+        <Stack spacing="xs" mb="xl">
             <TextInput
                 label={`${dirtyLayout?.flipAxes ? 'Y' : 'X'}-axis label`}
                 placeholder="Enter axis label"
@@ -144,6 +144,19 @@ const AxesOptions: FC<Props> = ({ items }) => {
                 }
                 onBlur={(e) => setXAxisName(e.currentTarget.value)}
             />
+            {isNumericItem(xAxisField) && (
+                <AxisMinMax
+                    label={`Auto ${
+                        dirtyLayout?.flipAxes ? 'y' : 'x'
+                    }-axis range (${
+                        dirtyLayout?.flipAxes ? 'left' : 'bottom'
+                    })`}
+                    min={dirtyEchartsConfig?.xAxis?.[0]?.min}
+                    max={dirtyEchartsConfig?.xAxis?.[0]?.max}
+                    setMin={(newValue) => setXMinValue(0, newValue)}
+                    setMax={(newValue) => setXMaxValue(0, newValue)}
+                />
+            )}
             <Group noWrap spacing="xs">
                 <Text fw={600}> Sort </Text>
                 <SegmentedControl
@@ -169,6 +182,26 @@ const AxesOptions: FC<Props> = ({ items }) => {
                     }}
                 />
             </Group>
+            {!dirtyLayout?.flipAxes && (
+                <Group noWrap spacing="xs" align="baseline">
+                    <Text fw={600} mt="sm">
+                        Rotation
+                    </Text>
+                    <NumberInput
+                        defaultValue={
+                            dirtyEchartsConfig?.xAxis?.[0].rotate || 0
+                        }
+                        min={0}
+                        max={90}
+                        step={15}
+                        size="xs"
+                        w={80}
+                        onChange={(value) => {
+                            setXAxisLabelRotation(Number(value));
+                        }}
+                    />
+                </Group>
+            )}
             <TextInput
                 label={`${dirtyLayout?.flipAxes ? 'X' : 'Y'}-axis label (${
                     dirtyLayout?.flipAxes ? 'bottom' : 'left'
@@ -183,7 +216,7 @@ const AxesOptions: FC<Props> = ({ items }) => {
                         axisReference: 'yRef',
                         axisIndex: 0,
                         series: dirtyEchartsConfig?.series,
-                        items,
+                        itemsMap,
                     })
                 }
                 onBlur={(e) => setYAxisName(0, e.currentTarget.value)}
@@ -216,7 +249,7 @@ const AxesOptions: FC<Props> = ({ items }) => {
                         axisReference: 'yRef',
                         axisIndex: 1,
                         series: dirtyEchartsConfig?.series,
-                        items,
+                        itemsMap,
                     })
                 }
                 onBlur={(e) => setYAxisName(1, e.currentTarget.value)}

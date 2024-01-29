@@ -1,6 +1,8 @@
 import { subject } from '@casl/ability';
 import { UserAttribute } from '@lightdash/common';
 import {
+    ActionIcon,
+    Box,
     Button,
     Group,
     Modal,
@@ -15,6 +17,7 @@ import {
     IconAlertCircle,
     IconEdit,
     IconInfoCircle,
+    IconPlus,
     IconTrash,
 } from '@tabler/icons-react';
 import { FC, useState } from 'react';
@@ -34,7 +37,8 @@ import UserAttributeModal from './UserAttributeModal';
 const UserListItem: FC<{
     orgUserAttribute: UserAttribute;
     onEdit: () => void;
-}> = ({ orgUserAttribute, onEdit }) => {
+    isGroupManagementEnabled?: boolean;
+}> = ({ orgUserAttribute, onEdit, isGroupManagementEnabled }) => {
     const [isDeleteDialogOpen, deleteDialog] = useDisclosure(false);
     const { mutate: deleteUserAttribute } = useUserAttributesDeleteMutation();
 
@@ -58,31 +62,40 @@ const UserListItem: FC<{
                             </Tooltip>
                         )}
                     </Group>
-                    <Text fz="xs" color="gray.6">
-                        {orgUserAttribute.users.length} user
-                        {orgUserAttribute.users.length != 1 ? 's' : ''}
-                    </Text>
+                    <Group spacing="sm">
+                        <Text fz="xs" color="gray.6">
+                            {orgUserAttribute.users.length} user
+                            {orgUserAttribute.users.length !== 1 ? 's' : ''}
+                        </Text>
+                        {isGroupManagementEnabled && (
+                            <Text fz="xs" color="gray.6">
+                                {orgUserAttribute.groups.length} group
+                                {orgUserAttribute.groups.length !== 1
+                                    ? 's'
+                                    : ''}
+                            </Text>
+                        )}
+                    </Group>
                 </Stack>
             </td>
             <td width="1%">
                 <Group noWrap spacing="xs">
-                    <Button
-                        onClick={onEdit}
-                        variant="outline"
+                    <ActionIcon
                         color="blue.4"
-                        leftIcon={<MantineIcon icon={IconEdit} />}
+                        variant="outline"
+                        onClick={onEdit}
                     >
-                        Edit
-                    </Button>
+                        <MantineIcon icon={IconEdit} />
+                    </ActionIcon>
 
-                    <Button
-                        leftIcon={<MantineIcon icon={IconTrash} />}
+                    <ActionIcon
                         variant="outline"
                         onClick={deleteDialog.open}
                         color="red"
                     >
-                        Delete
-                    </Button>
+                        <MantineIcon icon={IconTrash} />
+                    </ActionIcon>
+
                     <Modal
                         opened={isDeleteDialogOpen}
                         onClose={deleteDialog.close}
@@ -105,6 +118,7 @@ const UserListItem: FC<{
                             <Button
                                 onClick={deleteDialog.close}
                                 variant="outline"
+                                color="dark"
                             >
                                 Cancel
                             </Button>
@@ -126,13 +140,14 @@ const UserListItem: FC<{
 
 const UserAttributesPanel: FC = () => {
     const { classes } = useTableStyles();
-    const { user } = useApp();
+    const { user, health } = useApp();
     const [showAddAttributeModal, addAttributeModal] = useDisclosure(false);
 
     const [editAttribute, setEditAttribute] = useState<
         UserAttribute | undefined
     >();
-    const { data: orgUserAttributes, isLoading } = useUserAttributes();
+
+    const { data: orgUserAttributes, isInitialLoading } = useUserAttributes();
     const { data: organization } = useOrganization();
     if (
         user.data?.ability.cannot(
@@ -145,45 +160,53 @@ const UserAttributesPanel: FC = () => {
         return <ForbiddenPanel />;
     }
 
-    if (isLoading) return <LoadingState title="Loading user attributes" />;
+    if (isInitialLoading)
+        return <LoadingState title="Loading user attributes" />;
+
+    if (!user.data || !health.data) return null;
+
+    const isGroupManagementEnabled = health.data.hasGroups;
 
     return (
         <Stack>
             <Group position="apart">
                 <Group spacing="two">
-                    <Title order={5}>User attributes</Title>
+                    <Title order={5}>
+                        {isGroupManagementEnabled
+                            ? 'User and group attributes'
+                            : 'User attributes'}
+                    </Title>
                     <Tooltip
                         multiline
                         w={400}
                         withArrow
                         label={
-                            <div>
+                            <Box>
                                 User attributes are metadata defined by your
-                                organization. They can used to control and
+                                organization. They can be used to control and
                                 cutomize the user experience through data access
-                                and personzalization. Learn more about using
-                                user attributes in the
-                                <a
-                                    href="https://docs.lightdash.com"
-                                    target="_blank"
-                                    rel="noreferrer"
-                                >
-                                    {' '}
-                                    docs
-                                </a>
-                                .
-                            </div>
+                                and personalization. Learn more about using user
+                                attributes by clicking on this icon.
+                            </Box>
                         }
                     >
-                        {/* TODO add link to docs */}
-                        {/* TODO keep tooltip open on hover */}
-
-                        <MantineIcon icon={IconInfoCircle} color="gray.6" />
+                        <ActionIcon
+                            component="a"
+                            href="https://docs.lightdash.com/references/user-attributes"
+                            target="_blank"
+                            rel="noreferrer"
+                        >
+                            <MantineIcon icon={IconInfoCircle} />
+                        </ActionIcon>
                     </Tooltip>
                 </Group>
                 <>
-                    <Button onClick={addAttributeModal.open}>
-                        Add new attributes
+                    <Button
+                        size="xs"
+                        leftIcon={<MantineIcon icon={IconPlus} />}
+                        onClick={addAttributeModal.open}
+                    >
+                        Add new attribute
                     </Button>
                     <UserAttributeModal
                         opened={showAddAttributeModal}
@@ -193,7 +216,7 @@ const UserAttributesPanel: FC = () => {
                 </>
             </Group>
 
-            {isLoading ? (
+            {isInitialLoading ? (
                 <LoadingState title="Loading user attributes" />
             ) : orgUserAttributes?.length === 0 ? (
                 <SettingsCard shadow="none">
@@ -216,6 +239,9 @@ const UserAttributesPanel: FC = () => {
                                     orgUserAttribute={orgUserAttribute}
                                     onEdit={() =>
                                         setEditAttribute(orgUserAttribute)
+                                    }
+                                    isGroupManagementEnabled={
+                                        isGroupManagementEnabled
                                     }
                                 />
                             ))}

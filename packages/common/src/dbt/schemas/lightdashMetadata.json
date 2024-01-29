@@ -1,5 +1,24 @@
 {
     "definitions": {
+        "RequiredAttributes": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": {
+                "oneOf": [
+                    {
+                        "type": "array",
+                        "items": [
+                            {
+                                "type": "string"
+                            }
+                        ]
+                    },
+                    {
+                        "type": "string"
+                    }
+                ]
+            }
+        },
         "Compact": {
             "type": "string",
             "enum": [
@@ -90,8 +109,47 @@
                     "$ref": "#/definitions/Urls"
                 },
                 "required_attributes": {
-                    "type": "object",
-                    "properties": {}
+                    "$ref": "#/definitions/RequiredAttributes"
+                }
+            }
+        },
+        "LightdashAdditionalDimension": {
+            "type": "object",
+            "required": [],
+            "properties": {
+                "label": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string",
+                    "enum": ["string", "number", "boolean", "date", "timestamp"]
+                },
+                "description": {
+                    "type": "string"
+                },
+                "sql": {
+                    "type": "string"
+                },
+                "hidden": {
+                    "type": "boolean"
+                },
+                "round": {
+                    "type": "number"
+                },
+                "compact": {
+                    "$ref": "#/definitions/Compact"
+                },
+                "format": {
+                    "$ref": "#/definitions/Format"
+                },
+                "group_label": {
+                    "type": "string"
+                },
+                "urls": {
+                    "$ref": "#/definitions/Urls"
+                },
+                "required_attributes": {
+                    "$ref": "#/definitions/RequiredAttributes"
                 }
             }
         },
@@ -167,6 +225,13 @@
                 "dimension": {
                     "$ref": "#/definitions/LightdashDimension"
                 },
+                "additional_dimensions": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/LightdashAdditionalDimension"
+                    },
+                    "default": {}
+                },
                 "metrics": {
                     "type": "object",
                     "additionalProperties": {
@@ -208,6 +273,9 @@
                 },
                 "sql_filter": {
                     "type": "string"
+                },
+                "required_attributes": {
+                    "$ref": "#/definitions/RequiredAttributes"
                 }
             },
             "default": {}

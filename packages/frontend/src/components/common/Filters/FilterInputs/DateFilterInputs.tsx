@@ -13,6 +13,7 @@ import {
     TimeFrames,
 } from '@lightdash/common';
 import { Flex, NumberInput, Text } from '@mantine/core';
+import moment from 'moment';
 import { FilterInputsProps } from '.';
 import { useFiltersContext } from '../FiltersProvider';
 import { getFirstDayOfWeek } from '../utils/filterDateUtils';
@@ -106,6 +107,8 @@ const DateFilterInputs = <T extends ConditionalRule = DateFilterRule>(
                         return (
                             <FilterMonthAndYearPicker
                                 disabled={disabled}
+                                // FIXME: until mantine 7.4: https://github.com/mantinedev/mantine/issues/5401#issuecomment-1874906064
+                                // @ts-ignore
                                 placeholder={placeholder}
                                 popoverProps={popoverProps}
                                 value={
@@ -133,6 +136,8 @@ const DateFilterInputs = <T extends ConditionalRule = DateFilterRule>(
                         return (
                             <FilterYearPicker
                                 disabled={disabled}
+                                // FIXME: until mantine 7.4: https://github.com/mantinedev/mantine/issues/5401#issuecomment-1874906064
+                                // @ts-ignore
                                 placeholder={placeholder}
                                 popoverProps={popoverProps}
                                 value={
@@ -168,8 +173,16 @@ const DateFilterInputs = <T extends ConditionalRule = DateFilterRule>(
                 return (
                     <FilterDateTimePicker
                         disabled={disabled}
+                        // FIXME: until mantine 7.4: https://github.com/mantinedev/mantine/issues/5401#issuecomment-1874906064
+                        // @ts-ignore
                         placeholder={placeholder}
                         withSeconds
+                        valueFormat={
+                            rule.values &&
+                            moment(rule.values[0])
+                                .utc()
+                                .format('DD/MM/YYYY HH:mm:ss')
+                        }
                         // FIXME: mantine v7
                         // mantine does not set the first day of the week based on the locale
                         // so we need to do it manually and always pass it as a prop
@@ -195,7 +208,7 @@ const DateFilterInputs = <T extends ConditionalRule = DateFilterRule>(
                                         : [
                                               formatTimestamp(
                                                   value,
-                                                  TimeFrames.MILLISECOND,
+                                                  TimeFrames.SECOND,
                                               ),
                                           ],
                             });

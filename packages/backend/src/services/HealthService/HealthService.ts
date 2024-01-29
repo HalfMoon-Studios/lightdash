@@ -94,9 +94,11 @@ export class HealthService {
             hasEmailClient: !!this.lightdashConfig.smtp,
             hasHeadlessBrowser:
                 this.lightdashConfig.headlessBrowser?.host !== undefined,
+            // TODO: soon to be deleted as we move feature to UI - https://github.com/lightdash/lightdash/issues/6767
             hasDbtSemanticLayer:
                 !!process.env.DBT_CLOUD_ENVIRONMENT_ID &&
                 !!process.env.DBT_CLOUD_BEARER_TOKEN,
+            hasGroups: this.lightdashConfig.groups.enabled,
         };
     }
 

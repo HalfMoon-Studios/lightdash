@@ -1,233 +1,122 @@
-import {
-    ButtonGroup,
-    Classes,
-    NonIdealState,
-    Spinner,
-} from '@blueprintjs/core';
 import { subject } from '@casl/ability';
 import {
-    OrganizationMemberProfile,
+    convertOrganizationRoleToProjectRole,
+    getHighestProjectRole,
     OrganizationMemberRole,
-    ProjectMemberProfile,
     ProjectMemberRole,
 } from '@lightdash/common';
-import {
-    Badge,
-    Button,
-    Group,
-    Modal,
-    Stack,
-    Text,
-    Title,
-    Tooltip,
-} from '@mantine/core';
-import {
-    IconAlertTriangleFilled,
-    IconKey,
-    IconTrash,
-} from '@tabler/icons-react';
+import { ActionIcon, Paper, Table, TextInput } from '@mantine/core';
+import { IconX } from '@tabler/icons-react';
 import { FC, useMemo, useState } from 'react';
+import { useProjectGroupAccessList } from '../../features/projectGroupAccess/hooks/useProjectGroupAccess';
+import { useTableStyles } from '../../hooks/styles/useTableStyles';
+import { useOrganizationGroups } from '../../hooks/useOrganizationGroups';
 import { useOrganizationUsers } from '../../hooks/useOrganizationUsers';
-import {
-    useProjectAccess,
-    useRevokeProjectAccessMutation,
-    useUpdateProjectAccessMutation,
-} from '../../hooks/useProjectAccess';
+import { useProjectAccess } from '../../hooks/useProjectAccess';
 import { useApp } from '../../providers/AppProvider';
 import { useAbilityContext } from '../common/Authorization';
+import LoadingState from '../common/LoadingState';
 import MantineIcon from '../common/MantineIcon';
 import { SettingsCard } from '../common/Settings/SettingsCard';
-import {
-    ItemContent,
-    RoleSelectButton,
-    SectionWrapper,
-    UserEmail,
-    UserInfo,
-    UserName,
-} from './ProjectAccess.styles';
-
-const UserListItem: FC<{
-    user: OrganizationMemberProfile | ProjectMemberProfile;
-    relevantOrgRole?: OrganizationMemberProfile['role'];
-    roleTooltip?: string;
-    onDelete?: () => void;
-    onUpdate?: (newRole: ProjectMemberRole) => void;
-}> = ({
-    user: { firstName, lastName, email, role },
-    relevantOrgRole,
-    roleTooltip,
-    onDelete,
-    onUpdate,
-}) => {
-    const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
-
-    return (
-        <SettingsCard>
-            <ItemContent>
-                <SectionWrapper>
-                    <UserInfo>
-                        <UserName className={Classes.TEXT_OVERFLOW_ELLIPSIS}>
-                            {firstName} {lastName}
-                        </UserName>
-                        {email && <UserEmail minimal>{email}</UserEmail>}
-                    </UserInfo>
-
-                    {relevantOrgRole && (
-                        <Tooltip
-                            label={`This user inherits the organization role: ${relevantOrgRole}`}
-                            position="left"
-                        >
-                            <MantineIcon
-                                icon={IconAlertTriangleFilled}
-                                style={{
-                                    marginRight: 8,
-                                    color: 'orange',
-                                }}
-                            />
-                        </Tooltip>
-                    )}
-
-                    <ButtonGroup>
-                        {onUpdate ? (
-                            <RoleSelectButton
-                                fill
-                                id="user-role"
-                                options={Object.values(ProjectMemberRole).map(
-                                    (orgMemberRole) => ({
-                                        value: orgMemberRole,
-                                        label: orgMemberRole.replace('_', ' '),
-                                    }),
-                                )}
-                                required
-                                onChange={(e) => {
-                                    const newRole = e.target
-                                        .value as ProjectMemberRole;
-                                    onUpdate(newRole);
-                                }}
-                                value={role}
-                            />
-                        ) : (
-                            <Tooltip
-                                label={roleTooltip}
-                                disabled={!roleTooltip}
-                                position="left"
-                            >
-                                <Badge
-                                    radius="xs"
-                                    size="lg"
-                                    variant="filled"
-                                    color="gray.3"
-                                    sx={{
-                                        textTransform: 'unset',
-                                        color: 'black',
-                                    }}
-                                >
-                                    {role}
-                                </Badge>
-                            </Tooltip>
-                        )}
-                        {onDelete && (
-                            <Button
-                                variant="outline"
-                                size="xs"
-                                color="red"
-                                px="xs"
-                                onClick={() => setIsDeleteDialogOpen(true)}
-                            >
-                                <MantineIcon icon={IconTrash} />
-                            </Button>
-                        )}
-                    </ButtonGroup>
-                </SectionWrapper>
-            </ItemContent>
-            <Modal
-                opened={isDeleteDialogOpen}
-                onClose={() => setIsDeleteDialogOpen(false)}
-                title={
-                    <Group spacing="xs">
-                        <MantineIcon size="lg" icon={IconKey} color="red" />
-                        <Title order={4}>Revoke project access</Title>
-                    </Group>
-                }
-            >
-                <Text pb="md">
-                    Are you sure you want to revoke project access for this user{' '}
-                    {email} ?
-                </Text>
-                <Group spacing="xs" position="right">
-                    <Button
-                        variant="outline"
-                        onClick={() => setIsDeleteDialogOpen(false)}
-                    >
-                        Cancel
-                    </Button>
-                    <Button color="red" onClick={onDelete}>
-                        Delete
-                    </Button>
-                </Group>
-            </Modal>
-        </SettingsCard>
-    );
-};
-
-const relevantOrgRolesForProjectRole: Record<
-    ProjectMemberRole,
-    OrganizationMemberRole[]
-> = {
-    [ProjectMemberRole.VIEWER]: [
-        OrganizationMemberRole.INTERACTIVE_VIEWER,
-        OrganizationMemberRole.EDITOR,
-        OrganizationMemberRole.DEVELOPER,
-        OrganizationMemberRole.ADMIN,
-    ],
-    [ProjectMemberRole.INTERACTIVE_VIEWER]: [
-        OrganizationMemberRole.EDITOR,
-        OrganizationMemberRole.DEVELOPER,
-        OrganizationMemberRole.ADMIN,
-    ],
-    [ProjectMemberRole.EDITOR]: [
-        OrganizationMemberRole.DEVELOPER,
-        OrganizationMemberRole.ADMIN,
-    ],
-    [ProjectMemberRole.DEVELOPER]: [OrganizationMemberRole.ADMIN],
-    [ProjectMemberRole.ADMIN]: [],
-};
+import CreateProjectAccessModal from './CreateProjectAccessModal';
+import ProjectAccessRow from './ProjectAccessRow';
 
 interface ProjectAccessProps {
     projectUuid: string;
+    isAddingProjectAccess: boolean;
+    onAddProjectAccessClose: () => void;
 }
 
-const ProjectAccess: FC<ProjectAccessProps> = ({ projectUuid }) => {
+const ProjectAccess: FC<ProjectAccessProps> = ({
+    projectUuid,
+    isAddingProjectAccess,
+    onAddProjectAccessClose,
+}) => {
     const { user } = useApp();
     const ability = useAbilityContext();
-    const { mutate: revokeAccess } =
-        useRevokeProjectAccessMutation(projectUuid);
-    const { mutate: updateAccess } =
-        useUpdateProjectAccessMutation(projectUuid);
 
-    const { data: projectAccess, isLoading: isProjectAccessLoading } =
+    const { cx, classes } = useTableStyles();
+
+    const [search, setSearch] = useState('');
+
+    const {
+        data: organizationUsers,
+        isInitialLoading: isOrganizationUsersLoading,
+    } = useOrganizationUsers({ searchInput: search });
+
+    const { data: groups } = useOrganizationGroups(5);
+
+    const { data: projectAccess, isInitialLoading: isProjectAccessLoading } =
         useProjectAccess(projectUuid);
-    const { data: organizationUsers, isLoading: isOrganizationUsersLoading } =
-        useOrganizationUsers();
 
-    const [inheritedPermissions, overlapPermissions] = useMemo(() => {
-        const projectMemberEmails =
-            projectAccess?.map((projectMember) => projectMember.email) || [];
-        return (organizationUsers || []).reduce<
-            [OrganizationMemberProfile[], OrganizationMemberProfile[]]
-        >(
-            ([inherited, overlapping], orgUser) => {
-                if (orgUser.role === OrganizationMemberRole.MEMBER) {
-                    return [inherited, overlapping];
-                }
-                if (projectMemberEmails.includes(orgUser.email)) {
-                    return [inherited, [...overlapping, orgUser]];
-                }
-                return [[...inherited, orgUser], overlapping];
+    const { data: projectGroupAccess } = useProjectGroupAccessList(projectUuid);
+
+    const orgRoles = useMemo(() => {
+        if (!organizationUsers) return {};
+        if (!projectAccess) return {};
+
+        return organizationUsers.reduce<Record<string, OrganizationMemberRole>>(
+            (acc, orgUser) => {
+                return {
+                    ...acc,
+                    [orgUser.userUuid]: orgUser.role,
+                };
             },
-            [[], []],
+            {},
         );
     }, [organizationUsers, projectAccess]);
+
+    const groupRoles = useMemo(() => {
+        if (!organizationUsers) return {};
+        if (!projectGroupAccess) return {};
+        if (!groups) return {};
+
+        return organizationUsers.reduce<Record<string, ProjectMemberRole>>(
+            (aggregatedRoles, orgUser) => {
+                const userGroupRoles = projectGroupAccess.reduce<
+                    ProjectMemberRole[]
+                >((userRoles, groupAccess) => {
+                    const group = groups.find(
+                        (g) => g.uuid === groupAccess.groupUuid,
+                    );
+                    if (!group) return userRoles;
+                    if (!group.memberUuids.includes(orgUser.userUuid))
+                        return userRoles;
+
+                    return [...userRoles, groupAccess.role];
+                }, []);
+
+                const highestRole = getHighestProjectRole(
+                    userGroupRoles.map((role) => ({
+                        type: 'group',
+                        role,
+                    })),
+                );
+
+                if (!highestRole) return aggregatedRoles;
+
+                return {
+                    ...aggregatedRoles,
+                    [orgUser.userUuid]: highestRole.role,
+                };
+            },
+            {},
+        );
+    }, [organizationUsers, projectGroupAccess, groups]);
+
+    const projectRoles = useMemo(() => {
+        if (!projectAccess) return {};
+
+        return projectAccess.reduce<Record<string, ProjectMemberRole>>(
+            (acc, projectMember) => {
+                return {
+                    ...acc,
+                    [projectMember.userUuid]: projectMember.role,
+                };
+            },
+            {},
+        );
+    }, [projectAccess]);
 
     const canManageProjectAccess = ability.can(
         'manage',
@@ -238,47 +127,73 @@ const ProjectAccess: FC<ProjectAccessProps> = ({ projectUuid }) => {
     );
 
     if (isProjectAccessLoading || isOrganizationUsersLoading) {
-        return <NonIdealState title="Loading..." icon={<Spinner />} />;
+        return <LoadingState title="Loading user access" />;
     }
+
     return (
-        <Stack>
-            {projectAccess?.map((projectMember) => (
-                <UserListItem
-                    key={projectMember.email}
-                    user={projectMember}
-                    onUpdate={
-                        canManageProjectAccess
-                            ? (newRole) =>
-                                  updateAccess({
-                                      userUuid: projectMember.userUuid,
-                                      role: newRole,
-                                  })
-                            : undefined
-                    }
-                    onDelete={
-                        canManageProjectAccess
-                            ? () => revokeAccess(projectMember.userUuid)
-                            : undefined
-                    }
-                    relevantOrgRole={
-                        overlapPermissions.find(
-                            ({ email, role }) =>
-                                email === projectMember.email &&
-                                relevantOrgRolesForProjectRole[
-                                    projectMember.role
-                                ].includes(role),
-                        )?.role
-                    }
+        <>
+            <SettingsCard shadow="none" p={0}>
+                <Paper p="sm">
+                    <TextInput
+                        size="xs"
+                        placeholder="Search users by name, email, or role"
+                        onChange={(e) => setSearch(e.target.value)}
+                        value={search}
+                        w={320}
+                        rightSection={
+                            search.length > 0 && (
+                                <ActionIcon onClick={() => setSearch('')}>
+                                    <MantineIcon icon={IconX} />
+                                </ActionIcon>
+                            )
+                        }
+                    />
+                </Paper>
+
+                <Table className={cx(classes.root, classes.alignLastTdRight)}>
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Role</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {organizationUsers?.map((orgUser) => (
+                            <ProjectAccessRow
+                                key={orgUser.userUuid}
+                                projectUuid={projectUuid}
+                                canManageProjectAccess={canManageProjectAccess}
+                                user={orgUser}
+                                inheritedRoles={[
+                                    {
+                                        type: 'organization',
+                                        role: convertOrganizationRoleToProjectRole(
+                                            orgRoles[orgUser.userUuid],
+                                        ),
+                                    },
+                                    {
+                                        type: 'group',
+                                        role: groupRoles[orgUser.userUuid],
+                                    },
+                                    {
+                                        type: 'project',
+                                        role: projectRoles[orgUser.userUuid],
+                                    },
+                                ]}
+                            />
+                        ))}
+                    </tbody>
+                </Table>
+            </SettingsCard>
+
+            {isAddingProjectAccess && (
+                <CreateProjectAccessModal
+                    projectUuid={projectUuid}
+                    onClose={() => onAddProjectAccessClose()}
                 />
-            ))}
-            {inheritedPermissions?.map((orgUser) => (
-                <UserListItem
-                    key={orgUser.email}
-                    user={orgUser}
-                    roleTooltip={`This user inherits the organization role: ${orgUser.role}`}
-                />
-            ))}
-        </Stack>
+            )}
+        </>
     );
 };
 

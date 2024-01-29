@@ -35,6 +35,7 @@ export interface ResourceViewActionMenuCommonProps {
 interface ResourceViewActionMenuProps
     extends ResourceViewActionMenuCommonProps {
     item: ResourceViewItem;
+    allowDelete?: boolean;
     isOpen?: boolean;
     onOpen?: () => void;
     onClose?: () => void;
@@ -52,6 +53,7 @@ const SpaceTypeLabels = {
 
 const ResourceViewActionMenu: FC<ResourceViewActionMenuProps> = ({
     item,
+    allowDelete = true,
     isOpen,
     onOpen,
     onClose,
@@ -294,24 +296,6 @@ const ResourceViewActionMenu: FC<ResourceViewActionMenuProps> = ({
                                                     }
                                                     component="button"
                                                     onClick={() => {
-                                                        // TODO: remove when #6626 is closed
-                                                        console.log(
-                                                            '--------------------',
-                                                        );
-                                                        console.log(
-                                                            'onClick in ResourceActionMenu',
-                                                        );
-                                                        console.log(
-                                                            'item.data.spaceUuid',
-                                                            item.data.spaceUuid,
-                                                        );
-                                                        console.log(
-                                                            'space.uuid',
-                                                            space.uuid,
-                                                        );
-                                                        console.log(
-                                                            '====================',
-                                                        );
                                                         if (
                                                             item.data
                                                                 .spaceUuid !==
@@ -361,22 +345,26 @@ const ResourceViewActionMenu: FC<ResourceViewActionMenuProps> = ({
                     </>
                 ) : null}
 
-                <Menu.Divider />
+                {allowDelete && (
+                    <>
+                        <Menu.Divider />
 
-                <Menu.Item
-                    component="button"
-                    role="menuitem"
-                    color="red"
-                    icon={<MantineIcon icon={IconTrash} size={18} />}
-                    onClick={() => {
-                        onAction({
-                            type: ResourceViewItemAction.DELETE,
-                            item,
-                        });
-                    }}
-                >
-                    Delete {item.type}
-                </Menu.Item>
+                        <Menu.Item
+                            component="button"
+                            role="menuitem"
+                            color="red"
+                            icon={<MantineIcon icon={IconTrash} size={18} />}
+                            onClick={() => {
+                                onAction({
+                                    type: ResourceViewItemAction.DELETE,
+                                    item,
+                                });
+                            }}
+                        >
+                            Delete {item.type}
+                        </Menu.Item>
+                    </>
+                )}
             </Menu.Dropdown>
         </Menu>
     );

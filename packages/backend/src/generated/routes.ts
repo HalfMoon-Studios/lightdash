@@ -16,6 +16,8 @@ import { CsvController } from './../controllers/csvController';
 // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
 import { DbtCloudIntegrationController } from './../controllers/dbtCloudIntegrationController';
 // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+import { ExploreController } from './../controllers/exploreController';
+// WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
 import { GoogleDriveController } from './../controllers/googleDriveController';
 // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
 import { GroupsController } from './../controllers/groupsController';
@@ -144,66 +146,56 @@ const models: TsoaRoute.Models = {
         },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    ApiGdriveAccessTokenResponse: {
+    ApiSuccessEmpty: {
         dataType: 'refAlias',
         type: {
             dataType: 'nestedObjectLiteral',
             nestedProperties: {
-                results: { dataType: 'string', required: true },
+                results: { dataType: 'undefined', required: true },
                 status: { dataType: 'enum', enums: ['ok'], required: true },
             },
             validators: {},
         },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    ApiJobScheduledResponse: {
-        dataType: 'refAlias',
-        type: {
-            dataType: 'nestedObjectLiteral',
-            nestedProperties: {
-                results: {
-                    dataType: 'nestedObjectLiteral',
-                    nestedProperties: {
-                        jobId: { dataType: 'string', required: true },
-                    },
-                    required: true,
-                },
-                status: { dataType: 'enum', enums: ['ok'], required: true },
-            },
-            validators: {},
-        },
-    },
-    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    FieldId: {
-        dataType: 'refAlias',
-        type: { dataType: 'string', validators: {} },
-    },
-    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    FilterGroupResponse: {
+    DbtModelJoinType: {
         dataType: 'refAlias',
         type: {
             dataType: 'union',
             subSchemas: [
+                { dataType: 'enum', enums: ['inner'] },
+                { dataType: 'enum', enums: ['full'] },
+                { dataType: 'enum', enums: ['left'] },
+                { dataType: 'enum', enums: ['right'] },
+            ],
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Pick_ExploreJoin.table-or-sqlOn-or-type-or-hidden_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                table: { dataType: 'string', required: true },
+                sqlOn: { dataType: 'string', required: true },
+                type: { ref: 'DbtModelJoinType' },
+                hidden: { dataType: 'boolean' },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    CompiledExploreJoin: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'intersection',
+            subSchemas: [
+                { ref: 'Pick_ExploreJoin.table-or-sqlOn-or-type-or-hidden_' },
                 {
                     dataType: 'nestedObjectLiteral',
                     nestedProperties: {
-                        or: {
-                            dataType: 'array',
-                            array: { dataType: 'any' },
-                            required: true,
-                        },
-                        id: { dataType: 'string', required: true },
-                    },
-                },
-                {
-                    dataType: 'nestedObjectLiteral',
-                    nestedProperties: {
-                        and: {
-                            dataType: 'array',
-                            array: { dataType: 'any' },
-                            required: true,
-                        },
-                        id: { dataType: 'string', required: true },
+                        compiledSqlOn: { dataType: 'string', required: true },
                     },
                 },
             ],
@@ -211,13 +203,491 @@ const models: TsoaRoute.Models = {
         },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    FiltersResponse: {
+    OrderFieldsByStrategy: {
+        dataType: 'refEnum',
+        enums: ['LABEL', 'INDEX'],
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Record_string.string-or-string-Array_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {},
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    TableBase: {
         dataType: 'refAlias',
         type: {
             dataType: 'nestedObjectLiteral',
             nestedProperties: {
-                metrics: { ref: 'FilterGroupResponse' },
-                dimensions: { ref: 'FilterGroupResponse' },
+                requiredAttributes: {
+                    ref: 'Record_string.string-or-string-Array_',
+                },
+                hidden: { dataType: 'boolean' },
+                sqlWhere: { dataType: 'string' },
+                groupLabel: { dataType: 'string' },
+                orderFieldsBy: { ref: 'OrderFieldsByStrategy' },
+                sqlTable: { dataType: 'string', required: true },
+                schema: { dataType: 'string', required: true },
+                database: { dataType: 'string', required: true },
+                description: { dataType: 'string' },
+                label: { dataType: 'string', required: true },
+                name: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Record_string.CompiledDimension_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {},
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Record_string.CompiledMetric_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {},
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Record_string.LineageNodeDependency-Array_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {},
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    LineageGraph: {
+        dataType: 'refAlias',
+        type: {
+            ref: 'Record_string.LineageNodeDependency-Array_',
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    SourcePosition: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                character: { dataType: 'double', required: true },
+                line: { dataType: 'double', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    Source: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                content: { dataType: 'string', required: true },
+                highlight: {
+                    dataType: 'nestedObjectLiteral',
+                    nestedProperties: {
+                        end: { ref: 'SourcePosition', required: true },
+                        start: { ref: 'SourcePosition', required: true },
+                    },
+                },
+                range: {
+                    dataType: 'nestedObjectLiteral',
+                    nestedProperties: {
+                        end: { ref: 'SourcePosition', required: true },
+                        start: { ref: 'SourcePosition', required: true },
+                    },
+                    required: true,
+                },
+                path: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    CompiledTable: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'intersection',
+            subSchemas: [
+                { ref: 'TableBase' },
+                {
+                    dataType: 'nestedObjectLiteral',
+                    nestedProperties: {
+                        source: {
+                            dataType: 'union',
+                            subSchemas: [
+                                { ref: 'Source' },
+                                { dataType: 'undefined' },
+                            ],
+                        },
+                        lineageGraph: { ref: 'LineageGraph', required: true },
+                        metrics: {
+                            ref: 'Record_string.CompiledMetric_',
+                            required: true,
+                        },
+                        dimensions: {
+                            ref: 'Record_string.CompiledDimension_',
+                            required: true,
+                        },
+                    },
+                },
+            ],
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    SupportedDbtAdapter: {
+        dataType: 'refEnum',
+        enums: [
+            'bigquery',
+            'databricks',
+            'snowflake',
+            'redshift',
+            'postgres',
+            'trino',
+        ],
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    Explore: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                warehouse: { dataType: 'string' },
+                targetDatabase: { ref: 'SupportedDbtAdapter', required: true },
+                tables: {
+                    dataType: 'nestedObjectLiteral',
+                    nestedProperties: {},
+                    additionalProperties: { ref: 'CompiledTable' },
+                    required: true,
+                },
+                joinedTables: {
+                    dataType: 'array',
+                    array: { dataType: 'refAlias', ref: 'CompiledExploreJoin' },
+                    required: true,
+                },
+                baseTable: { dataType: 'string', required: true },
+                groupLabel: { dataType: 'string' },
+                tags: {
+                    dataType: 'array',
+                    array: { dataType: 'string' },
+                    required: true,
+                },
+                label: { dataType: 'string', required: true },
+                name: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    Partial_Explore_: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                name: { dataType: 'string' },
+                label: { dataType: 'string' },
+                tags: { dataType: 'array', array: { dataType: 'string' } },
+                groupLabel: { dataType: 'string' },
+                baseTable: { dataType: 'string' },
+                joinedTables: {
+                    dataType: 'array',
+                    array: { dataType: 'refAlias', ref: 'CompiledExploreJoin' },
+                },
+                tables: {
+                    dataType: 'nestedObjectLiteral',
+                    nestedProperties: {},
+                    additionalProperties: { ref: 'CompiledTable' },
+                },
+                targetDatabase: { ref: 'SupportedDbtAdapter' },
+                warehouse: { dataType: 'string' },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Pick_Explore.name-or-label-or-groupLabel_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                name: { dataType: 'string', required: true },
+                label: { dataType: 'string', required: true },
+                groupLabel: { dataType: 'string' },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    InlineErrorType: {
+        dataType: 'refEnum',
+        enums: ['METADATA_PARSE_ERROR', 'NO_DIMENSIONS_FOUND'],
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    InlineError: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                message: { dataType: 'string', required: true },
+                type: { ref: 'InlineErrorType', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    ExploreError: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'intersection',
+            subSchemas: [
+                { ref: 'Partial_Explore_' },
+                { ref: 'Pick_Explore.name-or-label-or-groupLabel_' },
+                {
+                    dataType: 'nestedObjectLiteral',
+                    nestedProperties: {
+                        errors: {
+                            dataType: 'array',
+                            array: { dataType: 'refAlias', ref: 'InlineError' },
+                            required: true,
+                        },
+                    },
+                },
+            ],
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Pick_Explore.SummaryExploreFields_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                name: { dataType: 'string', required: true },
+                label: { dataType: 'string', required: true },
+                groupLabel: { dataType: 'string' },
+                tags: {
+                    dataType: 'array',
+                    array: { dataType: 'string' },
+                    required: true,
+                },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    SummaryExtraFields: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                databaseName: { dataType: 'string', required: true },
+                schemaName: { dataType: 'string', required: true },
+                description: { dataType: 'string' },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Pick_ExploreError.SummaryExploreErrorFields_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                name: { dataType: 'string', required: true },
+                label: { dataType: 'string', required: true },
+                groupLabel: { dataType: 'string' },
+                tags: {
+                    dataType: 'array',
+                    array: { dataType: 'string' },
+                    required: true,
+                },
+                errors: {
+                    dataType: 'array',
+                    array: { dataType: 'refAlias', ref: 'InlineError' },
+                    required: true,
+                },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    Partial_SummaryExtraFields_: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                description: { dataType: 'string' },
+                schemaName: { dataType: 'string' },
+                databaseName: { dataType: 'string' },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    SummaryExplore: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'union',
+            subSchemas: [
+                {
+                    dataType: 'intersection',
+                    subSchemas: [
+                        { ref: 'Pick_Explore.SummaryExploreFields_' },
+                        { ref: 'SummaryExtraFields' },
+                    ],
+                },
+                {
+                    dataType: 'intersection',
+                    subSchemas: [
+                        { ref: 'Pick_ExploreError.SummaryExploreErrorFields_' },
+                        { ref: 'Partial_SummaryExtraFields_' },
+                    ],
+                },
+            ],
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    ApiExploresResults: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'array',
+            array: { dataType: 'refAlias', ref: 'SummaryExplore' },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    ApiExploreResults: {
+        dataType: 'refAlias',
+        type: { ref: 'Explore', validators: {} },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    ApiCompiledQueryResults: {
+        dataType: 'refAlias',
+        type: { dataType: 'string', validators: {} },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    FieldId: {
+        dataType: 'refAlias',
+        type: { dataType: 'string', validators: {} },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    FilterGroup: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'union',
+            subSchemas: [{ ref: 'OrFilterGroup' }, { ref: 'AndFilterGroup' }],
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    FieldTarget: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                fieldId: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    ConditionalOperator: {
+        dataType: 'refEnum',
+        enums: [
+            'isNull',
+            'notNull',
+            'equals',
+            'notEquals',
+            'startsWith',
+            'endsWith',
+            'include',
+            'doesNotInclude',
+            'lessThan',
+            'lessThanOrEqual',
+            'greaterThan',
+            'greaterThanOrEqual',
+            'inThePast',
+            'notInThePast',
+            'inTheNext',
+            'inTheCurrent',
+            'inBetween',
+        ],
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    FilterRule: {
+        dataType: 'refObject',
+        properties: {
+            values: { dataType: 'array', array: { dataType: 'any' } },
+            operator: { ref: 'ConditionalOperator', required: true },
+            id: { dataType: 'string', required: true },
+            target: { ref: 'FieldTarget', required: true },
+            settings: { dataType: 'any' },
+            disabled: { dataType: 'boolean' },
+        },
+        additionalProperties: false,
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    FilterGroupItem: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'union',
+            subSchemas: [{ ref: 'FilterGroup' }, { ref: 'FilterRule' }],
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    OrFilterGroup: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                or: {
+                    dataType: 'array',
+                    array: { dataType: 'refAlias', ref: 'FilterGroupItem' },
+                    required: true,
+                },
+                id: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    AndFilterGroup: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                and: {
+                    dataType: 'array',
+                    array: { dataType: 'refAlias', ref: 'FilterGroupItem' },
+                    required: true,
+                },
+                id: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    Filters: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                tableCalculations: { ref: 'FilterGroup' },
+                metrics: { ref: 'FilterGroup' },
+                dimensions: { ref: 'FilterGroup' },
             },
             validators: {},
         },
@@ -336,29 +806,6 @@ const models: TsoaRoute.Models = {
         enums: ['km', 'mi', 'usd', 'gbp', 'eur', 'id', 'percent'],
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    ConditionalOperator: {
-        dataType: 'refEnum',
-        enums: [
-            'isNull',
-            'notNull',
-            'equals',
-            'notEquals',
-            'startsWith',
-            'endsWith',
-            'include',
-            'doesNotInclude',
-            'lessThan',
-            'lessThanOrEqual',
-            'greaterThan',
-            'greaterThanOrEqual',
-            'inThePast',
-            'notInThePast',
-            'inTheNext',
-            'inTheCurrent',
-            'inBetween',
-        ],
-    },
-    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     MetricFilterRule: {
         dataType: 'refObject',
         properties: {
@@ -458,11 +905,166 @@ const models: TsoaRoute.Models = {
         additionalProperties: false,
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Pick_CompiledDimension.label-or-name_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                name: { dataType: 'string', required: true },
+                label: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    MetricQuery: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                metadata: {
+                    dataType: 'nestedObjectLiteral',
+                    nestedProperties: {
+                        hasADateDimension: {
+                            ref: 'Pick_CompiledDimension.label-or-name_',
+                            required: true,
+                        },
+                    },
+                },
+                customDimensions: {
+                    dataType: 'array',
+                    array: { dataType: 'refObject', ref: 'CustomDimension' },
+                },
+                additionalMetrics: {
+                    dataType: 'array',
+                    array: { dataType: 'refObject', ref: 'AdditionalMetric' },
+                },
+                tableCalculations: {
+                    dataType: 'array',
+                    array: { dataType: 'refAlias', ref: 'TableCalculation' },
+                    required: true,
+                },
+                limit: { dataType: 'double', required: true },
+                sorts: {
+                    dataType: 'array',
+                    array: { dataType: 'refAlias', ref: 'SortField' },
+                    required: true,
+                },
+                filters: { ref: 'Filters', required: true },
+                metrics: {
+                    dataType: 'array',
+                    array: { dataType: 'refAlias', ref: 'FieldId' },
+                    required: true,
+                },
+                dimensions: {
+                    dataType: 'array',
+                    array: { dataType: 'refAlias', ref: 'FieldId' },
+                    required: true,
+                },
+                exploreName: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Record_string.string_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {},
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    ApiGdriveAccessTokenResponse: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                results: { dataType: 'string', required: true },
+                status: { dataType: 'enum', enums: ['ok'], required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    ApiJobScheduledResponse: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                results: {
+                    dataType: 'nestedObjectLiteral',
+                    nestedProperties: {
+                        jobId: { dataType: 'string', required: true },
+                    },
+                    required: true,
+                },
+                status: { dataType: 'enum', enums: ['ok'], required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    FilterGroupResponse: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'union',
+            subSchemas: [
+                {
+                    dataType: 'nestedObjectLiteral',
+                    nestedProperties: {
+                        or: {
+                            dataType: 'array',
+                            array: { dataType: 'any' },
+                            required: true,
+                        },
+                        id: { dataType: 'string', required: true },
+                    },
+                },
+                {
+                    dataType: 'nestedObjectLiteral',
+                    nestedProperties: {
+                        and: {
+                            dataType: 'array',
+                            array: { dataType: 'any' },
+                            required: true,
+                        },
+                        id: { dataType: 'string', required: true },
+                    },
+                },
+            ],
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    FiltersResponse: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                tableCalculations: { ref: 'FilterGroupResponse' },
+                metrics: { ref: 'FilterGroupResponse' },
+                dimensions: { ref: 'FilterGroupResponse' },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     MetricQueryResponse: {
         dataType: 'refAlias',
         type: {
             dataType: 'nestedObjectLiteral',
             nestedProperties: {
+                metadata: {
+                    dataType: 'nestedObjectLiteral',
+                    nestedProperties: {
+                        hasADateDimension: {
+                            ref: 'Pick_CompiledDimension.label-or-name_',
+                            required: true,
+                        },
+                    },
+                },
                 customDimensions: {
                     dataType: 'array',
                     array: { dataType: 'refObject', ref: 'CustomDimension' },
@@ -493,6 +1095,7 @@ const models: TsoaRoute.Models = {
                     array: { dataType: 'refAlias', ref: 'FieldId' },
                     required: true,
                 },
+                exploreName: { dataType: 'string', required: true },
             },
             validators: {},
         },
@@ -546,30 +1149,6 @@ const models: TsoaRoute.Models = {
         },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    ApiGroupResponse: {
-        dataType: 'refAlias',
-        type: {
-            dataType: 'nestedObjectLiteral',
-            nestedProperties: {
-                results: { ref: 'Group', required: true },
-                status: { dataType: 'enum', enums: ['ok'], required: true },
-            },
-            validators: {},
-        },
-    },
-    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    ApiSuccessEmpty: {
-        dataType: 'refAlias',
-        type: {
-            dataType: 'nestedObjectLiteral',
-            nestedProperties: {
-                results: { dataType: 'undefined', required: true },
-                status: { dataType: 'enum', enums: ['ok'], required: true },
-            },
-            validators: {},
-        },
-    },
-    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     GroupMember: {
         dataType: 'refAlias',
         type: {
@@ -579,6 +1158,48 @@ const models: TsoaRoute.Models = {
                 firstName: { dataType: 'string', required: true },
                 email: { dataType: 'string', required: true },
                 userUuid: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    GroupWithMembers: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'intersection',
+            subSchemas: [
+                { ref: 'Group' },
+                {
+                    dataType: 'nestedObjectLiteral',
+                    nestedProperties: {
+                        memberUuids: {
+                            dataType: 'array',
+                            array: { dataType: 'string' },
+                            required: true,
+                        },
+                        members: {
+                            dataType: 'array',
+                            array: { dataType: 'refAlias', ref: 'GroupMember' },
+                            required: true,
+                        },
+                    },
+                },
+            ],
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    ApiGroupResponse: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                results: {
+                    dataType: 'union',
+                    subSchemas: [{ ref: 'Group' }, { ref: 'GroupWithMembers' }],
+                    required: true,
+                },
+                status: { dataType: 'enum', enums: ['ok'], required: true },
             },
             validators: {},
         },
@@ -600,18 +1221,102 @@ const models: TsoaRoute.Models = {
         },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    'Pick_Group.name_': {
+    'Pick_GroupMember.userUuid_': {
         dataType: 'refAlias',
         type: {
             dataType: 'nestedObjectLiteral',
-            nestedProperties: { name: { dataType: 'string', required: true } },
+            nestedProperties: {
+                userUuid: { dataType: 'string', required: true },
+            },
             validators: {},
         },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    UpdateGroup: {
+    UpdateGroupWithMembers: {
         dataType: 'refAlias',
-        type: { ref: 'Pick_Group.name_', validators: {} },
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                members: {
+                    dataType: 'array',
+                    array: {
+                        dataType: 'refAlias',
+                        ref: 'Pick_GroupMember.userUuid_',
+                    },
+                },
+                name: { dataType: 'string' },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    ProjectMemberRole: {
+        dataType: 'refEnum',
+        enums: ['viewer', 'interactive_viewer', 'editor', 'developer', 'admin'],
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    ProjectGroupAccess: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                role: { ref: 'ProjectMemberRole', required: true },
+                groupUuid: { dataType: 'string', required: true },
+                projectUuid: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    ApiCreateProjectGroupAccess: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                results: { ref: 'ProjectGroupAccess', required: true },
+                status: { dataType: 'enum', enums: ['ok'], required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Pick_CreateDBProjectGroupAccess.role_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                role: { ref: 'ProjectMemberRole', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    ApiUpdateProjectGroupAccess: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                results: { ref: 'ProjectGroupAccess', required: true },
+                status: { dataType: 'enum', enums: ['ok'], required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Pick_DBProjectGroupAccess.role_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                role: { ref: 'ProjectMemberRole', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    UpdateDBProjectGroupAccess: {
+        dataType: 'refAlias',
+        type: { ref: 'Pick_DBProjectGroupAccess.role_', validators: {} },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     Organization: {
@@ -911,12 +1616,12 @@ const models: TsoaRoute.Models = {
             type: {
                 dataType: 'nestedObjectLiteral',
                 nestedProperties: {
+                    role: { ref: 'AllowedEmailDomainsRole', required: true },
                     emailDomains: {
                         dataType: 'array',
                         array: { dataType: 'string' },
                         required: true,
                     },
-                    role: { ref: 'AllowedEmailDomainsRole', required: true },
                     projects: {
                         dataType: 'array',
                         array: {
@@ -955,11 +1660,34 @@ const models: TsoaRoute.Models = {
         },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    'Pick_CreateGroup.name_': {
+    'Pick_Group.name_': {
         dataType: 'refAlias',
         type: {
             dataType: 'nestedObjectLiteral',
             nestedProperties: { name: { dataType: 'string', required: true } },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    CreateGroup: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'intersection',
+            subSchemas: [
+                { ref: 'Pick_Group.name_' },
+                {
+                    dataType: 'nestedObjectLiteral',
+                    nestedProperties: {
+                        members: {
+                            dataType: 'array',
+                            array: {
+                                dataType: 'refAlias',
+                                ref: 'Pick_GroupMember.userUuid_',
+                            },
+                        },
+                    },
+                },
+            ],
             validators: {},
         },
     },
@@ -970,8 +1698,20 @@ const models: TsoaRoute.Models = {
             dataType: 'nestedObjectLiteral',
             nestedProperties: {
                 results: {
-                    dataType: 'array',
-                    array: { dataType: 'refAlias', ref: 'Group' },
+                    dataType: 'union',
+                    subSchemas: [
+                        {
+                            dataType: 'array',
+                            array: { dataType: 'refAlias', ref: 'Group' },
+                        },
+                        {
+                            dataType: 'array',
+                            array: {
+                                dataType: 'refAlias',
+                                ref: 'GroupWithMembers',
+                            },
+                        },
+                    ],
                     required: true,
                 },
                 status: { dataType: 'enum', enums: ['ok'], required: true },
@@ -1023,8 +1763,8 @@ const models: TsoaRoute.Models = {
                 dataType: 'nestedObjectLiteral',
                 nestedProperties: {
                     name: { dataType: 'string', required: true },
-                    uuid: { dataType: 'string', required: true },
                     description: { dataType: 'string' },
+                    uuid: { dataType: 'string', required: true },
                     updatedAt: { dataType: 'datetime', required: true },
                     updatedByUser: { ref: 'UpdatedByUser' },
                     spaceUuid: { dataType: 'string', required: true },
@@ -1115,8 +1855,8 @@ const models: TsoaRoute.Models = {
                 dataType: 'nestedObjectLiteral',
                 nestedProperties: {
                     name: { dataType: 'string', required: true },
-                    uuid: { dataType: 'string', required: true },
                     description: { dataType: 'string' },
+                    uuid: { dataType: 'string', required: true },
                     updatedAt: { dataType: 'datetime', required: true },
                     updatedByUser: { ref: 'UpdatedByUser' },
                     spaceUuid: { dataType: 'string', required: true },
@@ -1566,11 +2306,12 @@ const models: TsoaRoute.Models = {
             type: {
                 dataType: 'nestedObjectLiteral',
                 nestedProperties: {
-                    role: { dataType: 'string' },
                     type: { ref: 'WarehouseTypes.SNOWFLAKE', required: true },
-                    account: { dataType: 'string', required: true },
-                    database: { dataType: 'string', required: true },
                     warehouse: { dataType: 'string', required: true },
+                    role: { dataType: 'string' },
+                    account: { dataType: 'string', required: true },
+                    requireUserCredentials: { dataType: 'boolean' },
+                    database: { dataType: 'string', required: true },
                     schema: { dataType: 'string', required: true },
                     threads: { dataType: 'double' },
                     clientSessionKeepAlive: { dataType: 'boolean' },
@@ -1616,6 +2357,7 @@ const models: TsoaRoute.Models = {
                 dataType: 'nestedObjectLiteral',
                 nestedProperties: {
                     type: { ref: 'WarehouseTypes.REDSHIFT', required: true },
+                    requireUserCredentials: { dataType: 'boolean' },
                     schema: { dataType: 'string', required: true },
                     threads: { dataType: 'double' },
                     startOfWeek: {
@@ -1668,8 +2410,9 @@ const models: TsoaRoute.Models = {
             type: {
                 dataType: 'nestedObjectLiteral',
                 nestedProperties: {
-                    role: { dataType: 'string' },
                     type: { ref: 'WarehouseTypes.POSTGRES', required: true },
+                    role: { dataType: 'string' },
+                    requireUserCredentials: { dataType: 'boolean' },
                     schema: { dataType: 'string', required: true },
                     threads: { dataType: 'double' },
                     startOfWeek: {
@@ -1723,6 +2466,7 @@ const models: TsoaRoute.Models = {
                 dataType: 'nestedObjectLiteral',
                 nestedProperties: {
                     type: { ref: 'WarehouseTypes.BIGQUERY', required: true },
+                    requireUserCredentials: { dataType: 'boolean' },
                     threads: { dataType: 'double' },
                     startOfWeek: {
                         dataType: 'union',
@@ -1807,6 +2551,7 @@ const models: TsoaRoute.Models = {
                 dataType: 'nestedObjectLiteral',
                 nestedProperties: {
                     type: { ref: 'WarehouseTypes.DATABRICKS', required: true },
+                    requireUserCredentials: { dataType: 'boolean' },
                     database: { dataType: 'string', required: true },
                     startOfWeek: {
                         dataType: 'union',
@@ -1851,6 +2596,7 @@ const models: TsoaRoute.Models = {
                 dataType: 'nestedObjectLiteral',
                 nestedProperties: {
                     type: { ref: 'WarehouseTypes.TRINO', required: true },
+                    requireUserCredentials: { dataType: 'boolean' },
                     schema: { dataType: 'string', required: true },
                     startOfWeek: {
                         dataType: 'union',
@@ -1943,9 +2689,9 @@ const models: TsoaRoute.Models = {
                 dataType: 'nestedObjectLiteral',
                 nestedProperties: {
                     name: { dataType: 'string', required: true },
+                    description: { dataType: 'string' },
                     organizationUuid: { dataType: 'string', required: true },
                     uuid: { dataType: 'string', required: true },
-                    description: { dataType: 'string' },
                     projectUuid: { dataType: 'string', required: true },
                     spaceUuid: { dataType: 'string', required: true },
                     pinnedListUuid: {
@@ -2097,11 +2843,6 @@ const models: TsoaRoute.Models = {
         },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    ProjectMemberRole: {
-        dataType: 'refEnum',
-        enums: ['viewer', 'interactive_viewer', 'editor', 'developer', 'admin'],
-    },
-    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     ProjectMemberProfile: {
         dataType: 'refAlias',
         type: {
@@ -2173,6 +2914,22 @@ const models: TsoaRoute.Models = {
         },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    ApiGetProjectGroupAccesses: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                results: {
+                    dataType: 'array',
+                    array: { dataType: 'refAlias', ref: 'ProjectGroupAccess' },
+                    required: true,
+                },
+                status: { dataType: 'enum', enums: ['ok'], required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     'Record_string._type-DimensionType--__': {
         dataType: 'refAlias',
         type: {
@@ -2234,16 +2991,9 @@ const models: TsoaRoute.Models = {
         },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    'Pick_CompiledDimension.label-or-name_': {
-        dataType: 'refAlias',
-        type: {
-            dataType: 'nestedObjectLiteral',
-            nestedProperties: {
-                name: { dataType: 'string', required: true },
-                label: { dataType: 'string', required: true },
-            },
-            validators: {},
-        },
+    DateGranularity: {
+        dataType: 'refEnum',
+        enums: ['Day', 'Week', 'Month', 'Quarter', 'Year'],
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     MetricQueryRequest: {
@@ -2260,6 +3010,7 @@ const models: TsoaRoute.Models = {
                         },
                     },
                 },
+                granularity: { ref: 'DateGranularity' },
                 customDimensions: {
                     dataType: 'array',
                     array: { dataType: 'refObject', ref: 'CustomDimension' },
@@ -2299,6 +3050,7 @@ const models: TsoaRoute.Models = {
                     array: { dataType: 'refAlias', ref: 'FieldId' },
                     required: true,
                 },
+                exploreName: { dataType: 'string', required: true },
             },
             validators: {},
         },
@@ -2316,6 +3068,15 @@ const models: TsoaRoute.Models = {
         },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Record_string.DbtExposure_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {},
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     CacheMetadata: {
         dataType: 'refAlias',
         type: {
@@ -2328,6 +3089,15 @@ const models: TsoaRoute.Models = {
         },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Record_string.Item-or-AdditionalMetric_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {},
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     ApiRunQueryResponse: {
         dataType: 'refAlias',
         type: {
@@ -2336,6 +3106,9 @@ const models: TsoaRoute.Models = {
                 results: {
                     dataType: 'nestedObjectLiteral',
                     nestedProperties: {
+                        fields: {
+                            ref: 'Record_string.Item-or-AdditionalMetric_',
+                        },
                         rows: {
                             dataType: 'array',
                             array: { dataType: 'any' },
@@ -2353,11 +3126,6 @@ const models: TsoaRoute.Models = {
             },
             validators: {},
         },
-    },
-    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    DateGranularity: {
-        dataType: 'refEnum',
-        enums: ['Day', 'Week', 'Month', 'Quarter', 'Year'],
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     'Pick_LightdashUser.userUuid-or-firstName-or-lastName_': {
@@ -2426,142 +3194,6 @@ const models: TsoaRoute.Models = {
             nestedProperties: {
                 results: { ref: 'ChartHistory', required: true },
                 status: { dataType: 'enum', enums: ['ok'], required: true },
-            },
-            validators: {},
-        },
-    },
-    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    FilterGroup: {
-        dataType: 'refAlias',
-        type: {
-            dataType: 'union',
-            subSchemas: [{ ref: 'OrFilterGroup' }, { ref: 'AndFilterGroup' }],
-            validators: {},
-        },
-    },
-    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    FieldTarget: {
-        dataType: 'refAlias',
-        type: {
-            dataType: 'nestedObjectLiteral',
-            nestedProperties: {
-                fieldId: { dataType: 'string', required: true },
-            },
-            validators: {},
-        },
-    },
-    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    FilterRule: {
-        dataType: 'refObject',
-        properties: {
-            values: { dataType: 'array', array: { dataType: 'any' } },
-            operator: { ref: 'ConditionalOperator', required: true },
-            id: { dataType: 'string', required: true },
-            target: { ref: 'FieldTarget', required: true },
-            settings: { dataType: 'any' },
-            disabled: { dataType: 'boolean' },
-        },
-        additionalProperties: false,
-    },
-    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    FilterGroupItem: {
-        dataType: 'refAlias',
-        type: {
-            dataType: 'union',
-            subSchemas: [{ ref: 'FilterGroup' }, { ref: 'FilterRule' }],
-            validators: {},
-        },
-    },
-    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    OrFilterGroup: {
-        dataType: 'refAlias',
-        type: {
-            dataType: 'nestedObjectLiteral',
-            nestedProperties: {
-                or: {
-                    dataType: 'array',
-                    array: { dataType: 'refAlias', ref: 'FilterGroupItem' },
-                    required: true,
-                },
-                id: { dataType: 'string', required: true },
-            },
-            validators: {},
-        },
-    },
-    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    AndFilterGroup: {
-        dataType: 'refAlias',
-        type: {
-            dataType: 'nestedObjectLiteral',
-            nestedProperties: {
-                and: {
-                    dataType: 'array',
-                    array: { dataType: 'refAlias', ref: 'FilterGroupItem' },
-                    required: true,
-                },
-                id: { dataType: 'string', required: true },
-            },
-            validators: {},
-        },
-    },
-    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    Filters: {
-        dataType: 'refAlias',
-        type: {
-            dataType: 'nestedObjectLiteral',
-            nestedProperties: {
-                tableCalculations: { ref: 'FilterGroup' },
-                metrics: { ref: 'FilterGroup' },
-                dimensions: { ref: 'FilterGroup' },
-            },
-            validators: {},
-        },
-    },
-    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    MetricQuery: {
-        dataType: 'refAlias',
-        type: {
-            dataType: 'nestedObjectLiteral',
-            nestedProperties: {
-                metadata: {
-                    dataType: 'nestedObjectLiteral',
-                    nestedProperties: {
-                        hasADateDimension: {
-                            ref: 'Pick_CompiledDimension.label-or-name_',
-                            required: true,
-                        },
-                    },
-                },
-                customDimensions: {
-                    dataType: 'array',
-                    array: { dataType: 'refObject', ref: 'CustomDimension' },
-                },
-                additionalMetrics: {
-                    dataType: 'array',
-                    array: { dataType: 'refObject', ref: 'AdditionalMetric' },
-                },
-                tableCalculations: {
-                    dataType: 'array',
-                    array: { dataType: 'refAlias', ref: 'TableCalculation' },
-                    required: true,
-                },
-                limit: { dataType: 'double', required: true },
-                sorts: {
-                    dataType: 'array',
-                    array: { dataType: 'refAlias', ref: 'SortField' },
-                    required: true,
-                },
-                filters: { ref: 'Filters', required: true },
-                metrics: {
-                    dataType: 'array',
-                    array: { dataType: 'refAlias', ref: 'FieldId' },
-                    required: true,
-                },
-                dimensions: {
-                    dataType: 'array',
-                    array: { dataType: 'refAlias', ref: 'FieldId' },
-                    required: true,
-                },
             },
             validators: {},
         },
@@ -2861,6 +3493,7 @@ const models: TsoaRoute.Models = {
         type: {
             dataType: 'nestedObjectLiteral',
             nestedProperties: {
+                rotate: { dataType: 'double' },
                 inverse: { dataType: 'boolean' },
                 max: {
                     dataType: 'union',
@@ -2971,15 +3604,6 @@ const models: TsoaRoute.Models = {
         type: {
             dataType: 'enum',
             enums: ['hidden', 'inside', 'outside'],
-            validators: {},
-        },
-    },
-    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
-    'Record_string.string_': {
-        dataType: 'refAlias',
-        type: {
-            dataType: 'nestedObjectLiteral',
-            nestedProperties: {},
             validators: {},
         },
     },
@@ -3227,6 +3851,11 @@ const models: TsoaRoute.Models = {
         type: {
             dataType: 'nestedObjectLiteral',
             nestedProperties: {
+                colorPalette: {
+                    dataType: 'array',
+                    array: { dataType: 'string' },
+                    required: true,
+                },
                 dashboardName: {
                     dataType: 'union',
                     subSchemas: [
@@ -3538,6 +4167,7 @@ const models: TsoaRoute.Models = {
                 {
                     dataType: 'nestedObjectLiteral',
                     nestedProperties: {
+                        customViewportWidth: { dataType: 'double' },
                         filters: {
                             dataType: 'array',
                             array: {
@@ -3811,7 +4441,15 @@ const models: TsoaRoute.Models = {
                 results: {
                     dataType: 'nestedObjectLiteral',
                     nestedProperties: {
-                        status: { dataType: 'string', required: true },
+                        details: {
+                            dataType: 'union',
+                            subSchemas: [
+                                { ref: 'Record_string.any_' },
+                                { dataType: 'enum', enums: [null] },
+                            ],
+                            required: true,
+                        },
+                        status: { ref: 'SchedulerJobStatus', required: true },
                     },
                     required: true,
                 },
@@ -3826,6 +4464,13 @@ const models: TsoaRoute.Models = {
         type: {
             dataType: 'nestedObjectLiteral',
             nestedProperties: {
+                results: {
+                    dataType: 'nestedObjectLiteral',
+                    nestedProperties: {
+                        jobId: { dataType: 'string', required: true },
+                    },
+                    required: true,
+                },
                 status: { dataType: 'enum', enums: ['ok'], required: true },
             },
             validators: {},
@@ -3907,6 +4552,18 @@ const models: TsoaRoute.Models = {
         },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    ApiSlackNotificationChannelResponse: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                results: { dataType: 'void', required: true },
+                status: { dataType: 'enum', enums: ['ok'], required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     'Pick_SavedChart.uuid-or-name-or-updatedAt-or-updatedByUser-or-description-or-spaceUuid-or-pinnedListUuid-or-pinnedListOrder_':
         {
             dataType: 'refAlias',
@@ -3914,8 +4571,8 @@ const models: TsoaRoute.Models = {
                 dataType: 'nestedObjectLiteral',
                 nestedProperties: {
                     name: { dataType: 'string', required: true },
-                    uuid: { dataType: 'string', required: true },
                     description: { dataType: 'string' },
+                    uuid: { dataType: 'string', required: true },
                     updatedAt: { dataType: 'datetime', required: true },
                     updatedByUser: { ref: 'UpdatedByUser' },
                     spaceUuid: { dataType: 'string', required: true },
@@ -4001,9 +4658,9 @@ const models: TsoaRoute.Models = {
                 dataType: 'nestedObjectLiteral',
                 nestedProperties: {
                     name: { dataType: 'string', required: true },
+                    description: { dataType: 'string' },
                     organizationUuid: { dataType: 'string', required: true },
                     uuid: { dataType: 'string', required: true },
-                    description: { dataType: 'string' },
                     updatedAt: { dataType: 'datetime', required: true },
                     projectUuid: { dataType: 'string', required: true },
                     updatedByUser: { ref: 'UpdatedByUser' },
@@ -4236,6 +4893,18 @@ const models: TsoaRoute.Models = {
         },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    GroupAttributeValue: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                value: { dataType: 'string', required: true },
+                groupUuid: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     UserAttribute: {
         dataType: 'refAlias',
         type: {
@@ -4247,6 +4916,11 @@ const models: TsoaRoute.Models = {
                         { dataType: 'string' },
                         { dataType: 'enum', enums: [null] },
                     ],
+                    required: true,
+                },
+                groups: {
+                    dataType: 'array',
+                    array: { dataType: 'refAlias', ref: 'GroupAttributeValue' },
                     required: true,
                 },
                 users: {
@@ -4337,6 +5011,11 @@ const models: TsoaRoute.Models = {
         type: { ref: 'Omit_UserAttributeValue.email_', validators: {} },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    CreateGroupAttributeValue: {
+        dataType: 'refAlias',
+        type: { ref: 'GroupAttributeValue', validators: {} },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     CreateUserAttribute: {
         dataType: 'refAlias',
         type: {
@@ -4348,6 +5027,14 @@ const models: TsoaRoute.Models = {
                 {
                     dataType: 'nestedObjectLiteral',
                     nestedProperties: {
+                        groups: {
+                            dataType: 'array',
+                            array: {
+                                dataType: 'refAlias',
+                                ref: 'CreateGroupAttributeValue',
+                            },
+                            required: true,
+                        },
                         users: {
                             dataType: 'array',
                             array: {
@@ -4583,9 +5270,192 @@ const models: TsoaRoute.Models = {
         },
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Pick_CreateRedshiftCredentials-or-CreatePostgresCredentials-or-CreateSnowflakeCredentials-or-CreateTrinoCredentials.type-or-user_':
+        {
+            dataType: 'refAlias',
+            type: {
+                dataType: 'nestedObjectLiteral',
+                nestedProperties: {
+                    type: { ref: 'WarehouseTypes.SNOWFLAKE', required: true },
+                    user: { dataType: 'string', required: true },
+                },
+                validators: {},
+            },
+        },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Pick_CreateBigqueryCredentials.type_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                type: { ref: 'WarehouseTypes.BIGQUERY', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Pick_CreateDatabricksCredentials.type_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                type: { ref: 'WarehouseTypes.DATABRICKS', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    UserWarehouseCredentials: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                credentials: {
+                    dataType: 'union',
+                    subSchemas: [
+                        {
+                            ref: 'Pick_CreateRedshiftCredentials-or-CreatePostgresCredentials-or-CreateSnowflakeCredentials-or-CreateTrinoCredentials.type-or-user_',
+                        },
+                        { ref: 'Pick_CreateBigqueryCredentials.type_' },
+                        { ref: 'Pick_CreateDatabricksCredentials.type_' },
+                    ],
+                    required: true,
+                },
+                updatedAt: { dataType: 'datetime', required: true },
+                createdAt: { dataType: 'datetime', required: true },
+                name: { dataType: 'string', required: true },
+                userUuid: { dataType: 'string', required: true },
+                uuid: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Pick_CreateRedshiftCredentials.type-or-user-or-password_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                type: { ref: 'WarehouseTypes.REDSHIFT', required: true },
+                user: { dataType: 'string', required: true },
+                password: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Pick_CreatePostgresCredentials.type-or-user-or-password_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                type: { ref: 'WarehouseTypes.POSTGRES', required: true },
+                user: { dataType: 'string', required: true },
+                password: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Pick_CreateSnowflakeCredentials.type-or-user-or-password_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                type: { ref: 'WarehouseTypes.SNOWFLAKE', required: true },
+                user: { dataType: 'string', required: true },
+                password: { dataType: 'string' },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Pick_CreateTrinoCredentials.type-or-user-or-password_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                type: { ref: 'WarehouseTypes.TRINO', required: true },
+                user: { dataType: 'string', required: true },
+                password: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Pick_CreateBigqueryCredentials.type-or-keyfileContents_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                type: { ref: 'WarehouseTypes.BIGQUERY', required: true },
+                keyfileContents: {
+                    ref: 'Record_string.string_',
+                    required: true,
+                },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    'Pick_CreateDatabricksCredentials.type-or-personalAccessToken_': {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                type: { ref: 'WarehouseTypes.DATABRICKS', required: true },
+                personalAccessToken: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    UpsertUserWarehouseCredentials: {
+        dataType: 'refAlias',
+        type: {
+            dataType: 'nestedObjectLiteral',
+            nestedProperties: {
+                credentials: {
+                    dataType: 'union',
+                    subSchemas: [
+                        {
+                            ref: 'Pick_CreateRedshiftCredentials.type-or-user-or-password_',
+                        },
+                        {
+                            ref: 'Pick_CreatePostgresCredentials.type-or-user-or-password_',
+                        },
+                        {
+                            ref: 'Pick_CreateSnowflakeCredentials.type-or-user-or-password_',
+                        },
+                        {
+                            ref: 'Pick_CreateTrinoCredentials.type-or-user-or-password_',
+                        },
+                        {
+                            ref: 'Pick_CreateBigqueryCredentials.type-or-keyfileContents_',
+                        },
+                        {
+                            ref: 'Pick_CreateDatabricksCredentials.type-or-personalAccessToken_',
+                        },
+                    ],
+                    required: true,
+                },
+                name: { dataType: 'string', required: true },
+            },
+            validators: {},
+        },
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     ValidationErrorType: {
         dataType: 'refEnum',
-        enums: ['chart', 'sorting', 'filter', 'metric', 'model', 'dimension'],
+        enums: [
+            'chart',
+            'sorting',
+            'filter',
+            'metric',
+            'model',
+            'dimension',
+            'custom metric',
+        ],
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     ValidationSourceType: {
@@ -4947,6 +5817,314 @@ export function RegisterRoutes(app: express.Router) {
         },
     );
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    app.put(
+        '/api/v1/projects/:projectUuid/explores',
+        ...fetchMiddlewares<RequestHandler>(ExploreController),
+        ...fetchMiddlewares<RequestHandler>(
+            ExploreController.prototype.SetExplores,
+        ),
+
+        function ExploreController_SetExplores(
+            request: any,
+            response: any,
+            next: any,
+        ) {
+            const args = {
+                projectUuid: {
+                    in: 'path',
+                    name: 'projectUuid',
+                    required: true,
+                    dataType: 'string',
+                },
+                req: {
+                    in: 'request',
+                    name: 'req',
+                    required: true,
+                    dataType: 'object',
+                },
+                body: {
+                    in: 'body',
+                    name: 'body',
+                    required: true,
+                    dataType: 'array',
+                    array: {
+                        dataType: 'union',
+                        subSchemas: [
+                            { ref: 'Explore' },
+                            { ref: 'ExploreError' },
+                        ],
+                    },
+                },
+            };
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = getValidatedArgs(args, request, response);
+
+                const controller = new ExploreController();
+
+                const promise = controller.SetExplores.apply(
+                    controller,
+                    validatedArgs as any,
+                );
+                promiseHandler(controller, promise, response, 200, next);
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    app.get(
+        '/api/v1/projects/:projectUuid/explores',
+        ...fetchMiddlewares<RequestHandler>(ExploreController),
+        ...fetchMiddlewares<RequestHandler>(
+            ExploreController.prototype.GetExplores,
+        ),
+
+        function ExploreController_GetExplores(
+            request: any,
+            response: any,
+            next: any,
+        ) {
+            const args = {
+                projectUuid: {
+                    in: 'path',
+                    name: 'projectUuid',
+                    required: true,
+                    dataType: 'string',
+                },
+                req: {
+                    in: 'request',
+                    name: 'req',
+                    required: true,
+                    dataType: 'object',
+                },
+            };
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = getValidatedArgs(args, request, response);
+
+                const controller = new ExploreController();
+
+                const promise = controller.GetExplores.apply(
+                    controller,
+                    validatedArgs as any,
+                );
+                promiseHandler(controller, promise, response, 200, next);
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    app.get(
+        '/api/v1/projects/:projectUuid/explores/:exploreId',
+        ...fetchMiddlewares<RequestHandler>(ExploreController),
+        ...fetchMiddlewares<RequestHandler>(
+            ExploreController.prototype.GetExplore,
+        ),
+
+        function ExploreController_GetExplore(
+            request: any,
+            response: any,
+            next: any,
+        ) {
+            const args = {
+                exploreId: {
+                    in: 'path',
+                    name: 'exploreId',
+                    required: true,
+                    dataType: 'string',
+                },
+                projectUuid: {
+                    in: 'path',
+                    name: 'projectUuid',
+                    required: true,
+                    dataType: 'string',
+                },
+                req: {
+                    in: 'request',
+                    name: 'req',
+                    required: true,
+                    dataType: 'object',
+                },
+            };
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = getValidatedArgs(args, request, response);
+
+                const controller = new ExploreController();
+
+                const promise = controller.GetExplore.apply(
+                    controller,
+                    validatedArgs as any,
+                );
+                promiseHandler(controller, promise, response, 200, next);
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    app.post(
+        '/api/v1/projects/:projectUuid/explores/:exploreId/compileQuery',
+        ...fetchMiddlewares<RequestHandler>(ExploreController),
+        ...fetchMiddlewares<RequestHandler>(
+            ExploreController.prototype.CompileQuery,
+        ),
+
+        function ExploreController_CompileQuery(
+            request: any,
+            response: any,
+            next: any,
+        ) {
+            const args = {
+                exploreId: {
+                    in: 'path',
+                    name: 'exploreId',
+                    required: true,
+                    dataType: 'string',
+                },
+                projectUuid: {
+                    in: 'path',
+                    name: 'projectUuid',
+                    required: true,
+                    dataType: 'string',
+                },
+                req: {
+                    in: 'request',
+                    name: 'req',
+                    required: true,
+                    dataType: 'object',
+                },
+                body: {
+                    in: 'body',
+                    name: 'body',
+                    required: true,
+                    ref: 'MetricQuery',
+                },
+            };
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = getValidatedArgs(args, request, response);
+
+                const controller = new ExploreController();
+
+                const promise = controller.CompileQuery.apply(
+                    controller,
+                    validatedArgs as any,
+                );
+                promiseHandler(controller, promise, response, 200, next);
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    app.post(
+        '/api/v1/projects/:projectUuid/explores/:exploreId/downloadCsv',
+        ...fetchMiddlewares<RequestHandler>(ExploreController),
+        ...fetchMiddlewares<RequestHandler>(
+            ExploreController.prototype.DownloadCsvFromExplore,
+        ),
+
+        function ExploreController_DownloadCsvFromExplore(
+            request: any,
+            response: any,
+            next: any,
+        ) {
+            const args = {
+                exploreId: {
+                    in: 'path',
+                    name: 'exploreId',
+                    required: true,
+                    dataType: 'string',
+                },
+                projectUuid: {
+                    in: 'path',
+                    name: 'projectUuid',
+                    required: true,
+                    dataType: 'string',
+                },
+                req: {
+                    in: 'request',
+                    name: 'req',
+                    required: true,
+                    dataType: 'object',
+                },
+                body: {
+                    in: 'body',
+                    name: 'body',
+                    required: true,
+                    dataType: 'intersection',
+                    subSchemas: [
+                        { ref: 'MetricQuery' },
+                        {
+                            dataType: 'nestedObjectLiteral',
+                            nestedProperties: {
+                                hiddenFields: {
+                                    dataType: 'array',
+                                    array: { dataType: 'string' },
+                                },
+                                columnOrder: {
+                                    dataType: 'array',
+                                    array: { dataType: 'string' },
+                                    required: true,
+                                },
+                                customLabels: { ref: 'Record_string.string_' },
+                                showTableNames: {
+                                    dataType: 'boolean',
+                                    required: true,
+                                },
+                                csvLimit: {
+                                    dataType: 'union',
+                                    subSchemas: [
+                                        { dataType: 'double' },
+                                        { dataType: 'enum', enums: [null] },
+                                        { dataType: 'undefined' },
+                                    ],
+                                    required: true,
+                                },
+                                onlyRaw: {
+                                    dataType: 'boolean',
+                                    required: true,
+                                },
+                            },
+                        },
+                    ],
+                },
+            };
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = getValidatedArgs(args, request, response);
+
+                const controller = new ExploreController();
+
+                const promise = controller.DownloadCsvFromExplore.apply(
+                    controller,
+                    validatedArgs as any,
+                );
+                promiseHandler(controller, promise, response, 200, next);
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     app.get(
         '/api/v1/gdrive/get-access-token',
         ...fetchMiddlewares<RequestHandler>(GoogleDriveController),
@@ -5058,6 +6236,12 @@ export function RegisterRoutes(app: express.Router) {
                     required: true,
                     dataType: 'object',
                 },
+                includeMembers: {
+                    in: 'query',
+                    name: 'includeMembers',
+                    dataType: 'double',
+                },
+                offset: { in: 'query', name: 'offset', dataType: 'double' },
             };
 
             // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
@@ -5304,7 +6488,7 @@ export function RegisterRoutes(app: express.Router) {
                     in: 'body',
                     name: 'body',
                     required: true,
-                    ref: 'UpdateGroup',
+                    ref: 'UpdateGroupWithMembers',
                 },
             };
 
@@ -5317,6 +6501,174 @@ export function RegisterRoutes(app: express.Router) {
                 const controller = new GroupsController();
 
                 const promise = controller.updateGroup.apply(
+                    controller,
+                    validatedArgs as any,
+                );
+                promiseHandler(controller, promise, response, undefined, next);
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    app.post(
+        '/api/v1/groups/:groupUuid/projects/:projectUuid',
+        ...fetchMiddlewares<RequestHandler>(GroupsController),
+        ...fetchMiddlewares<RequestHandler>(
+            GroupsController.prototype.addProjectAccessToGroup,
+        ),
+
+        function GroupsController_addProjectAccessToGroup(
+            request: any,
+            response: any,
+            next: any,
+        ) {
+            const args = {
+                groupUuid: {
+                    in: 'path',
+                    name: 'groupUuid',
+                    required: true,
+                    dataType: 'string',
+                },
+                projectUuid: {
+                    in: 'path',
+                    name: 'projectUuid',
+                    required: true,
+                    dataType: 'string',
+                },
+                projectGroupAccess: {
+                    in: 'body',
+                    name: 'projectGroupAccess',
+                    required: true,
+                    ref: 'Pick_CreateDBProjectGroupAccess.role_',
+                },
+                req: {
+                    in: 'request',
+                    name: 'req',
+                    required: true,
+                    dataType: 'object',
+                },
+            };
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = getValidatedArgs(args, request, response);
+
+                const controller = new GroupsController();
+
+                const promise = controller.addProjectAccessToGroup.apply(
+                    controller,
+                    validatedArgs as any,
+                );
+                promiseHandler(controller, promise, response, undefined, next);
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    app.patch(
+        '/api/v1/groups/:groupUuid/projects/:projectUuid',
+        ...fetchMiddlewares<RequestHandler>(GroupsController),
+        ...fetchMiddlewares<RequestHandler>(
+            GroupsController.prototype.updateProjectAccessForGroup,
+        ),
+
+        function GroupsController_updateProjectAccessForGroup(
+            request: any,
+            response: any,
+            next: any,
+        ) {
+            const args = {
+                groupUuid: {
+                    in: 'path',
+                    name: 'groupUuid',
+                    required: true,
+                    dataType: 'string',
+                },
+                projectUuid: {
+                    in: 'path',
+                    name: 'projectUuid',
+                    required: true,
+                    dataType: 'string',
+                },
+                projectGroupAccess: {
+                    in: 'body',
+                    name: 'projectGroupAccess',
+                    required: true,
+                    ref: 'UpdateDBProjectGroupAccess',
+                },
+                req: {
+                    in: 'request',
+                    name: 'req',
+                    required: true,
+                    dataType: 'object',
+                },
+            };
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = getValidatedArgs(args, request, response);
+
+                const controller = new GroupsController();
+
+                const promise = controller.updateProjectAccessForGroup.apply(
+                    controller,
+                    validatedArgs as any,
+                );
+                promiseHandler(controller, promise, response, undefined, next);
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    app.delete(
+        '/api/v1/groups/:groupUuid/projects/:projectUuid',
+        ...fetchMiddlewares<RequestHandler>(GroupsController),
+        ...fetchMiddlewares<RequestHandler>(
+            GroupsController.prototype.removeProjectAccessFromGroup,
+        ),
+
+        function GroupsController_removeProjectAccessFromGroup(
+            request: any,
+            response: any,
+            next: any,
+        ) {
+            const args = {
+                groupUuid: {
+                    in: 'path',
+                    name: 'groupUuid',
+                    required: true,
+                    dataType: 'string',
+                },
+                projectUuid: {
+                    in: 'path',
+                    name: 'projectUuid',
+                    required: true,
+                    dataType: 'string',
+                },
+                req: {
+                    in: 'request',
+                    name: 'req',
+                    required: true,
+                    dataType: 'object',
+                },
+            };
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = getValidatedArgs(args, request, response);
+
+                const controller = new GroupsController();
+
+                const promise = controller.removeProjectAccessFromGroup.apply(
                     controller,
                     validatedArgs as any,
                 );
@@ -5630,6 +6982,11 @@ export function RegisterRoutes(app: express.Router) {
                     required: true,
                     dataType: 'object',
                 },
+                includeGroups: {
+                    in: 'query',
+                    name: 'includeGroups',
+                    dataType: 'double',
+                },
             };
 
             // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
@@ -5907,7 +7264,7 @@ export function RegisterRoutes(app: express.Router) {
                     in: 'body',
                     name: 'body',
                     required: true,
-                    ref: 'Pick_CreateGroup.name_',
+                    ref: 'CreateGroup',
                 },
             };
 
@@ -5948,6 +7305,11 @@ export function RegisterRoutes(app: express.Router) {
                     name: 'req',
                     required: true,
                     dataType: 'object',
+                },
+                includeMembers: {
+                    in: 'query',
+                    name: 'includeMembers',
+                    dataType: 'double',
                 },
             };
 
@@ -6474,6 +7836,52 @@ export function RegisterRoutes(app: express.Router) {
         },
     );
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    app.get(
+        '/api/v1/projects/:projectUuid/groupAccesses',
+        ...fetchMiddlewares<RequestHandler>(ProjectController),
+        ...fetchMiddlewares<RequestHandler>(
+            ProjectController.prototype.getProjectGroupAccesses,
+        ),
+
+        function ProjectController_getProjectGroupAccesses(
+            request: any,
+            response: any,
+            next: any,
+        ) {
+            const args = {
+                projectUuid: {
+                    in: 'path',
+                    name: 'projectUuid',
+                    required: true,
+                    dataType: 'string',
+                },
+                req: {
+                    in: 'request',
+                    name: 'req',
+                    required: true,
+                    dataType: 'object',
+                },
+            };
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = getValidatedArgs(args, request, response);
+
+                const controller = new ProjectController();
+
+                const promise = controller.getProjectGroupAccesses.apply(
+                    controller,
+                    validatedArgs as any,
+                );
+                promiseHandler(controller, promise, response, 200, next);
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     app.post(
         '/api/v1/projects/:projectUuid/sqlQuery',
         ...fetchMiddlewares<RequestHandler>(ProjectController),
@@ -6571,6 +7979,52 @@ export function RegisterRoutes(app: express.Router) {
                 const controller = new ProjectController();
 
                 const promise = controller.CalculateTotalFromQuery.apply(
+                    controller,
+                    validatedArgs as any,
+                );
+                promiseHandler(controller, promise, response, 200, next);
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    app.get(
+        '/api/v1/projects/:projectUuid/dbt-exposures',
+        ...fetchMiddlewares<RequestHandler>(ProjectController),
+        ...fetchMiddlewares<RequestHandler>(
+            ProjectController.prototype.GetDbtExposures,
+        ),
+
+        function ProjectController_GetDbtExposures(
+            request: any,
+            response: any,
+            next: any,
+        ) {
+            const args = {
+                projectUuid: {
+                    in: 'path',
+                    name: 'projectUuid',
+                    required: true,
+                    dataType: 'string',
+                },
+                req: {
+                    in: 'request',
+                    name: 'req',
+                    required: true,
+                    dataType: 'object',
+                },
+            };
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = getValidatedArgs(args, request, response);
+
+                const controller = new ProjectController();
+
+                const promise = controller.GetDbtExposures.apply(
                     controller,
                     validatedArgs as any,
                 );
@@ -7515,6 +8969,62 @@ export function RegisterRoutes(app: express.Router) {
         },
     );
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    app.put(
+        '/api/v1/slack/notification-channel',
+        ...fetchMiddlewares<RequestHandler>(SlackController),
+        ...fetchMiddlewares<RequestHandler>(
+            SlackController.prototype.updateNotificationChannel,
+        ),
+
+        function SlackController_updateNotificationChannel(
+            request: any,
+            response: any,
+            next: any,
+        ) {
+            const args = {
+                req: {
+                    in: 'request',
+                    name: 'req',
+                    required: true,
+                    dataType: 'object',
+                },
+                body: {
+                    in: 'body',
+                    name: 'body',
+                    required: true,
+                    dataType: 'nestedObjectLiteral',
+                    nestedProperties: {
+                        channelId: {
+                            dataType: 'union',
+                            subSchemas: [
+                                { dataType: 'string' },
+                                { dataType: 'enum', enums: [null] },
+                            ],
+                            required: true,
+                        },
+                    },
+                },
+            };
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = getValidatedArgs(args, request, response);
+
+                const controller = new SlackController();
+
+                const promise = controller.updateNotificationChannel.apply(
+                    controller,
+                    validatedArgs as any,
+                );
+                promiseHandler(controller, promise, response, 200, next);
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     app.get(
         '/api/v1/projects/:projectUuid/spaces/:spaceUuid',
         ...fetchMiddlewares<RequestHandler>(SpaceController),
@@ -8350,6 +9860,190 @@ export function RegisterRoutes(app: express.Router) {
                 const controller = new UserController();
 
                 const promise = controller.deleteUser.apply(
+                    controller,
+                    validatedArgs as any,
+                );
+                promiseHandler(controller, promise, response, undefined, next);
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    app.get(
+        '/api/v1/user/warehouseCredentials',
+        ...fetchMiddlewares<RequestHandler>(UserController),
+        ...fetchMiddlewares<RequestHandler>(
+            UserController.prototype.getWarehouseCredentials,
+        ),
+
+        function UserController_getWarehouseCredentials(
+            request: any,
+            response: any,
+            next: any,
+        ) {
+            const args = {
+                req: {
+                    in: 'request',
+                    name: 'req',
+                    required: true,
+                    dataType: 'object',
+                },
+            };
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = getValidatedArgs(args, request, response);
+
+                const controller = new UserController();
+
+                const promise = controller.getWarehouseCredentials.apply(
+                    controller,
+                    validatedArgs as any,
+                );
+                promiseHandler(controller, promise, response, undefined, next);
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    app.post(
+        '/api/v1/user/warehouseCredentials',
+        ...fetchMiddlewares<RequestHandler>(UserController),
+        ...fetchMiddlewares<RequestHandler>(
+            UserController.prototype.createWarehouseCredentials,
+        ),
+
+        function UserController_createWarehouseCredentials(
+            request: any,
+            response: any,
+            next: any,
+        ) {
+            const args = {
+                req: {
+                    in: 'request',
+                    name: 'req',
+                    required: true,
+                    dataType: 'object',
+                },
+                body: {
+                    in: 'body',
+                    name: 'body',
+                    required: true,
+                    ref: 'UpsertUserWarehouseCredentials',
+                },
+            };
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = getValidatedArgs(args, request, response);
+
+                const controller = new UserController();
+
+                const promise = controller.createWarehouseCredentials.apply(
+                    controller,
+                    validatedArgs as any,
+                );
+                promiseHandler(controller, promise, response, undefined, next);
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    app.patch(
+        '/api/v1/user/warehouseCredentials/:uuid',
+        ...fetchMiddlewares<RequestHandler>(UserController),
+        ...fetchMiddlewares<RequestHandler>(
+            UserController.prototype.updateWarehouseCredentials,
+        ),
+
+        function UserController_updateWarehouseCredentials(
+            request: any,
+            response: any,
+            next: any,
+        ) {
+            const args = {
+                req: {
+                    in: 'request',
+                    name: 'req',
+                    required: true,
+                    dataType: 'object',
+                },
+                uuid: {
+                    in: 'path',
+                    name: 'uuid',
+                    required: true,
+                    dataType: 'string',
+                },
+                body: {
+                    in: 'body',
+                    name: 'body',
+                    required: true,
+                    ref: 'UpsertUserWarehouseCredentials',
+                },
+            };
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = getValidatedArgs(args, request, response);
+
+                const controller = new UserController();
+
+                const promise = controller.updateWarehouseCredentials.apply(
+                    controller,
+                    validatedArgs as any,
+                );
+                promiseHandler(controller, promise, response, undefined, next);
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    app.delete(
+        '/api/v1/user/warehouseCredentials/:uuid',
+        ...fetchMiddlewares<RequestHandler>(UserController),
+        ...fetchMiddlewares<RequestHandler>(
+            UserController.prototype.deleteWarehouseCredentials,
+        ),
+
+        function UserController_deleteWarehouseCredentials(
+            request: any,
+            response: any,
+            next: any,
+        ) {
+            const args = {
+                req: {
+                    in: 'request',
+                    name: 'req',
+                    required: true,
+                    dataType: 'object',
+                },
+                uuid: {
+                    in: 'path',
+                    name: 'uuid',
+                    required: true,
+                    dataType: 'string',
+                },
+            };
+
+            // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+
+            let validatedArgs: any[] = [];
+            try {
+                validatedArgs = getValidatedArgs(args, request, response);
+
+                const controller = new UserController();
+
+                const promise = controller.deleteWarehouseCredentials.apply(
                     controller,
                     validatedArgs as any,
                 );

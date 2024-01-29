@@ -19,6 +19,7 @@ models:
               - DAY_OF_MONTH_NUM
               - DAY_OF_YEAR_NUM
               - WEEK
+              - WEEK_NUM
               - MONTH
               - MONTH_NUM
               - MONTH_NAME
@@ -27,6 +28,8 @@ models:
               - QUARTER_NAME
               - YEAR
               - YEAR_NUM
+              - HOUR_OF_DAY_NUM
+              - MINUTE_OF_HOUR_NUM
       - name: timestamp_ntz
         description: ""
         meta:
@@ -119,3 +122,9 @@ models:
               percentile: 75
             median: 
               type: median
+            with_filters:
+              type: sum
+              filters:
+              - event_id: "!null"
+              - event_id: ">5"
+              - event: "song_played"

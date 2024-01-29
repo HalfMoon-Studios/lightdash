@@ -1,6 +1,7 @@
 import { subject } from '@casl/ability';
 import {
     ActivateUser,
+    ArgumentsOf,
     AuthorizationError,
     CompleteUserArgs,
     CreateInviteLink,
@@ -27,6 +28,7 @@ import {
     RegisterOrActivateUser,
     SessionUser,
     UpdateUserArgs,
+    UpsertUserWarehouseCredentials,
     UserAllowedOrganization,
     validateOrganizationEmailDomains,
 } from '@lightdash/common';
@@ -39,6 +41,7 @@ import { lightdashConfig } from '../config/lightdashConfig';
 import Logger from '../logging/logger';
 import { PersonalAccessTokenModel } from '../models/DashboardModel/PersonalAccessTokenModel';
 import { EmailModel } from '../models/EmailModel';
+import { GroupsModel } from '../models/GroupsModel';
 import { InviteLinkModel } from '../models/InviteLinkModel';
 import { OpenIdIdentityModel } from '../models/OpenIdIdentitiesModel';
 import { OrganizationAllowedEmailDomainsModel } from '../models/OrganizationAllowedEmailDomainsModel';
@@ -47,10 +50,12 @@ import { OrganizationModel } from '../models/OrganizationModel';
 import { PasswordResetLinkModel } from '../models/PasswordResetLinkModel';
 import { SessionModel } from '../models/SessionModel';
 import { UserModel } from '../models/UserModel';
+import { UserWarehouseCredentialsModel } from '../models/UserWarehouseCredentials/UserWarehouseCredentialsModel';
 
 type UserServiceDependencies = {
     inviteLinkModel: InviteLinkModel;
     userModel: UserModel;
+    groupsModel: GroupsModel;
     sessionModel: SessionModel;
     emailModel: EmailModel;
     openIdIdentityModel: OpenIdIdentityModel;
@@ -60,12 +65,15 @@ type UserServiceDependencies = {
     organizationModel: OrganizationModel;
     personalAccessTokenModel: PersonalAccessTokenModel;
     organizationAllowedEmailDomainsModel: OrganizationAllowedEmailDomainsModel;
+    userWarehouseCredentialsModel: UserWarehouseCredentialsModel;
 };
 
 export class UserService {
     private readonly inviteLinkModel: InviteLinkModel;
 
     private readonly userModel: UserModel;
+
+    private readonly groupsModel: GroupsModel;
 
     private readonly sessionModel: SessionModel;
 
@@ -85,6 +93,8 @@ export class UserService {
 
     private readonly organizationAllowedEmailDomainsModel: OrganizationAllowedEmailDomainsModel;
 
+    private readonly userWarehouseCredentialsModel: UserWarehouseCredentialsModel;
+
     private readonly emailOneTimePasscodeExpirySeconds = 60 * 15;
 
     private readonly emailOneTimePasscodeMaxAttempts = 5;
@@ -92,6 +102,7 @@ export class UserService {
     constructor({
         inviteLinkModel,
         userModel,
+        groupsModel,
         sessionModel,
         emailModel,
         openIdIdentityModel,
@@ -101,9 +112,11 @@ export class UserService {
         organizationMemberProfileModel,
         personalAccessTokenModel,
         organizationAllowedEmailDomainsModel,
+        userWarehouseCredentialsModel,
     }: UserServiceDependencies) {
         this.inviteLinkModel = inviteLinkModel;
         this.userModel = userModel;
+        this.groupsModel = groupsModel;
         this.sessionModel = sessionModel;
         this.emailModel = emailModel;
         this.openIdIdentityModel = openIdIdentityModel;
@@ -114,6 +127,7 @@ export class UserService {
         this.personalAccessTokenModel = personalAccessTokenModel;
         this.organizationAllowedEmailDomainsModel =
             organizationAllowedEmailDomainsModel;
+        this.userWarehouseCredentialsModel = userWarehouseCredentialsModel;
     }
 
     private async tryVerifyUserEmail(
@@ -147,6 +161,7 @@ export class UserService {
         ) {
             throw new ForbiddenError('Password credentials are not allowed');
         }
+
         const inviteLink = await this.inviteLinkModel.getByCode(inviteCode);
         const userEmail = isOpenIdUser(activateUser)
             ? activateUser.openId.email
@@ -309,6 +324,33 @@ export class UserService {
         });
     }
 
+    private async tryAddUserToGroups(
+        ...data: ArgumentsOf<GroupsModel['addUserToGroupsIfExist']>
+    ) {
+        const updatedGroups = await this.groupsModel.addUserToGroupsIfExist(
+            ...data,
+        );
+        if (updatedGroups) {
+            await Promise.all(
+                updatedGroups.map(async (groupUuid) => {
+                    const updatedGroup =
+                        await this.groupsModel.getGroupWithMembers(groupUuid);
+                    analytics.track({
+                        event: 'group.updated',
+                        userId: data[0].userUuid,
+                        properties: {
+                            viaSso: true,
+                            organizationId: updatedGroup.organizationUuid,
+                            groupId: updatedGroup.uuid,
+                            name: updatedGroup.name,
+                            countUsersInGroup: updatedGroup.memberUuids.length,
+                        },
+                    });
+                }),
+            );
+        }
+    }
+
     async loginWithOpenId(
         openIdUser: OpenIdUser,
         sessionUser: SessionUser | undefined,
@@ -322,6 +364,24 @@ export class UserService {
 
         // Identity already exists. Update the identity attributes and login the user
         if (loginUser) {
+            if (inviteCode) {
+                const inviteLink = await this.inviteLinkModel.getByCode(
+                    inviteCode,
+                );
+                if (
+                    loginUser.email &&
+                    inviteLink.email.toLowerCase() !==
+                        loginUser.email.toLowerCase()
+                ) {
+                    Logger.error(
+                        `User accepted invite with wrong email ${loginUser.email} when the invited email was ${inviteLink.email}`,
+                    );
+                    throw new AuthorizationError(
+                        `Provided email ${loginUser.email} does not match the invited email.`,
+                    );
+                }
+            }
+
             await this.openIdIdentityModel.updateIdentityByOpenId({
                 ...openIdUser.openId,
                 refreshToken,
@@ -335,6 +395,20 @@ export class UserService {
                     loginProvider: 'google',
                 },
             });
+
+            if (
+                lightdashConfig.groups.enabled === true &&
+                lightdashConfig.auth.enableGroupSync === true &&
+                Array.isArray(openIdUser.openId.groups) &&
+                openIdUser.openId.groups.length &&
+                loginUser.organizationUuid
+            )
+                await this.tryAddUserToGroups({
+                    userUuid: loginUser.userUuid,
+                    groups: openIdUser.openId.groups,
+                    organizationUuid: loginUser.organizationUuid,
+                });
+
             return loginUser;
         }
 
@@ -356,6 +430,20 @@ export class UserService {
                     loginProvider: 'google',
                 },
             });
+
+            if (
+                lightdashConfig.groups.enabled === true &&
+                lightdashConfig.auth.enableGroupSync === true &&
+                Array.isArray(openIdUser.openId.groups) &&
+                openIdUser.openId.groups.length &&
+                sessionUser.organizationUuid
+            )
+                await this.tryAddUserToGroups({
+                    userUuid: sessionUser.userUuid,
+                    groups: openIdUser.openId.groups,
+                    organizationUuid: sessionUser.organizationUuid,
+                });
+
             return sessionUser;
         }
 
@@ -365,6 +453,20 @@ export class UserService {
             inviteCode,
         );
         await this.tryVerifyUserEmail(createdUser, openIdUser.openId.email);
+
+        if (
+            lightdashConfig.groups.enabled === true &&
+            lightdashConfig.auth.enableGroupSync === true &&
+            Array.isArray(openIdUser.openId.groups) &&
+            openIdUser.openId.groups.length &&
+            createdUser.organizationUuid
+        )
+            await this.tryAddUserToGroups({
+                userUuid: createdUser.userUuid,
+                groups: openIdUser.openId.groups,
+                organizationUuid: createdUser.organizationUuid,
+            });
+
         return createdUser;
     }
 
@@ -914,5 +1016,73 @@ export class UserService {
      */
     async getRefreshToken(userUuid: string): Promise<string> {
         return this.userModel.getRefreshToken(userUuid);
+    }
+
+    async getWarehouseCredentials(user: SessionUser) {
+        return this.userWarehouseCredentialsModel.getAllByUserUuid(
+            user.userUuid,
+        );
+    }
+
+    async createWarehouseCredentials(
+        user: SessionUser,
+        data: UpsertUserWarehouseCredentials,
+    ) {
+        const userWarehouseCredentialsUuid =
+            await this.userWarehouseCredentialsModel.create(
+                user.userUuid,
+                data,
+            );
+        analytics.track({
+            userId: user.userUuid,
+            event: 'user_warehouse_credentials.created',
+            properties: {
+                credentialsId: userWarehouseCredentialsUuid,
+                warehouseType: data.credentials.type,
+            },
+        });
+        return this.userWarehouseCredentialsModel.getByUuid(
+            userWarehouseCredentialsUuid,
+        );
+    }
+
+    async updateWarehouseCredentials(
+        user: SessionUser,
+        userWarehouseCredentialsUuid: string,
+        data: UpsertUserWarehouseCredentials,
+    ) {
+        await this.userWarehouseCredentialsModel.update(
+            user.userUuid,
+            userWarehouseCredentialsUuid,
+            data,
+        );
+        analytics.track({
+            userId: user.userUuid,
+            event: 'user_warehouse_credentials.updated',
+            properties: {
+                credentialsId: userWarehouseCredentialsUuid,
+                warehouseType: data.credentials.type,
+            },
+        });
+        return this.userWarehouseCredentialsModel.getByUuid(
+            userWarehouseCredentialsUuid,
+        );
+    }
+
+    async deleteWarehouseCredentials(
+        user: SessionUser,
+        userWarehouseCredentialsUuid: string,
+    ) {
+        await this.userWarehouseCredentialsModel.delete(
+            user.userUuid,
+            userWarehouseCredentialsUuid,
+        );
+        analytics.track({
+            userId: user.userUuid,
+            event: 'user_warehouse_credentials.deleted',
+            properties: {
+                credentialsId: userWarehouseCredentialsUuid,
+            },
+        });
     }
 }

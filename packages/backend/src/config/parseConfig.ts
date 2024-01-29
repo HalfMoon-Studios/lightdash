@@ -124,6 +124,10 @@ export type LightdashConfig = {
         enabled: boolean;
         concurrency: number;
         jobTimeout: number;
+        screenshotTimeout?: number;
+    };
+    groups: {
+        enabled: boolean;
     };
     logging: LoggingConfig;
 };
@@ -191,6 +195,7 @@ type AuthOktaConfig = {
     oauth2ClientId: string | undefined;
     oauth2ClientSecret: string | undefined;
     authorizationServerId: string | undefined;
+    extraScopes: string | undefined;
     oktaDomain: string | undefined;
     callbackPath: string;
     loginPath: string;
@@ -206,6 +211,7 @@ type AuthOneLoginConfig = {
 
 export type AuthConfig = {
     disablePasswordAuthentication: boolean;
+    enableGroupSync: boolean;
     google: AuthGoogleConfig;
     okta: AuthOktaConfig;
     oneLogin: AuthOneLoginConfig;
@@ -314,6 +320,7 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
         auth: {
             disablePasswordAuthentication:
                 process.env.AUTH_DISABLE_PASSWORD_AUTHENTICATION === 'true',
+            enableGroupSync: process.env.AUTH_ENABLE_GROUP_SYNC === 'true',
             google: {
                 oauth2ClientId: process.env.AUTH_GOOGLE_OAUTH2_CLIENT_ID,
                 oauth2ClientSecret:
@@ -329,6 +336,7 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
                 oauth2ClientSecret: process.env.AUTH_OKTA_OAUTH_CLIENT_SECRET,
                 authorizationServerId:
                     process.env.AUTH_OKTA_AUTHORIZATION_SERVER_ID,
+                extraScopes: process.env.AUTH_OKTA_EXTRA_SCOPES,
                 oktaDomain: process.env.AUTH_OKTA_DOMAIN,
                 callbackPath: '/oauth/redirect/okta',
                 loginPath: '/login/okta',
@@ -429,6 +437,12 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
             jobTimeout: process.env.SCHEDULER_JOB_TIMEOUT
                 ? parseInt(process.env.SCHEDULER_JOB_TIMEOUT, 10)
                 : DEFAULT_JOB_TIMEOUT,
+            screenshotTimeout: process.env.SCHEDULER_SCREENSHOT_TIMEOUT
+                ? parseInt(process.env.SCHEDULER_SCREENSHOT_TIMEOUT, 10)
+                : undefined,
+        },
+        groups: {
+            enabled: process.env.GROUPS_ENABLED === 'true',
         },
         logging: {
             level: parseLoggingLevel(

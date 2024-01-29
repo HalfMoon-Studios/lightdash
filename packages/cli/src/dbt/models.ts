@@ -137,6 +137,7 @@ type FindAndUpdateModelYamlArgs = {
     docs: Record<string, DbtDoc>;
     includeMeta: boolean;
     projectDir: string;
+    projectName: string;
 };
 export const findAndUpdateModelYaml = async ({
     model,
@@ -144,6 +145,7 @@ export const findAndUpdateModelYaml = async ({
     docs,
     includeMeta,
     projectDir,
+    projectName,
 }: FindAndUpdateModelYamlArgs): Promise<{
     updatedYml: YamlSchema;
     outputFilePath: string;
@@ -156,8 +158,17 @@ export const findAndUpdateModelYaml = async ({
     const filenames = [];
     const { patchPath } = model;
     if (patchPath) {
-        const { path: expectedYamlSubPath } = patchPathParts(patchPath);
-        const expectedYamlPath = path.join(projectDir, expectedYamlSubPath);
+        const { project: expectedYamlProject, path: expectedYamlSubPath } =
+            patchPathParts(patchPath);
+        const projectSubpath =
+            expectedYamlProject !== projectName
+                ? path.join('dbt_packages', expectedYamlProject)
+                : '.';
+        const expectedYamlPath = path.join(
+            projectDir,
+            projectSubpath,
+            expectedYamlSubPath,
+        );
         filenames.push(expectedYamlPath);
     }
     const defaultYmlPath = path.join(
@@ -276,6 +287,7 @@ export const getModelsFromManifest = (
             node.resource_type === 'model' &&
             node.config?.materialized !== 'ephemeral',
     ) as DbtRawModelNode[];
+
     if (!isSupportedDbtAdapter(manifest.metadata)) {
         throw new ParseError(
             `dbt adapter not supported. Lightdash does not support adapter ${manifest.metadata.adapter_type}`,
@@ -301,6 +313,7 @@ export const getCompiledModels = async (
         profilesDir: string;
         target: string | undefined;
         profile: string | undefined;
+        vars: string | undefined;
     },
 ): Promise<CompiledModel[]> => {
     let allModelIds = models.map((model) => model.unique_id);
@@ -318,6 +331,7 @@ export const getCompiledModels = async (
                 ...(args.profile ? ['--profile', args.profile] : []),
                 ...(args.select ? ['--select', args.select.join(' ')] : []),
                 ...(args.exclude ? ['--exclude', args.exclude.join(' ')] : []),
+                ...(args.vars ? ['--vars', args.vars] : []),
                 '--resource-type=model',
                 '--output=json',
             ]);

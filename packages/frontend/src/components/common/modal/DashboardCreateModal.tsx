@@ -9,6 +9,7 @@ import {
     Select,
     Stack,
     Text,
+    Textarea,
     TextInput,
     Title,
 } from '@mantine/core';
@@ -59,7 +60,7 @@ const DashboardCreateModal: FC<DashboardCreateModalProps> = ({
 
     const {
         data: spaces,
-        isLoading: isLoadingSpaces,
+        isInitialLoading: isLoadingSpaces,
         isSuccess,
     } = useSpaceSummaries(projectUuid, true, {
         staleTime: 0,
@@ -148,10 +149,12 @@ const DashboardCreateModal: FC<DashboardCreateModalProps> = ({
                             required
                             {...form.getInputProps('dashboardName')}
                         />
-                        <TextInput
+                        <Textarea
                             label="Dashboard description"
                             placeholder="A few words to give your team some context"
                             disabled={isCreatingDashboard}
+                            autosize
+                            maxRows={3}
                             {...form.getInputProps('dashboardDescription')}
                         />
                         {!isLoadingSpaces && spaces ? (
@@ -180,8 +183,6 @@ const DashboardCreateModal: FC<DashboardCreateModalProps> = ({
                                         },
                                     }}
                                     onSearchChange={(query) => {
-                                        console.log('changed', query);
-
                                         if (!query) {
                                             setFieldValue(
                                                 'isCreatingNewSpace',

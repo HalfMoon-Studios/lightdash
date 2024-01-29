@@ -29,23 +29,25 @@ const Home: FC = () => {
     const savedChartStatus = useProjectSavedChartStatus(selectedProjectUuid);
     const project = useProject(selectedProjectUuid);
     const onboarding = useOnboardingStatus();
-
-    const { data: pinnedItems = [], isLoading: pinnedItemsLoading } =
-        usePinnedItems(selectedProjectUuid, project.data?.pinnedListUuid);
+    const pinnedItems = usePinnedItems(
+        selectedProjectUuid,
+        project.data?.pinnedListUuid,
+    );
 
     const {
         data: mostPopularAndRecentlyUpdated,
-        isLoading: isMostPopularAndRecentlyUpdatedLoading,
+        isInitialLoading: isMostPopularAndRecentlyUpdatedLoading,
     } = useMostPopularAndRecentlyUpdated(selectedProjectUuid);
 
     const { user } = useApp();
 
     const isLoading =
-        onboarding.isLoading ||
-        project.isLoading ||
-        savedChartStatus.isLoading ||
+        onboarding.isInitialLoading ||
+        project.isInitialLoading ||
+        savedChartStatus.isInitialLoading ||
         isMostPopularAndRecentlyUpdatedLoading ||
-        pinnedItemsLoading;
+        pinnedItems.isInitialLoading;
+
     const error = onboarding.error || project.error || savedChartStatus.error;
 
     useUnmount(() => onboarding.remove());
@@ -84,9 +86,10 @@ const Home: FC = () => {
                             organizationUuid={project.data.organizationUuid}
                             projectUuid={project.data.projectUuid}
                             pinnedListUuid={project.data.pinnedListUuid || ''}
+                            allowDelete={false}
                         >
                             <PinnedItemsPanel
-                                pinnedItems={pinnedItems}
+                                pinnedItems={pinnedItems.data ?? []}
                                 isEnabled={Boolean(
                                     mostPopularAndRecentlyUpdated?.mostPopular
                                         .length ||

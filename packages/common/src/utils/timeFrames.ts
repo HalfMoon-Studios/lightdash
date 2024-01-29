@@ -36,8 +36,11 @@ const nullTimeFrameMap: Record<TimeFrames, null> = {
     RAW: null,
     SECOND: null,
     WEEK: null,
+    WEEK_NUM: null,
     YEAR: null,
     YEAR_NUM: null,
+    HOUR_OF_DAY_NUM: null,
+    MINUTE_OF_HOUR_NUM: null,
 };
 
 const timeFrameToDatePartMap: Record<TimeFrames, string | null> = {
@@ -45,9 +48,12 @@ const timeFrameToDatePartMap: Record<TimeFrames, string | null> = {
     [TimeFrames.DAY_OF_WEEK_INDEX]: 'DOW',
     [TimeFrames.DAY_OF_MONTH_NUM]: 'DAY',
     [TimeFrames.DAY_OF_YEAR_NUM]: 'DOY',
+    [TimeFrames.WEEK_NUM]: 'WEEK',
     [TimeFrames.MONTH_NUM]: 'MONTH',
     [TimeFrames.QUARTER_NUM]: 'QUARTER',
     [TimeFrames.YEAR_NUM]: 'YEAR',
+    [TimeFrames.HOUR_OF_DAY_NUM]: 'HOUR',
+    [TimeFrames.MINUTE_OF_HOUR_NUM]: 'MINUTE',
 };
 
 type WarehouseConfig = {
@@ -189,7 +195,7 @@ const postgresConfig: WarehouseConfig = {
                 `Cannot recognise format expression for ${timeFrame}`,
             );
         }
-        return `TO_CHAR(${originalSql}, '${formatExpression}')`;
+        return `TO_CHAR(${originalSql}, 'FM${formatExpression}')`;
     },
 };
 
@@ -272,7 +278,7 @@ const warehouseConfigs: Record<SupportedDbtAdapter, WarehouseConfig> = {
     [SupportedDbtAdapter.TRINO]: trinoConfig,
 };
 
-const getSqlForTruncatedDate: TimeFrameConfig['getSql'] = (
+export const getSqlForTruncatedDate: TimeFrameConfig['getSql'] = (
     adapterType,
     timeFrame,
     originalSql,
@@ -393,6 +399,13 @@ export const timeFrameConfigs: Record<TimeFrames, TimeFrameConfig> = {
         getAxisMinInterval: () => 31557600000,
         getAxisLabelFormatter: () => null,
     },
+    WEEK_NUM: {
+        getLabel: () => 'Week (number)',
+        getDimensionType: () => DimensionType.NUMBER,
+        getSql: getSqlForDatePart,
+        getAxisMinInterval: () => null,
+        getAxisLabelFormatter: () => null,
+    },
     MONTH_NUM: {
         getLabel: () => 'Month (number)',
         getDimensionType: () => DimensionType.NUMBER,
@@ -456,6 +469,20 @@ export const timeFrameConfigs: Record<TimeFrames, TimeFrameConfig> = {
         getAxisMinInterval: () => null,
         getAxisLabelFormatter: () => null,
     },
+    HOUR_OF_DAY_NUM: {
+        getLabel: () => 'Hour of day (number)',
+        getDimensionType: () => DimensionType.NUMBER,
+        getSql: getSqlForDatePart,
+        getAxisMinInterval: () => null,
+        getAxisLabelFormatter: () => null,
+    },
+    MINUTE_OF_HOUR_NUM: {
+        getLabel: () => 'Minute of hour (number)',
+        getDimensionType: () => DimensionType.NUMBER,
+        getSql: getSqlForDatePart,
+        getAxisMinInterval: () => null,
+        getAxisLabelFormatter: () => null,
+    },
 };
 
 export const getDefaultTimeFrames = (type: DimensionType) =>
@@ -492,6 +519,7 @@ const timeFrameOrder = [
     TimeFrames.DAY_OF_MONTH_NUM,
     TimeFrames.DAY_OF_YEAR_NUM,
     TimeFrames.WEEK,
+    TimeFrames.WEEK_NUM,
     TimeFrames.MONTH,
     TimeFrames.MONTH_NUM,
     TimeFrames.MONTH_NAME,
@@ -500,6 +528,8 @@ const timeFrameOrder = [
     TimeFrames.QUARTER_NAME,
     TimeFrames.YEAR,
     TimeFrames.YEAR_NUM,
+    TimeFrames.HOUR_OF_DAY_NUM,
+    TimeFrames.MINUTE_OF_HOUR_NUM,
 ];
 
 export const sortTimeFrames = (a: TimeFrames, b: TimeFrames) =>

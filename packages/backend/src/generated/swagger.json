@@ -107,80 +107,591 @@
                 "required": ["status"],
                 "type": "object"
             },
-            "ApiGdriveAccessTokenResponse": {
+            "ApiSuccessEmpty": {
                 "properties": {
-                    "results": {
+                    "results": {},
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["status"],
+                "type": "object"
+            },
+            "DbtModelJoinType": {
+                "type": "string",
+                "enum": ["inner", "full", "left", "right"]
+            },
+            "Pick_ExploreJoin.table-or-sqlOn-or-type-or-hidden_": {
+                "properties": {
+                    "table": {
                         "type": "string"
                     },
-                    "status": {
-                        "type": "string",
-                        "enum": ["ok"],
-                        "nullable": false
-                    }
-                },
-                "required": ["results", "status"],
-                "type": "object"
-            },
-            "ApiJobScheduledResponse": {
-                "properties": {
-                    "results": {
-                        "properties": {
-                            "jobId": {
-                                "type": "string"
-                            }
-                        },
-                        "required": ["jobId"],
-                        "type": "object"
+                    "sqlOn": {
+                        "type": "string"
                     },
-                    "status": {
-                        "type": "string",
-                        "enum": ["ok"],
-                        "nullable": false
+                    "type": {
+                        "$ref": "#/components/schemas/DbtModelJoinType"
+                    },
+                    "hidden": {
+                        "type": "boolean"
                     }
                 },
-                "required": ["results", "status"],
-                "type": "object"
+                "required": ["table", "sqlOn"],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
             },
-            "FieldId": {
-                "type": "string"
-            },
-            "FilterGroupResponse": {
-                "anyOf": [
+            "CompiledExploreJoin": {
+                "allOf": [
                     {
-                        "properties": {
-                            "or": {
-                                "items": {},
-                                "type": "array"
-                            },
-                            "id": {
-                                "type": "string"
-                            }
-                        },
-                        "required": ["or", "id"],
-                        "type": "object"
+                        "$ref": "#/components/schemas/Pick_ExploreJoin.table-or-sqlOn-or-type-or-hidden_"
                     },
                     {
                         "properties": {
-                            "and": {
-                                "items": {},
-                                "type": "array"
-                            },
-                            "id": {
+                            "compiledSqlOn": {
                                 "type": "string"
                             }
                         },
-                        "required": ["and", "id"],
+                        "required": ["compiledSqlOn"],
                         "type": "object"
                     }
                 ]
             },
-            "FiltersResponse": {
+            "OrderFieldsByStrategy": {
+                "enum": ["LABEL", "INDEX"],
+                "type": "string"
+            },
+            "Record_string.string-or-string-Array_": {
+                "properties": {},
+                "type": "object",
+                "description": "Construct a type with a set of properties K of type T"
+            },
+            "TableBase": {
                 "properties": {
+                    "requiredAttributes": {
+                        "$ref": "#/components/schemas/Record_string.string-or-string-Array_"
+                    },
+                    "hidden": {
+                        "type": "boolean"
+                    },
+                    "sqlWhere": {
+                        "type": "string"
+                    },
+                    "groupLabel": {
+                        "type": "string"
+                    },
+                    "orderFieldsBy": {
+                        "$ref": "#/components/schemas/OrderFieldsByStrategy"
+                    },
+                    "sqlTable": {
+                        "type": "string"
+                    },
+                    "schema": {
+                        "type": "string"
+                    },
+                    "database": {
+                        "type": "string"
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "label": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "required": ["sqlTable", "schema", "database", "label", "name"],
+                "type": "object"
+            },
+            "Record_string.CompiledDimension_": {
+                "properties": {},
+                "type": "object",
+                "description": "Construct a type with a set of properties K of type T"
+            },
+            "Record_string.CompiledMetric_": {
+                "properties": {},
+                "type": "object",
+                "description": "Construct a type with a set of properties K of type T"
+            },
+            "Record_string.LineageNodeDependency-Array_": {
+                "properties": {},
+                "type": "object",
+                "description": "Construct a type with a set of properties K of type T"
+            },
+            "LineageGraph": {
+                "$ref": "#/components/schemas/Record_string.LineageNodeDependency-Array_"
+            },
+            "SourcePosition": {
+                "properties": {
+                    "character": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "line": {
+                        "type": "number",
+                        "format": "double"
+                    }
+                },
+                "required": ["character", "line"],
+                "type": "object"
+            },
+            "Source": {
+                "properties": {
+                    "content": {
+                        "type": "string"
+                    },
+                    "highlight": {
+                        "properties": {
+                            "end": {
+                                "$ref": "#/components/schemas/SourcePosition"
+                            },
+                            "start": {
+                                "$ref": "#/components/schemas/SourcePosition"
+                            }
+                        },
+                        "required": ["end", "start"],
+                        "type": "object"
+                    },
+                    "range": {
+                        "properties": {
+                            "end": {
+                                "$ref": "#/components/schemas/SourcePosition"
+                            },
+                            "start": {
+                                "$ref": "#/components/schemas/SourcePosition"
+                            }
+                        },
+                        "required": ["end", "start"],
+                        "type": "object"
+                    },
+                    "path": {
+                        "type": "string"
+                    }
+                },
+                "required": ["content", "range", "path"],
+                "type": "object"
+            },
+            "CompiledTable": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/TableBase"
+                    },
+                    {
+                        "properties": {
+                            "source": {
+                                "$ref": "#/components/schemas/Source"
+                            },
+                            "lineageGraph": {
+                                "$ref": "#/components/schemas/LineageGraph"
+                            },
+                            "metrics": {
+                                "$ref": "#/components/schemas/Record_string.CompiledMetric_"
+                            },
+                            "dimensions": {
+                                "$ref": "#/components/schemas/Record_string.CompiledDimension_"
+                            }
+                        },
+                        "required": ["lineageGraph", "metrics", "dimensions"],
+                        "type": "object"
+                    }
+                ]
+            },
+            "SupportedDbtAdapter": {
+                "enum": [
+                    "bigquery",
+                    "databricks",
+                    "snowflake",
+                    "redshift",
+                    "postgres",
+                    "trino"
+                ],
+                "type": "string"
+            },
+            "Explore": {
+                "properties": {
+                    "warehouse": {
+                        "type": "string"
+                    },
+                    "targetDatabase": {
+                        "$ref": "#/components/schemas/SupportedDbtAdapter"
+                    },
+                    "tables": {
+                        "properties": {},
+                        "additionalProperties": {
+                            "$ref": "#/components/schemas/CompiledTable"
+                        },
+                        "type": "object"
+                    },
+                    "joinedTables": {
+                        "items": {
+                            "$ref": "#/components/schemas/CompiledExploreJoin"
+                        },
+                        "type": "array"
+                    },
+                    "baseTable": {
+                        "type": "string"
+                    },
+                    "groupLabel": {
+                        "type": "string"
+                    },
+                    "tags": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array"
+                    },
+                    "label": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "targetDatabase",
+                    "tables",
+                    "joinedTables",
+                    "baseTable",
+                    "tags",
+                    "label",
+                    "name"
+                ],
+                "type": "object"
+            },
+            "Partial_Explore_": {
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "label": {
+                        "type": "string"
+                    },
+                    "tags": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array"
+                    },
+                    "groupLabel": {
+                        "type": "string"
+                    },
+                    "baseTable": {
+                        "type": "string"
+                    },
+                    "joinedTables": {
+                        "items": {
+                            "$ref": "#/components/schemas/CompiledExploreJoin"
+                        },
+                        "type": "array"
+                    },
+                    "tables": {
+                        "properties": {},
+                        "additionalProperties": {
+                            "$ref": "#/components/schemas/CompiledTable"
+                        },
+                        "type": "object"
+                    },
+                    "targetDatabase": {
+                        "$ref": "#/components/schemas/SupportedDbtAdapter"
+                    },
+                    "warehouse": {
+                        "type": "string"
+                    }
+                },
+                "type": "object",
+                "description": "Make all properties in T optional"
+            },
+            "Pick_Explore.name-or-label-or-groupLabel_": {
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "label": {
+                        "type": "string"
+                    },
+                    "groupLabel": {
+                        "type": "string"
+                    }
+                },
+                "required": ["name", "label"],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "InlineErrorType": {
+                "enum": ["METADATA_PARSE_ERROR", "NO_DIMENSIONS_FOUND"],
+                "type": "string"
+            },
+            "InlineError": {
+                "properties": {
+                    "message": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "$ref": "#/components/schemas/InlineErrorType"
+                    }
+                },
+                "required": ["message", "type"],
+                "type": "object"
+            },
+            "ExploreError": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/Partial_Explore_"
+                    },
+                    {
+                        "$ref": "#/components/schemas/Pick_Explore.name-or-label-or-groupLabel_"
+                    },
+                    {
+                        "properties": {
+                            "errors": {
+                                "items": {
+                                    "$ref": "#/components/schemas/InlineError"
+                                },
+                                "type": "array"
+                            }
+                        },
+                        "required": ["errors"],
+                        "type": "object"
+                    }
+                ]
+            },
+            "Pick_Explore.SummaryExploreFields_": {
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "label": {
+                        "type": "string"
+                    },
+                    "groupLabel": {
+                        "type": "string"
+                    },
+                    "tags": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array"
+                    }
+                },
+                "required": ["name", "label", "tags"],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "SummaryExtraFields": {
+                "properties": {
+                    "databaseName": {
+                        "type": "string"
+                    },
+                    "schemaName": {
+                        "type": "string"
+                    },
+                    "description": {
+                        "type": "string"
+                    }
+                },
+                "required": ["databaseName", "schemaName"],
+                "type": "object"
+            },
+            "Pick_ExploreError.SummaryExploreErrorFields_": {
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "label": {
+                        "type": "string"
+                    },
+                    "groupLabel": {
+                        "type": "string"
+                    },
+                    "tags": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array"
+                    },
+                    "errors": {
+                        "items": {
+                            "$ref": "#/components/schemas/InlineError"
+                        },
+                        "type": "array"
+                    }
+                },
+                "required": ["name", "label", "tags", "errors"],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "Partial_SummaryExtraFields_": {
+                "properties": {
+                    "description": {
+                        "type": "string"
+                    },
+                    "schemaName": {
+                        "type": "string"
+                    },
+                    "databaseName": {
+                        "type": "string"
+                    }
+                },
+                "type": "object",
+                "description": "Make all properties in T optional"
+            },
+            "SummaryExplore": {
+                "anyOf": [
+                    {
+                        "allOf": [
+                            {
+                                "$ref": "#/components/schemas/Pick_Explore.SummaryExploreFields_"
+                            },
+                            {
+                                "$ref": "#/components/schemas/SummaryExtraFields"
+                            }
+                        ]
+                    },
+                    {
+                        "allOf": [
+                            {
+                                "$ref": "#/components/schemas/Pick_ExploreError.SummaryExploreErrorFields_"
+                            },
+                            {
+                                "$ref": "#/components/schemas/Partial_SummaryExtraFields_"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "ApiExploresResults": {
+                "items": {
+                    "$ref": "#/components/schemas/SummaryExplore"
+                },
+                "type": "array"
+            },
+            "ApiExploreResults": {
+                "$ref": "#/components/schemas/Explore"
+            },
+            "ApiCompiledQueryResults": {
+                "type": "string"
+            },
+            "FieldId": {
+                "type": "string"
+            },
+            "FilterGroup": {
+                "anyOf": [
+                    {
+                        "$ref": "#/components/schemas/OrFilterGroup"
+                    },
+                    {
+                        "$ref": "#/components/schemas/AndFilterGroup"
+                    }
+                ]
+            },
+            "FieldTarget": {
+                "properties": {
+                    "fieldId": {
+                        "type": "string"
+                    }
+                },
+                "required": ["fieldId"],
+                "type": "object"
+            },
+            "ConditionalOperator": {
+                "enum": [
+                    "isNull",
+                    "notNull",
+                    "equals",
+                    "notEquals",
+                    "startsWith",
+                    "endsWith",
+                    "include",
+                    "doesNotInclude",
+                    "lessThan",
+                    "lessThanOrEqual",
+                    "greaterThan",
+                    "greaterThanOrEqual",
+                    "inThePast",
+                    "notInThePast",
+                    "inTheNext",
+                    "inTheCurrent",
+                    "inBetween"
+                ],
+                "type": "string"
+            },
+            "FilterRule": {
+                "properties": {
+                    "values": {
+                        "items": {},
+                        "type": "array"
+                    },
+                    "operator": {
+                        "$ref": "#/components/schemas/ConditionalOperator"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "target": {
+                        "$ref": "#/components/schemas/FieldTarget"
+                    },
+                    "settings": {},
+                    "disabled": {
+                        "type": "boolean"
+                    }
+                },
+                "required": ["operator", "id", "target"],
+                "type": "object",
+                "additionalProperties": false
+            },
+            "FilterGroupItem": {
+                "anyOf": [
+                    {
+                        "$ref": "#/components/schemas/FilterGroup"
+                    },
+                    {
+                        "$ref": "#/components/schemas/FilterRule"
+                    }
+                ]
+            },
+            "OrFilterGroup": {
+                "properties": {
+                    "or": {
+                        "items": {
+                            "$ref": "#/components/schemas/FilterGroupItem"
+                        },
+                        "type": "array"
+                    },
+                    "id": {
+                        "type": "string"
+                    }
+                },
+                "required": ["or", "id"],
+                "type": "object"
+            },
+            "AndFilterGroup": {
+                "properties": {
+                    "and": {
+                        "items": {
+                            "$ref": "#/components/schemas/FilterGroupItem"
+                        },
+                        "type": "array"
+                    },
+                    "id": {
+                        "type": "string"
+                    }
+                },
+                "required": ["and", "id"],
+                "type": "object"
+            },
+            "Filters": {
+                "properties": {
+                    "tableCalculations": {
+                        "$ref": "#/components/schemas/FilterGroup"
+                    },
                     "metrics": {
-                        "$ref": "#/components/schemas/FilterGroupResponse"
+                        "$ref": "#/components/schemas/FilterGroup"
                     },
                     "dimensions": {
-                        "$ref": "#/components/schemas/FilterGroupResponse"
+                        "$ref": "#/components/schemas/FilterGroup"
                     }
                 },
                 "type": "object"
@@ -305,28 +816,6 @@
             },
             "Format": {
                 "enum": ["km", "mi", "usd", "gbp", "eur", "id", "percent"],
-                "type": "string"
-            },
-            "ConditionalOperator": {
-                "enum": [
-                    "isNull",
-                    "notNull",
-                    "equals",
-                    "notEquals",
-                    "startsWith",
-                    "endsWith",
-                    "include",
-                    "doesNotInclude",
-                    "lessThan",
-                    "lessThanOrEqual",
-                    "greaterThan",
-                    "greaterThanOrEqual",
-                    "inThePast",
-                    "notInThePast",
-                    "inTheNext",
-                    "inTheCurrent",
-                    "inBetween"
-                ],
                 "type": "string"
             },
             "MetricFilterRule": {
@@ -471,8 +960,182 @@
                 "type": "object",
                 "additionalProperties": false
             },
+            "Pick_CompiledDimension.label-or-name_": {
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "label": {
+                        "type": "string"
+                    }
+                },
+                "required": ["name", "label"],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "MetricQuery": {
+                "properties": {
+                    "metadata": {
+                        "properties": {
+                            "hasADateDimension": {
+                                "$ref": "#/components/schemas/Pick_CompiledDimension.label-or-name_"
+                            }
+                        },
+                        "required": ["hasADateDimension"],
+                        "type": "object"
+                    },
+                    "customDimensions": {
+                        "items": {
+                            "$ref": "#/components/schemas/CustomDimension"
+                        },
+                        "type": "array"
+                    },
+                    "additionalMetrics": {
+                        "items": {
+                            "$ref": "#/components/schemas/AdditionalMetric"
+                        },
+                        "type": "array"
+                    },
+                    "tableCalculations": {
+                        "items": {
+                            "$ref": "#/components/schemas/TableCalculation"
+                        },
+                        "type": "array"
+                    },
+                    "limit": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "sorts": {
+                        "items": {
+                            "$ref": "#/components/schemas/SortField"
+                        },
+                        "type": "array"
+                    },
+                    "filters": {
+                        "$ref": "#/components/schemas/Filters"
+                    },
+                    "metrics": {
+                        "items": {
+                            "$ref": "#/components/schemas/FieldId"
+                        },
+                        "type": "array"
+                    },
+                    "dimensions": {
+                        "items": {
+                            "$ref": "#/components/schemas/FieldId"
+                        },
+                        "type": "array"
+                    },
+                    "exploreName": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "tableCalculations",
+                    "limit",
+                    "sorts",
+                    "filters",
+                    "metrics",
+                    "dimensions",
+                    "exploreName"
+                ],
+                "type": "object"
+            },
+            "Record_string.string_": {
+                "properties": {},
+                "type": "object",
+                "description": "Construct a type with a set of properties K of type T"
+            },
+            "ApiGdriveAccessTokenResponse": {
+                "properties": {
+                    "results": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
+            "ApiJobScheduledResponse": {
+                "properties": {
+                    "results": {
+                        "properties": {
+                            "jobId": {
+                                "type": "string"
+                            }
+                        },
+                        "required": ["jobId"],
+                        "type": "object"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
+            "FilterGroupResponse": {
+                "anyOf": [
+                    {
+                        "properties": {
+                            "or": {
+                                "items": {},
+                                "type": "array"
+                            },
+                            "id": {
+                                "type": "string"
+                            }
+                        },
+                        "required": ["or", "id"],
+                        "type": "object"
+                    },
+                    {
+                        "properties": {
+                            "and": {
+                                "items": {},
+                                "type": "array"
+                            },
+                            "id": {
+                                "type": "string"
+                            }
+                        },
+                        "required": ["and", "id"],
+                        "type": "object"
+                    }
+                ]
+            },
+            "FiltersResponse": {
+                "properties": {
+                    "tableCalculations": {
+                        "$ref": "#/components/schemas/FilterGroupResponse"
+                    },
+                    "metrics": {
+                        "$ref": "#/components/schemas/FilterGroupResponse"
+                    },
+                    "dimensions": {
+                        "$ref": "#/components/schemas/FilterGroupResponse"
+                    }
+                },
+                "type": "object"
+            },
             "MetricQueryResponse": {
                 "properties": {
+                    "metadata": {
+                        "properties": {
+                            "hasADateDimension": {
+                                "$ref": "#/components/schemas/Pick_CompiledDimension.label-or-name_"
+                            }
+                        },
+                        "required": ["hasADateDimension"],
+                        "type": "object"
+                    },
                     "customDimensions": {
                         "items": {
                             "$ref": "#/components/schemas/CustomDimension"
@@ -515,6 +1178,9 @@
                             "$ref": "#/components/schemas/FieldId"
                         },
                         "type": "array"
+                    },
+                    "exploreName": {
+                        "type": "string"
                     }
                 },
                 "required": [
@@ -523,7 +1189,8 @@
                     "sorts",
                     "filters",
                     "metrics",
-                    "dimensions"
+                    "dimensions",
+                    "exploreName"
                 ],
                 "type": "object"
             },
@@ -596,32 +1263,6 @@
                 "required": ["organizationUuid", "createdAt", "name", "uuid"],
                 "type": "object"
             },
-            "ApiGroupResponse": {
-                "properties": {
-                    "results": {
-                        "$ref": "#/components/schemas/Group"
-                    },
-                    "status": {
-                        "type": "string",
-                        "enum": ["ok"],
-                        "nullable": false
-                    }
-                },
-                "required": ["results", "status"],
-                "type": "object"
-            },
-            "ApiSuccessEmpty": {
-                "properties": {
-                    "results": {},
-                    "status": {
-                        "type": "string",
-                        "enum": ["ok"],
-                        "nullable": false
-                    }
-                },
-                "required": ["status"],
-                "type": "object"
-            },
             "GroupMember": {
                 "properties": {
                     "lastName": {
@@ -646,6 +1287,54 @@
                 "type": "object",
                 "description": "A summary for a Lightdash user within a group"
             },
+            "GroupWithMembers": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/Group"
+                    },
+                    {
+                        "properties": {
+                            "memberUuids": {
+                                "items": {
+                                    "type": "string"
+                                },
+                                "type": "array"
+                            },
+                            "members": {
+                                "items": {
+                                    "$ref": "#/components/schemas/GroupMember"
+                                },
+                                "type": "array",
+                                "description": "A list of the group's members."
+                            }
+                        },
+                        "required": ["memberUuids", "members"],
+                        "type": "object"
+                    }
+                ],
+                "description": "Details for a group including a list of the group's members."
+            },
+            "ApiGroupResponse": {
+                "properties": {
+                    "results": {
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/Group"
+                            },
+                            {
+                                "$ref": "#/components/schemas/GroupWithMembers"
+                            }
+                        ]
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
             "ApiGroupMembersResponse": {
                 "properties": {
                     "results": {
@@ -663,19 +1352,107 @@
                 "required": ["results", "status"],
                 "type": "object"
             },
-            "Pick_Group.name_": {
+            "Pick_GroupMember.userUuid_": {
                 "properties": {
-                    "name": {
+                    "userUuid": {
                         "type": "string",
-                        "description": "A friendly name for the group"
+                        "description": "Unique id for the user",
+                        "format": "uuid"
                     }
                 },
-                "required": ["name"],
+                "required": ["userUuid"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
-            "UpdateGroup": {
-                "$ref": "#/components/schemas/Pick_Group.name_"
+            "UpdateGroupWithMembers": {
+                "properties": {
+                    "members": {
+                        "items": {
+                            "$ref": "#/components/schemas/Pick_GroupMember.userUuid_"
+                        },
+                        "type": "array"
+                    },
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "ProjectMemberRole": {
+                "enum": [
+                    "viewer",
+                    "interactive_viewer",
+                    "editor",
+                    "developer",
+                    "admin"
+                ],
+                "type": "string"
+            },
+            "ProjectGroupAccess": {
+                "properties": {
+                    "role": {
+                        "$ref": "#/components/schemas/ProjectMemberRole"
+                    },
+                    "groupUuid": {
+                        "type": "string"
+                    },
+                    "projectUuid": {
+                        "type": "string"
+                    }
+                },
+                "required": ["role", "groupUuid", "projectUuid"],
+                "type": "object"
+            },
+            "ApiCreateProjectGroupAccess": {
+                "properties": {
+                    "results": {
+                        "$ref": "#/components/schemas/ProjectGroupAccess"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
+            "Pick_CreateDBProjectGroupAccess.role_": {
+                "properties": {
+                    "role": {
+                        "$ref": "#/components/schemas/ProjectMemberRole"
+                    }
+                },
+                "required": ["role"],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "ApiUpdateProjectGroupAccess": {
+                "properties": {
+                    "results": {
+                        "$ref": "#/components/schemas/ProjectGroupAccess"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
+            "Pick_DBProjectGroupAccess.role_": {
+                "properties": {
+                    "role": {
+                        "$ref": "#/components/schemas/ProjectMemberRole"
+                    }
+                },
+                "required": ["role"],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "UpdateDBProjectGroupAccess": {
+                "$ref": "#/components/schemas/Pick_DBProjectGroupAccess.role_"
             },
             "Organization": {
                 "properties": {
@@ -1013,14 +1790,14 @@
             },
             "Pick_AllowedEmailDomains.Exclude_keyofAllowedEmailDomains.organizationUuid__": {
                 "properties": {
+                    "role": {
+                        "$ref": "#/components/schemas/AllowedEmailDomainsRole"
+                    },
                     "emailDomains": {
                         "items": {
                             "type": "string"
                         },
                         "type": "array"
-                    },
-                    "role": {
-                        "$ref": "#/components/schemas/AllowedEmailDomainsRole"
                     },
                     "projects": {
                         "items": {
@@ -1038,7 +1815,7 @@
                         "type": "array"
                     }
                 },
-                "required": ["emailDomains", "role", "projects"],
+                "required": ["role", "emailDomains", "projects"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -1049,7 +1826,7 @@
             "UpdateAllowedEmailDomains": {
                 "$ref": "#/components/schemas/Omit_AllowedEmailDomains.organizationUuid_"
             },
-            "Pick_CreateGroup.name_": {
+            "Pick_Group.name_": {
                 "properties": {
                     "name": {
                         "type": "string",
@@ -1060,13 +1837,41 @@
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
+            "CreateGroup": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/Pick_Group.name_"
+                    },
+                    {
+                        "properties": {
+                            "members": {
+                                "items": {
+                                    "$ref": "#/components/schemas/Pick_GroupMember.userUuid_"
+                                },
+                                "type": "array"
+                            }
+                        },
+                        "type": "object"
+                    }
+                ]
+            },
             "ApiGroupListResponse": {
                 "properties": {
                     "results": {
-                        "items": {
-                            "$ref": "#/components/schemas/Group"
-                        },
-                        "type": "array"
+                        "anyOf": [
+                            {
+                                "items": {
+                                    "$ref": "#/components/schemas/Group"
+                                },
+                                "type": "array"
+                            },
+                            {
+                                "items": {
+                                    "$ref": "#/components/schemas/GroupWithMembers"
+                                },
+                                "type": "array"
+                            }
+                        ]
                     },
                     "status": {
                         "type": "string",
@@ -1123,10 +1928,10 @@
                     "name": {
                         "type": "string"
                     },
-                    "uuid": {
+                    "description": {
                         "type": "string"
                     },
-                    "description": {
+                    "uuid": {
                         "type": "string"
                     },
                     "updatedAt": {
@@ -1227,10 +2032,10 @@
                     "name": {
                         "type": "string"
                     },
-                    "uuid": {
+                    "description": {
                         "type": "string"
                     },
-                    "description": {
+                    "uuid": {
                         "type": "string"
                     },
                     "updatedAt": {
@@ -1810,19 +2615,22 @@
             },
             "Pick_CreateSnowflakeCredentials.Exclude_keyofCreateSnowflakeCredentials.SensitiveCredentialsFieldNames__": {
                 "properties": {
-                    "role": {
-                        "type": "string"
-                    },
                     "type": {
                         "$ref": "#/components/schemas/WarehouseTypes.SNOWFLAKE"
+                    },
+                    "warehouse": {
+                        "type": "string"
+                    },
+                    "role": {
+                        "type": "string"
                     },
                     "account": {
                         "type": "string"
                     },
-                    "database": {
-                        "type": "string"
+                    "requireUserCredentials": {
+                        "type": "boolean"
                     },
-                    "warehouse": {
+                    "database": {
                         "type": "string"
                     },
                     "schema": {
@@ -1852,9 +2660,9 @@
                 },
                 "required": [
                     "type",
+                    "warehouse",
                     "account",
                     "database",
-                    "warehouse",
                     "schema"
                 ],
                 "type": "object",
@@ -1875,6 +2683,9 @@
                 "properties": {
                     "type": {
                         "$ref": "#/components/schemas/WarehouseTypes.REDSHIFT"
+                    },
+                    "requireUserCredentials": {
+                        "type": "boolean"
                     },
                     "schema": {
                         "type": "string"
@@ -1945,11 +2756,14 @@
             },
             "Pick_CreatePostgresCredentials.Exclude_keyofCreatePostgresCredentials.SensitiveCredentialsFieldNames__": {
                 "properties": {
+                    "type": {
+                        "$ref": "#/components/schemas/WarehouseTypes.POSTGRES"
+                    },
                     "role": {
                         "type": "string"
                     },
-                    "type": {
-                        "$ref": "#/components/schemas/WarehouseTypes.POSTGRES"
+                    "requireUserCredentials": {
+                        "type": "boolean"
                     },
                     "schema": {
                         "type": "string"
@@ -2023,6 +2837,9 @@
                     "type": {
                         "$ref": "#/components/schemas/WarehouseTypes.BIGQUERY"
                     },
+                    "requireUserCredentials": {
+                        "type": "boolean"
+                    },
                     "threads": {
                         "type": "number",
                         "format": "double"
@@ -2081,6 +2898,9 @@
                     "type": {
                         "$ref": "#/components/schemas/WarehouseTypes.DATABRICKS"
                     },
+                    "requireUserCredentials": {
+                        "type": "boolean"
+                    },
                     "database": {
                         "type": "string"
                     },
@@ -2121,6 +2941,9 @@
                 "properties": {
                     "type": {
                         "$ref": "#/components/schemas/WarehouseTypes.TRINO"
+                    },
+                    "requireUserCredentials": {
+                        "type": "boolean"
                     },
                     "schema": {
                         "type": "string"
@@ -2250,13 +3073,13 @@
                     "name": {
                         "type": "string"
                     },
+                    "description": {
+                        "type": "string"
+                    },
                     "organizationUuid": {
                         "type": "string"
                     },
                     "uuid": {
-                        "type": "string"
-                    },
-                    "description": {
                         "type": "string"
                     },
                     "projectUuid": {
@@ -2414,16 +3237,6 @@
                 "required": ["results", "status"],
                 "type": "object"
             },
-            "ProjectMemberRole": {
-                "enum": [
-                    "viewer",
-                    "interactive_viewer",
-                    "editor",
-                    "developer",
-                    "admin"
-                ],
-                "type": "string"
-            },
             "ProjectMemberProfile": {
                 "properties": {
                     "lastName": {
@@ -2510,6 +3323,23 @@
                 "required": ["role"],
                 "type": "object"
             },
+            "ApiGetProjectGroupAccesses": {
+                "properties": {
+                    "results": {
+                        "items": {
+                            "$ref": "#/components/schemas/ProjectGroupAccess"
+                        },
+                        "type": "array"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
             "Record_string._type-DimensionType--__": {
                 "properties": {},
                 "type": "object",
@@ -2554,18 +3384,9 @@
                 "required": ["results", "status"],
                 "type": "object"
             },
-            "Pick_CompiledDimension.label-or-name_": {
-                "properties": {
-                    "name": {
-                        "type": "string"
-                    },
-                    "label": {
-                        "type": "string"
-                    }
-                },
-                "required": ["name", "label"],
-                "type": "object",
-                "description": "From T, pick a set of properties whose keys are in the union K"
+            "DateGranularity": {
+                "enum": ["Day", "Week", "Month", "Quarter", "Year"],
+                "type": "string"
             },
             "MetricQueryRequest": {
                 "properties": {
@@ -2577,6 +3398,9 @@
                         },
                         "required": ["hasADateDimension"],
                         "type": "object"
+                    },
+                    "granularity": {
+                        "$ref": "#/components/schemas/DateGranularity"
                     },
                     "customDimensions": {
                         "items": {
@@ -2629,6 +3453,9 @@
                             "$ref": "#/components/schemas/FieldId"
                         },
                         "type": "array"
+                    },
+                    "exploreName": {
+                        "type": "string"
                     }
                 },
                 "required": [
@@ -2637,7 +3464,8 @@
                     "sorts",
                     "filters",
                     "metrics",
-                    "dimensions"
+                    "dimensions",
+                    "exploreName"
                 ],
                 "type": "object"
             },
@@ -2653,6 +3481,11 @@
                 "required": ["explore", "metricQuery"],
                 "type": "object"
             },
+            "Record_string.DbtExposure_": {
+                "properties": {},
+                "type": "object",
+                "description": "Construct a type with a set of properties K of type T"
+            },
             "CacheMetadata": {
                 "properties": {
                     "cacheHit": {
@@ -2666,10 +3499,18 @@
                 "required": ["cacheHit"],
                 "type": "object"
             },
+            "Record_string.Item-or-AdditionalMetric_": {
+                "properties": {},
+                "type": "object",
+                "description": "Construct a type with a set of properties K of type T"
+            },
             "ApiRunQueryResponse": {
                 "properties": {
                     "results": {
                         "properties": {
+                            "fields": {
+                                "$ref": "#/components/schemas/Record_string.Item-or-AdditionalMetric_"
+                            },
                             "rows": {
                                 "items": {},
                                 "type": "array"
@@ -2692,10 +3533,6 @@
                 },
                 "required": ["results", "status"],
                 "type": "object"
-            },
-            "DateGranularity": {
-                "enum": ["Day", "Week", "Month", "Quarter", "Year"],
-                "type": "string"
             },
             "Pick_LightdashUser.userUuid-or-firstName-or-lastName_": {
                 "properties": {
@@ -2770,168 +3607,6 @@
                     }
                 },
                 "required": ["results", "status"],
-                "type": "object"
-            },
-            "FilterGroup": {
-                "anyOf": [
-                    {
-                        "$ref": "#/components/schemas/OrFilterGroup"
-                    },
-                    {
-                        "$ref": "#/components/schemas/AndFilterGroup"
-                    }
-                ]
-            },
-            "FieldTarget": {
-                "properties": {
-                    "fieldId": {
-                        "type": "string"
-                    }
-                },
-                "required": ["fieldId"],
-                "type": "object"
-            },
-            "FilterRule": {
-                "properties": {
-                    "values": {
-                        "items": {},
-                        "type": "array"
-                    },
-                    "operator": {
-                        "$ref": "#/components/schemas/ConditionalOperator"
-                    },
-                    "id": {
-                        "type": "string"
-                    },
-                    "target": {
-                        "$ref": "#/components/schemas/FieldTarget"
-                    },
-                    "settings": {},
-                    "disabled": {
-                        "type": "boolean"
-                    }
-                },
-                "required": ["operator", "id", "target"],
-                "type": "object",
-                "additionalProperties": false
-            },
-            "FilterGroupItem": {
-                "anyOf": [
-                    {
-                        "$ref": "#/components/schemas/FilterGroup"
-                    },
-                    {
-                        "$ref": "#/components/schemas/FilterRule"
-                    }
-                ]
-            },
-            "OrFilterGroup": {
-                "properties": {
-                    "or": {
-                        "items": {
-                            "$ref": "#/components/schemas/FilterGroupItem"
-                        },
-                        "type": "array"
-                    },
-                    "id": {
-                        "type": "string"
-                    }
-                },
-                "required": ["or", "id"],
-                "type": "object"
-            },
-            "AndFilterGroup": {
-                "properties": {
-                    "and": {
-                        "items": {
-                            "$ref": "#/components/schemas/FilterGroupItem"
-                        },
-                        "type": "array"
-                    },
-                    "id": {
-                        "type": "string"
-                    }
-                },
-                "required": ["and", "id"],
-                "type": "object"
-            },
-            "Filters": {
-                "properties": {
-                    "tableCalculations": {
-                        "$ref": "#/components/schemas/FilterGroup"
-                    },
-                    "metrics": {
-                        "$ref": "#/components/schemas/FilterGroup"
-                    },
-                    "dimensions": {
-                        "$ref": "#/components/schemas/FilterGroup"
-                    }
-                },
-                "type": "object"
-            },
-            "MetricQuery": {
-                "properties": {
-                    "metadata": {
-                        "properties": {
-                            "hasADateDimension": {
-                                "$ref": "#/components/schemas/Pick_CompiledDimension.label-or-name_"
-                            }
-                        },
-                        "required": ["hasADateDimension"],
-                        "type": "object"
-                    },
-                    "customDimensions": {
-                        "items": {
-                            "$ref": "#/components/schemas/CustomDimension"
-                        },
-                        "type": "array"
-                    },
-                    "additionalMetrics": {
-                        "items": {
-                            "$ref": "#/components/schemas/AdditionalMetric"
-                        },
-                        "type": "array"
-                    },
-                    "tableCalculations": {
-                        "items": {
-                            "$ref": "#/components/schemas/TableCalculation"
-                        },
-                        "type": "array"
-                    },
-                    "limit": {
-                        "type": "number",
-                        "format": "double"
-                    },
-                    "sorts": {
-                        "items": {
-                            "$ref": "#/components/schemas/SortField"
-                        },
-                        "type": "array"
-                    },
-                    "filters": {
-                        "$ref": "#/components/schemas/Filters"
-                    },
-                    "metrics": {
-                        "items": {
-                            "$ref": "#/components/schemas/FieldId"
-                        },
-                        "type": "array"
-                    },
-                    "dimensions": {
-                        "items": {
-                            "$ref": "#/components/schemas/FieldId"
-                        },
-                        "type": "array"
-                    }
-                },
-                "required": [
-                    "tableCalculations",
-                    "limit",
-                    "sorts",
-                    "filters",
-                    "metrics",
-                    "dimensions"
-                ],
                 "type": "object"
             },
             "ChartType.BIG_NUMBER": {
@@ -3278,6 +3953,10 @@
             },
             "Axis": {
                 "properties": {
+                    "rotate": {
+                        "type": "number",
+                        "format": "double"
+                    },
                     "inverse": {
                         "type": "boolean"
                     },
@@ -3382,11 +4061,6 @@
                 "type": "string",
                 "enum": ["hidden", "inside", "outside"],
                 "nullable": false
-            },
-            "Record_string.string_": {
-                "properties": {},
-                "type": "object",
-                "description": "Construct a type with a set of properties K of type T"
             },
             "Record_string.Partial_PieChartValueOptions__": {
                 "properties": {},
@@ -3651,6 +4325,12 @@
             },
             "SavedChart": {
                 "properties": {
+                    "colorPalette": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array"
+                    },
                     "dashboardName": {
                         "type": "string",
                         "nullable": true
@@ -3731,6 +4411,7 @@
                     }
                 },
                 "required": [
+                    "colorPalette",
                     "dashboardName",
                     "dashboardUuid",
                     "pinnedListOrder",
@@ -4019,6 +4700,10 @@
                     },
                     {
                         "properties": {
+                            "customViewportWidth": {
+                                "type": "number",
+                                "format": "double"
+                            },
                             "filters": {
                                 "items": {
                                     "$ref": "#/components/schemas/SchedulerFilterRule"
@@ -4332,11 +5017,19 @@
                 "properties": {
                     "results": {
                         "properties": {
+                            "details": {
+                                "allOf": [
+                                    {
+                                        "$ref": "#/components/schemas/Record_string.any_"
+                                    }
+                                ],
+                                "nullable": true
+                            },
                             "status": {
-                                "type": "string"
+                                "$ref": "#/components/schemas/SchedulerJobStatus"
                             }
                         },
-                        "required": ["status"],
+                        "required": ["details", "status"],
                         "type": "object"
                     },
                     "status": {
@@ -4350,13 +5043,22 @@
             },
             "ApiTestSchedulerResponse": {
                 "properties": {
+                    "results": {
+                        "properties": {
+                            "jobId": {
+                                "type": "string"
+                            }
+                        },
+                        "required": ["jobId"],
+                        "type": "object"
+                    },
                     "status": {
                         "type": "string",
                         "enum": ["ok"],
                         "nullable": false
                     }
                 },
-                "required": ["status"],
+                "required": ["results", "status"],
                 "type": "object"
             },
             "ShareUrl": {
@@ -4455,15 +5157,27 @@
                 "required": ["results", "status"],
                 "type": "object"
             },
+            "ApiSlackNotificationChannelResponse": {
+                "properties": {
+                    "results": {},
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
             "Pick_SavedChart.uuid-or-name-or-updatedAt-or-updatedByUser-or-description-or-spaceUuid-or-pinnedListUuid-or-pinnedListOrder_": {
                 "properties": {
                     "name": {
                         "type": "string"
                     },
-                    "uuid": {
+                    "description": {
                         "type": "string"
                     },
-                    "description": {
+                    "uuid": {
                         "type": "string"
                     },
                     "updatedAt": {
@@ -4548,13 +5262,13 @@
                     "name": {
                         "type": "string"
                     },
+                    "description": {
+                        "type": "string"
+                    },
                     "organizationUuid": {
                         "type": "string"
                     },
                     "uuid": {
-                        "type": "string"
-                    },
-                    "description": {
                         "type": "string"
                     },
                     "updatedAt": {
@@ -4810,11 +5524,29 @@
                 "required": ["value", "email", "userUuid"],
                 "type": "object"
             },
+            "GroupAttributeValue": {
+                "properties": {
+                    "value": {
+                        "type": "string"
+                    },
+                    "groupUuid": {
+                        "type": "string"
+                    }
+                },
+                "required": ["value", "groupUuid"],
+                "type": "object"
+            },
             "UserAttribute": {
                 "properties": {
                     "attributeDefault": {
                         "type": "string",
                         "nullable": true
+                    },
+                    "groups": {
+                        "items": {
+                            "$ref": "#/components/schemas/GroupAttributeValue"
+                        },
+                        "type": "array"
                     },
                     "users": {
                         "items": {
@@ -4841,6 +5573,7 @@
                 },
                 "required": [
                     "attributeDefault",
+                    "groups",
                     "users",
                     "organizationUuid",
                     "name",
@@ -4917,6 +5650,9 @@
             "CreateUserAttributeValue": {
                 "$ref": "#/components/schemas/Omit_UserAttributeValue.email_"
             },
+            "CreateGroupAttributeValue": {
+                "$ref": "#/components/schemas/GroupAttributeValue"
+            },
             "CreateUserAttribute": {
                 "allOf": [
                     {
@@ -4924,6 +5660,12 @@
                     },
                     {
                         "properties": {
+                            "groups": {
+                                "items": {
+                                    "$ref": "#/components/schemas/CreateGroupAttributeValue"
+                                },
+                                "type": "array"
+                            },
                             "users": {
                                 "items": {
                                     "$ref": "#/components/schemas/CreateUserAttributeValue"
@@ -4931,7 +5673,7 @@
                                 "type": "array"
                             }
                         },
-                        "required": ["users"],
+                        "required": ["groups", "users"],
                         "type": "object"
                     }
                 ]
@@ -5200,6 +5942,203 @@
                 "required": ["results", "status"],
                 "type": "object"
             },
+            "Pick_CreateRedshiftCredentials-or-CreatePostgresCredentials-or-CreateSnowflakeCredentials-or-CreateTrinoCredentials.type-or-user_": {
+                "properties": {
+                    "type": {
+                        "$ref": "#/components/schemas/WarehouseTypes.SNOWFLAKE"
+                    },
+                    "user": {
+                        "type": "string"
+                    }
+                },
+                "required": ["type", "user"],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "Pick_CreateBigqueryCredentials.type_": {
+                "properties": {
+                    "type": {
+                        "$ref": "#/components/schemas/WarehouseTypes.BIGQUERY"
+                    }
+                },
+                "required": ["type"],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "Pick_CreateDatabricksCredentials.type_": {
+                "properties": {
+                    "type": {
+                        "$ref": "#/components/schemas/WarehouseTypes.DATABRICKS"
+                    }
+                },
+                "required": ["type"],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "UserWarehouseCredentials": {
+                "properties": {
+                    "credentials": {
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/Pick_CreateRedshiftCredentials-or-CreatePostgresCredentials-or-CreateSnowflakeCredentials-or-CreateTrinoCredentials.type-or-user_"
+                            },
+                            {
+                                "$ref": "#/components/schemas/Pick_CreateBigqueryCredentials.type_"
+                            },
+                            {
+                                "$ref": "#/components/schemas/Pick_CreateDatabricksCredentials.type_"
+                            }
+                        ]
+                    },
+                    "updatedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "createdAt": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "userUuid": {
+                        "type": "string"
+                    },
+                    "uuid": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "credentials",
+                    "updatedAt",
+                    "createdAt",
+                    "name",
+                    "userUuid",
+                    "uuid"
+                ],
+                "type": "object"
+            },
+            "Pick_CreateRedshiftCredentials.type-or-user-or-password_": {
+                "properties": {
+                    "type": {
+                        "$ref": "#/components/schemas/WarehouseTypes.REDSHIFT"
+                    },
+                    "user": {
+                        "type": "string"
+                    },
+                    "password": {
+                        "type": "string"
+                    }
+                },
+                "required": ["type", "user", "password"],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "Pick_CreatePostgresCredentials.type-or-user-or-password_": {
+                "properties": {
+                    "type": {
+                        "$ref": "#/components/schemas/WarehouseTypes.POSTGRES"
+                    },
+                    "user": {
+                        "type": "string"
+                    },
+                    "password": {
+                        "type": "string"
+                    }
+                },
+                "required": ["type", "user", "password"],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "Pick_CreateSnowflakeCredentials.type-or-user-or-password_": {
+                "properties": {
+                    "type": {
+                        "$ref": "#/components/schemas/WarehouseTypes.SNOWFLAKE"
+                    },
+                    "user": {
+                        "type": "string"
+                    },
+                    "password": {
+                        "type": "string"
+                    }
+                },
+                "required": ["type", "user"],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "Pick_CreateTrinoCredentials.type-or-user-or-password_": {
+                "properties": {
+                    "type": {
+                        "$ref": "#/components/schemas/WarehouseTypes.TRINO"
+                    },
+                    "user": {
+                        "type": "string"
+                    },
+                    "password": {
+                        "type": "string"
+                    }
+                },
+                "required": ["type", "user", "password"],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "Pick_CreateBigqueryCredentials.type-or-keyfileContents_": {
+                "properties": {
+                    "type": {
+                        "$ref": "#/components/schemas/WarehouseTypes.BIGQUERY"
+                    },
+                    "keyfileContents": {
+                        "$ref": "#/components/schemas/Record_string.string_"
+                    }
+                },
+                "required": ["type", "keyfileContents"],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "Pick_CreateDatabricksCredentials.type-or-personalAccessToken_": {
+                "properties": {
+                    "type": {
+                        "$ref": "#/components/schemas/WarehouseTypes.DATABRICKS"
+                    },
+                    "personalAccessToken": {
+                        "type": "string"
+                    }
+                },
+                "required": ["type", "personalAccessToken"],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "UpsertUserWarehouseCredentials": {
+                "properties": {
+                    "credentials": {
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/Pick_CreateRedshiftCredentials.type-or-user-or-password_"
+                            },
+                            {
+                                "$ref": "#/components/schemas/Pick_CreatePostgresCredentials.type-or-user-or-password_"
+                            },
+                            {
+                                "$ref": "#/components/schemas/Pick_CreateSnowflakeCredentials.type-or-user-or-password_"
+                            },
+                            {
+                                "$ref": "#/components/schemas/Pick_CreateTrinoCredentials.type-or-user-or-password_"
+                            },
+                            {
+                                "$ref": "#/components/schemas/Pick_CreateBigqueryCredentials.type-or-keyfileContents_"
+                            },
+                            {
+                                "$ref": "#/components/schemas/Pick_CreateDatabricksCredentials.type-or-personalAccessToken_"
+                            }
+                        ]
+                    },
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "required": ["credentials", "name"],
+                "type": "object"
+            },
             "ValidationErrorType": {
                 "enum": [
                     "chart",
@@ -5207,7 +6146,8 @@
                     "filter",
                     "metric",
                     "model",
-                    "dimension"
+                    "dimension",
+                    "custom metric"
                 ],
                 "type": "string"
             },
@@ -5436,8 +6376,8 @@
     },
     "info": {
         "title": "Lightdash API",
-        "version": "0.885.1",
-        "description": "Open API documentation for all public Lightdash API endpoints",
+        "version": "0.965.3",
+        "description": "Open API documentation for all public Lightdash API endpoints.  # Authentication Before you get started, you might need to create a Personal Access Token to authenticate via the API. You can create a token by following this guide: https://docs.lightdash.com/references/personal_tokens\n",
         "license": {
             "name": "MIT"
         },
@@ -5608,6 +6548,353 @@
                 ]
             }
         },
+        "/api/v1/projects/{projectUuid}/explores": {
+            "put": {
+                "operationId": "SetExplores",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiSuccessEmpty"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "tags": ["Projects"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "items": {
+                                    "anyOf": [
+                                        {
+                                            "$ref": "#/components/schemas/Explore"
+                                        },
+                                        {
+                                            "$ref": "#/components/schemas/ExploreError"
+                                        }
+                                    ]
+                                },
+                                "type": "array"
+                            }
+                        }
+                    }
+                }
+            },
+            "get": {
+                "operationId": "GetExplores",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "results": {
+                                            "$ref": "#/components/schemas/ApiExploresResults"
+                                        },
+                                        "status": {
+                                            "type": "string",
+                                            "enum": ["ok"],
+                                            "nullable": false
+                                        }
+                                    },
+                                    "required": ["results", "status"],
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "tags": ["Projects"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ]
+            }
+        },
+        "/api/v1/projects/{projectUuid}/explores/{exploreId}": {
+            "get": {
+                "operationId": "GetExplore",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "results": {
+                                            "$ref": "#/components/schemas/ApiExploreResults"
+                                        },
+                                        "status": {
+                                            "type": "string",
+                                            "enum": ["ok"],
+                                            "nullable": false
+                                        }
+                                    },
+                                    "required": ["results", "status"],
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "tags": ["Projects"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "exploreId",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ]
+            }
+        },
+        "/api/v1/projects/{projectUuid}/explores/{exploreId}/compileQuery": {
+            "post": {
+                "operationId": "CompileQuery",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "results": {
+                                            "$ref": "#/components/schemas/ApiCompiledQueryResults"
+                                        },
+                                        "status": {
+                                            "type": "string",
+                                            "enum": ["ok"],
+                                            "nullable": false
+                                        }
+                                    },
+                                    "required": ["results", "status"],
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "tags": ["Projects"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "exploreId",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/MetricQuery"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/projects/{projectUuid}/explores/{exploreId}/downloadCsv": {
+            "post": {
+                "operationId": "DownloadCsvFromExplore",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "results": {
+                                            "properties": {
+                                                "jobId": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "required": ["jobId"],
+                                            "type": "object"
+                                        },
+                                        "status": {
+                                            "type": "string",
+                                            "enum": ["ok"],
+                                            "nullable": false
+                                        }
+                                    },
+                                    "required": ["results", "status"],
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "tags": ["Projects"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "exploreId",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "allOf": [
+                                    {
+                                        "$ref": "#/components/schemas/MetricQuery"
+                                    },
+                                    {
+                                        "properties": {
+                                            "hiddenFields": {
+                                                "items": {
+                                                    "type": "string"
+                                                },
+                                                "type": "array"
+                                            },
+                                            "columnOrder": {
+                                                "items": {
+                                                    "type": "string"
+                                                },
+                                                "type": "array"
+                                            },
+                                            "customLabels": {
+                                                "$ref": "#/components/schemas/Record_string.string_"
+                                            },
+                                            "showTableNames": {
+                                                "type": "boolean"
+                                            },
+                                            "csvLimit": {
+                                                "type": "number",
+                                                "format": "double",
+                                                "nullable": true
+                                            },
+                                            "onlyRaw": {
+                                                "type": "boolean"
+                                            }
+                                        },
+                                        "required": [
+                                            "columnOrder",
+                                            "showTableNames",
+                                            "onlyRaw"
+                                        ],
+                                        "type": "object"
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/gdrive/get-access-token": {
             "get": {
                 "operationId": "getAccessToken",
@@ -5717,6 +7004,26 @@
                         "schema": {
                             "type": "string"
                         }
+                    },
+                    {
+                        "description": "number of members to include",
+                        "in": "query",
+                        "name": "includeMembers",
+                        "required": false,
+                        "schema": {
+                            "format": "double",
+                            "type": "number"
+                        }
+                    },
+                    {
+                        "description": "offset of members to include",
+                        "in": "query",
+                        "name": "offset",
+                        "required": false,
+                        "schema": {
+                            "format": "double",
+                            "type": "number"
+                        }
                     }
                 ]
             },
@@ -5800,7 +7107,7 @@
                     "content": {
                         "application/json": {
                             "schema": {
-                                "$ref": "#/components/schemas/UpdateGroup"
+                                "$ref": "#/components/schemas/UpdateGroupWithMembers"
                             }
                         }
                     }
@@ -5938,6 +7245,166 @@
                         "description": "the UUID for the group to view the members of",
                         "in": "path",
                         "name": "groupUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ]
+            }
+        },
+        "/api/v1/groups/{groupUuid}/projects/{projectUuid}": {
+            "post": {
+                "operationId": "addProjectAccessToGroup",
+                "responses": {
+                    "200": {
+                        "description": "Ok",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiCreateProjectGroupAccess"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Add project access to a group",
+                "tags": ["User Groups"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "groupUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Pick_CreateDBProjectGroupAccess.role_"
+                            }
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "operationId": "updateProjectAccessForGroup",
+                "responses": {
+                    "200": {
+                        "description": "Ok",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiUpdateProjectGroupAccess"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Update project access for a group",
+                "tags": ["User Groups"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "groupUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/UpdateDBProjectGroupAccess"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "operationId": "removeProjectAccessFromGroup",
+                "responses": {
+                    "200": {
+                        "description": "Ok",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiSuccessEmpty"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Remove project access from a group",
+                "tags": ["User Groups"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "groupUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
                         "required": true,
                         "schema": {
                             "type": "string"
@@ -6224,7 +7691,17 @@
                 "description": "Gets all the members of the current user's organization",
                 "tags": ["Organizations"],
                 "security": [],
-                "parameters": []
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "includeGroups",
+                        "required": false,
+                        "schema": {
+                            "format": "double",
+                            "type": "number"
+                        }
+                    }
+                ]
             }
         },
         "/api/v1/org/users/{userUuid}": {
@@ -6467,7 +7944,7 @@
                     "content": {
                         "application/json": {
                             "schema": {
-                                "$ref": "#/components/schemas/Pick_CreateGroup.name_",
+                                "$ref": "#/components/schemas/CreateGroup",
                                 "description": "the new group details"
                             }
                         }
@@ -6501,7 +7978,18 @@
                 "description": "Gets all the groups in the current user's organization",
                 "tags": ["Organizations"],
                 "security": [],
-                "parameters": []
+                "parameters": [
+                    {
+                        "description": "number of members to include",
+                        "in": "query",
+                        "name": "includeMembers",
+                        "required": false,
+                        "schema": {
+                            "format": "double",
+                            "type": "number"
+                        }
+                    }
+                ]
             }
         },
         "/api/v1/projects/{projectUuid}/pinned-lists/{pinnedListUuid}/items": {
@@ -7022,6 +8510,46 @@
                     {
                         "in": "path",
                         "name": "userUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ]
+            }
+        },
+        "/api/v1/projects/{projectUuid}/groupAccesses": {
+            "get": {
+                "operationId": "GetProjectGroupAccesses",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiGetProjectGroupAccesses"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "List group access for projects",
+                "tags": ["Projects"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "projectUuid",
                         "required": true,
                         "schema": {
                             "type": "string"
@@ -8071,6 +9599,54 @@
                 "parameters": []
             }
         },
+        "/api/v1/slack/notification-channel": {
+            "put": {
+                "operationId": "UpdateNotificationChannel",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiSlackNotificationChannelResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Update slack notification channel to send notifications to scheduled jobs fail",
+                "tags": ["Integrations"],
+                "security": [],
+                "parameters": [],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "properties": {
+                                    "channelId": {
+                                        "type": "string",
+                                        "nullable": true
+                                    }
+                                },
+                                "required": ["channelId"],
+                                "type": "object"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/projects/{projectUuid}/spaces/{spaceUuid}": {
             "get": {
                 "operationId": "GetSpace",
@@ -8782,6 +10358,200 @@
                 "tags": ["My Account"],
                 "security": [],
                 "parameters": []
+            }
+        },
+        "/api/v1/user/warehouseCredentials": {
+            "get": {
+                "operationId": "getWarehouseCredentials",
+                "responses": {
+                    "200": {
+                        "description": "Ok",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "results": {
+                                            "items": {
+                                                "$ref": "#/components/schemas/UserWarehouseCredentials"
+                                            },
+                                            "type": "array"
+                                        },
+                                        "status": {
+                                            "type": "string",
+                                            "enum": ["ok"],
+                                            "nullable": false
+                                        }
+                                    },
+                                    "required": ["results", "status"],
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Get user warehouse credentials",
+                "tags": ["My Account"],
+                "security": [],
+                "parameters": []
+            },
+            "post": {
+                "operationId": "createWarehouseCredentials",
+                "responses": {
+                    "200": {
+                        "description": "Ok",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "results": {
+                                            "$ref": "#/components/schemas/UserWarehouseCredentials"
+                                        },
+                                        "status": {
+                                            "type": "string",
+                                            "enum": ["ok"],
+                                            "nullable": false
+                                        }
+                                    },
+                                    "required": ["results", "status"],
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Create user warehouse credentials",
+                "tags": ["My Account"],
+                "security": [],
+                "parameters": [],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/UpsertUserWarehouseCredentials"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/user/warehouseCredentials/{uuid}": {
+            "patch": {
+                "operationId": "updateWarehouseCredentials",
+                "responses": {
+                    "200": {
+                        "description": "Ok",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "results": {
+                                            "$ref": "#/components/schemas/UserWarehouseCredentials"
+                                        },
+                                        "status": {
+                                            "type": "string",
+                                            "enum": ["ok"],
+                                            "nullable": false
+                                        }
+                                    },
+                                    "required": ["results", "status"],
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Update user warehouse credentials",
+                "tags": ["My Account"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "uuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/UpsertUserWarehouseCredentials"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "operationId": "deleteWarehouseCredentials",
+                "responses": {
+                    "200": {
+                        "description": "Ok",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiSuccessEmpty"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Delete user warehouse credentials",
+                "tags": ["My Account"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "uuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ]
             }
         },
         "/api/v1/projects/{projectUuid}/validate": {

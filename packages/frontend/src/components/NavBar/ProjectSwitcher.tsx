@@ -1,5 +1,6 @@
 import { ProjectType } from '@lightdash/common';
 import { Select } from '@mantine/core';
+import { IconArrowRight } from '@tabler/icons-react';
 import { useHistory, useRouteMatch } from 'react-router-dom';
 import useToaster from '../../hooks/toaster/useToaster';
 import {
@@ -19,6 +20,7 @@ const swappableProjectRoutes = (activeProjectUuid: string) => [
     `/projects/${activeProjectUuid}`,
     `/generalSettings`,
     `/generalSettings/password`,
+    `/generalSettings/myWarehouseConnections`,
     `/generalSettings/personalAccessTokens`,
     `/generalSettings/organization`,
     `/generalSettings/userManagement`,
@@ -38,7 +40,8 @@ const ProjectSwitcher = () => {
     const { showToastSuccess } = useToaster();
     const history = useHistory();
 
-    const { isLoading: isLoadingProjects, data: projects } = useProjects();
+    const { isInitialLoading: isLoadingProjects, data: projects } =
+        useProjects();
     const { isLoading: isLoadingActiveProjectUuid, activeProjectUuid } =
         useActiveProjectUuid();
     const { mutate: setLastProjectMutation } = useUpdateActiveProjectMutation();
@@ -74,13 +77,12 @@ const ProjectSwitcher = () => {
         setLastProjectMutation(project.projectUuid);
 
         showToastSuccess({
-            icon: 'tick',
             title: `You are now viewing ${project.name}`,
             action:
                 !isHomePage && shouldSwapProjectRoute
                     ? {
-                          text: 'Go to project home',
-                          icon: 'arrow-right',
+                          children: 'Go to project home',
+                          icon: IconArrowRight,
                           onClick: () => {
                               history.push(
                                   `/projects/${project.projectUuid}/home`,

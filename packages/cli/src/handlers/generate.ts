@@ -4,6 +4,7 @@ import { promises as fs } from 'fs';
 import inquirer from 'inquirer';
 import * as yaml from 'js-yaml';
 import * as path from 'path';
+import { v4 as uuidv4 } from 'uuid';
 import { LightdashAnalytics } from '../analytics/analytics';
 import { getDbtContext } from '../dbt/context';
 import { loadManifest } from '../dbt/manifest';
@@ -34,7 +35,7 @@ type GenerateHandlerOptions = CompileHandlerOptions & {
 export const generateHandler = async (options: GenerateHandlerOptions) => {
     GlobalState.setVerbose(options.verbose);
     await checkLightdashVersion();
-
+    const executionId = uuidv4();
     if (
         options.select === undefined &&
         options.exclude === undefined &&
@@ -57,6 +58,7 @@ export const generateHandler = async (options: GenerateHandlerOptions) => {
     await LightdashAnalytics.track({
         event: 'generate.started',
         properties: {
+            executionId,
             trigger: 'generate',
             numModelsSelected,
         },
@@ -94,6 +96,7 @@ export const generateHandler = async (options: GenerateHandlerOptions) => {
         target: options.target,
         select: options.select || options.models,
         exclude: options.exclude,
+        vars: options.vars || undefined,
     });
 
     GlobalState.debug(`> Compiled models: ${compiledModels.length}`);
@@ -115,6 +118,7 @@ export const generateHandler = async (options: GenerateHandlerOptions) => {
                     docs: manifest.docs,
                     includeMeta: !options.excludeMeta,
                     projectDir: absoluteProjectPath,
+                    projectName: context.projectName,
                 },
             );
             try {
@@ -144,6 +148,7 @@ export const generateHandler = async (options: GenerateHandlerOptions) => {
             await LightdashAnalytics.track({
                 event: 'generate.error',
                 properties: {
+                    executionId,
                     trigger: 'generate',
                     error: `${e.message}`,
                 },
@@ -156,6 +161,7 @@ export const generateHandler = async (options: GenerateHandlerOptions) => {
     await LightdashAnalytics.track({
         event: 'generate.completed',
         properties: {
+            executionId,
             trigger: 'generate',
             numModelsSelected,
         },

@@ -1,6 +1,7 @@
 import assertUnreachable from '../utils/assertUnreachable';
 import { WeekDay } from '../utils/timeFrames';
 import { DbtManifestVersion } from './dbt';
+import { ProjectGroupAccess } from './projectGroupAccess';
 
 export enum ProjectType {
     DEFAULT = 'DEFAULT',
@@ -43,6 +44,7 @@ export type CreateBigqueryCredentials = {
     timeoutSeconds: number | undefined;
     priority: 'interactive' | 'batch' | undefined;
     keyfileContents: Record<string, string>;
+    requireUserCredentials?: boolean;
     retries: number | undefined;
     location: string | undefined;
     maximumBytesBilled: number | undefined;
@@ -71,6 +73,7 @@ export type CreateDatabricksCredentials = {
     serverHostName: string;
     httpPath: string;
     personalAccessToken: string;
+    requireUserCredentials?: boolean;
     startOfWeek?: WeekDay | null;
 };
 export type DatabricksCredentials = Omit<
@@ -82,6 +85,7 @@ export type CreatePostgresCredentials = SshTunnelConfiguration & {
     host: string;
     user: string;
     password: string;
+    requireUserCredentials?: boolean;
     port: number;
     dbname: string;
     schema: string;
@@ -101,6 +105,7 @@ export type CreateTrinoCredentials = {
     host: string;
     user: string;
     password: string;
+    requireUserCredentials?: boolean;
     port: number;
     dbname: string;
     schema: string;
@@ -116,6 +121,7 @@ export type CreateRedshiftCredentials = SshTunnelConfiguration & {
     host: string;
     user: string;
     password: string;
+    requireUserCredentials?: boolean;
     port: number;
     dbname: string;
     schema: string;
@@ -134,6 +140,7 @@ export type CreateSnowflakeCredentials = {
     account: string;
     user: string;
     password?: string;
+    requireUserCredentials?: boolean;
     privateKey?: string;
     privateKeyPass?: string;
     role?: string;
@@ -293,12 +300,17 @@ export type Project = {
 
 export type ProjectSummary = Pick<
     Project,
-    'name' | 'projectUuid' | 'organizationUuid'
+    'name' | 'projectUuid' | 'organizationUuid' | 'type'
 >;
 
 export type ApiProjectResponse = {
     status: 'ok';
     results: Project;
+};
+
+export type ApiGetProjectGroupAccesses = {
+    status: 'ok';
+    results: ProjectGroupAccess[];
 };
 
 export type IdContentMapping = {

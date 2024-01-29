@@ -1,5 +1,6 @@
 import {
     Explore,
+    MetricQuery,
     ProjectMemberProfile,
     SEED_ORG_1_ADMIN,
     SEED_PROJECT,
@@ -8,7 +9,8 @@ import {
 
 const apiUrl = '/api/v1';
 
-const runqueryBody = {
+const runqueryBody: MetricQuery = {
+    exploreName: 'customers',
     dimensions: ['customers_customer_id'],
     metrics: [],
     filters: {},
@@ -541,7 +543,12 @@ describe('Lightdash API tests for member user with editor project permissions', 
             url: `${apiUrl}${endpoint}`,
             headers: { 'Content-type': 'application/json' },
             method: 'POST',
-            body: runqueryBody,
+            body: {
+                ...runqueryBody,
+                onlyRaw: false,
+                columnOrder: [],
+                showTableNames: false,
+            },
         }).then((resp) => {
             expect(resp.status).to.eq(200);
             cy.log(`resp.body ${JSON.stringify(resp.body)}`);
@@ -837,7 +844,12 @@ describe('Lightdash API tests for member user with interactive_viewer project pe
             url: `${apiUrl}${endpoint}`,
             headers: { 'Content-type': 'application/json' },
             method: 'POST',
-            body: runqueryBody,
+            body: {
+                ...runqueryBody,
+                onlyRaw: false,
+                columnOrder: [],
+                showTableNames: false,
+            },
         }).then((resp) => {
             expect(resp.status).to.eq(200);
             expect(resp.body).to.have.property('status', 'ok');
@@ -1085,7 +1097,7 @@ describe('Lightdash API tests for member user with viewer project permissions', 
             expect(resp.status).to.eq(403);
         });
     });
-    it('Should get forbidden (403) from POST downloadCsv', () => {
+    it('Should get csv (200) from POST downloadCsv', () => {
         const projectUuid = SEED_PROJECT.project_uuid;
 
         const endpoint = `/projects/${projectUuid}/explores/customers/downloadCsv`;
@@ -1093,10 +1105,15 @@ describe('Lightdash API tests for member user with viewer project permissions', 
             url: `${apiUrl}${endpoint}`,
             headers: { 'Content-type': 'application/json' },
             method: 'POST',
-            body: runqueryBody,
+            body: {
+                ...runqueryBody,
+                onlyRaw: false,
+                columnOrder: [],
+                showTableNames: false,
+            },
             failOnStatusCode: false,
         }).then((resp) => {
-            expect(resp.status).to.eq(403);
+            expect(resp.status).to.eq(200);
         });
     });
     it('Should get forbidden (403) from POST runUnderlyingDataQuery', () => {

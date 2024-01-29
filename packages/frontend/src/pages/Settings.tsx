@@ -1,5 +1,5 @@
 import { subject } from '@casl/ability';
-import { Box, Stack, Title } from '@mantine/core';
+import { Box, Stack, Text, Title } from '@mantine/core';
 import {
     IconBuildingSkyscraper,
     IconCalendarStats,
@@ -18,6 +18,7 @@ import {
     IconUsers,
     IconUserShield,
 } from '@tabler/icons-react';
+import { useFeatureFlagEnabled } from 'posthog-js/react';
 import { FC } from 'react';
 import { Redirect, Route, Switch } from 'react-router-dom';
 import { Can } from '../components/common/Authorization';
@@ -33,7 +34,7 @@ import AllowedDomainsPanel from '../components/UserSettings/AllowedDomainsPanel'
 import AppearancePanel from '../components/UserSettings/AppearancePanel';
 import DefaultProjectPanel from '../components/UserSettings/DefaultProjectPanel';
 import { DeleteOrganizationPanel } from '../components/UserSettings/DeleteOrganizationPanel';
-import { Description } from '../components/UserSettings/DeleteOrganizationPanel/DeleteOrganizationPanel.styles';
+import { MyWarehouseConnectionsPanel } from '../components/UserSettings/MyWarehouseConnectionsPanel';
 import OrganizationPanel from '../components/UserSettings/OrganizationPanel';
 import PasswordPanel from '../components/UserSettings/PasswordPanel';
 import ProfilePanel from '../components/UserSettings/ProfilePanel';
@@ -41,7 +42,7 @@ import ProjectManagementPanel from '../components/UserSettings/ProjectManagement
 import SlackSettingsPanel from '../components/UserSettings/SlackSettingsPanel';
 import SocialLoginsPanel from '../components/UserSettings/SocialLoginsPanel';
 import UserAttributesPanel from '../components/UserSettings/UserAttributesPanel';
-import UserManagementPanel from '../components/UserSettings/UserManagementPanel';
+import UsersAndGroupsPanel from '../components/UserSettings/UsersAndGroupsPanel';
 import { useOrganization } from '../hooks/organization/useOrganization';
 import { useActiveProjectUuid } from '../hooks/useActiveProject';
 import { useProject } from '../hooks/useProject';
@@ -51,25 +52,28 @@ import { EventName, PageName } from '../types/Events';
 import ProjectSettings from './ProjectSettings';
 
 const Settings: FC = () => {
+    const isPassthroughLoginFeatureEnabled =
+        useFeatureFlagEnabled('passthrough-login');
+
     const {
         health: {
             data: health,
-            isLoading: isHealthLoading,
+            isInitialLoading: isHealthLoading,
             error: healthError,
         },
-        user: { data: user, isLoading: isUserLoading, error: userError },
+        user: { data: user, isInitialLoading: isUserLoading, error: userError },
     } = useApp();
     const { track } = useTracking();
     const {
         data: organization,
-        isLoading: isOrganizationLoading,
+        isInitialLoading: isOrganizationLoading,
         error: organizationError,
     } = useOrganization();
     const { activeProjectUuid, isLoading: isActiveProjectUuidLoading } =
         useActiveProjectUuid();
     const {
         data: project,
-        isLoading: isProjectLoading,
+        isInitialLoading: isProjectLoading,
         error: projectError,
     } = useProject(activeProjectUuid);
 
@@ -106,6 +110,8 @@ const Settings: FC = () => {
         health.auth.okta.enabled ||
         health.auth.oneLogin.enabled ||
         health.auth.azuread.enabled;
+
+    const isGroupManagementEnabled = health.hasGroups;
 
     return (
         <Page
@@ -146,6 +152,16 @@ const Settings: FC = () => {
                                 />
                             )}
 
+                            {isPassthroughLoginFeatureEnabled && (
+                                <RouterNavLink
+                                    label="My warehouse connections"
+                                    exact
+                                    to="/generalSettings/myWarehouseConnections"
+                                    icon={
+                                        <MantineIcon icon={IconDatabaseCog} />
+                                    }
+                                />
+                            )}
                             <RouterNavLink
                                 label="Personal access tokens"
                                 exact
@@ -183,7 +199,11 @@ const Settings: FC = () => {
                                     'OrganizationMemberProfile',
                                 ) && (
                                     <RouterNavLink
-                                        label="User management"
+                                        label={
+                                            isGroupManagementEnabled
+                                                ? 'Users & groups'
+                                                : 'User management'
+                                        }
                                         to="/generalSettings/userManagement"
                                         exact
                                         icon={
@@ -199,7 +219,11 @@ const Settings: FC = () => {
                                     }),
                                 ) && (
                                     <RouterNavLink
-                                        label="User attributes"
+                                        label={
+                                            isGroupManagementEnabled
+                                                ? 'User & group attributes'
+                                                : 'User attributes'
+                                        }
                                         to="/generalSettings/userAttributes"
                                         exact
                                         icon={
@@ -387,6 +411,13 @@ const Settings: FC = () => {
                         </Stack>
                     </Route>
                 )}
+                {isPassthroughLoginFeatureEnabled && (
+                    <Route exact path="/generalSettings/myWarehouseConnections">
+                        <Stack spacing="xl">
+                            <MyWarehouseConnectionsPanel />
+                        </Stack>
+                    </Route>
+                )}
 
                 {user.ability.can('manage', 'Organization') && (
                     <Route exact path="/generalSettings/organization">
@@ -401,11 +432,11 @@ const Settings: FC = () => {
                                     <Title order={4}>
                                         Allowed email domains
                                     </Title>
-                                    <Description>
+                                    <Text c="gray.6" fz="xs">
                                         Anyone with email addresses at these
                                         domains can automatically join the
                                         organization.
-                                    </Description>
+                                    </Text>
                                 </div>
                                 <AllowedDomainsPanel />
                             </SettingsGridCard>
@@ -413,13 +444,13 @@ const Settings: FC = () => {
                             <SettingsGridCard>
                                 <div>
                                     <Title order={4}>Default Project</Title>
-                                    <Description>
+                                    <Text c="gray.6" fz="xs">
                                         This is the project users will see when
                                         they log in for the first time or from a
                                         new device. If a user does not have
                                         access, they will see their next
                                         accessible project.
-                                    </Description>
+                                    </Text>
                                 </div>
                                 <DefaultProjectPanel />
                             </SettingsGridCard>
@@ -428,12 +459,12 @@ const Settings: FC = () => {
                                 <SettingsGridCard>
                                     <div>
                                         <Title order={4}>Danger zone </Title>
-                                        <Description>
+                                        <Text c="gray.6" fz="xs">
                                             This action deletes the whole
                                             workspace and all its content,
                                             including users. This action is not
                                             reversible.
-                                        </Description>
+                                        </Text>
                                     </div>
                                     <DeleteOrganizationPanel />
                                 </SettingsGridCard>
@@ -442,9 +473,14 @@ const Settings: FC = () => {
                     </Route>
                 )}
 
-                {user.ability.can('view', 'OrganizationMemberProfile') && (
+                {user.ability.can(
+                    'manage',
+                    subject('OrganizationMemberProfile', {
+                        organizationUuid: organization.organizationUuid,
+                    }),
+                ) && (
                     <Route path="/generalSettings/userManagement">
-                        <UserManagementPanel />
+                        <UsersAndGroupsPanel />
                     </Route>
                 )}
 
@@ -503,7 +539,10 @@ const Settings: FC = () => {
 
                 {health.hasSlack && user.ability.can('manage', 'Organization') && (
                     <Route exact path="/generalSettings/integrations/slack">
-                        <SlackSettingsPanel />
+                        <Stack>
+                            <Title order={4}>Integrations</Title>
+                            <SlackSettingsPanel />
+                        </Stack>
                     </Route>
                 )}
 

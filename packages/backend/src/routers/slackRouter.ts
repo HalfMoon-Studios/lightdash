@@ -5,7 +5,6 @@ import {
 } from '@lightdash/common';
 import { ExpressReceiver } from '@slack/bolt';
 import express from 'express';
-import fs from 'fs';
 import path from 'path';
 import { analytics } from '../analytics/client';
 import { LightdashAnalytics } from '../analytics/LightdashAnalytics';
@@ -15,6 +14,7 @@ import {
     unauthorisedInDemo,
 } from '../controllers/authentication';
 import { slackAuthenticationModel } from '../models/models';
+import { downloadFileService } from '../services/services';
 
 export const slackRouter = express.Router({ mergeParams: true });
 
@@ -42,6 +42,7 @@ slackRouter.get(
                 slackTeamName: slackAuth.slackTeamName,
                 createdAt: slackAuth.createdAt,
                 scopes: slackAuth.scopes,
+                notificationChannel: slackAuth.notificationChannel,
             };
             res.json({
                 status: 'ok',
@@ -54,27 +55,18 @@ slackRouter.get(
 );
 
 slackRouter.get(
-    '/image/:imageId',
+    '/image/:nanoId',
 
     async (req, res, next) => {
         try {
-            const { imageId } = req.params;
-            if (
-                !imageId.startsWith('slack-image') ||
-                !imageId.endsWith('.png')
-            ) {
-                throw new NotFoundError(
-                    `Slack image not found ${req.params.imageId}`,
-                );
+            const { nanoId } = req.params;
+            const { path: filePath } =
+                await downloadFileService.getDownloadFile(nanoId);
+            const normalizedPath = path.normalize(filePath);
+            if (!normalizedPath.startsWith('/tmp/')) {
+                throw new NotFoundError(`File not found ${normalizedPath}`);
             }
-            const sanitizedImageId = imageId.replace('..', '');
-
-            const filePath = path.join('/tmp', sanitizedImageId);
-            if (!fs.existsSync(filePath)) {
-                const error = `This file ${imageId} doesn't exist on this server, this may be happening if you are running multiple containers or because files are not persisted. You can check out our docs to learn more on how to enable cloud storage: https://docs.lightdash.com/self-host/customize-deployment/configure-lightdash-to-use-external-object-storage`;
-                throw new NotFoundError(error);
-            }
-            res.sendFile(filePath);
+            res.sendFile(normalizedPath);
         } catch (error) {
             next(error);
         }

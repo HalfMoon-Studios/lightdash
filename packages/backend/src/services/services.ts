@@ -3,6 +3,7 @@ import { lightdashConfig } from '../config/lightdashConfig';
 import {
     analyticsModel,
     dashboardModel,
+    downloadFileModel,
     emailModel,
     groupsModel,
     inviteLinkModel,
@@ -26,11 +27,13 @@ import {
     sshKeyPairModel,
     userAttributesModel,
     userModel,
+    userWarehouseCredentialsModel,
     validationModel,
 } from '../models/models';
 import { AnalyticsService } from './AnalyticsService/AnalyticsService';
 import { CsvService } from './CsvService/CsvService';
 import { DashboardService } from './DashboardService/DashboardService';
+import { DownloadFileService } from './DownloadFileService/DownloadFileService';
 import { EncryptionService } from './EncryptionService/EncryptionService';
 import { GdriveService } from './GdriveService/GdriveService';
 import { GroupsService } from './GroupService';
@@ -55,6 +58,7 @@ const encryptionService = new EncryptionService({ lightdashConfig });
 export const userService = new UserService({
     inviteLinkModel,
     userModel,
+    groupsModel,
     sessionModel,
     emailModel,
     openIdIdentityModel,
@@ -64,6 +68,7 @@ export const userService = new UserService({
     organizationModel,
     personalAccessTokenModel,
     organizationAllowedEmailDomainsModel,
+    userWarehouseCredentialsModel,
 });
 export const organizationService = new OrganizationService({
     organizationModel,
@@ -87,6 +92,8 @@ export const projectService = new ProjectService({
     userAttributesModel,
     s3CacheClient,
     analyticsModel,
+    dashboardModel,
+    userWarehouseCredentialsModel,
 });
 
 export const shareService = new ShareService({
@@ -143,6 +150,7 @@ export const unfurlService = new UnfurlService({
     encryptionService,
     s3Client,
     projectModel,
+    downloadFileModel,
 });
 
 export const analyticsService = new AnalyticsService({
@@ -164,6 +172,7 @@ export const csvService = new CsvService({
     projectService,
     dashboardModel,
     savedChartModel,
+    downloadFileModel,
 });
 
 export const pinningService = new PinningService({
@@ -186,6 +195,7 @@ export const validationService = new ValidationService({
 
 export const groupService = new GroupsService({
     groupsModel,
+    projectModel,
 });
 
 export const sshKeyPairService = new SshKeyPairService({
@@ -202,4 +212,9 @@ export const gdriveService = new GdriveService({
     projectService,
     dashboardModel,
     savedChartModel,
+});
+
+export const downloadFileService = new DownloadFileService({
+    lightdashConfig,
+    downloadFileModel,
 });

@@ -6,6 +6,7 @@ import {
     compiledJoinedExploreOverridingAliasAndLabel,
     compiledJoinedExploreOverridingJoinAlias,
     compiledJoinedExploreOverridingJoinLabel,
+    compiledJoinedExploreWithJoinAliasAndSubsetOfFieldsThatDontIncludeSqlFields,
     compiledJoinedExploreWithSubsetOfFields,
     compiledJoinedExploreWithSubsetOfFieldsThatDontIncludeSqlFields,
     compiledSimpleJoinedExplore,
@@ -30,9 +31,12 @@ import {
     exploreWithHiddenJoin,
     exploreWithMetricNumber,
     exploreWithMetricNumberCompiled,
+    exploreWithRequiredAttributes,
+    exploreWithRequiredAttributesCompiled,
     joinedExploreOverridingAliasAndLabel,
     joinedExploreOverridingJoinAlias,
     joinedExploreOverridingJoinLabel,
+    joinedExploreWithJoinAliasAndSubsetOfFieldsThatDontIncludeSqlFields,
     joinedExploreWithSubsetOfFields,
     joinedExploreWithSubsetOfFieldsThatDontIncludeSqlFields,
     simpleJoinedExplore,
@@ -149,6 +153,15 @@ describe('Explores with a base table and joined table', () => {
             ),
         ).toStrictEqual(
             compiledJoinedExploreWithSubsetOfFieldsThatDontIncludeSqlFields,
+        );
+    });
+    test('should compile joins with a join alias and a subset of fields selected on join which dont include the fields in the join SQL', () => {
+        expect(
+            compiler.compileExplore(
+                joinedExploreWithJoinAliasAndSubsetOfFieldsThatDontIncludeSqlFields,
+            ),
+        ).toStrictEqual(
+            compiledJoinedExploreWithJoinAliasAndSubsetOfFieldsThatDontIncludeSqlFields,
         );
     });
     test('should compile with a hidden join', () => {
@@ -277,5 +290,13 @@ describe('Parse dimension reference', () => {
         expect(
             parseAllReferences('${ld_table.ld_dimension} == 1', 'ld_table'),
         ).toStrictEqual([{ refName: 'ld_dimension', refTable: 'ld_table' }]);
+    });
+});
+
+describe('Explore with user attributes', () => {
+    test('should compile explore with table and field required attributes', () => {
+        expect(
+            compiler.compileExplore(exploreWithRequiredAttributes),
+        ).toStrictEqual(exploreWithRequiredAttributesCompiled);
     });
 });

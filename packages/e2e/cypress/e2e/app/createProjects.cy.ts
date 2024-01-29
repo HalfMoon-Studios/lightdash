@@ -64,7 +64,7 @@ const configurePostgresWarehouse = (
     });
     cy.get('input[name="warehouse.dbname"]').type(config.database);
 
-    cy.contains('a', 'Advanced configuration options').click();
+    cy.contains('button', 'Advanced configuration options').click();
 
     cy.get('input[name="warehouse.port"]').clear().type(config.port);
     cy.selectMantine('warehouse.sslmode', 'disable');
@@ -156,12 +156,9 @@ const testCompile = (): Cypress.Chainable<string> => {
     cy.contains('Step 2/3', { timeout: 60000 });
     cy.contains('Successfully synced dbt project!', { timeout: 60000 });
 
-    cy.contains('selected 12 models');
+    cy.contains('selected 10 models');
     // Configure
-    cy.findByText('Save changes')
-        .parent('button')
-        .should('not.be.disabled')
-        .click();
+    cy.contains('button', 'Save changes').click();
     cy.url().should('include', '/home', { timeout: 30000 });
     cy.contains('Welcome, David');
     cy.findByText('Charts and Dashboards');
@@ -180,6 +177,7 @@ const testFilterStringEscaping = (projectUuid: string) => {
         headers: { 'Content-type': 'application/json' },
         method: 'POST',
         body: {
+            exploreName: 'customers',
             dimensions: ['customers_first_name'],
             metrics: [],
             filters: {
@@ -220,6 +218,7 @@ const defaultRowValues = [
     '11',
     '224',
     '2020-08-10',
+    '33',
     '2020-08',
     '8',
     'August',
@@ -228,6 +227,8 @@ const defaultRowValues = [
     'Q3',
     '2020',
     '2,020',
+    '23',
+    '44',
 ];
 
 const percentileRowValues = ['2020-08-11', '1,298', '828', '1,298', '1,717'];
@@ -241,6 +242,7 @@ const testPercentile = (
         headers: { 'Content-type': 'application/json' },
         method: 'POST',
         body: {
+            exploreName: 'events',
             dimensions: ['events_timestamp_tz_day'],
             metrics: [
                 'events_median',
@@ -275,6 +277,7 @@ const testTimeIntervalsResults = (
         headers: { 'Content-type': 'application/json' },
         method: 'POST',
         body: {
+            exploreName: 'events',
             dimensions: [
                 'events_timestamp_tz_raw',
                 'events_timestamp_tz_millisecond',
@@ -287,6 +290,7 @@ const testTimeIntervalsResults = (
                 'events_timestamp_tz_day_of_month_num',
                 'events_timestamp_tz_day_of_year_num',
                 'events_timestamp_tz_week',
+                'events_timestamp_tz_week_num',
                 'events_timestamp_tz_month',
                 'events_timestamp_tz_month_num',
                 'events_timestamp_tz_month_name',
@@ -295,6 +299,8 @@ const testTimeIntervalsResults = (
                 'events_timestamp_tz_quarter_name',
                 'events_timestamp_tz_year',
                 'events_timestamp_tz_year_num',
+                'events_timestamp_tz_hour_of_day_num',
+                'events_timestamp_tz_minute_of_hour_num',
             ],
             metrics: [],
             filters: {},
@@ -331,6 +337,7 @@ const createCustomDimensionChart = (projectUuid) => {
             description: 'Payment range by amount',
             tableName: 'payments',
             metricQuery: {
+                exploreName: 'payments',
                 dimensions: ['payments_payment_method'],
                 metrics: ['orders_total_order_amount'],
                 filters: {},
@@ -396,8 +403,8 @@ const testCustomDimensions = (projectUuid) => {
     // This is also used in createProject.cy.ts to test custom dimensions against all warehouses
     cy.visit(`/projects/${projectUuid}/saved`);
     cy.contains('How do payment methods vary').click();
-    cy.contains('0-6');
-    cy.contains('6-12');
+    cy.contains('0 - 6');
+    cy.contains('6 - 12');
 };
 
 describe('Create projects', () => {
@@ -504,6 +511,7 @@ describe('Create projects', () => {
                 '12',
                 '225',
                 '2020-08-09',
+                '32',
                 '2020-08',
                 '8',
                 'August',
@@ -512,6 +520,8 @@ describe('Create projects', () => {
                 'Q3',
                 '2020',
                 '2,020',
+                '7',
+                '58',
             ];
 
             testTimeIntervalsResults(projectUuid, bigqueryRowValues);
@@ -636,6 +646,7 @@ describe('Create projects', () => {
                 '12',
                 '225',
                 '2020-08-10',
+                '33',
                 '2020-08',
                 '8',
                 'August',
@@ -644,6 +655,8 @@ describe('Create projects', () => {
                 'Q3',
                 '2020',
                 '2,020',
+                '7',
+                '58',
             ];
 
             testTimeIntervalsResults(projectUuid, snowflakeRowValues);

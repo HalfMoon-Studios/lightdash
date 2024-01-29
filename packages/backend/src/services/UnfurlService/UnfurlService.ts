@@ -3,6 +3,7 @@ import {
     assertUnreachable,
     AuthorizationError,
     ChartType,
+    DownloadFileType,
     ForbiddenError,
     LightdashPage,
     SessionUser,
@@ -19,6 +20,7 @@ import { S3Client } from '../../clients/Aws/s3';
 import { LightdashConfig } from '../../config/parseConfig';
 import Logger from '../../logging/logger';
 import { DashboardModel } from '../../models/DashboardModel/DashboardModel';
+import { DownloadFileModel } from '../../models/DownloadFileModel';
 import { ProjectModel } from '../../models/ProjectModel/ProjectModel';
 import { SavedChartModel } from '../../models/SavedChartModel';
 import { ShareModel } from '../../models/ShareModel';
@@ -90,6 +92,7 @@ type UnfurlServiceDependencies = {
     encryptionService: EncryptionService;
     s3Client: S3Client;
     projectModel: ProjectModel;
+    downloadFileModel: DownloadFileModel;
 };
 
 export class UnfurlService {
@@ -109,6 +112,8 @@ export class UnfurlService {
 
     projectModel: ProjectModel;
 
+    downloadFileModel: DownloadFileModel;
+
     constructor({
         lightdashConfig,
         dashboardModel,
@@ -118,6 +123,7 @@ export class UnfurlService {
         encryptionService,
         s3Client,
         projectModel,
+        downloadFileModel,
     }: UnfurlServiceDependencies) {
         this.lightdashConfig = lightdashConfig;
         this.dashboardModel = dashboardModel;
@@ -127,6 +133,7 @@ export class UnfurlService {
         this.encryptionService = encryptionService;
         this.s3Client = s3Client;
         this.projectModel = projectModel;
+        this.downloadFileModel = downloadFileModel;
     }
 
     async getTitleAndDescription(
@@ -225,23 +232,32 @@ export class UnfurlService {
         return path;
     }
 
-    async unfurlImage(
-        url: string,
-        lightdashPage: LightdashPage,
-        imageId: string,
-        authUserUuid: string,
-        withPdf: boolean = false,
-    ): Promise<{ imageUrl?: string; pdfPath?: string }> {
+    async unfurlImage({
+        url,
+        lightdashPage,
+        imageId,
+        authUserUuid,
+        gridWidth,
+        withPdf = false,
+    }: {
+        url: string;
+        lightdashPage: LightdashPage;
+        imageId: string;
+        authUserUuid: string;
+        gridWidth?: number | undefined;
+        withPdf?: boolean;
+    }): Promise<{ imageUrl?: string; pdfPath?: string }> {
         const cookie = await this.getUserCookie(authUserUuid);
         const details = await this.unfurlDetails(url);
-        const buffer = await this.saveScreenshot(
+        const buffer = await this.saveScreenshot({
             imageId,
             cookie,
             url,
             lightdashPage,
-            details?.chartType,
-            details?.organizationUuid,
-        );
+            chartType: details?.chartType,
+            organizationUuid: details?.organizationUuid,
+            gridWidth,
+        });
 
         let imageUrl;
         let pdfPath;
@@ -253,7 +269,15 @@ export class UnfurlService {
                 imageUrl = await this.s3Client.uploadImage(buffer, imageId);
             } else {
                 // We will share the image saved by puppetteer on our lightdash enpdoint
-                imageUrl = `${this.lightdashConfig.siteUrl}/api/v1/slack/image/${imageId}.png`;
+                const filePath = `/tmp/${imageId}.png`;
+                const downloadFileId = useNanoid();
+                await this.downloadFileModel.createDownloadFile(
+                    downloadFileId,
+                    filePath,
+                    DownloadFileType.IMAGE,
+                );
+
+                imageUrl = `${this.lightdashConfig.siteUrl}/api/v1/slack/image/${downloadFileId}`;
             }
         }
 
@@ -263,6 +287,7 @@ export class UnfurlService {
     async exportDashboard(
         dashboardUuid: string,
         queryFilters: string,
+        gridWidth: number | undefined,
         user: SessionUser,
     ): Promise<string> {
         const dashboard = await this.dashboardModel.getById(dashboardUuid);
@@ -281,26 +306,36 @@ export class UnfurlService {
         ) {
             throw new ForbiddenError();
         }
-        const unfurlImage = await this.unfurlImage(
-            minimalUrl,
-            pageType,
-            `slack-image_${snakeCaseName(name)}_${useNanoid()}`, // In order to use local images from slackRouter, image needs to start with slack-image
-            user.userUuid,
-        );
+        const unfurlImage = await this.unfurlImage({
+            url: minimalUrl,
+            lightdashPage: pageType,
+            imageId: `slack-image_${snakeCaseName(name)}_${useNanoid()}`,
+            authUserUuid: user.userUuid,
+            gridWidth,
+        });
         if (unfurlImage.imageUrl === undefined) {
             throw new Error('Unable to unfurl image');
         }
         return unfurlImage.imageUrl;
     }
 
-    private async saveScreenshot(
-        imageId: string,
-        cookie: string,
-        url: string,
-        lightdashPage: LightdashPage,
-        chartType?: string,
-        organizationUuid?: string,
-    ): Promise<Buffer | undefined> {
+    private async saveScreenshot({
+        imageId,
+        cookie,
+        url,
+        lightdashPage,
+        chartType,
+        organizationUuid,
+        gridWidth = undefined,
+    }: {
+        imageId: string;
+        cookie: string;
+        url: string;
+        lightdashPage: LightdashPage;
+        chartType?: string;
+        organizationUuid?: string;
+        gridWidth?: number | undefined;
+    }): Promise<Buffer | undefined> {
         if (this.lightdashConfig.headlessBrowser?.host === undefined) {
             Logger.error(
                 `Can't get screenshot if HEADLESS_BROWSER_HOST env variable is not defined`,
@@ -332,7 +367,10 @@ export class UnfurlService {
                     if (chartType === ChartType.BIG_NUMBER) {
                         await page.setViewport(bigNumberViewport);
                     } else {
-                        await page.setViewport(viewport);
+                        await page.setViewport({
+                            ...viewport,
+                            width: gridWidth ?? viewport.width,
+                        });
                     }
                     await page.on('requestfailed', (request) => {
                         Logger.warn(
@@ -371,7 +409,11 @@ export class UnfurlService {
 
                     await page.on('response', (response) => {
                         const responseUrl = response.url();
-                        if (responseUrl.match(/\/saved\/[a-f0-9-]+\/results/)) {
+                        const regexUrlToMatch =
+                            lightdashPage === LightdashPage.EXPLORE
+                                ? /\/saved\/[a-f0-9-]+\/results/
+                                : /\/saved\/[a-f0-9-]+\/chart-and-results/; // NOTE: Chart endpoint in Dashboards is different
+                        if (responseUrl.match(regexUrlToMatch)) {
                             chartRequests += 1;
                             response.buffer().then(
                                 (buffer) => {
@@ -459,9 +501,20 @@ export class UnfurlService {
                             pageMetrics.JSEventListeners,
                         timeout,
                     });
-                    const imageBuffer = (await element.screenshot({
+
+                    if (this.lightdashConfig.scheduler.screenshotTimeout) {
+                        await new Promise((resolve) => {
+                            setTimeout(
+                                resolve,
+                                this.lightdashConfig.scheduler
+                                    .screenshotTimeout,
+                            );
+                        });
+                    }
+
+                    const imageBuffer = await element.screenshot({
                         path,
-                    })) as Buffer;
+                    });
 
                     return imageBuffer;
                 } catch (e) {

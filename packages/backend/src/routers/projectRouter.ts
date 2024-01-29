@@ -1,17 +1,11 @@
 import {
-    ApiCompiledQueryResults,
-    ApiExploreResults,
-    ApiExploresResults,
-    ApiSqlQueryResults,
     getRequestMethod,
     LightdashRequestMethodHeader,
-    MetricQuery,
     NotFoundError,
     ProjectCatalog,
     TablesConfiguration,
 } from '@lightdash/common';
 import express from 'express';
-import fs from 'fs';
 
 import path from 'path';
 import {
@@ -19,17 +13,15 @@ import {
     isAuthenticated,
     unauthorisedInDemo,
 } from '../controllers/authentication';
-import { CsvService } from '../services/CsvService/CsvService';
 import {
     csvService,
     dashboardService,
+    downloadFileService,
     projectService,
     savedChartsService,
     searchService,
     spaceService,
 } from '../services/services';
-
-const { Readable } = require('stream');
 
 export const projectRouter = express.Router({ mergeParams: true });
 
@@ -74,172 +66,22 @@ projectRouter.get(
     },
 );
 
-projectRouter.put(
-    '/explores',
-    allowApiKeyAuthentication,
-    isAuthenticated,
-    unauthorisedInDemo,
-    async (req, res, next) => {
-        projectService
-            .setExplores(req.user!, req.params.projectUuid, req.body)
-            .then(() => {
-                res.json({
-                    status: 'ok',
-                });
-            })
-            .catch(next);
-    },
-);
-
 projectRouter.get(
-    '/explores',
-    allowApiKeyAuthentication,
-    isAuthenticated,
-    async (req, res, next) => {
-        try {
-            const results: ApiExploresResults =
-                await projectService.getAllExploresSummary(
-                    req.user!,
-                    req.params.projectUuid,
-                    req.query.filtered === 'true',
-                );
-            res.json({
-                status: 'ok',
-                results,
-            });
-        } catch (e) {
-            next(e);
-        }
-    },
-);
-
-projectRouter.get(
-    '/explores/:exploreId',
-    allowApiKeyAuthentication,
-    isAuthenticated,
-    async (req, res, next) => {
-        try {
-            const results: ApiExploreResults = await projectService.getExplore(
-                req.user!,
-                req.params.projectUuid,
-                req.params.exploreId,
-            );
-            res.json({ status: 'ok', results });
-        } catch (e) {
-            next(e);
-        }
-    },
-);
-
-projectRouter.post(
-    '/explores/:exploreId/compileQuery',
-    allowApiKeyAuthentication,
-    isAuthenticated,
-    async (req, res, next) => {
-        try {
-            const { body } = req;
-            const metricQuery: MetricQuery = {
-                dimensions: body.dimensions,
-                metrics: body.metrics,
-                filters: body.filters,
-                sorts: body.sorts,
-                limit: body.limit,
-                tableCalculations: body.tableCalculations,
-                additionalMetrics: body.additionalMetrics,
-                customDimensions: body.customDimensions,
-            };
-            const results: ApiCompiledQueryResults = (
-                await projectService.compileQuery(
-                    req.user!,
-                    metricQuery,
-                    req.params.projectUuid,
-                    req.params.exploreId,
-                )
-            ).query;
-            res.json({
-                status: 'ok',
-                results,
-            });
-        } catch (e) {
-            next(e);
-        }
-    },
-);
-
-projectRouter.post(
-    '/explores/:exploreId/downloadCsv',
-    allowApiKeyAuthentication,
-    isAuthenticated,
-    async (req, res, next) => {
-        const { body } = req;
-
-        try {
-            const {
-                onlyRaw,
-                csvLimit,
-                showTableNames,
-                customLabels,
-                columnOrder,
-                hiddenFields,
-            } = body;
-            const { projectUuid, exploreId } = req.params;
-
-            const metricQuery: MetricQuery = {
-                dimensions: body.dimensions,
-                metrics: body.metrics,
-                filters: body.filters,
-                sorts: body.sorts,
-                limit: body.limit,
-                tableCalculations: body.tableCalculations,
-                additionalMetrics: body.additionalMetrics,
-                customDimensions: body.customDimensions,
-            };
-
-            const { jobId } = await CsvService.scheduleDownloadCsv(req.user!, {
-                userUuid: req.user?.userUuid!,
-                projectUuid,
-                exploreId,
-                metricQuery,
-                onlyRaw,
-                csvLimit,
-                showTableNames,
-                customLabels,
-                columnOrder,
-                hiddenFields,
-            });
-
-            res.json({
-                status: 'ok',
-                results: {
-                    jobId,
-                },
-            });
-        } catch (e) {
-            next(e);
-        }
-    },
-);
-
-projectRouter.get(
-    '/csv/:fileId',
+    '/csv/:nanoId',
 
     async (req, res, next) => {
         try {
-            const { fileId } = req.params;
-
-            if (!fileId.startsWith('csv-') || !fileId.endsWith('.csv')) {
-                throw new NotFoundError(`CSV file not found ${fileId}`);
-            }
-            const sanitizedFileId = fileId.replace('..', '');
-
-            const filePath = path.join('/tmp', sanitizedFileId);
-            if (!fs.existsSync(filePath)) {
-                const error = `This file ${fileId} doesn't exist on this server, this may be happening if you are running multiple containers or because files are not persisted. You can check out our docs to learn more on how to enable cloud storage: https://docs.lightdash.com/self-host/customize-deployment/configure-lightdash-to-use-external-object-storage`;
-                throw new NotFoundError(error);
-            }
+            const { nanoId } = req.params;
+            const { path: filePath } =
+                await downloadFileService.getDownloadFile(nanoId);
+            const filename = path.basename(filePath);
             res.set('Content-Type', 'text/csv');
-            res.set('Content-Disposition', `attachment; filename=${fileId}`);
-            res.sendFile(filePath);
+            res.set('Content-Disposition', `attachment; filename=${filename}`);
+            const normalizedPath = path.normalize(filePath);
+            if (!normalizedPath.startsWith('/tmp/')) {
+                throw new NotFoundError(`File not found ${normalizedPath}`);
+            }
+            res.sendFile(normalizedPath);
         } catch (error) {
             next(error);
         }

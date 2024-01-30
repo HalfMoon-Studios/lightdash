@@ -99,7 +99,7 @@ All the properties you can customize:
 | [compact](#compact-values)                  | No       | string                                                                                                                                            | This option will compact the number value (e.g. 1,500 to 1.50K). Currently supports one of the following: `['thousands', 'millions', 'billions', 'trillions']`                                                                                             |
 | group_label                                 | No       | string                                                                                                                                            | If you set this property, the dimension will be grouped in the sidebar with other dimensions with the same group label.                                                                                                                                    |
 | [urls](#urls)                               | No       | Array of { url, label }                                                                                                                           | Adding urls to a dimension allows your users to click dimension values in the UI and take actions, like opening an external tool with a url, or open at a website. You can use liquid templates to customise the link based on the value of the dimension. |
-| [required_attributes](#required-attributes) | No       | Object with { user_attribute, value }                                                                                                             | Adding urls to a dimension allows your users to click dimension values in the UI and take actions, like opening an external tool with a url, or open at a website. You can use liquid templates to customise the link based on the value of the dimension. |
+| [required_attributes](#required-attributes) | No       | Object with { user_attribute, value }                                                                                                             | Limits access to users with those attributes  |
 
 ## Type
 
@@ -218,9 +218,12 @@ You can see all of the interval options for date and timestamp fields below.
 | DAY_OF_WEEK_INDEX | Index of the day of the week | Number | 0               | The value range and start of the week depends on your warehouse configuration |
 | DAY_OF_MONTH_NUM  | Day of the month             | Number | 21              |                                                                               |
 | DAY_OF_YEAR_NUM   | Day of the year              | Number | 127             |                                                                               |
+| WEEK_NUM          | Week number                  | Number | 37              |                                                                               |
 | MONTH_NUM         | Month number                 | Number | 7               |                                                                               |
 | QUARTER_NUM       | Quarter number               | Number | 3               |                                                                               |
 | YEAR_NUM          | Year number                  | Number | 2019            |                                                                               |
+| MINUTE_OF_HOUR_NUM| Minute number                | Number | 50              |                                                                               |
+| HOUR_OF_DAY_NUM   | Hour number                  | Number | 22              |                                                                               |
 
 ### String options
 
@@ -343,7 +346,7 @@ columns:
     meta: 
       dimension: 
         required_attributes: 
-          is_admin: true 
+          is_admin: "true" 
 ```
 
 If a user without access to this dimension runs a query that contains this dimension, they will get a `Forbidden` error. 

@@ -17,6 +17,11 @@ import {
 } from '../types/field';
 import { WarehouseClient } from '../types/warehouse';
 
+import {
+    DateGranularity,
+    dateGranularityToTimeFrameMap,
+} from '../types/timeFrames';
+import { timeFrameConfigs } from '../utils/timeFrames';
 import { renderFilterRuleSql } from './filtersCompiler';
 
 // exclude lightdash prefix from variable pattern
@@ -61,6 +66,7 @@ export type UncompiledExplore = {
     tables: Record<string, Table>;
     targetDatabase: SupportedDbtAdapter;
     sqlWhere?: string;
+    warehouse?: string;
 };
 
 export class ExploreCompiler {
@@ -79,6 +85,7 @@ export class ExploreCompiler {
         tables,
         targetDatabase,
         groupLabel,
+        warehouse,
     }: UncompiledExplore): Explore {
         // Check that base table and joined tables exist
         if (!tables[baseTable]) {
@@ -116,7 +123,7 @@ export class ExploreCompiler {
                     join.sqlOn,
                     join.table,
                 ).reduce<string[]>((acc, reference) => {
-                    if (reference.refTable === join.table) {
+                    if (reference.refTable === joinTableName) {
                         acc.push(reference.refName);
                     }
                     return acc;
@@ -209,6 +216,7 @@ export class ExploreCompiler {
             tables: compiledTables,
             targetDatabase,
             groupLabel,
+            warehouse,
         };
     }
 
@@ -271,10 +279,25 @@ export class ExploreCompiler {
                 );
             }
         });
+        const tablesRequiredAttributes = Array.from(
+            compiledMetric.tablesReferences,
+        ).reduce<Record<string, Record<string, string | string[]>>>(
+            (acc, tableReference) => {
+                const table = tables[tableReference] as Table | undefined;
+                if (table?.requiredAttributes) {
+                    acc[tableReference] = table.requiredAttributes;
+                }
+                return acc;
+            },
+            {},
+        );
         return {
             ...metric,
             compiledSql: compiledMetric.sql,
             tablesReferences: Array.from(compiledMetric.tablesReferences),
+            ...(Object.keys(tablesRequiredAttributes).length
+                ? { tablesRequiredAttributes }
+                : {}),
         };
     }
 
@@ -387,10 +410,25 @@ export class ExploreCompiler {
         tables: Record<string, Table>,
     ): CompiledDimension {
         const compiledDimension = this.compileDimensionSql(dimension, tables);
+        const tablesRequiredAttributes = Array.from(
+            compiledDimension.tablesReferences,
+        ).reduce<Record<string, Record<string, string | string[]>>>(
+            (acc, tableReference) => {
+                const table = tables[tableReference] as Table | undefined;
+                if (table?.requiredAttributes) {
+                    acc[tableReference] = table.requiredAttributes;
+                }
+                return acc;
+            },
+            {},
+        );
         return {
             ...dimension,
             compiledSql: compiledDimension.sql,
             tablesReferences: Array.from(compiledDimension.tablesReferences),
+            ...(Object.keys(tablesRequiredAttributes).length
+                ? { tablesRequiredAttributes }
+                : {}),
         };
     }
 
@@ -526,3 +564,39 @@ export class ExploreCompiler {
         };
     }
 }
+
+export const createDimensionWithGranularity = (
+    dimensionName: string,
+    baseTimeDimension: CompiledDimension,
+    explore: Explore,
+    warehouseClient: WarehouseClient,
+    granularity: DateGranularity,
+) => {
+    const newTimeInterval = dateGranularityToTimeFrameMap[granularity];
+    const exploreCompiler = new ExploreCompiler(warehouseClient);
+    return exploreCompiler.compileDimension(
+        {
+            ...baseTimeDimension,
+            name: dimensionName,
+            type: timeFrameConfigs[newTimeInterval].getDimensionType(
+                baseTimeDimension.type,
+            ),
+            timeInterval: newTimeInterval,
+            label: `${baseTimeDimension.label} ${timeFrameConfigs[
+                newTimeInterval
+            ]
+                .getLabel()
+                .toLowerCase()}`,
+            sql: timeFrameConfigs[newTimeInterval].getSql(
+                warehouseClient.getAdapterType(),
+                newTimeInterval,
+                baseTimeDimension.sql,
+                timeFrameConfigs[newTimeInterval].getDimensionType(
+                    baseTimeDimension.type,
+                ),
+                warehouseClient.getStartOfWeek(),
+            ),
+        },
+        explore.tables,
+    );
+};

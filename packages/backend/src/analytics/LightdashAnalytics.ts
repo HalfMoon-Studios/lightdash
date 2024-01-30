@@ -118,6 +118,23 @@ type VerifiedUserEvent = BaseTrack & {
     };
 };
 
+type UserWarehouseCredentialsEvent = BaseTrack & {
+    event:
+        | 'user_warehouse_credentials.created'
+        | 'user_warehouse_credentials.updated';
+    properties: {
+        credentialsId: string;
+        warehouseType: WarehouseTypes;
+    };
+};
+
+type UserWarehouseCredentialsDeleteEvent = BaseTrack & {
+    event: 'user_warehouse_credentials.deleted';
+    properties: {
+        credentialsId: string;
+    };
+};
+
 type UserJoinOrganizationEvent = BaseTrack & {
     event: 'user.joined_organization';
     properties: {
@@ -403,6 +420,7 @@ type ProjectCompiledEvent = BaseTrack & {
         urlsCount?: number;
         modelsWithSqlFiltersCount: number;
         columnAccessFiltersCount: number;
+        additionalDimensionsCount: number;
     };
 };
 
@@ -801,6 +819,8 @@ export type UserAttributeCreateAndUpdateEvent = BaseTrack & {
         values: {
             userIds: string[];
             values: string[];
+            groupIds: string[];
+            groupValues: string[];
         };
         defaultValue: string | null;
     };
@@ -812,6 +832,27 @@ export type UserAttributeDeleteEvent = BaseTrack & {
     properties: {
         organizationId: string;
         attributeId: string;
+    };
+};
+
+export type GroupCreateAndUpdateEvent = BaseTrack & {
+    event: 'group.created' | 'group.updated';
+    userId: string;
+    properties: {
+        organizationId: string;
+        groupId: string;
+        name: string;
+        countUsersInGroup: number;
+        viaSso: boolean;
+    };
+};
+
+export type GroupDeleteEvent = BaseTrack & {
+    event: 'group.deleted';
+    userId: string;
+    properties: {
+        organizationId: string;
+        groupId: string;
     };
 };
 
@@ -845,6 +886,8 @@ type Track =
     | UpdateOrganizationEvent
     | DeleteOrganizationEvent
     | OrganizationAllowedEmailDomainUpdatedEvent
+    | UserWarehouseCredentialsEvent
+    | UserWarehouseCredentialsDeleteEvent
     | LoginEvent
     | IdentityLinkedEvent
     | SqlExecutedEvent
@@ -877,6 +920,8 @@ type Track =
     | UserAttributeCreateAndUpdateEvent
     | UserAttributeDeleteEvent
     | MetricFlowQueryEvent
+    | GroupCreateAndUpdateEvent
+    | GroupDeleteEvent
     | ConditionalFormattingRuleSavedEvent;
 
 export class LightdashAnalytics extends Analytics {

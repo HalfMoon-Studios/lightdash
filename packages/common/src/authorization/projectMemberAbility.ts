@@ -1,8 +1,6 @@
 import { AbilityBuilder } from '@casl/ability';
-import {
-    ProjectMemberProfile,
-    ProjectMemberRole,
-} from '../types/projectMemberProfile';
+import { ProjectMemberProfile } from '../types/projectMemberProfile';
+import { ProjectMemberRole } from '../types/projectMemberRole';
 import { MemberAbility } from './types';
 
 // eslint-disable-next-line import/prefer-default-export
@@ -29,16 +27,19 @@ export const projectMemberAbilities: Record<
         can('view', 'PinnedItems', {
             projectUuid: member.projectUuid,
         });
+        can('manage', 'ExportCsv', {
+            projectUuid: member.projectUuid,
+        });
     },
     interactive_viewer(member, { can }) {
         projectMemberAbilities.viewer(member, { can });
         can('view', 'UnderlyingData', {
             projectUuid: member.projectUuid,
         });
-        can('manage', 'ExportCsv', {
+        can('manage', 'Explore', {
             projectUuid: member.projectUuid,
         });
-        can('manage', 'Explore', {
+        can('manage', 'ChangeCsvResults', {
             projectUuid: member.projectUuid,
         });
     },

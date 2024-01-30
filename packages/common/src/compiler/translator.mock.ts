@@ -232,6 +232,7 @@ export const BASE_LIGHTDASH_TABLE: Omit<Table, 'lineageGraph'> = {
     sqlTable: model.relation_name,
     description: model.description,
     sqlWhere: undefined,
+    requiredAttributes: undefined,
     dimensions: {
         myColumnName: {
             compact: undefined,
@@ -642,7 +643,7 @@ export const LIGHTDASH_TABLE_WITH_DEFAULT_TIME_INTERVAL_DIMENSIONS_BIGQUERY: Omi
             groupLabel: undefined,
             index: 0,
         },
-        user_created_RAW: {
+        user_created_raw: {
             fieldType: FieldType.DIMENSION,
             requiredAttributes: undefined,
             description: undefined,
@@ -662,7 +663,7 @@ export const LIGHTDASH_TABLE_WITH_DEFAULT_TIME_INTERVAL_DIMENSIONS_BIGQUERY: Omi
             groupLabel: undefined,
             index: 0,
         },
-        user_created_DAY: {
+        user_created_day: {
             fieldType: FieldType.DIMENSION,
             requiredAttributes: undefined,
             description: undefined,
@@ -682,7 +683,7 @@ export const LIGHTDASH_TABLE_WITH_DEFAULT_TIME_INTERVAL_DIMENSIONS_BIGQUERY: Omi
             groupLabel: undefined,
             index: 0,
         },
-        user_created_WEEK: {
+        user_created_week: {
             fieldType: FieldType.DIMENSION,
             requiredAttributes: undefined,
             description: undefined,
@@ -703,7 +704,7 @@ export const LIGHTDASH_TABLE_WITH_DEFAULT_TIME_INTERVAL_DIMENSIONS_BIGQUERY: Omi
             groupLabel: undefined,
             index: 0,
         },
-        user_created_MONTH: {
+        user_created_month: {
             fieldType: FieldType.DIMENSION,
             requiredAttributes: undefined,
             description: undefined,
@@ -724,7 +725,7 @@ export const LIGHTDASH_TABLE_WITH_DEFAULT_TIME_INTERVAL_DIMENSIONS_BIGQUERY: Omi
             groupLabel: undefined,
             index: 0,
         },
-        user_created_QUARTER: {
+        user_created_quarter: {
             description: undefined,
             fieldType: FieldType.DIMENSION,
             requiredAttributes: undefined,
@@ -744,7 +745,7 @@ export const LIGHTDASH_TABLE_WITH_DEFAULT_TIME_INTERVAL_DIMENSIONS_BIGQUERY: Omi
             type: DimensionType.DATE,
             index: 0,
         },
-        user_created_YEAR: {
+        user_created_year: {
             fieldType: FieldType.DIMENSION,
             requiredAttributes: undefined,
             description: undefined,
@@ -794,7 +795,7 @@ export const LIGHTDASH_TABLE_WITH_DEFAULT_TIME_INTERVAL_DIMENSIONS_SNOWFLAKE: Om
             groupLabel: undefined,
             index: 0,
         },
-        user_created_RAW: {
+        user_created_raw: {
             fieldType: FieldType.DIMENSION,
             requiredAttributes: undefined,
             description: undefined,
@@ -814,7 +815,7 @@ export const LIGHTDASH_TABLE_WITH_DEFAULT_TIME_INTERVAL_DIMENSIONS_SNOWFLAKE: Om
             groupLabel: undefined,
             index: 0,
         },
-        user_created_DAY: {
+        user_created_day: {
             fieldType: FieldType.DIMENSION,
             requiredAttributes: undefined,
             description: undefined,
@@ -837,7 +838,7 @@ export const LIGHTDASH_TABLE_WITH_DEFAULT_TIME_INTERVAL_DIMENSIONS_SNOWFLAKE: Om
             groupLabel: undefined,
             index: 0,
         },
-        user_created_WEEK: {
+        user_created_week: {
             fieldType: FieldType.DIMENSION,
             requiredAttributes: undefined,
             description: undefined,
@@ -857,7 +858,7 @@ export const LIGHTDASH_TABLE_WITH_DEFAULT_TIME_INTERVAL_DIMENSIONS_SNOWFLAKE: Om
             groupLabel: undefined,
             index: 0,
         },
-        user_created_MONTH: {
+        user_created_month: {
             fieldType: FieldType.DIMENSION,
             requiredAttributes: undefined,
             description: undefined,
@@ -877,7 +878,7 @@ export const LIGHTDASH_TABLE_WITH_DEFAULT_TIME_INTERVAL_DIMENSIONS_SNOWFLAKE: Om
             groupLabel: undefined,
             index: 0,
         },
-        user_created_QUARTER: {
+        user_created_quarter: {
             description: undefined,
             fieldType: FieldType.DIMENSION,
             requiredAttributes: undefined,
@@ -898,7 +899,7 @@ export const LIGHTDASH_TABLE_WITH_DEFAULT_TIME_INTERVAL_DIMENSIONS_SNOWFLAKE: Om
             type: DimensionType.DATE,
             index: 0,
         },
-        user_created_YEAR: {
+        user_created_year: {
             fieldType: FieldType.DIMENSION,
             requiredAttributes: undefined,
             description: undefined,
@@ -996,7 +997,7 @@ export const LIGHTDASH_TABLE_WITH_CUSTOM_TIME_INTERVAL_DIMENSIONS: Omit<
             groupLabel: undefined,
             index: 0,
         },
-        user_created_YEAR: {
+        user_created_year: {
             fieldType: FieldType.DIMENSION,
             requiredAttributes: undefined,
             description: undefined,
@@ -1062,4 +1063,102 @@ export const expectedModelWithType: DbtModelNode = {
 export const LIGHTDASH_TABLE_SQL_WHERE: Omit<Table, 'lineageGraph'> = {
     ...BASE_LIGHTDASH_TABLE,
     sqlWhere: '${payment_method} IS NOT NULL',
+};
+
+export const MODEL_WITH_ADDITIONAL_DIMENSIONS: DbtModelNode & {
+    relation_name: string;
+} = {
+    ...model,
+    columns: {
+        metadata: {
+            name: 'metadata',
+            data_type: DimensionType.STRING,
+            meta: {
+                dimension: {
+                    hidden: true,
+                },
+                additional_dimensions: {
+                    version: {
+                        type: DimensionType.NUMBER,
+                        sql: "${metadata}-->'version'",
+                    },
+                    created_at: {
+                        type: DimensionType.TIMESTAMP,
+                        sql: "${metadata}-->'created_at'",
+                    },
+                },
+            },
+        },
+    },
+};
+
+export const LIGHTDASH_TABLE_WITH_ADDITIONAL_DIMENSIONS: Omit<
+    Table,
+    'lineageGraph'
+> = {
+    ...BASE_LIGHTDASH_TABLE,
+    dimensions: {
+        metadata: {
+            fieldType: FieldType.DIMENSION,
+            requiredAttributes: undefined,
+            description: undefined,
+            type: DimensionType.STRING,
+            sql: '${TABLE}.metadata',
+            name: 'metadata',
+            label: 'Metadata',
+            table: BASE_LIGHTDASH_TABLE.name,
+            tableLabel: 'My table',
+            source: undefined,
+            group: undefined,
+            timeInterval: undefined,
+            hidden: true,
+            format: undefined,
+            round: undefined,
+            compact: undefined,
+            groupLabel: undefined,
+            index: 0,
+        },
+        version: {
+            fieldType: FieldType.DIMENSION,
+            requiredAttributes: undefined,
+            description: undefined,
+            type: DimensionType.NUMBER,
+            sql: "${metadata}-->'version'",
+            name: 'version',
+            label: 'Version',
+            table: BASE_LIGHTDASH_TABLE.name,
+            tableLabel: 'My table',
+            source: undefined,
+            group: undefined,
+            timeInterval: undefined,
+            hidden: false,
+            format: undefined,
+            round: undefined,
+            compact: undefined,
+            groupLabel: undefined,
+            index: 0,
+            isAdditionalDimension: true,
+        },
+        created_at: {
+            fieldType: FieldType.DIMENSION,
+            requiredAttributes: undefined,
+            description: undefined,
+            type: DimensionType.TIMESTAMP,
+            sql: "${metadata}-->'created_at'",
+            name: 'created_at',
+            label: 'Created at',
+            table: BASE_LIGHTDASH_TABLE.name,
+            tableLabel: 'My table',
+            source: undefined,
+            group: undefined,
+            timeInterval: undefined,
+            hidden: false,
+            format: undefined,
+            round: undefined,
+            compact: undefined,
+            groupLabel: undefined,
+            index: 0,
+            isAdditionalDimension: true,
+        },
+    },
 };

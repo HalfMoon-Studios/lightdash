@@ -1,7 +1,7 @@
 import { subject } from '@casl/ability';
 import { ApiError, PinnedItems } from '@lightdash/common';
+import { UseMutateFunction } from '@tanstack/react-query';
 import React, { createContext, useContext } from 'react';
-import { UseMutateFunction } from 'react-query';
 import { useReorder } from '../hooks/pinning/usePinnedItems';
 import { useApp } from './AppProvider';
 
@@ -13,6 +13,7 @@ type PinnedItemsContext = {
         PinnedItems,
         unknown
     >;
+    allowDelete: boolean;
 };
 
 const Context = createContext<PinnedItemsContext | null>(null);
@@ -21,12 +22,16 @@ type PinnedItemsProviderProps = {
     projectUuid: string;
     pinnedListUuid: string;
     organizationUuid: string;
+    allowDelete?: boolean;
 };
 
-export const PinnedItemsProvider: React.FC<PinnedItemsProviderProps> = ({
+export const PinnedItemsProvider: React.FC<
+    React.PropsWithChildren<PinnedItemsProviderProps>
+> = ({
     organizationUuid,
     projectUuid,
     pinnedListUuid,
+    allowDelete,
     children,
 }) => {
     const { user } = useApp();
@@ -41,6 +46,7 @@ export const PinnedItemsProvider: React.FC<PinnedItemsProviderProps> = ({
     const value: PinnedItemsContext = {
         userCanManage,
         reorderItems,
+        allowDelete: allowDelete ?? true,
     };
     return <Context.Provider value={value}>{children}</Context.Provider>;
 };

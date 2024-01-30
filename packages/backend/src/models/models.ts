@@ -4,6 +4,7 @@ import { EncryptionService } from '../services/EncryptionService/EncryptionServi
 import { AnalyticsModel } from './AnalyticsModel';
 import { DashboardModel } from './DashboardModel/DashboardModel';
 import { PersonalAccessTokenModel } from './DashboardModel/PersonalAccessTokenModel';
+import { DownloadFileModel } from './DownloadFileModel';
 import { EmailModel } from './EmailModel';
 import { GroupsModel } from './GroupsModel';
 import { InviteLinkModel } from './InviteLinkModel';
@@ -27,6 +28,7 @@ import { SpaceModel } from './SpaceModel';
 import { SshKeyPairModel } from './SshKeyPairModel';
 import { UserAttributesModel } from './UserAttributesModel';
 import { UserModel } from './UserModel';
+import { UserWarehouseCredentialsModel } from './UserWarehouseCredentials/UserWarehouseCredentialsModel';
 import { ValidationModel } from './ValidationModel/ValidationModel';
 
 export const encryptionService = new EncryptionService({ lightdashConfig });
@@ -98,3 +100,9 @@ export const sshKeyPairModel = new SshKeyPairModel({
 });
 
 export const userAttributesModel = new UserAttributesModel({ database });
+export const downloadFileModel = new DownloadFileModel({ database });
+
+export const userWarehouseCredentialsModel = new UserWarehouseCredentialsModel({
+    database,
+    encryptionService,
+});

@@ -1,5 +1,6 @@
-import { CartesianSeriesType } from '@lightdash/common';
+import { CartesianSeriesType, getItemMap } from '@lightdash/common';
 import { renderHook } from '@testing-library/react-hooks';
+import { describe, expect, test } from 'vitest';
 import useCartesianChartConfig from './useCartesianChartConfig';
 import {
     existingMixedSeries,
@@ -55,7 +56,7 @@ describe('sortDimensions', () => {
         ];
         const sortedDimensions = sortDimensions(
             dimensionIds,
-            explore,
+            getItemMap(explore),
             columnOrder,
         );
         expect(sortedDimensions).toStrictEqual(dimensionIds);
@@ -74,7 +75,7 @@ describe('sortDimensions', () => {
         ];
         const sortedDimensions = sortDimensions(
             dimensionIds,
-            explore,
+            getItemMap(explore),
             columnOrder,
         );
         expect(sortedDimensions).toStrictEqual([
@@ -97,7 +98,7 @@ describe('sortDimensions', () => {
         ];
         const sortedDimensions = sortDimensions(
             dimensionIds,
-            explore,
+            getItemMap(explore),
             columnOrder,
         );
         expect(sortedDimensions).toStrictEqual([
@@ -112,7 +113,7 @@ describe('sortDimensions', () => {
         const columnOrder = ['dimension_string', 'dimension_timestamp'];
         const sortedDimensions = sortDimensions(
             dimensionIds,
-            explore,
+            getItemMap(explore),
             columnOrder,
         );
         expect(sortedDimensions).toStrictEqual([

@@ -1,7 +1,7 @@
 # -----------------------------
 # Stage 0: install dependencies
 # -----------------------------
-FROM node:18-bullseye AS base
+FROM node:20-bookworm-slim AS base
 WORKDIR /usr/app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -16,7 +16,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     unzip \
     wget \
-    && apt-get clean
+    git \ 
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Installing multiple versions of dbt
 # dbt 1.4 is the default
@@ -51,7 +53,7 @@ RUN /usr/local/dbt1.6/bin/pip install \
     "dbt-bigquery~=1.6.0" \
     "dbt-databricks~=1.6.0" \
     "dbt-trino==1.6.0" \
-    "psycopg2-binary==2.8.6"
+    "psycopg2-binary==2.9.6"
 RUN ln -s /usr/local/dbt1.6/bin/dbt /usr/local/bin/dbt1.6
 
 # RUN python3 -m venv /usr/local/dbt1.7
@@ -113,8 +115,8 @@ COPY packages/frontend ./packages/frontend
 RUN yarn --cwd ./packages/frontend/ build
 
 # Cleanup development dependencies
-RUN rm -rf node_modules
-RUN rm -rf packages/*/node_modules
+RUN rm -rf node_modules \
+    && rm -rf packages/*/node_modules
 
 # Install production dependencies
 ENV NODE_ENV production
@@ -124,7 +126,7 @@ RUN yarn install --pure-lockfile --non-interactive --production
 # Stage 3: execution environment for backend
 # -----------------------------
 
-FROM node:18-bullseye as prod
+FROM node:20-bookworm-slim as prod
 WORKDIR /usr/app
 
 ENV NODE_ENV production
@@ -133,7 +135,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-psycopg2 \
     python3-venv \
-    && apt-get clean
+    git \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # COPY --from=prod-builder  /usr/local/dbt1.4 /usr/local/dbt1.4
 # COPY --from=prod-builder  /usr/local/dbt1.5 /usr/local/dbt1.5

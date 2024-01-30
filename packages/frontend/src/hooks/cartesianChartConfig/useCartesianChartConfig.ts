@@ -5,11 +5,11 @@ import {
     CompleteCartesianChartLayout,
     EchartsGrid,
     EchartsLegend,
-    Explore,
     getCustomDimensionId,
     getSeriesId,
     isCompleteEchartsConfig,
     isCompleteLayout,
+    ItemsMap,
     MarkLineData,
     Series,
 } from '@lightdash/common';
@@ -40,7 +40,7 @@ type Args = {
         React.SetStateAction<string[] | undefined>
     >;
     columnOrder: string[];
-    explore: Explore | undefined;
+    itemsMap: ItemsMap | undefined;
     stacking: boolean | undefined;
     cartesianType: CartesianTypeOptions | undefined;
 };
@@ -114,7 +114,7 @@ const useCartesianChartConfig = ({
     resultsData,
     setPivotDimensions,
     columnOrder,
-    explore,
+    itemsMap,
     stacking,
     cartesianType,
 }: Args) => {
@@ -218,6 +218,39 @@ const useCartesianChartConfig = ({
         [],
     );
 
+    const setXMinValue = useCallback(
+        (index: number, value: string | undefined) => {
+            setDirtyEchartsConfig((prevState) => {
+                return {
+                    ...prevState,
+                    xAxis: [
+                        prevState?.xAxis?.[0] || {},
+                        prevState?.xAxis?.[1] || {},
+                    ].map((axis, axisIndex) =>
+                        axisIndex === index ? { ...axis, min: value } : axis,
+                    ),
+                };
+            });
+        },
+        [],
+    );
+
+    const setXMaxValue = useCallback(
+        (index: number, value: string | undefined) => {
+            setDirtyEchartsConfig((prevState) => {
+                return {
+                    ...prevState,
+                    xAxis: [
+                        prevState?.xAxis?.[0] || {},
+                        prevState?.xAxis?.[1] || {},
+                    ].map((axis, axisIndex) =>
+                        axisIndex === index ? { ...axis, max: value } : axis,
+                    ),
+                };
+            });
+        },
+        [],
+    );
     const setXField = useCallback((xField: string | undefined) => {
         setDirtyLayout((prev) => ({
             ...prev,
@@ -245,6 +278,15 @@ const useCartesianChartConfig = ({
                 xAxis: [{ ...firstAxis, inverse }, ...axes],
             };
             return x;
+        });
+    }, []);
+    const setXAxisLabelRotation = useCallback((rotation: number) => {
+        setDirtyEchartsConfig((prevState) => {
+            const [firstAxis, ...axes] = prevState?.xAxis || [];
+            return {
+                ...prevState,
+                xAxis: [{ ...firstAxis, rotate: rotation }, ...axes],
+            };
         });
     }, []);
     const addSingleSeries = useCallback((yField: string) => {
@@ -384,10 +426,10 @@ const useCartesianChartConfig = ({
     const sortedDimensions = useMemo(() => {
         return sortDimensions(
             resultsData?.metricQuery.dimensions || [],
-            explore,
+            itemsMap,
             columnOrder,
         );
-    }, [resultsData?.metricQuery.dimensions, explore, columnOrder]);
+    }, [resultsData?.metricQuery.dimensions, itemsMap, columnOrder]);
 
     const [
         availableFields,
@@ -543,7 +585,7 @@ const useCartesianChartConfig = ({
                     newYFields = [availableDimensions[1]];
                 }
 
-                if (explore !== undefined) setPivotDimensions(newPivotFields);
+                if (itemsMap !== undefined) setPivotDimensions(newPivotFields);
                 return {
                     ...prev,
                     xField: newXField,
@@ -558,7 +600,7 @@ const useCartesianChartConfig = ({
         availableTableCalculations,
         availableCustomDimensions,
         hasInitialValue,
-        explore,
+        itemsMap,
         setPivotDimensions,
         setType,
     ]);
@@ -610,6 +652,8 @@ const useCartesianChartConfig = ({
                         ? prev?.series?.[0]?.areaStyle
                         : undefined;
                 const defaultSmooth = prev?.series?.[0]?.smooth;
+                const defaultLabel = prev?.series?.[0]?.label;
+
                 const defaultShowSymbol = prev?.series?.[0]?.showSymbol;
                 const expectedSeriesMap = getExpectedSeriesMap({
                     defaultSmooth,
@@ -622,6 +666,7 @@ const useCartesianChartConfig = ({
                     resultsData,
                     xField: dirtyLayout.xField,
                     yFields: dirtyLayout.yField,
+                    defaultLabel,
                 });
                 const newSeries = mergeExistingAndExpectedSeries({
                     expectedSeriesMap,
@@ -694,11 +739,14 @@ const useCartesianChartConfig = ({
         setFlipAxis,
         setYMinValue,
         setYMaxValue,
+        setXMinValue,
+        setXMaxValue,
         setLegend,
         setGrid,
         setShowGridX,
         setShowGridY,
         setInverseX,
+        setXAxisLabelRotation,
         updateSeries,
         referenceLines,
         setReferenceLines,

@@ -1,4 +1,3 @@
-import { Classes, Divider } from '@blueprintjs/core';
 import { subject } from '@casl/ability';
 import { Dashboard, SpaceSummary, UpdatedByUser } from '@lightdash/common';
 import {
@@ -6,10 +5,12 @@ import {
     Box,
     Button,
     Flex,
+    Group,
     Menu,
     Popover,
     Stack,
     Text,
+    Title,
     Tooltip,
 } from '@mantine/core';
 import {
@@ -18,6 +19,7 @@ import {
     IconCopy,
     IconDots,
     IconFolder,
+    IconFolderPlus,
     IconFolders,
     IconInfoCircle,
     IconPencil,
@@ -42,9 +44,7 @@ import DashboardUpdateModal from '../modal/DashboardUpdateModal';
 import PageHeader from '../Page/PageHeader';
 import {
     PageActionsContainer,
-    PageTitle,
     PageTitleAndDetailsContainer,
-    PageTitleContainer,
 } from '../PageHeader';
 import SpaceAndDashboardInfo from '../PageHeader/SpaceAndDashboardInfo';
 import { UpdatedInfo } from '../PageHeader/UpdatedInfo';
@@ -139,8 +139,10 @@ const DashboardHeader = ({
     return (
         <PageHeader h="auto">
             <PageTitleAndDetailsContainer>
-                <PageTitleContainer className={Classes.TEXT_OVERFLOW_ELLIPSIS}>
-                    <PageTitle>{dashboardName}</PageTitle>
+                <Group spacing="xs">
+                    <Title order={4} fw={600}>
+                        {dashboardName}
+                    </Title>
 
                     <Popover
                         withinPortal
@@ -156,7 +158,7 @@ const DashboardHeader = ({
                             </ActionIcon>
                         </Popover.Target>
 
-                        <Popover.Dropdown>
+                        <Popover.Dropdown maw={500}>
                             <Stack spacing="xs">
                                 {dashboardDescription && (
                                     <Text fz="xs" color="gray.7" fw={500}>
@@ -199,13 +201,14 @@ const DashboardHeader = ({
                     {isUpdating && (
                         <DashboardUpdateModal
                             uuid={dashboardUuid}
-                            isOpen={isUpdating}
+                            opened={isUpdating}
                             onClose={() => setIsUpdating(false)}
                             onConfirm={() => setIsUpdating(false)}
                         />
                     )}
-                </PageTitleContainer>
+                </Group>
             </PageTitleAndDetailsContainer>
+
             {oldestCacheTime && (
                 <Text
                     color="gray"
@@ -218,6 +221,7 @@ const DashboardHeader = ({
                     </Text>
                 </Text>
             )}
+
             {userCanManageDashboard && isEditMode ? (
                 <PageActionsContainer>
                     <AddTileButton
@@ -237,8 +241,9 @@ const DashboardHeader = ({
                                 disabled={!hasDashboardChanged}
                                 loading={isSaving}
                                 onClick={onSaveDashboard}
+                                color="green.7"
                             >
-                                Save
+                                Save changes
                             </Button>
                         </Box>
                     </Tooltip>
@@ -371,7 +376,7 @@ const DashboardHeader = ({
                                                     );
                                                 })}
 
-                                                <Divider />
+                                                <Menu.Divider />
 
                                                 <Menu.Item
                                                     icon={
@@ -417,7 +422,7 @@ const DashboardHeader = ({
 
                             {userCanManageDashboard && (
                                 <>
-                                    <Divider />
+                                    <Menu.Divider />
                                     <Menu.Item
                                         icon={
                                             <MantineIcon
@@ -441,7 +446,7 @@ const DashboardHeader = ({
                             actionType={ActionType.CREATE}
                             title="Create new space"
                             confirmButtonLabel="Create"
-                            icon="folder-close"
+                            icon={IconFolderPlus}
                             onClose={() => setIsCreatingNewSpace(false)}
                             onSubmitForm={(space) => {
                                 if (space) onMoveToSpace(space.uuid);

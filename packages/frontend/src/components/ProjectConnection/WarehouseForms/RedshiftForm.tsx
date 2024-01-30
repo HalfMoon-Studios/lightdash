@@ -14,16 +14,15 @@ import {
     Tooltip,
 } from '@mantine/core';
 import { IconCheck, IconCopy } from '@tabler/icons-react';
+import { useFeatureFlagEnabled } from 'posthog-js/react';
 import React, { FC } from 'react';
 import { Controller, useFormContext, useWatch } from 'react-hook-form';
 import { useToggle } from 'react-use';
 import { hasNoWhiteSpaces } from '../../../utils/fieldValidators';
 import MantineIcon from '../../common/MantineIcon';
+import BooleanSwitch from '../../ReactHookForm/BooleanSwitch';
 import FormSection from '../../ReactHookForm/FormSection';
-import {
-    AdvancedButton,
-    AdvancedButtonWrapper,
-} from '../ProjectConnection.styles';
+import FormCollapseButton from '../FormCollapseButton';
 import { useProjectFormContext } from '../ProjectFormProvider';
 import StartOfWeekSelect from './Inputs/StartOfWeekSelect';
 import { useCreateSshKeyPair } from './sshHooks';
@@ -75,6 +74,8 @@ const RedshiftForm: FC<{
             setValue('warehouse.sshTunnelPublicKey', data.publicKey);
         },
     });
+    const isPassthroughLoginFeatureEnabled =
+        useFeatureFlagEnabled('passthrough-login');
     return (
         <>
             <Stack style={{ marginTop: '8px' }}>
@@ -131,6 +132,14 @@ const RedshiftForm: FC<{
                 />
                 <FormSection isOpen={isOpen} name="advanced">
                     <Stack style={{ marginTop: '8px' }}>
+                        {isPassthroughLoginFeatureEnabled && (
+                            <BooleanSwitch
+                                name="warehouse.requireUserCredentials"
+                                label="Require users to provide their own credentials"
+                                defaultValue={false}
+                                disabled={disabled}
+                            />
+                        )}
                         <Controller
                             name="warehouse.port"
                             defaultValue={5439}
@@ -341,13 +350,10 @@ const RedshiftForm: FC<{
                         </FormSection>
                     </Stack>
                 </FormSection>
-                <AdvancedButtonWrapper>
-                    <AdvancedButton
-                        icon={isOpen ? 'chevron-up' : 'chevron-down'}
-                        text={`Advanced configuration options`}
-                        onClick={toggleOpen}
-                    />
-                </AdvancedButtonWrapper>
+
+                <FormCollapseButton isSectionOpen={isOpen} onClick={toggleOpen}>
+                    Advanced configuration options
+                </FormCollapseButton>
             </Stack>
         </>
     );

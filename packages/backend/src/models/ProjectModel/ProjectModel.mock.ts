@@ -40,6 +40,7 @@ export const lightdashConfigMock: LightdashConfig = {
     },
     auth: {
         disablePasswordAuthentication: false,
+        enableGroupSync: false,
         google: {
             oauth2ClientId: undefined,
             oauth2ClientSecret: undefined,
@@ -55,6 +56,7 @@ export const lightdashConfigMock: LightdashConfig = {
             oauth2ClientId: undefined,
             oauth2Issuer: undefined,
             authorizationServerId: undefined,
+            extraScopes: undefined,
             oktaDomain: undefined,
         },
         oneLogin: {
@@ -122,6 +124,9 @@ export const lightdashConfigMock: LightdashConfig = {
         enabled: false,
         cacheStateTimeSeconds: 86400,
         s3: {},
+    },
+    groups: {
+        enabled: false,
     },
 };
 
@@ -484,3 +489,24 @@ export const exploreWithMetricFilters: Explore = {
     ],
     targetDatabase: SupportedDbtAdapter.POSTGRES,
 };
+
+export const exploresWithSameName: Explore[] = [
+    {
+        name: 'payments',
+        tags: [],
+        label: 'Payments V1',
+        tables: {},
+        baseTable: 'payments_v1',
+        joinedTables: [],
+        targetDatabase: SupportedDbtAdapter.POSTGRES,
+    },
+    {
+        name: 'payments',
+        tags: [],
+        label: 'Payments V2',
+        tables: {},
+        baseTable: 'payments_v2',
+        joinedTables: [],
+        targetDatabase: SupportedDbtAdapter.POSTGRES,
+    },
+];

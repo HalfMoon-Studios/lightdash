@@ -53,7 +53,7 @@ RUN /usr/local/dbt1.6/bin/pip install \
     "dbt-bigquery~=1.6.0" \
     "dbt-databricks~=1.6.0" \
     "dbt-trino==1.6.0" \
-    "psycopg2-binary==2.8.6"
+    "psycopg2-binary==2.9.6"
 RUN ln -s /usr/local/dbt1.6/bin/dbt /usr/local/bin/dbt1.6
 
 # RUN python3 -m venv /usr/local/dbt1.7

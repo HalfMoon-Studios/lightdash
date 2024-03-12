@@ -24,6 +24,7 @@ import {
     UnexpectedServerError,
     UpdateProject,
     WarehouseCredentials,
+    WarehouseTypes,
 } from '@lightdash/common';
 import {
     WarehouseCatalog,
@@ -62,7 +63,7 @@ import { EncryptionService } from '../../services/EncryptionService/EncryptionSe
 import { wrapOtelSpan } from '../../utils';
 import Transaction = Knex.Transaction;
 
-type ProjectModelDependencies = {
+type ProjectModelArguments = {
     database: Knex;
     lightdashConfig: LightdashConfig;
     encryptionService: EncryptionService;
@@ -77,10 +78,10 @@ export class ProjectModel {
 
     private encryptionService: EncryptionService;
 
-    constructor(deps: ProjectModelDependencies) {
-        this.database = deps.database;
-        this.lightdashConfig = deps.lightdashConfig;
-        this.encryptionService = deps.encryptionService;
+    constructor(args: ProjectModelArguments) {
+        this.database = args.database;
+        this.lightdashConfig = args.lightdashConfig;
+        this.encryptionService = args.encryptionService;
     }
 
     static mergeMissingDbtConfigSecrets(
@@ -160,15 +161,46 @@ export class ProjectModel {
             throw new NotExistsError('Cannot find organization');
         }
         const projects = await this.database('projects')
-            .select('project_uuid', 'name', 'project_type')
+            .leftJoin(
+                WarehouseCredentialTableName,
+                'projects.project_id',
+                'warehouse_credentials.project_id',
+            )
+            .select(
+                'project_uuid',
+                'name',
+                'project_type',
+                `warehouse_type`,
+                `encrypted_credentials`,
+            )
             .where('organization_id', orgs[0].organization_id);
 
         return projects.map<OrganizationProject>(
-            ({ name, project_uuid, project_type }) => ({
+            ({
                 name,
-                projectUuid: project_uuid,
-                type: project_type,
-            }),
+                project_uuid,
+                project_type,
+                warehouse_type,
+                encrypted_credentials,
+            }) => {
+                try {
+                    const warehouseCredentials = JSON.parse(
+                        this.encryptionService.decrypt(encrypted_credentials),
+                    ) as CreateWarehouseCredentials;
+                    return {
+                        name,
+                        projectUuid: project_uuid,
+                        type: project_type,
+                        warehouseType: warehouse_type as WarehouseTypes,
+                        requireUserCredentials:
+                            !!warehouseCredentials.requireUserCredentials,
+                    };
+                } catch (e) {
+                    throw new UnexpectedServerError(
+                        'Unexpected error: failed to parse warehouse credentials',
+                    );
+                }
+            },
         );
     }
 
@@ -1062,6 +1094,7 @@ export class ProjectModel {
                               spaces.map((d) => {
                                   const createSpace = {
                                       ...d,
+                                      search_vector: undefined,
                                       space_id: undefined,
                                       space_uuid: undefined,
                                       project_id: previewProject.project_id,
@@ -1121,6 +1154,7 @@ export class ProjectModel {
                                   }
                                   const createChart = {
                                       ...d,
+                                      search_vector: undefined,
                                       saved_query_id: undefined,
                                       saved_query_uuid: undefined,
                                       space_id: getNewSpace(d.space_id),
@@ -1161,6 +1195,7 @@ export class ProjectModel {
                                   }
                                   const createChart = {
                                       ...d,
+                                      search_vector: undefined,
                                       saved_query_id: undefined,
                                       saved_query_uuid: undefined,
                                       space_id: null,
@@ -1317,6 +1352,7 @@ export class ProjectModel {
                               dashboards.map((d) => {
                                   const createDashboard = {
                                       ...d,
+                                      search_vector: undefined,
                                       dashboard_id: undefined,
                                       dashboard_uuid: undefined,
                                       space_id: getNewSpace(d.space_id),

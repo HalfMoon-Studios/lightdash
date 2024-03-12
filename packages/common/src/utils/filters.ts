@@ -1,6 +1,7 @@
 import moment from 'moment';
 import { v4 as uuidv4 } from 'uuid';
 import {
+    CustomFormatType,
     Dimension,
     DimensionType,
     Field,
@@ -13,7 +14,6 @@ import {
     isTableCalculation,
     isTableCalculationField,
     MetricType,
-    TableCalculationFormatType,
 } from '../types/field';
 import {
     DashboardFieldTarget,
@@ -128,11 +128,12 @@ export const getFilterTypeFromItem = (item: FilterableItem): FilterType => {
         case DimensionType.BOOLEAN:
         case MetricType.BOOLEAN:
             return FilterType.BOOLEAN;
-        case TableCalculationFormatType.DEFAULT:
+        case CustomFormatType.DEFAULT:
+        case CustomFormatType.ID:
             return FilterType.STRING;
-        case TableCalculationFormatType.CURRENCY:
-        case TableCalculationFormatType.PERCENT:
-        case TableCalculationFormatType.NUMBER:
+        case CustomFormatType.CURRENCY:
+        case CustomFormatType.PERCENT:
+        case CustomFormatType.NUMBER:
             return FilterType.NUMBER;
         default: {
             return assertUnreachable(
@@ -303,17 +304,23 @@ export const applyDefaultTileTargets = (
     return filterRule;
 };
 
-export const createDashboardFilterRuleFromField = (
-    field: FilterableField,
-    availableTileFilters: Record<string, FilterableField[] | undefined>,
-    includeDefaultValue: boolean,
-    isTemporary: boolean,
-): DashboardFilterRule =>
+export const createDashboardFilterRuleFromField = ({
+    field,
+    availableTileFilters,
+    isTemporary,
+    value,
+}: {
+    field: FilterableField;
+    availableTileFilters: Record<string, FilterableField[] | undefined>;
+    isTemporary: boolean;
+    value?: unknown;
+}): DashboardFilterRule =>
     getFilterRuleWithDefaultValue(
         field,
         {
             id: uuidv4(),
-            operator: FilterOperator.EQUALS,
+            operator:
+                value === null ? FilterOperator.NULL : FilterOperator.EQUALS,
             target: {
                 fieldId: fieldId(field),
                 tableName: field.table,
@@ -322,7 +329,7 @@ export const createDashboardFilterRuleFromField = (
             disabled: !isTemporary,
             label: undefined,
         },
-        includeDefaultValue ? [] : null,
+        value ? [value] : null, // When `null`, don't set default value if no value is provided
     );
 
 type AddFilterRuleArgs = {

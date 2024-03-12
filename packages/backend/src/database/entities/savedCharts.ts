@@ -4,10 +4,11 @@ import {
     ChartKind,
     ChartType,
     CompactOrAlias,
+    CustomFormat,
     DBFieldTypes,
     MetricFilterRule,
     MetricType,
-    TableCalculationFormat,
+    NumberSeparator,
 } from '@lightdash/common';
 import { Knex } from 'knex';
 
@@ -66,6 +67,7 @@ export type DbSavedChart = {
     last_version_chart_kind: ChartKind;
     last_version_updated_at: Date;
     last_version_updated_by_user_uuid: string | undefined;
+    search_vector: string;
 };
 
 export type DbSavedChartVersion = {
@@ -146,7 +148,7 @@ export type DbSavedChartTableCalculation = {
     order: number;
     calculation_raw_sql: string;
     saved_queries_version_id: number;
-    format?: TableCalculationFormat;
+    format?: CustomFormat;
 };
 
 export type DbSavedChartTableCalculationInsert = Omit<
@@ -199,12 +201,17 @@ export type DbSavedChartAdditionalMetric = {
     filters: MetricFilterRule[] | null; // JSONB
     base_dimension_name: string | null;
     uuid: string;
+    format_options?: CustomFormat | null; // JSONB
 };
 export type DbSavedChartAdditionalMetricInsert = Omit<
     DbSavedChartAdditionalMetric,
-    'saved_queries_version_additional_metric_id' | 'filters' | 'uuid'
+    | 'saved_queries_version_additional_metric_id'
+    | 'filters'
+    | 'uuid'
+    | 'format_options'
 > & {
     filters: string | null;
+    format_options: string | null;
 };
 
 export type SavedChartAdditionalMetricTable = Knex.CompositeTableType<
@@ -233,5 +240,6 @@ export type DBFilteredAdditionalMetrics = Pick<
             | 'percentile'
             | 'filters'
             | 'base_dimension_name'
+            | 'format_options'
         >
     >;

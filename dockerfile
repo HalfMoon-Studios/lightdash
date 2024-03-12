@@ -8,17 +8,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     g++ \
     libsasl2-modules-gssapi-mit \
-    nodejs \
     python3 \
     python3-psycopg2 \
     python3-venv \
     python3-dev \
     software-properties-common \
     unzip \
-    wget \
     git \ 
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Fix package vulnerabilities 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgnutls28-dev=3.7.9-2+deb12u2  \
+    tar=1.34+dfsg-1.2+deb12u1 \ 
+    libsystemd0=252.22-1~deb12u1
 
 # Installing multiple versions of dbt
 # dbt 1.4 is the default

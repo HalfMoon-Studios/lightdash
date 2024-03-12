@@ -11,6 +11,9 @@ import {
     CalculateTotalFromQuery,
     ChartSummary,
     CompiledDimension,
+    CompiledMetricQuery,
+    CompiledTableCalculation,
+    convertCustomMetricToDbt,
     countCustomDimensionsInMetricQuery,
     countTotalFilterRules,
     CreateDbtCloudIntegration,
@@ -19,6 +22,7 @@ import {
     CreateProject,
     CreateProjectMember,
     CreateWarehouseCredentials,
+    CustomFormatType,
     DashboardAvailableFilters,
     DashboardBasicDetails,
     DashboardFilters,
@@ -31,8 +35,10 @@ import {
     DimensionType,
     Explore,
     ExploreError,
+    FeatureFlags,
     fieldId as getFieldId,
     FilterableField,
+    FilterGroup,
     FilterGroupItem,
     FilterOperator,
     findFieldByIdInExplore,
@@ -42,6 +48,7 @@ import {
     getDateDimension,
     getDimensions,
     getFields,
+    getFilterRulesFromGroup,
     getItemId,
     getMetrics,
     hasIntersection,
@@ -67,6 +74,7 @@ import {
     ProjectMemberProfile,
     ProjectMemberRole,
     ProjectType,
+    renderTableCalculationFilterRuleSql,
     replaceDimensionInExplore,
     RequestMethod,
     ResultRow,
@@ -77,13 +85,14 @@ import {
     SpaceQuery,
     SpaceSummary,
     SummaryExplore,
-    TableCalculationFormatType,
+    TableCalculation,
     TablesConfiguration,
     TableSelectionType,
     UnexpectedServerError,
     UpdateProject,
     UpdateProjectMember,
     UserAttributeValueMap,
+    UserWarehouseCredentials,
     WarehouseClient,
     WarehouseTypes,
 } from '@lightdash/common';
@@ -91,17 +100,21 @@ import { SshTunnel } from '@lightdash/warehouses';
 import opentelemetry, { SpanStatusCode } from '@opentelemetry/api';
 import * as Sentry from '@sentry/node';
 import * as crypto from 'crypto';
+import * as yaml from 'js-yaml';
 import { uniq } from 'lodash';
 import { URL } from 'url';
 import { v4 as uuidv4 } from 'uuid';
 import { Worker } from 'worker_threads';
-import { analytics } from '../../analytics/client';
-import { QueryExecutionContext } from '../../analytics/LightdashAnalytics';
+import {
+    LightdashAnalytics,
+    QueryExecutionContext,
+} from '../../analytics/LightdashAnalytics';
 import { S3CacheClient } from '../../clients/Aws/S3CacheClient';
 import { schedulerClient } from '../../clients/clients';
 import EmailClient from '../../clients/EmailClient/EmailClient';
-import { lightdashConfig } from '../../config/lightdashConfig';
+import { LightdashConfig } from '../../config/parseConfig';
 import { errorHandler } from '../../errors';
+import { runQueryInMemoryDatabaseContext } from '../../inMemoryTableCalculations';
 import Logger from '../../logging/logger';
 import { AnalyticsModel } from '../../models/AnalyticsModel';
 import { DashboardModel } from '../../models/DashboardModel/DashboardModel';
@@ -113,7 +126,7 @@ import { SpaceModel } from '../../models/SpaceModel';
 import { SshKeyPairModel } from '../../models/SshKeyPairModel';
 import { UserAttributesModel } from '../../models/UserAttributesModel';
 import { UserWarehouseCredentialsModel } from '../../models/UserWarehouseCredentials/UserWarehouseCredentialsModel';
-import { postHogClient } from '../../postHog';
+import { isFeatureFlagEnabled } from '../../postHog';
 import { projectAdapterFromConfig } from '../../projectAdapters/projectAdapter';
 import { buildQuery, CompiledQuery } from '../../queryBuilder';
 import { compileMetricQuery } from '../../queryCompiler';
@@ -138,7 +151,9 @@ type RunQueryTags = {
     dashboard_uuid?: string;
 };
 
-type ProjectServiceDependencies = {
+type ProjectServiceArguments = {
+    lightdashConfig: LightdashConfig;
+    analytics: LightdashAnalytics;
     projectModel: ProjectModel;
     onboardingModel: OnboardingModel;
     savedChartModel: SavedChartModel;
@@ -154,6 +169,10 @@ type ProjectServiceDependencies = {
 };
 
 export class ProjectService {
+    lightdashConfig: LightdashConfig;
+
+    analytics: LightdashAnalytics;
+
     projectModel: ProjectModel;
 
     onboardingModel: OnboardingModel;
@@ -181,6 +200,8 @@ export class ProjectService {
     userWarehouseCredentialsModel: UserWarehouseCredentialsModel;
 
     constructor({
+        lightdashConfig,
+        analytics,
         projectModel,
         onboardingModel,
         savedChartModel,
@@ -193,7 +214,9 @@ export class ProjectService {
         analyticsModel,
         dashboardModel,
         userWarehouseCredentialsModel,
-    }: ProjectServiceDependencies) {
+    }: ProjectServiceArguments) {
+        this.lightdashConfig = lightdashConfig;
+        this.analytics = analytics;
         this.projectModel = projectModel;
         this.onboardingModel = onboardingModel;
         this.warehouseClients = {};
@@ -240,7 +263,8 @@ export class ProjectService {
             );
         if (credentials.requireUserCredentials) {
             const userWarehouseCredentials =
-                await this.userWarehouseCredentialsModel.findForProject(
+                await this.userWarehouseCredentialsModel.findForProjectWithSecrets(
+                    projectUuid,
                     userUuid,
                     credentials.type,
                 );
@@ -248,10 +272,12 @@ export class ProjectService {
                 throw new NotFoundError('User warehouse credentials not found');
             }
 
-            if (credentials.type === userWarehouseCredentials.type) {
+            if (
+                credentials.type === userWarehouseCredentials.credentials.type
+            ) {
                 credentials = {
                     ...credentials,
-                    ...userWarehouseCredentials,
+                    ...userWarehouseCredentials.credentials,
                 } as CreateWarehouseCredentials; // force type as typescript doesn't know the types match
             } else {
                 throw new UnexpectedServerError(
@@ -349,7 +375,7 @@ export class ProjectService {
             );
         }
 
-        analytics.track({
+        this.analytics.track({
             event: 'project.created',
             userId: user.userUuid,
             properties: {
@@ -480,7 +506,7 @@ export class ProjectService {
                         projectUuid,
                     },
                 });
-                analytics.track({
+                this.analytics.track({
                     event: 'project.created',
                     userId: user.userUuid,
                     properties: {
@@ -687,7 +713,7 @@ export class ProjectService {
                     projectUuid,
                 },
             });
-            analytics.track({
+            this.analytics.track({
                 event: 'project.updated',
                 userId: user.userUuid,
                 properties: {
@@ -720,18 +746,6 @@ export class ProjectService {
     }> {
         const sshTunnel = new SshTunnel(data.warehouseConnection);
         await sshTunnel.connect();
-        const useDbtLs =
-            (await postHogClient?.isFeatureEnabled(
-                'use-dbt-ls',
-                user.userUuid,
-                user.organizationUuid !== undefined
-                    ? {
-                          groups: {
-                              organization: user.organizationUuid,
-                          },
-                      }
-                    : {},
-            )) ?? false;
         const adapter = await projectAdapterFromConfig(
             data.dbtConnection,
             sshTunnel.overrideCredentials,
@@ -740,7 +754,6 @@ export class ProjectService {
                 onWarehouseCatalogChange: () => {},
             },
             data.dbtVersion || DefaultSupportedDbtVersion,
-            useDbtLs,
         );
         try {
             await adapter.test();
@@ -768,7 +781,7 @@ export class ProjectService {
 
         await this.projectModel.delete(projectUuid);
 
-        analytics.track({
+        this.analytics.track({
             event: 'project.deleted',
             userId: user.userUuid,
             properties: {
@@ -797,20 +810,7 @@ export class ProjectService {
             await this.projectModel.getWarehouseFromCache(projectUuid);
         const sshTunnel = new SshTunnel(project.warehouseConnection);
         await sshTunnel.connect();
-        const useDbtLs =
-            (await postHogClient?.isFeatureEnabled(
-                'use-dbt-ls',
-                user.userUuid,
-                user.organizationUuid !== undefined
-                    ? {
-                          groups: {
-                              organization: user.organizationUuid,
-                          },
-                      }
-                    : {},
-            )) ?? false;
-        console.log(await postHogClient?.getAllFlags(user.userUuid));
-        console.log('projectservice', useDbtLs);
+
         const adapter = await projectAdapterFromConfig(
             project.dbtConnection,
             sshTunnel.overrideCredentials,
@@ -824,7 +824,6 @@ export class ProjectService {
                 },
             },
             project.dbtVersion || DefaultSupportedDbtVersion,
-            useDbtLs,
         );
         return { adapter, sshTunnel };
     }
@@ -882,6 +881,127 @@ export class ProjectService {
         return explore;
     }
 
+    /**
+     * Based on _compileQuery, this -temporary- method handles isolating and generating
+     * a separate query for table calculations on DuckDB.
+     *
+     * Once the feature is proven and ready to be rolled out, _compileQuery and the query builder
+     * will be expanded to support this behavior natively.
+     */
+    private static async _compileMetricQueryWithNewTableCalculationsEngine(
+        metricQuery: MetricQuery,
+        explore: Explore,
+        warehouseClient: WarehouseClient,
+        userAttributes: UserAttributeValueMap,
+        granularity?: DateGranularity,
+    ): Promise<[CompiledQuery, CompiledQuery]> {
+        const exploreWithOverride = ProjectService.updateExploreWithGranularity(
+            explore,
+            metricQuery,
+            warehouseClient,
+            granularity,
+        );
+
+        const {
+            compiledMetricQuery: originalCompiledMetricQuery,
+            compiledMetricQueryWithoutTableCalculations,
+            compiledTableCalculations,
+            tableCalculationFilters,
+            tableCalculations,
+        } = ProjectService.isolateTableCalculationsFromCompiledMetricsQuery(
+            compileMetricQuery({
+                explore: exploreWithOverride,
+                metricQuery,
+                warehouseClient,
+            }),
+        );
+
+        /**
+         * Generate a new SELECT statement with all of our original columns, as well as
+         * table calculation columns/aggregates:
+         */
+        const selectFrom = [
+            '*',
+            ...compiledTableCalculations.map(
+                ({ name, compiledSql }) => `${compiledSql} AS ${name}`,
+            ),
+        ];
+
+        /**
+         * Render table calculation filter rules for compatibility with DuckDB.
+         */
+        const filterRules = getFilterRulesFromGroup(
+            tableCalculationFilters as FilterGroup,
+        );
+
+        const renderedFilters = filterRules.map((filterRule) => {
+            const field = compiledTableCalculations.find(
+                ({ name }) =>
+                    `table_calculation_${name}` === filterRule.target.fieldId,
+            );
+
+            /**
+             * If a matching field cannot be found, we insert a placeholder expression.
+             */
+            if (!field) {
+                return '1=1';
+            }
+
+            return renderTableCalculationFilterRuleSql(
+                filterRule,
+                field,
+                '"',
+                "'",
+                '\\',
+            );
+        });
+
+        const whereClause =
+            renderedFilters.length > 0
+                ? `WHERE ${renderedFilters.join('\nAND ')}`
+                : '';
+
+        /**
+         * We apply sorting at this stage, so we need to access sort data from the
+         * original compiled query.
+         */
+        const sorts = originalCompiledMetricQuery.sorts.map(
+            ({ descending, fieldId }) =>
+                `${fieldId} ${descending ? 'DESC' : 'ASC'}`,
+        );
+
+        const orderByClause =
+            sorts.length > 0 ? `ORDER BY ${sorts.join(', ')}` : '';
+
+        const primaryQuery = buildQuery({
+            explore: exploreWithOverride,
+            compiledMetricQuery: compiledMetricQueryWithoutTableCalculations,
+            warehouseClient,
+            userAttributes,
+        });
+
+        const tableCalculationsSubQuery: CompiledQuery = {
+            fields: tableCalculations.reduce((acc, tableCalculation) => {
+                acc[tableCalculation.name] = tableCalculation;
+
+                return acc;
+            }, {} as ItemsMap),
+            query: `
+                WITH results AS (
+                    SELECT ${selectFrom.join(',\n')}
+                    FROM _
+                )
+
+                SELECT * FROM results
+                ${whereClause}
+                ${orderByClause}
+            ;`,
+            hasExampleMetric: false,
+        };
+
+        return [primaryQuery, tableCalculationsSubQuery];
+    }
+
     private static async _compileQuery(
         metricQuery: MetricQuery,
         explore: Explore,
@@ -895,17 +1015,64 @@ export class ProjectService {
             warehouseClient,
             granularity,
         );
+
         const compiledMetricQuery = compileMetricQuery({
             explore: exploreWithOverride,
             metricQuery,
             warehouseClient,
         });
-        return buildQuery({
+
+        const buildQueryResult = buildQuery({
             explore: exploreWithOverride,
             compiledMetricQuery,
             warehouseClient,
             userAttributes,
         });
+
+        return buildQueryResult;
+    }
+
+    /**
+     * Modifies a compiled metric query to remove any references to table calculations, and
+     * returns the isolated portions separately.
+     *
+     * This is a temporary approach to avoid poluting the query compiler while rolling-out
+     * improvements to table calculations handling.
+     */
+    private static isolateTableCalculationsFromCompiledMetricsQuery(
+        compiledMetricQuery: CompiledMetricQuery,
+    ): {
+        compiledMetricQuery: CompiledMetricQuery;
+        compiledMetricQueryWithoutTableCalculations: CompiledMetricQuery;
+        tableCalculationFilters?: FilterGroupItem;
+        tableCalculations: TableCalculation[];
+        compiledTableCalculations: CompiledTableCalculation[];
+    } {
+        const {
+            filters,
+            tableCalculations,
+            compiledTableCalculations,
+            sorts,
+            ...otherProps
+        } = compiledMetricQuery;
+
+        return {
+            compiledMetricQuery,
+            compiledMetricQueryWithoutTableCalculations: {
+                ...otherProps,
+                tableCalculations: [],
+                compiledTableCalculations: [],
+                filters: {
+                    ...filters,
+                    tableCalculations: undefined,
+                },
+                sorts: [],
+            },
+
+            tableCalculationFilters: filters.tableCalculations,
+            tableCalculations,
+            compiledTableCalculations,
+        };
     }
 
     async compileQuery(
@@ -947,14 +1114,14 @@ export class ProjectService {
         return compiledQuery;
     }
 
-    static metricQueryWithLimit(
+    private metricQueryWithLimit(
         metricQuery: MetricQuery,
         csvLimit: number | null | undefined,
     ): MetricQuery {
         if (csvLimit === undefined) {
-            if (metricQuery.limit > lightdashConfig.query?.maxLimit) {
+            if (metricQuery.limit > this.lightdashConfig.query?.maxLimit) {
                 throw new ParameterError(
-                    `Query limit can not exceed ${lightdashConfig.query.maxLimit}`,
+                    `Query limit can not exceed ${this.lightdashConfig.query.maxLimit}`,
                 );
             }
             return metricQuery;
@@ -969,7 +1136,7 @@ export class ProjectService {
                 'Query must have at least one dimension or metric',
             );
 
-        const cellsLimit = lightdashConfig.query?.csvCellsLimit || 100000;
+        const cellsLimit = this.lightdashConfig.query?.csvCellsLimit || 100000;
         const maxRows = Math.floor(cellsLimit / numberColumns);
         const csvRowLimit =
             csvLimit === null ? maxRows : Math.min(csvLimit, maxRows);
@@ -1359,6 +1526,7 @@ export class ProjectService {
                                     'useWorker',
                                     useWorker,
                                 );
+
                                 return useWorker
                                     ? runWorkerThread<ResultRow[]>(
                                           new Worker(
@@ -1421,6 +1589,7 @@ export class ProjectService {
         metricQuery,
         queryTags,
         invalidateCache,
+        tableCalculationsSubQuery,
     }: {
         projectUuid: string;
         context: QueryExecutionContext;
@@ -1429,6 +1598,7 @@ export class ProjectService {
         metricQuery: MetricQuery;
         queryTags?: RunQueryTags;
         invalidateCache?: boolean;
+        tableCalculationsSubQuery?: CompiledQuery;
     }): Promise<{
         rows: Record<string, any>[];
         cacheMetadata: CacheMetadata;
@@ -1446,7 +1616,10 @@ export class ProjectService {
                 span.setAttribute('queryHash', queryHash);
                 span.setAttribute('cacheHit', false);
 
-                if (lightdashConfig.resultsCache?.enabled && !invalidateCache) {
+                if (
+                    this.lightdashConfig.resultsCache?.enabled &&
+                    !invalidateCache
+                ) {
                     const cacheEntryMetadata = await this.s3CacheClient
                         .getResultsMetadata(queryHash)
                         .catch((e) => undefined); // ignore since error is tracked in s3Client
@@ -1455,7 +1628,8 @@ export class ProjectService {
                         cacheEntryMetadata?.LastModified &&
                         new Date().getTime() -
                             cacheEntryMetadata.LastModified.getTime() <
-                            lightdashConfig.resultsCache.cacheStateTimeSeconds *
+                            this.lightdashConfig.resultsCache
+                                .cacheStateTimeSeconds *
                                 1000
                     ) {
                         Logger.debug(
@@ -1497,10 +1671,38 @@ export class ProjectService {
                     async () => warehouseClient.runQuery(query, queryTags),
                 );
 
-                if (lightdashConfig.resultsCache?.enabled) {
+                /**
+                 * If we have a table calculations sub-query, we run it against the in-memory
+                 * database, essentially generating a new result set based on the upstream
+                 * warehouse results.
+                 *
+                 * At this point, we also merge the two sets of fields - the field set used for
+                 * the warehouse query, and the follow-up table calculation fields.
+                 */
+                const warehouseResultsWithTableCalculations =
+                    tableCalculationsSubQuery
+                        ? {
+                              rows: await runQueryInMemoryDatabaseContext({
+                                  query: tableCalculationsSubQuery.query,
+                                  tables: {
+                                      _: warehouseResults,
+                                  },
+                              }),
+
+                              /**
+                               *
+                               */
+                              fields: {
+                                  ...warehouseResults.fields,
+                                  ...tableCalculationsSubQuery.fields,
+                              },
+                          }
+                        : warehouseResults;
+
+                if (this.lightdashConfig.resultsCache?.enabled) {
                     Logger.debug(`Writing data to cache with key ${queryHash}`);
                     const buffer = Buffer.from(
-                        JSON.stringify(warehouseResults),
+                        JSON.stringify(warehouseResultsWithTableCalculations),
                     );
                     // fire and forget
                     this.s3CacheClient
@@ -1509,7 +1711,7 @@ export class ProjectService {
                 }
 
                 return {
-                    rows: warehouseResults.rows,
+                    rows: warehouseResultsWithTableCalculations.rows,
                     cacheMetadata: { cacheHit: false },
                 };
             },
@@ -1554,6 +1756,24 @@ export class ProjectService {
                         );
                     }
 
+                    /**
+                     * If the feature flag is enabled, and we actually have any table calculations
+                     * to process, we use the new in-memory table calculations engine. This avoid us
+                     * spinning-up a new DuckDB database pointlessly.
+                     *
+                     * In a follow-up after initial testing, this check should be done somewhere further
+                     * down the stack.
+                     */
+                    const newTableCalculationsFeatureFlagEnabled =
+                        await isFeatureFlagEnabled(
+                            FeatureFlags.UseInMemoryTableCalculations,
+                            user,
+                        );
+
+                    const useNewTableCalculationsEngine =
+                        newTableCalculationsFeatureFlagEnabled &&
+                        metricQuery.tableCalculations.length > 0;
+
                     const { organizationUuid } =
                         await this.projectModel.getSummary(projectUuid);
 
@@ -1569,11 +1789,10 @@ export class ProjectService {
                         throw new ForbiddenError();
                     }
 
-                    const metricQueryWithLimit =
-                        ProjectService.metricQueryWithLimit(
-                            metricQuery,
-                            csvLimit,
-                        );
+                    const metricQueryWithLimit = this.metricQueryWithLimit(
+                        metricQuery,
+                        csvLimit,
+                    );
 
                     const explore =
                         loadedExplore ??
@@ -1597,14 +1816,60 @@ export class ProjectService {
                             },
                         );
 
-                    const { query, hasExampleMetric, fields } =
-                        await ProjectService._compileQuery(
-                            metricQueryWithLimit,
-                            explore,
-                            warehouseClient,
-                            userAttributes,
-                            granularity,
+                    /**
+                     * Note: most of this is temporary while testing out in-memory table calculations,
+                     * so that we can more cleanly handle the feature-flagged behavior fork below.
+                     */
+                    let fields: ItemsMap;
+                    let query: string;
+                    let hasExampleMetric: boolean;
+                    let tableCalculationsCompiledQuery:
+                        | undefined
+                        | CompiledQuery;
+
+                    const compileQueryArgs = [
+                        metricQueryWithLimit,
+                        explore,
+                        warehouseClient,
+                        userAttributes,
+                        granularity,
+                    ] as const;
+
+                    /**
+                     * If we're using the new table calculations engine, we're actually going to be
+                     * doing two separate queries - the parent query which excludes table calculations,
+                     * and a separate query that runs against the result of the parent query, exclusively
+                     * to generate table calculation values, and apply table calculation filters.
+                     */
+                    if (useNewTableCalculationsEngine) {
+                        const [parentQuery, tableCalculationsSubQuery] =
+                            await ProjectService._compileMetricQueryWithNewTableCalculationsEngine(
+                                ...compileQueryArgs,
+                            );
+
+                        /**
+                         * Merge field sets coming from the parent warehouse query, as well as the
+                         * table calculations sub-query:
+                         */
+                        fields = {
+                            ...parentQuery.fields,
+                            ...tableCalculationsSubQuery.fields,
+                        };
+
+                        query = parentQuery.query;
+                        hasExampleMetric = parentQuery.hasExampleMetric;
+
+                        tableCalculationsCompiledQuery =
+                            tableCalculationsSubQuery;
+                    } else {
+                        const fullQuery = await ProjectService._compileQuery(
+                            ...compileQueryArgs,
                         );
+
+                        fields = fullQuery.fields;
+                        query = fullQuery.query;
+                        hasExampleMetric = fullQuery.hasExampleMetric;
+                    }
 
                     const onboardingRecord =
                         await this.onboardingModel.getByOrganizationUuid(
@@ -1619,7 +1884,7 @@ export class ProjectService {
                         );
                     }
 
-                    await analytics.track({
+                    await this.analytics.track({
                         userId: user.userUuid,
                         event: 'query.executed',
                         properties: {
@@ -1637,19 +1902,19 @@ export class ProjectService {
                                 metricQuery.tableCalculations.filter(
                                     (tableCalculation) =>
                                         tableCalculation.format?.type ===
-                                        TableCalculationFormatType.PERCENT,
+                                        CustomFormatType.PERCENT,
                                 ).length,
                             tableCalculationsCurrencyFormatCount:
                                 metricQuery.tableCalculations.filter(
                                     (tableCalculation) =>
                                         tableCalculation.format?.type ===
-                                        TableCalculationFormatType.CURRENCY,
+                                        CustomFormatType.CURRENCY,
                                 ).length,
                             tableCalculationsNumberFormatCount:
                                 metricQuery.tableCalculations.filter(
                                     (tableCalculation) =>
                                         tableCalculation.format?.type ===
-                                        TableCalculationFormatType.NUMBER,
+                                        CustomFormatType.NUMBER,
                                 ).length,
                             additionalMetricsCount: (
                                 metricQuery.additionalMetrics || []
@@ -1668,6 +1933,39 @@ export class ProjectService {
                                     metric.filters &&
                                     metric.filters.length > 0,
                             ).length,
+                            additionalMetricsPercentFormatCount: (
+                                metricQuery.additionalMetrics || []
+                            ).filter(
+                                (metric) =>
+                                    metricQuery.metrics.includes(
+                                        getFieldId(metric),
+                                    ) &&
+                                    metric.formatOptions &&
+                                    metric.formatOptions.type ===
+                                        CustomFormatType.PERCENT,
+                            ).length,
+                            additionalMetricsCurrencyFormatCount: (
+                                metricQuery.additionalMetrics || []
+                            ).filter(
+                                (metric) =>
+                                    metricQuery.metrics.includes(
+                                        getFieldId(metric),
+                                    ) &&
+                                    metric.formatOptions &&
+                                    metric.formatOptions.type ===
+                                        CustomFormatType.CURRENCY,
+                            ).length,
+                            additionalMetricsNumberFormatCount: (
+                                metricQuery.additionalMetrics || []
+                            ).filter(
+                                (metric) =>
+                                    metricQuery.metrics.includes(
+                                        getFieldId(metric),
+                                    ) &&
+                                    metric.formatOptions &&
+                                    metric.formatOptions.type ===
+                                        CustomFormatType.NUMBER,
+                            ).length,
                             context,
                             ...countCustomDimensionsInMetricQuery(metricQuery),
                             dateZoomGranularity: granularity || null,
@@ -1676,6 +1974,18 @@ export class ProjectService {
 
                     Logger.debug(`Fetch query results from cache or warehouse`);
                     span.setAttribute('generatedSql', query);
+
+                    /**
+                     * If enabled, we include additional attributes for this span allowing us to measure
+                     * the impact of upcoming table calculation handling changes.
+                     */
+                    if (useNewTableCalculationsEngine) {
+                        span.setAttributes({
+                            tableCalculationsNum:
+                                metricQuery.tableCalculations.length,
+                            newTableCalculations: useNewTableCalculationsEngine,
+                        });
+                    }
                     span.setAttribute('lightdash.projectUuid', projectUuid);
                     span.setAttribute(
                         'warehouse.type',
@@ -1691,6 +2001,8 @@ export class ProjectService {
                             query,
                             queryTags,
                             invalidateCache,
+                            tableCalculationsSubQuery:
+                                tableCalculationsCompiledQuery,
                         });
                     await sshTunnel.disconnect();
                     return { rows, cacheMetadata, fields };
@@ -1725,7 +2037,7 @@ export class ProjectService {
             throw new ForbiddenError();
         }
 
-        await analytics.track({
+        await this.analytics.track({
             userId: user.userUuid,
             event: 'sql.executed',
             properties: {
@@ -1768,9 +2080,9 @@ export class ProjectService {
             throw new ForbiddenError();
         }
 
-        if (limit > lightdashConfig.query.maxLimit) {
+        if (limit > this.lightdashConfig.query.maxLimit) {
             throw new ParameterError(
-                `Query limit can not exceed ${lightdashConfig.query.maxLimit}`,
+                `Query limit can not exceed ${this.lightdashConfig.query.maxLimit}`,
             );
         }
 
@@ -1857,7 +2169,7 @@ export class ProjectService {
         const { rows } = await warehouseClient.runQuery(query, queryTags);
         await sshTunnel.disconnect();
 
-        analytics.track({
+        this.analytics.track({
             event: 'field_value.search',
             userId: user.userUuid,
             properties: {
@@ -1889,7 +2201,7 @@ export class ProjectService {
         const packages = await adapter.getDbtPackages();
         try {
             const explores = await adapter.compileAllExplores();
-            analytics.track({
+            this.analytics.track({
                 event: 'project.compiled',
                 userId: user.userUuid,
                 properties: {
@@ -2024,7 +2336,7 @@ export class ProjectService {
             return explores;
         } catch (e) {
             const errorResponse = errorHandler(e);
-            analytics.track({
+            this.analytics.track({
                 event: 'project.error',
                 userId: user.userUuid,
                 properties: {
@@ -2421,7 +2733,7 @@ export class ProjectService {
             throw new ForbiddenError();
         }
         await this.projectModel.updateTablesConfiguration(projectUuid, data);
-        analytics.track({
+        this.analytics.track({
             event: 'project_tables_configuration.updated',
             userId: user.userUuid,
             properties: {
@@ -2703,7 +3015,7 @@ export class ProjectService {
         const project = await this.projectModel.getSummary(projectUuid);
         const projectUrl = new URL(
             `/projects/${projectUuid}/home`,
-            lightdashConfig.siteUrl,
+            this.lightdashConfig.siteUrl,
         ).href;
 
         if (data.sendEmail)
@@ -2808,7 +3120,7 @@ export class ProjectService {
             projectUuid,
             integration,
         );
-        analytics.track({
+        this.analytics.track({
             event: 'dbt_cloud_integration.updated',
             userId: user.userUuid,
             properties: {
@@ -2831,7 +3143,7 @@ export class ProjectService {
             throw new ForbiddenError();
         }
         await this.projectModel.deleteDbtCloudIntegration(projectUuid);
-        analytics.track({
+        this.analytics.track({
             event: 'dbt_cloud_integration.deleted',
             userId: user.userUuid,
             properties: {
@@ -3261,7 +3573,7 @@ export class ProjectService {
                 },
                 label: chart.name,
                 description: chart.description ?? '',
-                url: `${lightdashConfig.siteUrl}/projects/${projectUuid}/saved/${chart.uuid}/view`,
+                url: `${this.lightdashConfig.siteUrl}/projects/${projectUuid}/saved/${chart.uuid}/view`,
                 dependsOn: Object.keys(
                     explores.find(({ name }) => name === chart.tableName)
                         ?.tables || {},
@@ -3286,7 +3598,7 @@ export class ProjectService {
                     },
                     label: dashboard.name,
                     description: dashboard.description ?? '',
-                    url: `${lightdashConfig.siteUrl}/projects/${projectUuid}/dashboards/${dashboard.uuid}/view`,
+                    url: `${this.lightdashConfig.siteUrl}/projects/${projectUuid}/dashboards/${dashboard.uuid}/view`,
                     dependsOn: dashboard.chartUuids
                         ? uniq(
                               dashboard.chartUuids
@@ -3321,7 +3633,7 @@ export class ProjectService {
             },
             label: `Lightdash - ${projectSummary.name}`,
             description: 'Lightdash project',
-            url: `${lightdashConfig.siteUrl}/projects/${projectUuid}/home`,
+            url: `${this.lightdashConfig.siteUrl}/projects/${projectUuid}/home`,
             dependsOn: uniq(
                 chartExposures.map(({ dependsOn }) => dependsOn).flat(),
             ),
@@ -3336,5 +3648,93 @@ export class ProjectService {
             acc[exposure.name] = exposure;
             return acc;
         }, {});
+    }
+
+    async getProjectCredentialsPreference(
+        user: SessionUser,
+        projectUuid: string,
+    ): Promise<UserWarehouseCredentials | undefined> {
+        const project = await this.projectModel.getSummary(projectUuid);
+        if (user.ability.cannot('view', subject('Project', project))) {
+            throw new ForbiddenError();
+        }
+        const credentials =
+            await this.projectModel.getWarehouseCredentialsForProject(
+                projectUuid,
+            );
+        return this.userWarehouseCredentialsModel.findForProject(
+            project.projectUuid,
+            user.userUuid,
+            credentials.type,
+        );
+    }
+
+    async upsertProjectCredentialsPreference(
+        user: SessionUser,
+        projectUuid: string,
+        userWarehouseCredentialsUuid: string,
+    ) {
+        const userWarehouseCredentials =
+            await this.userWarehouseCredentialsModel.getByUuid(
+                userWarehouseCredentialsUuid,
+            );
+        if (userWarehouseCredentials.userUuid !== user.userUuid) {
+            throw new ForbiddenError();
+        }
+        const project = await this.projectModel.getSummary(projectUuid);
+        if (user.ability.cannot('view', subject('Project', project))) {
+            throw new ForbiddenError();
+        }
+        await this.userWarehouseCredentialsModel.upsertUserCredentialsPreference(
+            user.userUuid,
+            projectUuid,
+            userWarehouseCredentialsUuid,
+        );
+    }
+
+    async getCustomMetrics(
+        user: SessionUser,
+        projectUuid: string,
+    ): Promise<
+        {
+            name: string;
+            label: string;
+            modelName: string;
+            yml: string;
+            chartLabel: string;
+            chartUrl: string;
+        }[]
+    > {
+        // TODO implement permissions
+        const chartSummaries = await this.savedChartModel.find({
+            projectUuid,
+        });
+        const chartPromises = chartSummaries.map((summary) =>
+            this.savedChartModel.get(summary.uuid, undefined),
+        );
+
+        const charts = await Promise.all(chartPromises);
+
+        return charts.reduce<any[]>((acc, chart) => {
+            const customMetrics = chart.metricQuery.additionalMetrics;
+
+            if (customMetrics === undefined || customMetrics.length === 0)
+                return acc;
+            const metrics = [
+                ...acc,
+                ...customMetrics.map((metric) => ({
+                    name: metric.uuid,
+                    label: metric.label,
+                    modelName: metric.table,
+                    yml: yaml.dump(convertCustomMetricToDbt(metric), {
+                        quotingType: "'",
+                    }),
+                    chartLabel: chart.name,
+                    chartUrl: `${this.lightdashConfig.siteUrl}/projects/${projectUuid}/saved/${chart.uuid}/view`,
+                })),
+            ];
+            console.log('metrics', metrics);
+            return metrics;
+        }, []);
     }
 }

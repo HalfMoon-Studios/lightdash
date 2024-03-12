@@ -1,15 +1,15 @@
 import {
     ApiQueryResults,
+    applyCustomFormat,
+    assertUnreachable,
     CartesianChart,
     CartesianSeriesType,
     DimensionType,
     formatItemValue,
-    formatTableCalculationValue,
-    formatValue,
     friendlyName,
     getAxisName,
+    getCustomFormatFromLegacy,
     getDateGroupLabel,
-    getDefaultSeriesColor,
     getItemLabelWithoutTableName,
     getResultValueArray,
     hashFieldReference,
@@ -25,7 +25,6 @@ import {
     PivotReference,
     ResultRow,
     Series,
-    TableCalculation,
     timeFrameConfigs,
     TimeFrames,
 } from '@lightdash/common';
@@ -253,6 +252,7 @@ export type EChartSeries = {
     };
     data?: unknown[];
     showSymbol?: boolean;
+    symbolSize?: number;
 };
 
 const getFormattedValue = (
@@ -602,16 +602,19 @@ const getPivotSeries = ({
                                 return value;
                             }
                             if (isTableCalculation(field)) {
-                                return formatTableCalculationValue(
-                                    field as TableCalculation,
+                                return formatItemValue(
+                                    field,
                                     value?.value?.[yFieldHash],
                                 );
                             } else {
-                                return formatValue(value?.value?.[yFieldHash], {
-                                    format: field.format,
-                                    round: field.round,
-                                    compact: field.compact,
-                                });
+                                return applyCustomFormat(
+                                    value?.value?.[yFieldHash],
+                                    getCustomFormatFromLegacy({
+                                        format: field.format,
+                                        round: field.round,
+                                        compact: field.compact,
+                                    }),
+                                );
                             }
                         },
                     }),
@@ -621,6 +624,31 @@ const getPivotSeries = ({
             },
         }),
     };
+};
+
+/**
+ * Get the series symbol configuration for a simple series
+ * This is used to hide the symbol if showSymbol is false for line and area charts
+ *
+ * Issue reference: https://github.com/apache/echarts/issues/19178
+ */
+const getSimpleSeriesSymbolConfig = (series: Series) => {
+    const { showSymbol, type } = series;
+    switch (type) {
+        case CartesianSeriesType.LINE:
+        case CartesianSeriesType.AREA:
+            return {
+                showSymbol: true,
+                symbolSize: showSymbol ? 4 : 0,
+            };
+        case CartesianSeriesType.BAR:
+        case CartesianSeriesType.SCATTER:
+            return {
+                showSymbol: showSymbol ?? true,
+            };
+        default:
+            return assertUnreachable(type, `unexpected series type: ${type}`);
+    }
 };
 
 type GetSimpleSeriesArg = {
@@ -665,7 +693,7 @@ const getSimpleSeries = ({
     tooltip: {
         valueFormatter: valueFormatter(yFieldHash, itemsMap),
     },
-    showSymbol: series.showSymbol ?? true,
+    ...getSimpleSeriesSymbolConfig(series),
     ...(series.label?.show && {
         label: {
             ...series.label,
@@ -677,16 +705,19 @@ const getSimpleSeries = ({
                             return value;
                         }
                         if (isTableCalculation(field)) {
-                            return formatTableCalculationValue(
-                                field as TableCalculation,
+                            return formatItemValue(
+                                field,
                                 value?.value?.[yFieldHash],
                             );
                         } else {
-                            return formatValue(value?.value?.[yFieldHash], {
-                                format: field.format,
-                                round: field.round,
-                                compact: field.compact,
-                            });
+                            return applyCustomFormat(
+                                value?.value?.[yFieldHash],
+                                getCustomFormatFromLegacy({
+                                    format: field.format,
+                                    round: field.round,
+                                    compact: field.compact,
+                                }),
+                            );
                         }
                     },
                 }),
@@ -873,16 +904,13 @@ const getEchartAxes = ({
         } else if (axisItem !== undefined && isTableCalculation(axisItem)) {
             axisConfig.axisLabel = {
                 formatter: (value: any) => {
-                    return formatTableCalculationValue(axisItem, value);
+                    return formatItemValue(axisItem, value);
                 },
             };
             axisConfig.axisPointer = {
                 label: {
                     formatter: (value: any) => {
-                        return formatTableCalculationValue(
-                            axisItem,
-                            value.value,
-                        );
+                        return formatItemValue(axisItem, value.value);
                     },
                 },
             };
@@ -1192,7 +1220,7 @@ const calculateStackTotal = (
 ) => {
     return series.reduce<number>((acc, s) => {
         const hash = flipAxis ? s.encode?.x : s.encode?.y;
-        const legendName = s.dimensions?.[1]?.displayName;
+        const legendName = s.name || s.dimensions?.[1]?.displayName;
         let selected = true;
         for (const key in selectedLegendNames) {
             if (legendName === key) {
@@ -1306,7 +1334,7 @@ const useEchartsCartesianConfig = (
         pivotDimensions,
         resultsData,
         itemsMap,
-        colorPalette,
+        getSeriesColor,
     } = useVisualizationContext();
 
     const validCartesianConfig = useMemo(() => {
@@ -1374,12 +1402,18 @@ const useEchartsCartesianConfig = (
         });
     }, [itemsMap, series, validCartesianConfig, resultsData]);
 
-    const stackedSeries = useMemo(() => {
+    const stackedSeriesWithColorAssignments = useMemo(() => {
         if (!itemsMap) return;
-        const seriesWithValidStack = series.map<EChartSeries>((serie) => ({
-            ...serie,
-            stack: getValidStack(serie),
-        }));
+
+        const seriesWithValidStack = series.map<EChartSeries>((serie, i) => {
+            const color = getSeriesColor(serie, i);
+
+            return {
+                ...serie,
+                color,
+                stack: getValidStack(serie),
+            };
+        });
         return [
             ...seriesWithValidStack,
             ...getStackTotalSeries(
@@ -1396,25 +1430,8 @@ const useEchartsCartesianConfig = (
         itemsMap,
         validCartesianConfig?.layout.flipAxes,
         validCartesianConfigLegend,
+        getSeriesColor,
     ]);
-
-    const colors = useMemo<string[]>(() => {
-        //Do not use colors from hidden series
-        return validCartesianConfig?.eChartsConfig.series
-            ? validCartesianConfig.eChartsConfig.series.reduce<string[]>(
-                  (acc, serie, index) => {
-                      if (!serie.hidden)
-                          return [
-                              ...acc,
-                              colorPalette[index] ||
-                                  getDefaultSeriesColor(index),
-                          ];
-                      else return acc;
-                  },
-                  [],
-              )
-            : colorPalette;
-    }, [colorPalette, validCartesianConfig]);
 
     const sortedResults = useMemo(() => {
         const results =
@@ -1568,12 +1585,11 @@ const useEchartsCartesianConfig = (
                     .join('');
 
                 const dimensionId = params[0].dimensionNames?.[0];
-
                 if (dimensionId !== undefined) {
                     const field = itemsMap[dimensionId];
                     if (isTableCalculation(field)) {
-                        const tooltipHeader = formatTableCalculationValue(
-                            field as TableCalculation,
+                        const tooltipHeader = formatItemValue(
+                            field,
                             params[0].axisValueLabel,
                         );
 
@@ -1605,7 +1621,7 @@ const useEchartsCartesianConfig = (
             xAxis: axes.xAxis,
             yAxis: axes.yAxis,
             useUTC: true,
-            series: stackedSeries,
+            series: stackedSeriesWithColorAssignments,
             animation: !isInDashboard,
             legend: mergeLegendSettings(
                 validCartesianConfig?.eChartsConfig.legend,
@@ -1623,12 +1639,13 @@ const useEchartsCartesianConfig = (
                     validCartesianConfig?.eChartsConfig.grid,
                 ),
             },
-            color: colors,
+            // We assign colors per series, so we specify an empty list here.
+            color: [],
         }),
         [
             axes.xAxis,
             axes.yAxis,
-            stackedSeries,
+            stackedSeriesWithColorAssignments,
             isInDashboard,
             validCartesianConfig?.eChartsConfig.legend,
             validCartesianConfig?.eChartsConfig.grid,
@@ -1636,7 +1653,6 @@ const useEchartsCartesianConfig = (
             series,
             sortedResults,
             tooltip,
-            colors,
         ],
     );
 

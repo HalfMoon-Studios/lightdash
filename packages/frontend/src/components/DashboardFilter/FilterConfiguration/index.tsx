@@ -6,6 +6,7 @@ import {
     Field,
     fieldId,
     FilterableField,
+    FilterOperator,
     isField,
     isFilterableField,
     matchFieldByType,
@@ -109,12 +110,11 @@ const FilterConfiguration: FC<Props> = ({
 
         if (newField && isField(newField) && isFilterableField(newField)) {
             setDraftFilterRule(
-                createDashboardFilterRuleFromField(
-                    newField,
+                createDashboardFilterRuleFromField({
+                    field: newField,
                     availableTileFilters,
-                    false,
-                    isCreatingTemporary,
-                ),
+                    isTemporary: isCreatingTemporary,
+                }),
             );
 
             setSelectedField(newField);
@@ -139,14 +139,22 @@ const FilterConfiguration: FC<Props> = ({
             setDraftFilterRule((oldFilterRule) => {
                 // TODO: Maybe this isn't the best place to do this.
                 // All this says is if a filter *was* disabled and had no
-                // value but now has a value, enable it. This is a way of
-                // keeping disabled and 'no value' in sync.
-                return oldFilterRule &&
-                    !oldFilterRule?.values?.length &&
-                    oldFilterRule?.disabled &&
-                    newFilterRule.values?.length
-                    ? { ...newFilterRule, disabled: false }
-                    : newFilterRule;
+                // value but now has a value, enable it. Also enable it if
+                // The operator requires no value (null/not null)
+                // This is a way of keeping disabled and 'no value' in sync.
+                let isNewFilterDisabled = newFilterRule.disabled;
+                if (
+                    (oldFilterRule &&
+                        oldFilterRule.disabled &&
+                        !oldFilterRule.values?.length &&
+                        newFilterRule.values?.length) ||
+                    newFilterRule.operator === FilterOperator.NULL ||
+                    newFilterRule.operator === FilterOperator.NOT_NULL
+                ) {
+                    isNewFilterDisabled = false;
+                }
+
+                return { ...newFilterRule, disabled: isNewFilterDisabled };
             });
         },
         [setDraftFilterRule],
@@ -299,7 +307,14 @@ const FilterConfiguration: FC<Props> = ({
                             selectedField && (
                                 <Group spacing="xs">
                                     <FieldIcon item={selectedField} />
-                                    <FieldLabel item={selectedField} />
+                                    {originalFilterRule?.label &&
+                                    !isEditMode ? (
+                                        <Text span fw={500}>
+                                            {originalFilterRule.label}
+                                        </Text>
+                                    ) : (
+                                        <FieldLabel item={selectedField} />
+                                    )}
                                 </Group>
                             )
                         )}
@@ -356,7 +371,7 @@ const FilterConfiguration: FC<Props> = ({
 
                 <Tooltip
                     label="Filter field and value required"
-                    disabled={isApplyDisabled}
+                    disabled={!isApplyDisabled}
                 >
                     <Box>
                         <Button

@@ -1,10 +1,11 @@
-import { DragDropContext, DropResult } from '@hello-pangea/dnd';
+import { DragDropContext, type DropResult } from '@hello-pangea/dnd';
 import { getCustomDimensionId } from '@lightdash/common';
-import { Box, Checkbox, Stack, Title, Tooltip } from '@mantine/core';
-import React, { FC, useCallback, useMemo, useState } from 'react';
+import { Box, Checkbox, Stack, Switch, Tooltip } from '@mantine/core';
+import { useCallback, useMemo, useState, type FC } from 'react';
 import useToaster from '../../../hooks/toaster/useToaster';
 import { isTableVisualizationConfig } from '../../LightdashVisualization/VisualizationConfigTable';
 import { useVisualizationContext } from '../../LightdashVisualization/VisualizationProvider';
+import { Config } from '../common/Config';
 import ColumnConfiguration from './ColumnConfiguration';
 import DroppableItemsList from './DroppableItemsList';
 
@@ -143,73 +144,91 @@ const GeneralSettings: FC = () => {
     if (!chartConfig) return null;
 
     const {
-        canUsePivotTable,
+        isPivotTableEnabled,
+        canUseSubtotals,
         hideRowNumbers,
         metricsAsRows,
         setHideRowNumbers,
         setShowColumnCalculation,
         setShowResultsTotal,
         setShowRowCalculation,
+        setShowSubtotals,
         setShowTableNames,
         showColumnCalculation,
         showResultsTotal,
         showRowCalculation,
+        showSubtotals,
         showTableNames,
     } = chartConfig;
 
     return (
-        <Stack spacing={0}>
+        <Stack>
             <DragDropContext
                 onDragStart={() => setIsDragging(true)}
                 onDragEnd={onDragEnd}
             >
-                <Title order={6}>Columns</Title>
-                <DroppableItemsList
-                    droppableId={DroppableIds.COLUMNS}
-                    itemIds={columns}
-                    isDragging={isDragging}
-                    disableReorder={false}
-                    placeholder={
-                        'Move dimensions to columns to pivot your table'
-                    }
-                />
-                <Title order={6}>Rows</Title>
-                <DroppableItemsList
-                    droppableId={DroppableIds.ROWS}
-                    itemIds={rows}
-                    isDragging={isDragging}
-                    disableReorder={true}
-                />
+                <Config>
+                    <Config.Section>
+                        <Config.Heading>Columns</Config.Heading>
+                        <DroppableItemsList
+                            droppableId={DroppableIds.COLUMNS}
+                            itemIds={columns}
+                            isDragging={isDragging}
+                            disableReorder={false}
+                            placeholder={
+                                'Drag dimensions into this area to pivot your table'
+                            }
+                        />
+
+                        <Config.Heading>Rows</Config.Heading>
+                        <DroppableItemsList
+                            droppableId={DroppableIds.ROWS}
+                            itemIds={rows}
+                            isDragging={isDragging}
+                            disableReorder={true}
+                            placeholder={
+                                'Drag dimensions into this area to group your data'
+                            }
+                        />
+                    </Config.Section>
+                </Config>
             </DragDropContext>
 
-            <Title order={6}>Metrics</Title>
-            <Tooltip
-                disabled={!!canUsePivotTable}
-                label={
-                    'To use metrics as rows, you need to move a dimension to "Columns"'
-                }
-                w={300}
-                multiline
-                withinPortal
-                position="top-start"
-            >
-                <Box my="sm">
-                    <Checkbox
-                        disabled={!canUsePivotTable}
-                        label="Show metrics as rows"
-                        checked={metricsAsRows}
-                        onChange={() => handleToggleMetricsAsRows()}
-                    />
-                </Box>
-            </Tooltip>
-            <Stack spacing="xs" mb="md">
+            <Config.Section>
+                <Config.Section>
+                    <Config.Heading>Metrics</Config.Heading>
+                    <Tooltip
+                        disabled={!!isPivotTableEnabled}
+                        label={
+                            'To use metrics as rows, you need to move a dimension to "Columns"'
+                        }
+                        w={300}
+                        multiline
+                        withinPortal
+                        position="top-start"
+                    >
+                        <Box>
+                            <Switch
+                                disabled={!isPivotTableEnabled}
+                                label="Show metrics as rows"
+                                labelPosition="right"
+                                checked={metricsAsRows}
+                                onChange={() => handleToggleMetricsAsRows()}
+                            />
+                        </Box>
+                    </Tooltip>
+                </Config.Section>
+            </Config.Section>
+
+            <Config.Section>
                 {metrics.map((itemId) => (
                     <ColumnConfiguration key={itemId} fieldId={itemId} />
                 ))}
-            </Stack>
+            </Config.Section>
 
-            <Title order={6}>Options</Title>
-            <Stack mt="sm" spacing="xs">
+            <Config.Section>
+                <Config.Heading>Display</Config.Heading>
+
                 <Checkbox
                     label="Show table names"
                     checked={showTableNames}
@@ -217,7 +236,6 @@ const GeneralSettings: FC = () => {
                         setShowTableNames(!showTableNames);
                     }}
                 />
-
                 <Checkbox
                     label="Show row numbers"
                     checked={!hideRowNumbers}
@@ -225,7 +243,11 @@ const GeneralSettings: FC = () => {
                         setHideRowNumbers(!hideRowNumbers);
                     }}
                 />
-                {canUsePivotTable ? (
+            </Config.Section>
+
+            <Config.Section>
+                <Config.Heading>Results</Config.Heading>
+                {isPivotTableEnabled ? (
                     <Checkbox
                         label="Show row totals"
                         checked={showRowCalculation}
@@ -248,7 +270,34 @@ const GeneralSettings: FC = () => {
                         setShowResultsTotal(!showResultsTotal);
                     }}
                 />
-            </Stack>
+                <Tooltip
+                    disabled={!isPivotTableEnabled && canUseSubtotals}
+                    label={
+                        !canUseSubtotals
+                            ? 'Subtotals can only be used on tables with at least two dimensions'
+                            : "Subtotals can only be used on tables that aren't pivoted"
+                    }
+                    w={300}
+                    multiline
+                    withinPortal
+                    position="top-start"
+                >
+                    <Box>
+                        <Checkbox
+                            label="Show subtotals"
+                            checked={
+                                canUseSubtotals &&
+                                !isPivotTableEnabled &&
+                                showSubtotals
+                            }
+                            onChange={() => {
+                                setShowSubtotals(!showSubtotals);
+                            }}
+                            disabled={!!isPivotTableEnabled || !canUseSubtotals}
+                        />
+                    </Box>
+                </Tooltip>
+            </Config.Section>
         </Stack>
     );
 };

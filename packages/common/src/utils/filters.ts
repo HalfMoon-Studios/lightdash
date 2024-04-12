@@ -1,36 +1,41 @@
+import dayjs from 'dayjs';
 import moment from 'moment';
 import { v4 as uuidv4 } from 'uuid';
 import {
     CustomFormatType,
-    Dimension,
     DimensionType,
-    Field,
     fieldId,
-    FilterableDimension,
-    FilterableField,
-    FilterableItem,
     isDimension,
     isFilterableDimension,
     isTableCalculation,
     isTableCalculationField,
     MetricType,
+    type Dimension,
+    type Field,
+    type FilterableDimension,
+    type FilterableField,
+    type FilterableItem,
 } from '../types/field';
 import {
-    DashboardFieldTarget,
-    DashboardFilterRule,
-    DashboardFilters,
-    DateFilterRule,
-    FilterGroup,
-    FilterGroupItem,
     FilterOperator,
-    FilterRule,
-    Filters,
     FilterType,
     isAndFilterGroup,
     isFilterGroup,
+    isFilterRule,
     UnitOfTime,
+    type AndFilterGroup,
+    type DashboardFieldTarget,
+    type DashboardFilterRule,
+    type DashboardFilters,
+    type DateFilterRule,
+    type FilterDashboardToRule,
+    type FilterGroup,
+    type FilterGroupItem,
+    type FilterRule,
+    type Filters,
+    type OrFilterGroup,
 } from '../types/filter';
-import { MetricQuery } from '../types/metricQuery';
+import { type MetricQuery } from '../types/metricQuery';
 import { TimeFrames } from '../types/timeFrames';
 import assertUnreachable from './assertUnreachable';
 import { formatDate } from './formatting';
@@ -183,9 +188,10 @@ export const getFilterRuleWithDefaultValue = <T extends FilterRule>(
                     const valueIsDate =
                         value !== undefined && typeof value !== 'number';
 
+                    // NOTE: Using .format() makes this a standard ISO string
                     const timestampValue = valueIsDate
-                        ? moment(value).format('YYYY-MM-DDTHH:mm:ssZ')
-                        : moment().utc(true).format('YYYY-MM-DDTHH:mm:ssZ');
+                        ? dayjs(value).format()
+                        : dayjs().format();
 
                     filterRuleDefaults.values = [timestampValue];
                 } else {
@@ -216,8 +222,14 @@ export const getFilterRuleWithDefaultValue = <T extends FilterRule>(
                             : moment();
 
                     const dateValue = valueIsDate
-                        ? formatDate(value, undefined, false)
+                        ? formatDate(
+                              // Treat the date as UTC, then remove its timezone information before formatting
+                              moment.utc(value).format('YYYY-MM-DD'),
+                              undefined,
+                              false,
+                          )
                         : formatDate(defaultDate, undefined, false);
+
                     filterRuleDefaults.values = [dateValue];
                 }
                 break;
@@ -314,7 +326,7 @@ export const createDashboardFilterRuleFromField = ({
     availableTileFilters: Record<string, FilterableField[] | undefined>;
     isTemporary: boolean;
     value?: unknown;
-}): DashboardFilterRule =>
+}): FilterDashboardToRule =>
     getFilterRuleWithDefaultValue(
         field,
         {
@@ -324,6 +336,7 @@ export const createDashboardFilterRuleFromField = ({
             target: {
                 fieldId: fieldId(field),
                 tableName: field.table,
+                fieldName: field.name,
             },
             tileTargets: getDefaultTileTargets(field, availableTileFilters),
             disabled: !isTemporary,
@@ -369,48 +382,42 @@ export const addFilterRule = ({
 export const getFilterRulesByFieldType = (
     fields: Field[],
     filterRules: FilterRule[],
-): {
-    dimensions: FilterRule[];
-    metrics: FilterRule[];
-    tableCalculations: FilterRule[];
-} =>
-    filterRules.reduce<{
-        dimensions: FilterRule[];
-        metrics: FilterRule[];
-        tableCalculations: FilterRule[];
-    }>(
-        (sum, filterRule) => {
+) =>
+    filterRules.reduce<
+        Record<
+            'valid' | 'invalid',
+            Record<'dimensions' | 'metrics' | 'tableCalculations', FilterRule[]>
+        >
+    >(
+        (accumulator, filterRule) => {
             const fieldInRule = fields.find(
                 (field) => fieldId(field) === filterRule.target.fieldId,
             );
-            if (fieldInRule) {
+
+            const updateAccumulator = (
+                key: 'valid' | 'invalid',
+                rule: FilterRule,
+            ) => {
                 if (isDimension(fieldInRule)) {
-                    return {
-                        ...sum,
-                        dimensions: [...sum.dimensions, filterRule],
-                    };
+                    accumulator[key].dimensions.push(rule);
+                } else if (isTableCalculationField(fieldInRule)) {
+                    accumulator[key].tableCalculations.push(rule);
+                } else {
+                    accumulator[key].metrics.push(rule);
                 }
-                if (isTableCalculationField(fieldInRule)) {
-                    return {
-                        ...sum,
-                        tableCalculations: [
-                            ...sum.tableCalculations,
-                            filterRule,
-                        ],
-                    };
-                }
-                return {
-                    ...sum,
-                    metrics: [...sum.metrics, filterRule],
-                };
+            };
+
+            if (fieldInRule) {
+                updateAccumulator('valid', filterRule);
+            } else {
+                updateAccumulator('invalid', filterRule);
             }
 
-            return sum;
+            return accumulator;
         },
         {
-            dimensions: [],
-            metrics: [],
-            tableCalculations: [],
+            valid: { dimensions: [], metrics: [], tableCalculations: [] },
+            invalid: { dimensions: [], metrics: [], tableCalculations: [] },
         },
     );
 
@@ -427,7 +434,6 @@ export const getDashboardFilterRulesForTile = (
             if (tileConfig === false) {
                 return null;
             }
-
             // If the tile isn't in the tileTarget overrides,
             // we return the filter and don't treat this tile
             // differently.
@@ -512,6 +518,54 @@ export const addFiltersToMetricQuery = (
     },
 });
 
+const findAndOverrideChartFilter = (
+    item: FilterGroupItem,
+    filterRulesList: FilterRule[],
+): FilterGroupItem => {
+    const identicalDashboardFilter = isFilterRule(item)
+        ? filterRulesList.find(
+              (x) =>
+                  x.target.fieldId === item.target.fieldId &&
+                  x.operator === item.operator,
+          )
+        : undefined;
+    return identicalDashboardFilter
+        ? {
+              ...item,
+              values: identicalDashboardFilter.values,
+          }
+        : item;
+};
+
+export const overrideChartFilter = (
+    filterGroup: AndFilterGroup | OrFilterGroup,
+    filterRules: FilterRule[],
+): FilterGroup =>
+    isAndFilterGroup(filterGroup)
+        ? {
+              id: filterGroup.id,
+              and: filterGroup.and.map((item) =>
+                  findAndOverrideChartFilter(item, filterRules),
+              ),
+          }
+        : {
+              id: filterGroup.id,
+              or: filterGroup.or.map((item) =>
+                  findAndOverrideChartFilter(item, filterRules),
+              ),
+          };
+
+const overrideFilterGroupWithFilterRules = (
+    filterGroup: FilterGroup | undefined,
+    filterRules: FilterRule[],
+): FilterGroup => ({
+    id: uuidv4(),
+    and: [
+        ...(filterGroup ? [overrideChartFilter(filterGroup, filterRules)] : []),
+        ...filterRules,
+    ],
+});
+
 const combineFilterGroupWithFilterRules = (
     filterGroup: FilterGroup | undefined,
     filterRules: FilterRule[],
@@ -520,23 +574,52 @@ const combineFilterGroupWithFilterRules = (
     and: [...(filterGroup ? [filterGroup] : []), ...filterRules],
 });
 
+const convertDashboardFilterRuleToFilterRule = (
+    dashboardFilterRule: DashboardFilterRule,
+): FilterRule => ({
+    id: dashboardFilterRule.id,
+    target: {
+        fieldId: dashboardFilterRule.target.fieldId,
+    },
+    operator: dashboardFilterRule.operator,
+    values: dashboardFilterRule.values,
+    ...(dashboardFilterRule.settings && {
+        settings: dashboardFilterRule.settings,
+    }),
+    ...(dashboardFilterRule.disabled && {
+        disabled: dashboardFilterRule.disabled,
+    }),
+});
+
 export const addDashboardFiltersToMetricQuery = (
     metricQuery: MetricQuery,
     dashboardFilters: DashboardFilters,
-): MetricQuery => ({
-    ...metricQuery,
-    filters: {
-        dimensions: combineFilterGroupWithFilterRules(
-            metricQuery.filters?.dimensions,
-            dashboardFilters.dimensions,
-        ),
-        metrics: combineFilterGroupWithFilterRules(
-            metricQuery.filters?.metrics,
-            dashboardFilters.metrics,
-        ),
-        tableCalculations: combineFilterGroupWithFilterRules(
-            metricQuery.filters?.tableCalculations,
-            dashboardFilters.tableCalculations,
-        ),
-    },
-});
+    shouldOverride: boolean,
+): MetricQuery => {
+    const mergeStrategy = shouldOverride
+        ? overrideFilterGroupWithFilterRules
+        : combineFilterGroupWithFilterRules;
+    return {
+        ...metricQuery,
+        filters: {
+            dimensions: mergeStrategy(
+                metricQuery.filters?.dimensions,
+                dashboardFilters.dimensions.map(
+                    convertDashboardFilterRuleToFilterRule,
+                ),
+            ),
+            metrics: mergeStrategy(
+                metricQuery.filters?.metrics,
+                dashboardFilters.metrics.map(
+                    convertDashboardFilterRuleToFilterRule,
+                ),
+            ),
+            tableCalculations: mergeStrategy(
+                metricQuery.filters?.tableCalculations,
+                dashboardFilters.tableCalculations.map(
+                    convertDashboardFilterRuleToFilterRule,
+                ),
+            ),
+        },
+    };
+};

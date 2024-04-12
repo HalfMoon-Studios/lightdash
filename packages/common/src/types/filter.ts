@@ -1,4 +1,4 @@
-import { ConditionalOperator, ConditionalRule } from './conditionalRule';
+import { ConditionalOperator, type ConditionalRule } from './conditionalRule';
 import type { SchedulerFilterRule } from './scheduler';
 
 export enum FilterType {
@@ -66,6 +66,13 @@ export type DashboardFilterRule<
 > = FilterRule<O, T, V, S> & {
     tileTargets?: Record<string, DashboardTileTarget>;
     label: undefined | string;
+    required?: boolean;
+};
+
+export type FilterDashboardToRule = DashboardFilterRule & {
+    target: {
+        fieldName: string;
+    };
 };
 
 export type DashboardFilterRuleOverride = Omit<
@@ -135,7 +142,9 @@ export const isAndFilterGroup = (
 export const isFilterGroup = (value: FilterGroupItem): value is FilterGroup =>
     isOrFilterGroup(value) || isAndFilterGroup(value);
 
-export const isFilterRule = (value: ConditionalRule): value is FilterRule =>
+export const isFilterRule = (
+    value: ConditionalRule | FilterGroupItem,
+): value is FilterRule =>
     'id' in value && 'target' in value && 'operator' in value;
 
 export const getFilterRules = (filters: Filters): FilterRule[] => {

@@ -1,7 +1,9 @@
-import { SpaceDashboard } from './dashboard';
-import { OrganizationMemberRole } from './organizationMemberProfile';
-import { ProjectMemberRole } from './projectMemberRole';
-import { SpaceQuery } from './savedCharts';
+// eslint-disable-next-line import/no-cycle
+import { type SpaceDashboard } from './dashboard';
+import { type OrganizationMemberRole } from './organizationMemberProfile';
+import { type ProjectMemberRole } from './projectMemberRole';
+// eslint-disable-next-line import/no-cycle
+import { type SpaceQuery } from './savedCharts';
 
 export type Space = {
     organizationUuid: string;
@@ -26,6 +28,7 @@ export type SpaceSummary = Pick<
     | 'pinnedListUuid'
     | 'pinnedListOrder'
 > & {
+    userAccess: SpaceShare | undefined;
     access: string[];
     chartCount: number;
     dashboardCount: number;
@@ -34,7 +37,7 @@ export type SpaceSummary = Pick<
 export type CreateSpace = {
     name: string;
     isPrivate?: boolean;
-    access?: Pick<SpaceShare, 'userUuid'>[];
+    access?: Pick<SpaceShare, 'userUuid' | 'role'>[];
 };
 
 export type UpdateSpace = {
@@ -56,6 +59,7 @@ export type SpaceShare = {
 export enum SpaceMemberRole {
     VIEWER = 'viewer',
     EDITOR = 'editor',
+    ADMIN = 'admin',
 }
 
 export type ApiSpaceSummaryListResponse = {
@@ -68,6 +72,7 @@ export type ApiSpaceResponse = {
     results: Space;
 };
 
-export type AddSpaceShare = {
+export type AddSpaceUserAccess = {
     userUuid: string;
+    spaceRole: SpaceMemberRole;
 };

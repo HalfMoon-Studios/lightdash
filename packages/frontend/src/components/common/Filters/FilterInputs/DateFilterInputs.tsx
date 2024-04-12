@@ -1,6 +1,4 @@
 import {
-    ConditionalRule,
-    DateFilterRule,
     DimensionType,
     FilterOperator,
     formatDate,
@@ -11,10 +9,12 @@ import {
     parseDate,
     parseTimestamp,
     TimeFrames,
+    type ConditionalRule,
+    type DateFilterRule,
 } from '@lightdash/common';
 import { Flex, NumberInput, Text } from '@mantine/core';
-import moment from 'moment';
-import { FilterInputsProps } from '.';
+import dayjs from 'dayjs';
+import { type FilterInputsProps } from '.';
 import { useFiltersContext } from '../FiltersProvider';
 import { getFirstDayOfWeek } from '../utils/filterDateUtils';
 import { getPlaceholderByFilterTypeAndOperator } from '../utils/getPlaceholderByFilterTypeAndOperator';
@@ -170,6 +170,13 @@ const DateFilterInputs = <T extends ConditionalRule = DateFilterRule>(
             }
 
             if (isTimestamp) {
+                // For display only
+
+                let value =
+                    rule.values && rule.values[0]
+                        ? dayjs(rule?.values?.[0]).toDate()
+                        : dayjs().toDate(); // Create
+
                 return (
                     <FilterDateTimePicker
                         disabled={disabled}
@@ -177,40 +184,17 @@ const DateFilterInputs = <T extends ConditionalRule = DateFilterRule>(
                         // @ts-ignore
                         placeholder={placeholder}
                         withSeconds
-                        valueFormat={
-                            rule.values &&
-                            moment(rule.values[0])
-                                .utc()
-                                .format('DD/MM/YYYY HH:mm:ss')
-                        }
                         // FIXME: mantine v7
                         // mantine does not set the first day of the week based on the locale
                         // so we need to do it manually and always pass it as a prop
                         firstDayOfWeek={getFirstDayOfWeek(startOfWeek)}
                         popoverProps={popoverProps}
-                        value={
-                            rule.values
-                                ? parseTimestamp(
-                                      formatTimestamp(
-                                          rule.values[0],
-                                          TimeFrames.MILLISECOND,
-                                      ),
-                                      TimeFrames.MILLISECOND,
-                                  )
-                                : null
-                        }
-                        onChange={(value: Date | null) => {
+                        value={value}
+                        onChange={(v: Date | null) => {
                             onChange({
                                 ...rule,
-                                values:
-                                    value === null
-                                        ? []
-                                        : [
-                                              formatTimestamp(
-                                                  value,
-                                                  TimeFrames.SECOND,
-                                              ),
-                                          ],
+                                // format as an ISO string, not for display
+                                values: v === null ? [] : [dayjs(v).format()],
                             });
                         }}
                     />

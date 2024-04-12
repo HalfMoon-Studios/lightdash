@@ -27,4 +27,25 @@ export enum FeatureFlags {
     /**/
     PuppeteerScrollElementIntoView = 'puppeteer-scroll-element-into-view',
     PuppeteerSetViewportDynamically = 'puppeteer-set-viewport-dynamically',
+
+    /* Shows the two-stage login flow */
+    newLoginEnabled = 'new-login-enabled',
+
+    /* Dashboard filters will override chart filters */
+    DashboardFilterOverridesChartFilters = 'dashboard-filter-overrides-chart-filters',
+
+    /* Show user groups */
+    UserGroupsEnabled = 'user-groups-enabled',
+
+    /** Collapse dashboard into a simple vertical stack on mobile */
+    DashboardMobileVerticalStack = 'dashboard-mobile-vertical-stack',
+
+    /** */
+    LazyLoadDashboardTiles = 'lazy-load-dashboard-tiles',
+
+    /**
+     * Disable https://docs.snowflake.com/en/sql-reference/parameters#label-quoted-identifiers-ignore-case
+     * for the Snowflake warehouse client
+     */
+    DisableSnowflakeQuotedIdentifiersIgnoreCase = 'disable-snowflake-quoted-identifiers-ignore-case',
 }

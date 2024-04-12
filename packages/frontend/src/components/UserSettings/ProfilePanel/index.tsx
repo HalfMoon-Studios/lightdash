@@ -1,4 +1,4 @@
-import { ApiError, getEmailSchema } from '@lightdash/common';
+import { getEmailSchema, type ApiError } from '@lightdash/common';
 import {
     Anchor,
     Button,
@@ -10,7 +10,7 @@ import {
 } from '@mantine/core';
 import { useForm, zodResolver } from '@mantine/form';
 import { IconAlertCircle, IconCircleCheck } from '@tabler/icons-react';
-import { FC, useEffect, useState } from 'react';
+import { useEffect, useState, type FC } from 'react';
 import { z } from 'zod';
 import useToaster from '../../../hooks/toaster/useToaster';
 import {
@@ -32,22 +32,17 @@ type FormValues = z.infer<typeof validationSchema>;
 
 const ProfilePanel: FC = () => {
     const {
-        user: { data: userData, isInitialLoading: isLoadingUser },
+        user: { data: userData, isLoading: isLoadingUser },
         health,
     } = useApp();
     const { showToastSuccess, showToastError } = useToaster();
 
     const form = useForm<FormValues>({
-        initialValues: {
-            firstName: '',
-            lastName: '',
-            email: '',
-        },
         validate: zodResolver(validationSchema),
     });
 
     useEffect(() => {
-        if (isLoadingUser || !userData) return;
+        if (!userData) return;
 
         const initialValues = {
             firstName: userData.firstName,
@@ -55,11 +50,15 @@ const ProfilePanel: FC = () => {
             email: userData.email,
         };
 
-        form.setInitialValues(initialValues);
-        form.setValues(initialValues);
+        if (form.initialized) {
+            form.setInitialValues(initialValues);
+            form.setValues(initialValues);
+        } else {
+            form.initialize(initialValues);
+        }
 
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isLoadingUser, userData]);
+    }, [userData]);
 
     const isEmailServerConfigured = health.data?.hasEmailClient;
     const { data, isInitialLoading: statusLoading } = useEmailStatus();
@@ -103,38 +102,35 @@ const ProfilePanel: FC = () => {
         updateUser(formValues);
     });
 
+    const isLoading = isLoadingUser || isUpdatingUser || !form.initialized;
+
     return (
         <form onSubmit={handleOnSubmit}>
             <Stack mt="md">
                 <TextInput
-                    id="first-name-input"
                     placeholder="First name"
                     label="First name"
                     type="text"
                     required
-                    disabled={isLoadingUser || isUpdatingUser}
-                    data-cy="first-name-input"
+                    disabled={isLoading}
                     {...form.getInputProps('firstName')}
                 />
 
                 <TextInput
-                    id="last-name-input"
                     placeholder="Last name"
                     label="Last name"
                     type="text"
                     required
-                    disabled={isLoadingUser || isUpdatingUser}
-                    data-cy="last-name-input"
+                    disabled={isLoading}
                     {...form.getInputProps('lastName')}
                 />
 
                 <TextInput
-                    id="email-input"
                     placeholder="Email"
                     label="Email"
                     type="email"
                     required
-                    disabled={isLoadingUser || isUpdatingUser}
+                    disabled={isLoading}
                     inputWrapperOrder={[
                         'label',
                         'input',
@@ -142,7 +138,6 @@ const ProfilePanel: FC = () => {
                         'description',
                     ]}
                     {...form.getInputProps('email')}
-                    data-cy="email-input"
                     rightSection={
                         isEmailServerConfigured && data?.isVerified ? (
                             <Tooltip label="This e-mail has been verified">
@@ -191,8 +186,7 @@ const ProfilePanel: FC = () => {
                     <Button
                         type="submit"
                         display="block"
-                        loading={isLoadingUser || isUpdatingUser}
-                        data-cy="update-profile-settings"
+                        loading={isLoading}
                         disabled={!form.isDirty()}
                     >
                         Update

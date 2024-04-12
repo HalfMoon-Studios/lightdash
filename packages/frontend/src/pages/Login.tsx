@@ -1,17 +1,20 @@
 import {
-    ApiError,
+    FeatureFlags,
     getEmailSchema,
     LightdashMode,
-    LightdashUser,
     OpenIdIdentityIssuerType,
     SEED_ORG_1_ADMIN_EMAIL,
     SEED_ORG_1_ADMIN_PASSWORD,
+    type ApiError,
+    type LightdashUser,
 } from '@lightdash/common';
 import {
     Anchor,
     Button,
     Card,
+    Center,
     Divider,
+    Header,
     Image,
     PasswordInput,
     Stack,
@@ -21,15 +24,18 @@ import {
 } from '@mantine/core';
 import { useForm, zodResolver } from '@mantine/form';
 import { useMutation } from '@tanstack/react-query';
-import { FC, useEffect } from 'react';
+import { useEffect, type FC } from 'react';
 import { Redirect, useLocation } from 'react-router-dom';
 
 import { z } from 'zod';
 import { lightdashApi } from '../api';
 import Page from '../components/common/Page/Page';
 import { ThirdPartySignInButton } from '../components/common/ThirdPartySignInButton';
+import { NAVBAR_HEIGHT } from '../components/NavBar';
 import PageSpinner from '../components/PageSpinner';
+import LoginLanding from '../features/users/components/LoginLanding';
 import useToaster from '../hooks/toaster/useToaster';
+import { useFeatureFlagEnabled } from '../hooks/useFeatureFlagEnabled';
 import { useFlashMessages } from '../hooks/useFlashMessages';
 import { useApp } from '../providers/AppProvider';
 import { useTracking } from '../providers/TrackingProvider';
@@ -131,7 +137,8 @@ const LoginContent: FC = () => {
         health.data?.auth.google.enabled ||
         health.data?.auth.okta.enabled ||
         health.data?.auth.oneLogin.enabled ||
-        health.data?.auth.azuread.enabled;
+        health.data?.auth.azuread.enabled ||
+        health.data?.auth.oidc.enabled;
     const ssoLogins = ssoAvailable && (
         <Stack>
             {Object.values(OpenIdIdentityIssuerType).map((providerName) => (
@@ -221,14 +228,43 @@ const LoginContent: FC = () => {
 };
 
 const Login: FC<{ minimal?: boolean }> = ({ minimal = false }) => {
+    // FEATURE FLAG
+    const useNewLogin = useFeatureFlagEnabled(FeatureFlags.newLoginEnabled);
+
     return minimal ? (
         <Stack m="xl">
             <LoginContent />
         </Stack>
     ) : (
-        <Page title="Login" withCenteredContent withNavbar={false}>
+        <Page
+            title="Login"
+            withCenteredContent
+            header={
+                useNewLogin && (
+                    <Header
+                        height={NAVBAR_HEIGHT}
+                        styles={(theme) => ({
+                            root: {
+                                display: 'flex',
+                                justifyContent: 'center',
+                                backgroundColor: theme.colors.blue['6'],
+                                color: 'white',
+                            },
+                        })}
+                    >
+                        <Center mx="sm">
+                            <Text weight={500} ta="center">
+                                Our login page looks different! We’ve made
+                                changes to login to improve your experience.
+                                Please provide your email below.
+                            </Text>
+                        </Center>
+                    </Header>
+                )
+            }
+        >
             <Stack w={400} mt="4xl">
-                <LoginContent />
+                {useNewLogin ? <LoginLanding /> : <LoginContent />}
             </Stack>
         </Page>
     );

@@ -11,7 +11,7 @@ import { ProjectModel } from '../../models/ProjectModel/ProjectModel';
 import { ResourceViewItemModel } from '../../models/ResourceViewItemModel';
 import { SavedChartModel } from '../../models/SavedChartModel';
 import { SpaceModel } from '../../models/SpaceModel';
-import { hasSpaceAccess } from '../SpaceService/SpaceService';
+import { BaseService } from '../BaseService';
 
 type PinningServiceArguments = {
     dashboardModel: DashboardModel;
@@ -25,7 +25,7 @@ type PinningServiceArguments = {
     projectModel: ProjectModel;
 };
 
-export class PinningService {
+export class PinningService extends BaseService {
     dashboardModel: DashboardModel;
 
     savedChartModel: SavedChartModel;
@@ -46,6 +46,7 @@ export class PinningService {
         resourceViewItemModel,
         projectModel,
     }: PinningServiceArguments) {
+        super();
         this.dashboardModel = dashboardModel;
         this.savedChartModel = savedChartModel;
         this.spaceModel = spaceModel;
@@ -65,9 +66,27 @@ export class PinningService {
         }
 
         const spaces = await this.spaceModel.find({ projectUuid });
+
+        const hasSpaceAccess = await Promise.all(
+            spaces.map(async (space) =>
+                user.ability.can(
+                    'view',
+                    subject('Space', {
+                        organizationUuid: space.organizationUuid,
+                        projectUuid,
+                        isPrivate: space.isPrivate,
+                        access: await this.spaceModel.getUserSpaceAccess(
+                            user.userUuid,
+                            space.uuid,
+                        ),
+                    }),
+                ),
+            ),
+        );
+
         const allowedSpaceUuids = spaces
-            .filter((space) => hasSpaceAccess(user, space))
-            .map((space) => space.uuid);
+            .filter((_, index) => hasSpaceAccess[index])
+            .map(({ uuid }) => uuid);
 
         if (allowedSpaceUuids.length === 0) {
             return [];

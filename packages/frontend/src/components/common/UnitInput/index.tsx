@@ -1,4 +1,4 @@
-import { Button, TextInput, TextInputProps } from '@mantine/core';
+import { Button, TextInput, type TextInputProps } from '@mantine/core';
 import { mergeRefs } from '@mantine/hooks';
 import { forwardRef, useCallback, useMemo, useRef } from 'react';
 
@@ -96,6 +96,7 @@ const UnitInput = forwardRef<HTMLInputElement, UnitInputProps>(
                             px="xs"
                             mx="xxs"
                             variant="light"
+                            h={rest.size === 'xs' ? 24 : 32}
                             onClick={() =>
                                 handleChange(
                                     value || defaultValue,
@@ -108,6 +109,13 @@ const UnitInput = forwardRef<HTMLInputElement, UnitInputProps>(
                         </Button>
                     )
                 }
+                styles={{
+                    rightSection: {
+                        ...(rest.size === 'xs'
+                            ? { display: 'flex', alignItems: 'center' }
+                            : {}),
+                    },
+                }}
             />
         );
     },

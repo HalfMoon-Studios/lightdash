@@ -1,7 +1,7 @@
-import { AbilityBuilder } from '@casl/ability';
-import { MemberAbility } from '../authorization/types';
-import { OpenIdIdentityIssuerType } from './openIdIdentity';
-import { OrganizationMemberRole } from './organizationMemberProfile';
+import { type AbilityBuilder } from '@casl/ability';
+import { type MemberAbility } from '../authorization/types';
+import { type OpenIdIdentityIssuerType } from './openIdIdentity';
+import { type OrganizationMemberRole } from './organizationMemberProfile';
 
 export interface LightdashUser {
     userUuid: string;
@@ -95,4 +95,22 @@ export type ApiGetAuthenticatedUserResponse = {
 export type ApiRegisterUserResponse = {
     status: 'ok';
     results: LightdashUser;
+};
+
+export enum LocalIssuerTypes {
+    EMAIL = 'email',
+    API_TOKEN = 'apiToken',
+}
+
+export type LoginOptionTypes = OpenIdIdentityIssuerType | LocalIssuerTypes;
+
+export type LoginOptions = {
+    showOptions: LoginOptionTypes[];
+    forceRedirect?: boolean;
+    redirectUri?: string;
+};
+
+export type ApiGetLoginOptionsResponse = {
+    status: 'ok';
+    results: LoginOptions;
 };

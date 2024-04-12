@@ -4,8 +4,9 @@ import {
     AndFilterGroup,
     compressDashboardFiltersToParam,
     convertDashboardFiltersParamToDashboardFilters,
-    FilterGroup,
     removeFieldFromFilterGroup,
+    type AndFilterGroup,
+    type FilterGroup,
 } from './filter';
 
 describe('compress and uncompress dashboard filters', () => {

@@ -1,29 +1,33 @@
 import moment from 'moment/moment';
 import { SupportedDbtAdapter } from '../types/dbt';
 import {
-    CompiledField,
-    CompiledTableCalculation,
     CustomFormatType,
     DimensionType,
     fieldId,
     isMetric,
     MetricType,
+    type CompiledField,
+    type CompiledTableCalculation,
 } from '../types/field';
 import {
-    DateFilterRule,
     FilterOperator,
-    FilterRule,
     UnitOfTime,
     unitOfTimeFormat,
+    type DateFilterRule,
+    type FilterRule,
 } from '../types/filter';
 import assertUnreachable from '../utils/assertUnreachable';
 import { formatDate } from '../utils/formatting';
 import { getItemId } from '../utils/item';
 import { getMomentDateWithCustomStartOfWeek } from '../utils/time';
-import { WeekDay } from '../utils/timeFrames';
+import { type WeekDay } from '../utils/timeFrames';
 
-const formatTimestamp = (date: Date): string =>
-    moment(date).format('YYYY-MM-DD HH:mm:ss');
+// NOTE: This function requires a complete date as input.
+// It produces a timezoneless string which is implied to be in UTC.
+// We could probably have it be a string WITH a timezone in the future.
+// Calling .utc() here makes it safe to drop the tz.
+const formatTimestampAsUTCWithNoTimezone = (date: Date): string =>
+    moment(date).utc().format('YYYY-MM-DD HH:mm:ss');
 
 export const renderStringFilterSql = (
     dimensionSql: string,
@@ -393,7 +397,7 @@ export const renderFilterRuleSql = (
                 fieldSql,
                 filterRule,
                 adapterType,
-                formatTimestamp,
+                formatTimestampAsUTCWithNoTimezone,
                 startOfWeek,
             );
         }

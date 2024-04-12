@@ -299,19 +299,6 @@ describe('Lightdash API tests for an project admin accessing other private space
         cy.loginWithEmail(email);
     });
 
-    it('Should not list charts or dashboards from private spaces', () => {
-        cy.request({
-            url: `${apiUrl}/projects/${SEED_PROJECT.project_uuid}/spaces-and-content`,
-            failOnStatusCode: false,
-        }).then((resp) => {
-            expect(resp.status).to.eq(200);
-            const privateSpace = resp.body.results.find(
-                (space) => space.name === 'private space',
-            );
-            expect(privateSpace).to.eq(undefined);
-        });
-    });
-
     it('Should list private spaces', () => {
         cy.request({
             url: `${apiUrl}/projects/${SEED_PROJECT.project_uuid}/spaces`,
@@ -363,7 +350,7 @@ describe('Lightdash API tests for an project admin accessing other private space
 
     it('Should not list private dashboards', () => {
         cy.request({
-            url: `${apiUrl}/projects/${SEED_PROJECT.project_uuid}/dashboards`,
+            url: `${apiUrl}/projects/${SEED_PROJECT.project_uuid}/dashboards?includePrivate=false`,
             failOnStatusCode: false,
         }).then((resp) => {
             expect(resp.status).to.eq(200);

@@ -1,5 +1,5 @@
 import { Loader, Tabs } from '@mantine/core';
-import Editor, { EditorProps, Monaco } from '@monaco-editor/react';
+import Editor, { type EditorProps, type Monaco } from '@monaco-editor/react';
 import merge from 'lodash/merge';
 import React, { memo, useEffect, useRef, useState } from 'react';
 import { isCustomVisualizationConfig } from '../../LightdashVisualization/VisualizationCustomConfig';
@@ -76,10 +76,13 @@ const CustomVisConfigTabs: React.FC = memo(() => {
     useEffect(() => {
         if (!isCustomConfig) return;
         const fields = visualizationConfig.chartConfig.fields || [];
-        initVegaLazySchema(fields).then((vegaSchemas) => {
-            schemas.current = vegaSchemas;
+
+        async function initVegaAsync() {
+            schemas.current = await initVegaLazySchema(fields);
             setIsLoading(false);
-        });
+        }
+
+        void initVegaAsync();
     }, [isCustomConfig, visualizationConfig.chartConfig]);
 
     if (isLoading) {

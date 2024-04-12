@@ -1,18 +1,18 @@
 import {
-    ApiError,
-    ApiJobStatusResponse,
-    ApiTestSchedulerResponse,
-    CreateSchedulerAndTargets,
-    SchedulerAndTargets,
     SchedulerJobStatus,
-    SchedulerWithLogs,
+    type ApiError,
+    type ApiJobStatusResponse,
+    type ApiTestSchedulerResponse,
+    type CreateSchedulerAndTargets,
+    type SchedulerAndTargets,
+    type SchedulerWithLogs,
 } from '@lightdash/common';
 import { notifications } from '@mantine/notifications';
 import {
     useMutation,
     useQuery,
     useQueryClient,
-    UseQueryOptions,
+    type UseQueryOptions,
 } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { lightdashApi } from '../../../api';
@@ -84,13 +84,13 @@ const getJobStatus = async (
 };
 
 export const pollJobStatus = async (jobId: string) => {
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<void>((resolve, reject) =>
         getJobStatus(
             jobId,
             () => resolve(),
             (error) => reject(error),
-        );
-    });
+        ),
+    );
 };
 
 export const useSendNowScheduler = () => {
@@ -184,7 +184,7 @@ export const useSendNowScheduler = () => {
                     );
                 }
             },
-            onError: (error: { error: Error }) => {
+            onError: async (error: { error: Error }) => {
                 showToastError({
                     title: 'Error polling job status',
                     subtitle: error?.error?.message,
@@ -198,7 +198,10 @@ export const useSendNowScheduler = () => {
                     1000,
                 );
 
-                queryClient.cancelQueries(['jobStatus', sendNowData?.jobId]);
+                await queryClient.cancelQueries([
+                    'jobStatus',
+                    sendNowData?.jobId,
+                ]);
             },
             enabled: Boolean(sendNowData && sendNowData?.jobId !== undefined),
         },

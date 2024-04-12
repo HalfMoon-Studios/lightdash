@@ -137,9 +137,9 @@ export class ValidationModel {
             .where('project_uuid', projectUuid)
             .andWhere((queryBuilder) => {
                 if (jobId) {
-                    queryBuilder.where('job_id', jobId);
+                    void queryBuilder.where('job_id', jobId);
                 } else {
-                    queryBuilder.whereNull('job_id');
+                    void queryBuilder.whereNull('job_id');
                 }
             })
             .andWhere(
@@ -208,7 +208,7 @@ export class ValidationModel {
                 lastUpdatedAt: validationError.last_version_updated_at,
                 validationId: validationError.validation_id,
                 spaceUuid: validationError.space_uuid,
-                chartType:
+                chartKind:
                     validationError.last_version_chart_kind ||
                     ChartKind.VERTICAL_BAR,
                 errorType: validationError.error_type,
@@ -246,9 +246,9 @@ export class ValidationModel {
             .where('project_uuid', projectUuid)
             .andWhere((queryBuilder) => {
                 if (jobId) {
-                    queryBuilder.where('job_id', jobId);
+                    void queryBuilder.where('job_id', jobId);
                 } else {
-                    queryBuilder.whereNull('job_id');
+                    void queryBuilder.whereNull('job_id');
                 }
             })
             .andWhere(
@@ -315,9 +315,9 @@ export class ValidationModel {
                 .where('project_uuid', projectUuid)
                 .andWhere((queryBuilder) => {
                     if (jobId) {
-                        queryBuilder.where('job_id', jobId);
+                        void queryBuilder.where('job_id', jobId);
                     } else {
-                        queryBuilder.whereNull('job_id');
+                        void queryBuilder.whereNull('job_id');
                     }
                 })
                 .andWhere(

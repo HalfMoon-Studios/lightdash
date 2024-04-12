@@ -1,12 +1,16 @@
-import { DbtModelJoinType, LineageGraph, SupportedDbtAdapter } from './dbt';
 import {
-    CompiledDimension,
-    CompiledMetric,
-    Dimension,
-    Metric,
-    Source,
+    type DbtModelJoinType,
+    type LineageGraph,
+    type SupportedDbtAdapter,
+} from './dbt';
+import {
+    type CompiledDimension,
+    type CompiledMetric,
+    type Dimension,
+    type Metric,
+    type Source,
 } from './field';
-import { TableBase } from './table';
+import { type TableBase } from './table';
 
 export type ExploreJoin = {
     table: string; // Must match a tableName in containing Explore
@@ -16,11 +20,12 @@ export type ExploreJoin = {
     label?: string; // Optional UI label override for the underlying table
     hidden?: boolean;
     fields?: string[]; // Optional list of fields to include from the joined table
+    always?: boolean; // Optional flag to always join the table
 };
 
 export type CompiledExploreJoin = Pick<
     ExploreJoin,
-    'table' | 'sqlOn' | 'type' | 'hidden'
+    'table' | 'sqlOn' | 'type' | 'hidden' | 'always'
 > & {
     compiledSqlOn: string; // Sql on clause with template variables resolved
 };

@@ -7,7 +7,7 @@ import {
     IconMessages,
     IconUsers,
 } from '@tabler/icons-react';
-import { FC } from 'react';
+import { type FC } from 'react';
 import { useIntercom } from 'react-use-intercom';
 import useHealth from '../../hooks/health/useHealth';
 import LargeMenuItem from '../common/LargeMenuItem';
@@ -28,7 +28,7 @@ const HelpMenu: FC = () => {
             offset={-2}
         >
             <Menu.Target>
-                <Button variant="default" size="xs">
+                <Button aria-label="Help" variant="default" size="xs">
                     <MantineIcon icon={IconHelp} />
                 </Button>
             </Menu.Target>
@@ -54,7 +54,7 @@ const HelpMenu: FC = () => {
 
                 <LargeMenuItem
                     component="a"
-                    href="https://join.slack.com/t/lightdash-community/shared_invite/zt-1nvwh36o0-gd3jOUx6DuVLNNeng1pPcw"
+                    href="https://join.slack.com/t/lightdash-community/shared_invite/zt-2ehqnrvqt-LbCq7cUSFHAzEj_wMuxg4A"
                     target="_blank"
                     title="Join Slack community"
                     description="Get advice share best practices with other users."

@@ -1,4 +1,4 @@
-import { MetricQuery } from './metricQuery';
+import { type MetricQuery } from './metricQuery';
 
 export type DownloadMetricCsv = {
     userUuid: string;
@@ -11,4 +11,5 @@ export type DownloadMetricCsv = {
     customLabels: Record<string, string> | undefined;
     columnOrder: string[];
     hiddenFields: string[] | undefined;
+    chartName: string | undefined;
 };

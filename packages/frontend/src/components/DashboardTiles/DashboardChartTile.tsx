@@ -1,12 +1,8 @@
 import { subject } from '@casl/ability';
 import {
-    ApiChartAndResults,
-    ApiError,
     ChartType,
     createDashboardFilterRuleFromField,
-    DashboardChartTile as IDashboardChartTile,
-    DashboardFilterRule,
-    Field,
+    DashboardTileTypes,
     fieldId,
     getCustomLabelsFromTableConfig,
     getDimensions,
@@ -18,10 +14,17 @@ import {
     isChartTile,
     isFilterableField,
     isTableChartConfig,
-    ItemsMap,
-    PivotReference,
-    ResultValue,
-    SavedChart,
+    type ApiChartAndResults,
+    type ApiError,
+    type Dashboard,
+    type DashboardChartTile as IDashboardChartTile,
+    type DashboardFilterRule,
+    type Field,
+    type FilterDashboardToRule,
+    type ItemsMap,
+    type PivotReference,
+    type ResultValue,
+    type SavedChart,
 } from '@lightdash/common';
 import {
     ActionIcon,
@@ -44,18 +47,26 @@ import {
     IconTableExport,
     IconTelescope,
 } from '@tabler/icons-react';
-import React, { FC, useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+    useCallback,
+    useEffect,
+    useMemo,
+    useState,
+    type FC,
+} from 'react';
 import { useParams } from 'react-router-dom';
+import { v4 as uuid4 } from 'uuid';
 import { downloadCsv } from '../../api/csv';
 import { DashboardTileComments } from '../../features/comments';
 import { DateZoomInfoOnTile } from '../../features/dateZoom';
 import { ExportToGoogleSheet } from '../../features/export';
 import useDashboardChart from '../../hooks/dashboard/useDashboardChart';
 import useDashboardFiltersForTile from '../../hooks/dashboard/useDashboardFiltersForTile';
-import { EChartSeries } from '../../hooks/echarts/useEchartsCartesianConfig';
+import { type EChartSeries } from '../../hooks/echarts/useEchartsCartesianConfig';
 import { uploadGsheet } from '../../hooks/gdrive/useGdrive';
 import useToaster from '../../hooks/toaster/useToaster';
 import { getExplorerUrlFromCreateSavedChartVersion } from '../../hooks/useExplorerRoute';
+import { useDuplicateChartMutation } from '../../hooks/useSavedQuery';
 import { useCreateShareMutation } from '../../hooks/useShare';
 import { useApp } from '../../providers/AppProvider';
 import { useDashboardContext } from '../../providers/DashboardProvider';
@@ -77,7 +88,7 @@ import MetricQueryDataProvider, {
     useMetricQueryDataContext,
 } from '../MetricQueryData/MetricQueryDataProvider';
 import UnderlyingDataModal from '../MetricQueryData/UnderlyingDataModal';
-import { EchartSeriesClickEvent } from '../SimpleChart';
+import { type EchartSeriesClickEvent } from '../SimpleChart';
 import EditChartMenuItem from './EditChartMenuItem';
 import TileBase from './TileBase/index';
 
@@ -110,6 +121,7 @@ const ExportResultAsCSVModal: FC<ExportResultAsCSVModalProps> = ({
                 savedChart.chartConfig.config,
             ),
             hiddenFields: getHiddenTableFields(savedChart.chartConfig),
+            chartName: savedChart.name,
         });
     };
 
@@ -271,6 +283,7 @@ interface DashboardChartTileMainProps
     > {
     tile: IDashboardChartTile;
     chartAndResults: ApiChartAndResults;
+    onAddTiles?: (tiles: Dashboard['tiles'][number][]) => void;
 }
 
 const DashboardChartTileMain: FC<DashboardChartTileMainProps> = (props) => {
@@ -314,10 +327,7 @@ const DashboardChartTileMain: FC<DashboardChartTileMainProps> = (props) => {
 
     const userCanManageChart = user.data?.ability?.can(
         'manage',
-        subject('SavedChart', {
-            organizationUuid: chart.organizationUuid,
-            projectUuid: chart.projectUuid,
-        }),
+        subject('SavedChart', chart),
     );
     const userCanManageExplore = user.data?.ability?.can(
         'manage',
@@ -375,6 +385,36 @@ const DashboardChartTileMain: FC<DashboardChartTileMainProps> = (props) => {
         showToastSuccess({ title: 'Copied to clipboard!' });
     }, [viewUnderlyingDataOptions, clipboard, showToastSuccess]);
 
+    const {
+        data: duplicatedChart,
+        mutateAsync: duplicateChart,
+        reset: resetDuplicatedChart,
+    } = useDuplicateChartMutation({
+        showRedirectButton: false,
+        autoRedirect: false,
+        successMessage: `Chart duplicated and added at the bottom of this dashboard`,
+    });
+
+    useEffect(() => {
+        if (duplicatedChart && props.onAddTiles) {
+            // We duplicated a chart, we add it to the dashboard
+            props.onAddTiles([
+                {
+                    uuid: uuid4(),
+                    properties: {
+                        savedChartUuid: duplicatedChart.uuid,
+                        chartName: duplicatedChart.name ?? '',
+                    },
+                    type: DashboardTileTypes.SAVED_CHART,
+                    x: 0,
+                    y: 0,
+                    h: props.tile.h,
+                    w: props.tile.w,
+                },
+            ]);
+            resetDuplicatedChart(); // Reset duplicated chart to avoid adding it multiple times
+        }
+    }, [props, duplicatedChart, resetDuplicatedChart]);
     const handleAddFilter = useCallback(
         (filter: DashboardFilterRule) => {
             track({
@@ -415,8 +455,20 @@ const DashboardChartTileMain: FC<DashboardChartTileMainProps> = (props) => {
         [],
     );
 
+    const handleCreateShareUrl = useCallback(
+        async (chartPathname: string, chartSearch: string) => {
+            const shareUrl = await createShareUrl({
+                path: chartPathname,
+                params: `?` + chartSearch,
+            });
+
+            window.open(`/share/${shareUrl.nanoid}`, '_blank');
+        },
+        [createShareUrl],
+    );
+
     const [dashboardTileFilterOptions, setDashboardTileFilterOptions] =
-        useState<DashboardFilterRule[]>([]);
+        useState<FilterDashboardToRule[]>([]);
 
     const [isCSVExportModalOpen, setIsCSVExportModalOpen] = useState(false);
 
@@ -665,78 +717,97 @@ const DashboardChartTileMain: FC<DashboardChartTileMainProps> = (props) => {
                     (userCanManageExplore ||
                         userCanManageChart ||
                         userCanExportData) && (
-                        <Tooltip
-                            disabled={!isEditMode}
-                            label="Finish editing dashboard to use these actions"
-                        >
-                            <Box>
-                                {userCanManageChart && (
-                                    <EditChartMenuItem
-                                        tile={props.tile}
-                                        disabled={isEditMode}
-                                    />
-                                )}
-
-                                {userCanManageExplore && chartPathname && (
-                                    <Menu.Item
-                                        icon={
-                                            <MantineIcon icon={IconTelescope} />
-                                        }
-                                        disabled={isEditMode}
-                                        onClick={() => {
-                                            createShareUrl({
-                                                path: chartPathname,
-                                                params: `?` + chartSearch,
-                                            }).then((shareUrl) => {
-                                                window.open(
-                                                    `/share/${shareUrl.nanoid}`,
-                                                    '_blank',
-                                                );
-                                            });
-                                        }}
-                                    >
-                                        Explore from here
-                                    </Menu.Item>
-                                )}
-
-                                {userCanExportData && (
-                                    <Menu.Item
-                                        icon={
-                                            <MantineIcon
-                                                icon={IconTableExport}
-                                            />
-                                        }
-                                        disabled={isEditMode}
-                                        onClick={() =>
-                                            setIsCSVExportModalOpen(true)
-                                        }
-                                    >
-                                        Export CSV
-                                    </Menu.Item>
-                                )}
-                                {chart.chartConfig.type === ChartType.TABLE &&
-                                    userCanExportData && (
-                                        <ExportGoogleSheet
-                                            savedChart={
-                                                chartWithDashboardFilters
-                                            }
+                        <>
+                            <Tooltip
+                                disabled={!isEditMode}
+                                label="Finish editing dashboard to use these actions"
+                            >
+                                <Box>
+                                    {userCanManageChart && (
+                                        <EditChartMenuItem
+                                            tile={props.tile}
                                             disabled={isEditMode}
                                         />
                                     )}
 
-                                {chart.dashboardUuid && userCanManageChart && (
-                                    <Menu.Item
-                                        icon={
-                                            <MantineIcon icon={IconFolders} />
-                                        }
-                                        onClick={() => setIsMovingChart(true)}
-                                        disabled={isEditMode}
-                                    >
-                                        Move to space
-                                    </Menu.Item>
-                                )}
-                            </Box>
-                        </Tooltip>
+                                    {userCanManageExplore && chartPathname && (
+                                        <Menu.Item
+                                            icon={
+                                                <MantineIcon
+                                                    icon={IconTelescope}
+                                                />
+                                            }
+                                            disabled={isEditMode}
+                                            onClick={() =>
+                                                handleCreateShareUrl(
+                                                    chartPathname,
+                                                    chartSearch,
+                                                )
+                                            }
+                                        >
+                                            Explore from here
+                                        </Menu.Item>
+                                    )}
+
+                                    {userCanExportData && (
+                                        <Menu.Item
+                                            icon={
+                                                <MantineIcon
+                                                    icon={IconTableExport}
+                                                />
+                                            }
+                                            disabled={isEditMode}
+                                            onClick={() =>
+                                                setIsCSVExportModalOpen(true)
+                                            }
+                                        >
+                                            Export CSV
+                                        </Menu.Item>
+                                    )}
+                                    {chart.chartConfig.type ===
+                                        ChartType.TABLE &&
+                                        userCanExportData && (
+                                            <ExportGoogleSheet
+                                                savedChart={
+                                                    chartWithDashboardFilters
+                                                }
+                                                disabled={isEditMode}
+                                            />
+                                        )}
+
+                                    {chart.dashboardUuid && userCanManageChart && (
+                                        <Menu.Item
+                                            icon={
+                                                <MantineIcon
+                                                    icon={IconFolders}
+                                                />
+                                            }
+                                            onClick={() =>
+                                                setIsMovingChart(true)
+                                            }
+                                            disabled={isEditMode}
+                                        >
+                                            Move to space
+                                        </Menu.Item>
+                                    )}
+                                </Box>
+                            </Tooltip>
+                            {userCanManageChart && isEditMode && (
+                                <Menu.Item
+                                    icon={<MantineIcon icon={IconCopy} />}
+                                    onClick={() =>
+                                        duplicateChart({
+                                            uuid: savedChartUuid,
+                                            name: chart.name,
+                                            description: chart.description,
+                                        })
+                                    }
+                                    disabled={!isEditMode}
+                                >
+                                    Duplicate chart
+                                </Menu.Item>
+                            )}
+                        </>
                     )
                 }
                 {...props}
@@ -933,7 +1004,9 @@ export const GenericDashboardChartTile: FC<
         dashboardUuid: string;
     }>();
     const { user } = useApp();
-    const userCanManageChart = user.data?.ability?.can('manage', 'SavedChart');
+    const userCanManageChart =
+        data?.chart &&
+        user.data?.ability?.can('manage', subject('SavedChart', data.chart));
 
     if (isLoading) {
         return (

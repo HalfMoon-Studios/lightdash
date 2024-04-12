@@ -2,9 +2,9 @@ import {
     isChartValidationError,
     isDashboardValidationError,
     isTableValidationError,
-    ValidationErrorChartResponse,
-    ValidationErrorDashboardResponse,
-    ValidationResponse,
+    type ValidationErrorChartResponse,
+    type ValidationErrorDashboardResponse,
+    type ValidationResponse,
 } from '@lightdash/common';
 import {
     ActionIcon,
@@ -21,11 +21,11 @@ import { mergeRefs, useHover } from '@mantine/hooks';
 import { IconLayoutDashboard, IconTable, IconX } from '@tabler/icons-react';
 import {
     createRef,
-    FC,
     forwardRef,
-    ReactNode,
-    RefObject,
     useMemo,
+    type FC,
+    type ReactNode,
+    type RefObject,
 } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useTableStyles } from '../../../hooks/styles/useTableStyles';
@@ -58,7 +58,7 @@ const isDeleted = (validationError: ValidationResponse) =>
 
 const Icon = ({ validationError }: { validationError: ValidationResponse }) => {
     if (isChartValidationError(validationError))
-        return <ChartIcon chartType={validationError.chartType} />;
+        return <ChartIcon chartKind={validationError.chartKind} />;
     if (isDashboardValidationError(validationError))
         return <IconBox icon={IconLayoutDashboard} color="green.8" />;
     return <IconBox icon={IconTable} color="indigo.6" />;

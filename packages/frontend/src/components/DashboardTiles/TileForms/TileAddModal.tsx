@@ -1,19 +1,29 @@
 import {
     assertUnreachable,
-    Dashboard,
-    DashboardLoomTileProperties,
-    DashboardMarkdownTileProperties,
     DashboardTileTypes,
     defaultTileSize,
+    type Dashboard,
+    type DashboardLoomTileProperties,
+    type DashboardMarkdownTile,
+    type DashboardMarkdownTileProperties,
 } from '@lightdash/common';
-import { Button, Group, Modal, ModalProps, Stack, Title } from '@mantine/core';
-import { useForm, UseFormReturnType } from '@mantine/form';
+import {
+    Button,
+    Group,
+    Modal,
+    Stack,
+    Title,
+    type ModalProps,
+} from '@mantine/core';
+import { useForm, type UseFormReturnType } from '@mantine/form';
 import { IconMarkdown, IconVideo } from '@tabler/icons-react';
-import { FC, useState } from 'react';
+import { useState, type FC } from 'react';
 import { v4 as uuid4 } from 'uuid';
 import MantineIcon from '../../common/MantineIcon';
 import LoomTileForm, { getLoomId } from './LoomTileForm';
-import MarkdownTileForm from './MarkdownTileForm';
+import MarkdownTileForm, {
+    markdownTileContentTransform,
+} from './MarkdownTileForm';
 
 type Tile = Dashboard['tiles'][number];
 type TileProperties = Tile['properties'];
@@ -47,6 +57,15 @@ export const TileAddModal: FC<AddProps> = ({
     const form = useForm<TileProperties>({
         validate: getValidators(),
         validateInputOnChange: ['title', 'url', 'content'],
+        transformValues(values) {
+            if (type === DashboardTileTypes.MARKDOWN) {
+                return markdownTileContentTransform(
+                    values as DashboardMarkdownTile['properties'],
+                );
+            }
+
+            return values;
+        },
     });
 
     if (!type) return null;

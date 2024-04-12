@@ -1,19 +1,19 @@
 import {
     BinType,
-    CompactOrAlias,
-    CompiledDimension,
-    CompiledMetric,
-    CompiledTableCalculation,
-    CustomDimension,
-    CustomFormat,
-    FieldId,
-    Format,
     friendlyName,
-    MetricType,
-    TableCalculation,
+    type CompactOrAlias,
+    type CompiledDimension,
+    type CompiledMetric,
+    type CompiledTableCalculation,
+    type CustomDimension,
+    type CustomFormat,
+    type FieldId,
+    type Format,
+    type MetricType,
+    type TableCalculation,
 } from './field';
-import { Filters, MetricFilterRule } from './filter';
-import { DateGranularity } from './timeFrames';
+import { type Filters, type MetricFilterRule } from './filter';
+import { type DateGranularity } from './timeFrames';
 
 export interface AdditionalMetric {
     label?: string;
@@ -74,23 +74,6 @@ export type CompiledMetricQuery = MetricQuery & {
 export type SortField = {
     fieldId: string; // Field must exist in the explore
     descending: boolean; // Direction of the sort
-};
-
-const idPattern = /(.+)id$/i;
-export const extractEntityNameFromIdColumn = (
-    columnName: string,
-): string | null => {
-    const match = columnName.match(idPattern);
-    if (!match || columnName.toLowerCase().endsWith('valid')) {
-        return null;
-    }
-    return (
-        match[1]
-            .toLowerCase()
-            .split(/[^a-z]/)
-            .filter((x) => x)
-            .join('_') || null
-    );
 };
 
 export const getAdditionalMetricLabel = (item: AdditionalMetric) =>

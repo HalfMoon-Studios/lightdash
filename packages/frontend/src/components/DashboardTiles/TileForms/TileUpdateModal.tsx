@@ -1,17 +1,27 @@
 import {
     assertUnreachable,
-    Dashboard,
-    DashboardLoomTileProperties,
-    DashboardMarkdownTileProperties,
     DashboardTileTypes,
+    type Dashboard,
+    type DashboardLoomTileProperties,
+    type DashboardMarkdownTile,
+    type DashboardMarkdownTileProperties,
 } from '@lightdash/common';
-import { Button, Group, Modal, ModalProps, Stack, Title } from '@mantine/core';
-import { useForm, UseFormReturnType } from '@mantine/form';
+import {
+    Button,
+    Group,
+    Modal,
+    Stack,
+    Title,
+    type ModalProps,
+} from '@mantine/core';
+import { useForm, type UseFormReturnType } from '@mantine/form';
 import { IconMarkdown, IconVideo } from '@tabler/icons-react';
 import produce from 'immer';
 import MantineIcon from '../../common/MantineIcon';
 import LoomTileForm, { getLoomId } from './LoomTileForm';
-import MarkdownTileForm from './MarkdownTileForm';
+import MarkdownTileForm, {
+    markdownTileContentTransform,
+} from './MarkdownTileForm';
 
 type Tile = Dashboard['tiles'][number];
 type TileProperties = Tile['properties'];
@@ -46,6 +56,15 @@ const TileUpdateModal = <T extends Tile>({
         initialValues: { ...tile.properties },
         validate: getValidators(),
         validateInputOnChange: ['title', 'url'],
+        transformValues(values) {
+            if (tile.type === DashboardTileTypes.MARKDOWN) {
+                return markdownTileContentTransform(
+                    values as DashboardMarkdownTile['properties'],
+                );
+            }
+
+            return values;
+        },
     });
 
     const handleConfirm = form.onSubmit(({ ...properties }) => {

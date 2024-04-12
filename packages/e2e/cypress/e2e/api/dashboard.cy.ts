@@ -21,6 +21,7 @@ const chartMock: CreateSavedChart = {
     name: 'chart in dashboard',
     tableName: 'orders',
     metricQuery: {
+        exploreName: 'orders',
         dimensions: ['orders_customer_id'],
         metrics: [],
         filters: {},
@@ -163,24 +164,22 @@ describe('Lightdash dashboard', () => {
                     },
                 ).then(({ chart: newChart2, dashboard: updatedDashboard2 }) => {
                     expect(updatedDashboard2.tiles.length).to.eq(2);
-                    const firstTile = updatedDashboard2
-                        .tiles[0] as DashboardChartTile;
-                    const secondTile = updatedDashboard2
-                        .tiles[1] as DashboardChartTile;
-
-                    expect(
-                        firstTile.properties.savedChartUuid,
-                        "Check if first tile didn't change",
-                    ).to.eq(newChart.uuid);
-                    // assert second tile is correct
-                    expect(
-                        secondTile.properties.savedChartUuid,
-                        'Check if second tile is correct',
-                    ).to.eq(newChart2.uuid);
-                    expect(
-                        secondTile.properties.belongsToDashboard,
-                        'Check if second tile belongs to a dashboard',
-                    ).to.eq(true);
+                    const firstTile = updatedDashboard2.tiles.find(
+                        ({ properties }: DashboardChartTile) =>
+                            properties.savedChartUuid === newChart.uuid &&
+                            properties.belongsToDashboard,
+                    );
+                    const secondTile = updatedDashboard2.tiles.find(
+                        ({ properties }: DashboardChartTile) =>
+                            properties.savedChartUuid === newChart2.uuid &&
+                            properties.belongsToDashboard,
+                    );
+                    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+                    expect(firstTile, "Check if first tile didn't change").to
+                        .not.be.undefined;
+                    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+                    expect(secondTile, 'Check if second tile is correct').to.not
+                        .be.undefined;
                 });
             });
         });
@@ -188,20 +187,30 @@ describe('Lightdash dashboard', () => {
     it('Should update chart that belongs to dashboard', () => {
         const newDescription = 'updated chart description';
         cy.request(
-            `${apiUrl}/projects/${SEED_PROJECT.project_uuid}/spaces-and-content`,
+            `${apiUrl}/projects/${SEED_PROJECT.project_uuid}/dashboards`,
         ).then((response) => {
             // Get the latest dashboard created via API
             const dashboard = response.body.results
-                .find((s) => s.name === SEED_PROJECT.name)
-                .dashboards.sort((d) => d.updatedAt)
+                .sort((d) => d.updatedAt)
                 .reverse()
                 .find((s) => s.name === dashboardName);
 
             cy.request(`${apiUrl}/dashboards/${dashboard.uuid}`).then(
                 (dashboardResponse) => {
+                    const tileWithChartInDashboard =
+                        dashboardResponse.body.results.tiles.find(
+                            (tile: DashboardChartTile) =>
+                                tile.properties.belongsToDashboard,
+                        );
+
+                    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+                    expect(
+                        tileWithChartInDashboard,
+                        'Check dashboard has chart that belongs to dashboard',
+                    ).to.not.be.undefined;
+
                     const chartInDashboard =
-                        dashboardResponse.body.results.tiles[0].properties
-                            .savedChartUuid;
+                        tileWithChartInDashboard.properties.savedChartUuid;
 
                     cy.request<{ results: SavedChart }>({
                         method: 'PATCH',
@@ -230,20 +239,29 @@ describe('Lightdash dashboard', () => {
     });
     it('Should get chart summaries without charts that belongs to dashboard', () => {
         cy.request(
-            `${apiUrl}/projects/${SEED_PROJECT.project_uuid}/spaces-and-content`,
+            `${apiUrl}/projects/${SEED_PROJECT.project_uuid}/dashboards`,
         ).then((response) => {
             // Get the latest dashboard created via API
             const dashboard = response.body.results
-                .find((s) => s.name === SEED_PROJECT.name)
-                .dashboards.sort((d) => d.updatedAt)
+                .sort((d) => d.updatedAt)
                 .reverse()
                 .find((s) => s.name === dashboardName);
 
             cy.request(`${apiUrl}/dashboards/${dashboard.uuid}`).then(
                 (dashboardResponse) => {
+                    const tileWithChartInDashboard =
+                        dashboardResponse.body.results.tiles.find(
+                            (tile: DashboardChartTile) =>
+                                tile.properties.belongsToDashboard,
+                        );
+                    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+                    expect(
+                        tileWithChartInDashboard,
+                        'Check dashboard has chart that belongs to dashboard',
+                    ).to.not.be.undefined;
+
                     const chartInDashboard =
-                        dashboardResponse.body.results.tiles[0].properties
-                            .savedChartUuid;
+                        tileWithChartInDashboard.properties.savedChartUuid;
 
                     cy.request<ApiChartSummaryListResponse>(
                         `${apiUrl}/projects/${SEED_PROJECT.project_uuid}/charts`,

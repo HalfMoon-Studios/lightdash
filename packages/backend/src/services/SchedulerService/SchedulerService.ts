@@ -3,7 +3,7 @@ import {
     ChartSummary,
     CreateSchedulerAndTargets,
     CreateSchedulerLog,
-    Dashboard,
+    DashboardDAO,
     ForbiddenError,
     isChartScheduler,
     isCreateSchedulerSlackTarget,
@@ -23,7 +23,7 @@ import {
     SchedulerDashboardUpsertEvent,
     SchedulerUpsertEvent,
 } from '../../analytics/LightdashAnalytics';
-import { schedulerClient, slackClient } from '../../clients/clients';
+import { SlackClient } from '../../clients/Slack/SlackClient';
 import { LightdashConfig } from '../../config/parseConfig';
 import {
     getSchedulerTargetType,
@@ -33,7 +33,8 @@ import { DashboardModel } from '../../models/DashboardModel/DashboardModel';
 import { SavedChartModel } from '../../models/SavedChartModel';
 import { SchedulerModel } from '../../models/SchedulerModel';
 import { SpaceModel } from '../../models/SpaceModel';
-import { hasSpaceAccess } from '../SpaceService/SpaceService';
+import { SchedulerClient } from '../../scheduler/SchedulerClient';
+import { BaseService } from '../BaseService';
 
 type SchedulerServiceArguments = {
     lightdashConfig: LightdashConfig;
@@ -45,9 +46,11 @@ type SchedulerServiceArguments = {
     savedChartModel: SavedChartModel;
 
     spaceModel: SpaceModel;
+    schedulerClient: SchedulerClient;
+    slackClient: SlackClient;
 };
 
-export class SchedulerService {
+export class SchedulerService extends BaseService {
     lightdashConfig: LightdashConfig;
 
     analytics: LightdashAnalytics;
@@ -60,6 +63,10 @@ export class SchedulerService {
 
     spaceModel: SpaceModel;
 
+    schedulerClient: SchedulerClient;
+
+    slackClient: SlackClient;
+
     constructor({
         lightdashConfig,
         analytics,
@@ -67,18 +74,23 @@ export class SchedulerService {
         dashboardModel,
         savedChartModel,
         spaceModel,
+        schedulerClient,
+        slackClient,
     }: SchedulerServiceArguments) {
+        super();
         this.lightdashConfig = lightdashConfig;
         this.analytics = analytics;
         this.schedulerModel = schedulerModel;
         this.dashboardModel = dashboardModel;
         this.savedChartModel = savedChartModel;
         this.spaceModel = spaceModel;
+        this.schedulerClient = schedulerClient;
+        this.slackClient = slackClient;
     }
 
     private async getSchedulerResource(
         scheduler: Scheduler,
-    ): Promise<ChartSummary | Dashboard> {
+    ): Promise<ChartSummary | DashboardDAO> {
         return isChartScheduler(scheduler)
             ? this.savedChartModel.getSummary(scheduler.savedChartUuid)
             : this.dashboardModel.getById(scheduler.dashboardUuid);
@@ -87,7 +99,10 @@ export class SchedulerService {
     private async checkUserCanUpdateSchedulerResource(
         user: SessionUser,
         schedulerUuid: string,
-    ): Promise<{ scheduler: Scheduler; resource: ChartSummary | Dashboard }> {
+    ): Promise<{
+        scheduler: Scheduler;
+        resource: ChartSummary | DashboardDAO;
+    }> {
         // editors can "manage" scheduled deliveries,
         // which means they can edit scheduled deliveries created from other users, even admins
         // however, interactive users can only "create" scheduled deliveries,
@@ -128,25 +143,41 @@ export class SchedulerService {
                 await this.savedChartModel.getSummary(scheduler.savedChartUuid);
 
             const [space] = await this.spaceModel.find({ spaceUuid });
+            const access = await this.spaceModel.getUserSpaceAccess(
+                user.userUuid,
+                spaceUuid,
+            );
             if (
                 user.ability.cannot(
                     'view',
-                    subject('SavedChart', { organizationUuid, projectUuid }),
-                ) ||
-                !hasSpaceAccess(user, space)
+                    subject('SavedChart', {
+                        organizationUuid,
+                        projectUuid,
+                        isPrivate: space.isPrivate,
+                        access,
+                    }),
+                )
             )
                 throw new ForbiddenError();
         } else if (scheduler.dashboardUuid) {
             const { organizationUuid, spaceUuid, projectUuid } =
                 await this.dashboardModel.getById(scheduler.dashboardUuid);
             const [space] = await this.spaceModel.find({ spaceUuid });
+            const spaceAccess = this.spaceModel.getUserSpaceAccess(
+                user.userUuid,
+                spaceUuid,
+            );
 
             if (
                 user.ability.cannot(
                     'view',
-                    subject('Dashboard', { organizationUuid, projectUuid }),
-                ) ||
-                !hasSpaceAccess(user, space)
+                    subject('Dashboard', {
+                        organizationUuid,
+                        projectUuid,
+                        isPrivate: space.isPrivate,
+                        access: spaceAccess,
+                    }),
+                )
             )
                 throw new ForbiddenError();
         } else {
@@ -179,7 +210,7 @@ export class SchedulerService {
             resource: { organizationUuid, projectUuid },
         } = await this.checkUserCanUpdateSchedulerResource(user, schedulerUuid);
 
-        await schedulerClient.deleteScheduledJobs(schedulerUuid);
+        await this.schedulerClient.deleteScheduledJobs(schedulerUuid);
         await this.schedulerModel.deleteScheduledLogs(schedulerUuid);
 
         const scheduler = await this.schedulerModel.updateScheduler({
@@ -219,14 +250,14 @@ export class SchedulerService {
             },
         };
         this.analytics.track(updateSchedulerEventData);
-        await slackClient.joinChannels(
+        await this.slackClient.joinChannels(
             user.organizationUuid,
             SchedulerModel.getSlackChannels(scheduler.targets),
         );
 
         // We only generate jobs if the scheduler is enabled
         if (scheduler.enabled)
-            await schedulerClient.generateDailyJobsForScheduler(scheduler);
+            await this.schedulerClient.generateDailyJobsForScheduler(scheduler);
 
         return scheduler;
     }
@@ -242,7 +273,7 @@ export class SchedulerService {
         await this.checkUserCanUpdateSchedulerResource(user, schedulerUuid);
 
         // Remove scheduled jobs, even if the scheduler is not enabled
-        await schedulerClient.deleteScheduledJobs(schedulerUuid);
+        await this.schedulerClient.deleteScheduledJobs(schedulerUuid);
         await this.schedulerModel.deleteScheduledLogs(schedulerUuid);
 
         const scheduler = await this.schedulerModel.setSchedulerEnabled(
@@ -252,7 +283,7 @@ export class SchedulerService {
 
         if (enabled) {
             // If the scheduler is enabled, we need to generate the daily jobs
-            await schedulerClient.generateDailyJobsForScheduler(scheduler);
+            await this.schedulerClient.generateDailyJobsForScheduler(scheduler);
         }
 
         return scheduler;
@@ -266,7 +297,7 @@ export class SchedulerService {
             scheduler,
             resource: { organizationUuid, projectUuid },
         } = await this.checkUserCanUpdateSchedulerResource(user, schedulerUuid);
-        await schedulerClient.deleteScheduledJobs(schedulerUuid);
+        await this.schedulerClient.deleteScheduledJobs(schedulerUuid);
         await this.schedulerModel.deleteScheduler(schedulerUuid);
         await this.schedulerModel.deleteScheduledLogs(schedulerUuid);
 
@@ -292,7 +323,7 @@ export class SchedulerService {
         schedulerUuid: string,
     ): Promise<ScheduledJobs[]> {
         await this.checkUserCanUpdateSchedulerResource(user, schedulerUuid);
-        return schedulerClient.getScheduledJobs(schedulerUuid);
+        return this.schedulerClient.getScheduledJobs(schedulerUuid);
     }
 
     async logSchedulerJob(log: CreateSchedulerLog): Promise<void> {
@@ -375,9 +406,12 @@ export class SchedulerService {
         const slackChannels = scheduler.targets
             .filter(isCreateSchedulerSlackTarget)
             .map((target) => target.channel);
-        await slackClient.joinChannels(user.organizationUuid, slackChannels);
+        await this.slackClient.joinChannels(
+            user.organizationUuid,
+            slackChannels,
+        );
 
-        return schedulerClient.addScheduledDeliveryJob(
+        return this.schedulerClient.addScheduledDeliveryJob(
             new Date(),
             scheduler,
             undefined,

@@ -46,8 +46,6 @@ export default defineConfig({
                     vega: ['vega', 'vega-lite'],
                     ace: ['ace-builds', 'react-ace/lib'],
                     modules: [
-                        'moment/moment.js',
-                        'moment/dist/moment.js',
                         'pegjs',
                         'jspdf',
                         'ajv',
@@ -64,7 +62,6 @@ export default defineConfig({
                         'posthog-js',
                     ],
                     uiw: [
-                        '@uiw/copy-to-clipboard',
                         '@uiw/react-markdown-preview',
                         '@uiw/react-md-editor',
                     ],

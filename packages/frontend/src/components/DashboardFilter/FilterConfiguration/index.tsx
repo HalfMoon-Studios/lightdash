@@ -1,32 +1,31 @@
 import {
     assertUnreachable,
     createDashboardFilterRuleFromField,
-    DashboardFilterRule,
-    DashboardTile,
-    Field,
     fieldId,
-    FilterableField,
-    FilterOperator,
     isField,
     isFilterableField,
     matchFieldByType,
     matchFieldByTypeAndName,
     matchFieldExact,
+    type DashboardFilterRule,
+    type DashboardTile,
+    type Field,
+    type FilterableField,
 } from '@lightdash/common';
 import {
     Box,
     Button,
     Flex,
     Group,
-    PopoverProps,
     Stack,
     Tabs,
     Text,
     Tooltip,
+    type PopoverProps,
 } from '@mantine/core';
 import { IconRotate2 } from '@tabler/icons-react';
 import produce from 'immer';
-import { FC, useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState, type FC } from 'react';
 import FieldSelect from '../../common/FieldSelect';
 import FieldIcon from '../../common/Filters/FieldIcon';
 import FieldLabel from '../../common/Filters/FieldLabel';
@@ -35,6 +34,7 @@ import FilterSettings from './FilterSettings';
 import TileFilterConfiguration from './TileFilterConfiguration';
 import {
     getFilterRuleRevertableObject,
+    hasFilterValueSet,
     hasSavedFilterValueChanged,
     isFilterEnabled,
 } from './utils';
@@ -136,24 +136,10 @@ const FilterConfiguration: FC<Props> = ({
 
     const handleChangeFilterRule = useCallback(
         (newFilterRule: DashboardFilterRule) => {
-            setDraftFilterRule((oldFilterRule) => {
-                // TODO: Maybe this isn't the best place to do this.
-                // All this says is if a filter *was* disabled and had no
-                // value but now has a value, enable it. Also enable it if
-                // The operator requires no value (null/not null)
-                // This is a way of keeping disabled and 'no value' in sync.
-                let isNewFilterDisabled = newFilterRule.disabled;
-                if (
-                    (oldFilterRule &&
-                        oldFilterRule.disabled &&
-                        !oldFilterRule.values?.length &&
-                        newFilterRule.values?.length) ||
-                    newFilterRule.operator === FilterOperator.NULL ||
-                    newFilterRule.operator === FilterOperator.NOT_NULL
-                ) {
-                    isNewFilterDisabled = false;
-                }
-
+            setDraftFilterRule(() => {
+                // When a disabled filter has a value set, it should be enabled by setting it to false
+                const isNewFilterDisabled =
+                    newFilterRule.disabled && !hasFilterValueSet(newFilterRule);
                 return { ...newFilterRule, disabled: isNewFilterDisabled };
             });
         },
@@ -278,7 +264,7 @@ const FilterConfiguration: FC<Props> = ({
                     </Tabs.List>
                 ) : null}
 
-                <Tabs.Panel value={FilterTabs.SETTINGS} w={350}>
+                <Tabs.Panel value={FilterTabs.SETTINGS} miw={350}>
                     <Stack spacing="sm">
                         {!!fields && isCreatingNew ? (
                             <FieldSelect
@@ -300,6 +286,7 @@ const FilterConfiguration: FC<Props> = ({
                                 items={fields}
                                 onChange={(newField) => {
                                     if (!newField) return;
+
                                     handleChangeField(newField);
                                 }}
                             />
@@ -380,6 +367,7 @@ const FilterConfiguration: FC<Props> = ({
                             disabled={isApplyDisabled}
                             onClick={() => {
                                 setSelectedTabId(FilterTabs.SETTINGS);
+
                                 if (!!draftFilterRule) onSave(draftFilterRule);
                             }}
                         >

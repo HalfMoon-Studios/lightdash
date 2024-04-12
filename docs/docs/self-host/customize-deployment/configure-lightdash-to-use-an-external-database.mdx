@@ -4,6 +4,8 @@ sidebar_label: Use external database
 
 # Configure Lightdash to use an external database
 
+> Note: Lightdash requires a **PostgreSQL** database (version 12 or greater).
+
 In production, we recommend using a managed database service (depending on your cloud provider). This ensures that your database is highly available and secure. You can also use a self-hosted database, but you will need to manage the database yourself.
 
 The following configuration shows an example of how to configure Lightdash to use an external database. You can use this as a starting point for your own configuration.
@@ -38,6 +40,6 @@ Lightdash requires the following extensions to be installed on the database:
 
 ## Migrations
 
-Migrations are ran automatically on starting the Lightdash server or workers. When upgrading Lightdash, migrations 
-will be ran automatically. If migrations fail due to a pg_lock error, check for a table called 
+Migrations are ran automatically on starting the Lightdash server or workers. When upgrading Lightdash, migrations
+will be ran automatically. If migrations fail due to a pg_lock error, check for a table called
 `knex_migrations_lock` to manually release the lock.

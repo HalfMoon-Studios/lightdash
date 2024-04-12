@@ -1,113 +1,120 @@
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import { z } from 'zod';
-import { UserActivity, ViewStatistics } from './types/analytics';
+import { type UserActivity, type ViewStatistics } from './types/analytics';
 import {
-    Dashboard,
-    DashboardAvailableFilters,
-    DashboardBasicDetails,
+    type Dashboard,
+    type DashboardAvailableFilters,
+    type DashboardBasicDetails,
+    type DashboardSummary,
 } from './types/dashboard';
-import { DbtCloudIntegration } from './types/dbtCloud';
-import { Explore, SummaryExplore } from './types/explore';
+import { type DbtCloudIntegration } from './types/dbtCloud';
+import { type Explore, type SummaryExplore } from './types/explore';
 import {
-    CompiledField,
-    CustomDimension,
-    Dimension,
     DimensionType,
-    Field,
-    FieldId,
     fieldId,
-    FilterableField,
     friendlyName,
     isDimension,
     isField,
     isMetric,
     isTableCalculation,
-    ItemsMap,
-    Metric,
-    TableCalculation,
+    type CompiledField,
+    type CustomDimension,
+    type Dimension,
+    type Field,
+    type FieldId,
+    type FilterableField,
+    type ItemsMap,
+    type Metric,
+    type TableCalculation,
 } from './types/field';
 import {
-    AdditionalMetric,
     getCustomDimensionId,
     isAdditionalMetric,
     isCustomDimension,
-    MetricQuery,
+    type AdditionalMetric,
+    type MetricQuery,
 } from './types/metricQuery';
 import {
-    OrganizationMemberProfile,
-    OrganizationMemberRole,
+    type OrganizationMemberProfile,
+    type OrganizationMemberRole,
 } from './types/organizationMemberProfile';
 import {
-    CreatePersonalAccessToken,
-    PersonalAccessToken,
+    type CreatePersonalAccessToken,
+    type PersonalAccessToken,
 } from './types/personalAccessToken';
-import { ProjectMemberProfile } from './types/projectMemberProfile';
+import { type ProjectMemberProfile } from './types/projectMemberProfile';
 import {
-    ApiCalculateTotalResponse,
-    ChartHistory,
-    ChartVersion,
-    SavedChart,
-    Series,
+    type ApiCalculateTotalResponse,
+    type ChartHistory,
+    type ChartVersion,
+    type SavedChart,
+    type Series,
 } from './types/savedCharts';
-import { SearchResults } from './types/search';
-import { ShareUrl } from './types/share';
-import { SlackSettings } from './types/slackSettings';
+import { type SearchResults } from './types/search';
+import { type ShareUrl } from './types/share';
+import { type SlackSettings } from './types/slackSettings';
 
 import {
-    ApiCreateComment,
-    ApiDeleteComment,
-    ApiGetComments,
+    type ApiCreateComment,
+    type ApiDeleteComment,
+    type ApiGetComments,
 } from './types/api/comments';
-import { Email } from './types/api/email';
-import { ApiSuccessEmpty } from './types/api/success';
-import { DbtExposure } from './types/dbt';
-import { EmailStatusExpiring } from './types/email';
-import { FieldValueSearchResult } from './types/fieldMatch';
-import { DashboardFilters } from './types/filter';
+import { type Email } from './types/api/email';
+import { type ApiSuccessEmpty } from './types/api/success';
+import { type DbtExposure } from './types/dbt';
+import { type EmailStatusExpiring } from './types/email';
+import { type FieldValueSearchResult } from './types/fieldMatch';
+import { type DashboardFilters } from './types/filter';
 import {
-    GitIntegrationConfiguration,
-    GitRepo,
-    PullRequestCreated,
+    type GitIntegrationConfiguration,
+    type GitRepo,
+    type PullRequestCreated,
 } from './types/gitIntegration';
 import {
-    DeleteOpenIdentity,
-    OpenIdIdentitySummary,
+    type DeleteOpenIdentity,
+    type OpenIdIdentitySummary,
 } from './types/openIdIdentity';
 import {
-    AllowedEmailDomains,
-    OnboardingStatus,
-    Organization,
-    OrganizationProject,
-    UpdateAllowedEmailDomains,
+    type AllowedEmailDomains,
+    type OnboardingStatus,
+    type Organization,
+    type OrganizationProject,
+    type UpdateAllowedEmailDomains,
 } from './types/organization';
-import { PinnedItems } from './types/pinning';
-import { ProjectGroupAccess } from './types/projectGroupAccess';
-import { ProjectMemberRole } from './types/projectMemberRole';
+import { type PinnedItems } from './types/pinning';
+import { type ProjectGroupAccess } from './types/projectGroupAccess';
+import { type ProjectMemberRole } from './types/projectMemberRole';
 import {
-    CreateWarehouseCredentials,
-    DbtProjectConfig,
     DbtProjectType,
-    Project,
     ProjectType,
-    WarehouseCredentials,
+    type CreateWarehouseCredentials,
+    type DbtProjectConfig,
+    type Project,
+    type WarehouseCredentials,
 } from './types/projects';
-import { MostPopularAndRecentlyUpdated } from './types/resourceViewItem';
-import { ResultRow } from './types/results';
+import { type MostPopularAndRecentlyUpdated } from './types/resourceViewItem';
+import { type ResultRow } from './types/results';
 import {
-    ApiJobScheduledResponse,
-    ApiJobStatusResponse,
-    SchedulerAndTargets,
-    SchedulerJobStatus,
-    SchedulerWithLogs,
+    type ApiJobScheduledResponse,
+    type ApiJobStatusResponse,
+    type SchedulerAndTargets,
+    type SchedulerJobStatus,
+    type SchedulerWithLogs,
 } from './types/scheduler';
-import { SlackChannel } from './types/slack';
-import { Space } from './types/space';
-import { ApiSshKeyPairResponse } from './types/SshKeyPair';
-import { TableBase } from './types/table';
-import { LightdashUser, UserAllowedOrganization } from './types/user';
-import { UserWarehouseCredentials } from './types/userWarehouseCredentials';
-import { ValidationResponse } from './types/validation';
+import { type SlackChannel } from './types/slack';
+import { type Space } from './types/space';
+import { type ApiSshKeyPairResponse } from './types/SshKeyPair';
+import { type TableBase } from './types/table';
+import {
+    type LightdashUser,
+    type LoginOptions,
+    type UserAllowedOrganization,
+} from './types/user';
+import { type UserWarehouseCredentials } from './types/userWarehouseCredentials';
+import { type ValidationResponse } from './types/validation';
+
+import { TimeFrames } from './types/timeFrames';
 import { convertAdditionalMetric } from './utils/additionalMetrics';
 import { getFields } from './utils/fields';
 import { formatItemValue } from './utils/formatting';
@@ -192,9 +199,11 @@ export * from './utils/formatting';
 export * from './utils/github';
 export * from './utils/item';
 export * from './utils/projectMemberRole';
+export * from './utils/sanitizeHtml';
 export * from './utils/scheduler';
 export * from './utils/time';
 export * from './utils/timeFrames';
+export * from './utils/warehouse';
 
 export const validateEmail = (email: string): boolean => {
     if (/\s/.test(email)) {
@@ -523,9 +532,24 @@ export type CreateInviteLink = Pick<InviteLink, 'expiresAt' | 'email'> & {
     role?: OrganizationMemberRole;
 };
 
+export type ApiCreateProjectResults = {
+    project: Project;
+    hasContentCopy: boolean;
+};
+
 export type ProjectSavedChartStatus = boolean;
 
 export type ApiFlashResults = Record<string, string[]>;
+
+export type ApiAiDashboardSummaryResponse = {
+    status: 'ok';
+    results: DashboardSummary;
+};
+
+export type ApiAiGetDashboardSummaryResponse = {
+    status: 'ok';
+    results: DashboardSummary;
+};
 
 type ApiResults =
     | ApiQueryResults
@@ -538,6 +562,7 @@ type ApiResults =
     | ApiHealthResults
     | Organization
     | LightdashUser
+    | LoginOptions
     | SavedChart
     | SavedChart[]
     | Space[]
@@ -601,7 +626,10 @@ type ApiResults =
     | ApiCreateComment['results']
     | ApiGetComments['results']
     | ApiDeleteComment
-    | ApiSuccessEmpty;
+    | ApiSuccessEmpty
+    | ApiCreateProjectResults
+    | ApiAiDashboardSummaryResponse['results']
+    | ApiAiGetDashboardSummaryResponse['results'];
 
 export type ApiResponse<T extends ApiResults = ApiResults> = {
     status: 'ok';
@@ -675,6 +703,10 @@ export type HealthState = {
             loginPath: string;
         };
         azuread: {
+            enabled: boolean;
+            loginPath: string;
+        };
+        oidc: {
             enabled: boolean;
             loginPath: string;
         };
@@ -757,9 +789,23 @@ export const getDateGroupLabel = (axisItem: ItemsMap[string]) => {
     if (
         isDimension(axisItem) &&
         [DimensionType.DATE, DimensionType.TIMESTAMP].includes(axisItem.type) &&
-        axisItem.group
-    )
-        return friendlyName(axisItem.group);
+        axisItem.group &&
+        axisItem.label &&
+        axisItem.timeInterval
+    ) {
+        const timeFrame =
+            TimeFrames[axisItem.timeInterval]?.toLowerCase() || '';
+
+        if (timeFrame && axisItem.label.endsWith(` ${timeFrame}`)) {
+            // Remove the time frame from the end of the label - e.g. from 'Order created day' to 'Order created'.
+            return getItemLabelWithoutTableName(axisItem).replace(
+                new RegExp(`\\s+${timeFrame}$`),
+                '',
+            );
+        }
+
+        return friendlyName(axisItem.label);
+    }
 
     return undefined;
 };

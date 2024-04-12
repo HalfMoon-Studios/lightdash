@@ -1,10 +1,10 @@
 import {
     assertUnreachable,
     ChartKind,
-    ResourceViewItem,
     ResourceViewItemType,
+    type ResourceViewItem,
 } from '@lightdash/common';
-import moment from 'moment';
+import dayjs from 'dayjs';
 
 export const getResourceTypeName = (item: ResourceViewItem) => {
     switch (item.type) {
@@ -13,7 +13,7 @@ export const getResourceTypeName = (item: ResourceViewItem) => {
         case ResourceViewItemType.SPACE:
             return 'Space';
         case ResourceViewItemType.CHART:
-            switch (item.data.chartType) {
+            switch (item.data.chartKind) {
                 case undefined:
                 case ChartKind.VERTICAL_BAR:
                     return 'Bar chart';
@@ -37,8 +37,8 @@ export const getResourceTypeName = (item: ResourceViewItem) => {
                     return 'Custom visualization';
                 default:
                     return assertUnreachable(
-                        item.data.chartType,
-                        `Chart type ${item.data.chartType} not supported`,
+                        item.data.chartKind,
+                        `Chart type ${item.data.chartKind} not supported`,
                     );
             }
         default:
@@ -84,7 +84,7 @@ export const getResourceViewsSinceWhenDescription = (
     }
 
     return item.data.firstViewedAt
-        ? `${item.data.views} views since ${moment(
+        ? `${item.data.views} views since ${dayjs(
               item.data.firstViewedAt,
           ).format('MMM D, YYYY h:mm A')}`
         : undefined;

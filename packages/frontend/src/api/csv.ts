@@ -1,8 +1,8 @@
 import {
-    ApiCsvUrlResponse,
-    ApiDownloadCsv,
-    ApiScheduledDownloadCsv,
-    MetricQuery,
+    type ApiCsvUrlResponse,
+    type ApiDownloadCsv,
+    type ApiScheduledDownloadCsv,
+    type MetricQuery,
 } from '@lightdash/common';
 
 import { lightdashApi } from '../api';
@@ -18,6 +18,7 @@ export const downloadCsv = async ({
     columnOrder,
     customLabels,
     hiddenFields,
+    chartName,
 }: {
     projectUuid: string;
     tableId: string;
@@ -28,6 +29,7 @@ export const downloadCsv = async ({
     columnOrder: string[];
     customLabels?: Record<string, string>;
     hiddenFields?: string[];
+    chartName?: string;
 }) => {
     const timezoneFixQuery = {
         ...query,
@@ -44,6 +46,7 @@ export const downloadCsv = async ({
             customLabels,
             columnOrder,
             hiddenFields,
+            chartName,
         }),
     });
 };

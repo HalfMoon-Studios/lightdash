@@ -1,10 +1,15 @@
 import { SupportedDbtAdapter } from '../types/dbt';
-import { Explore, Table } from '../types/explore';
-import { DimensionType, FieldType, MetricType, Source } from '../types/field';
+import { type Explore, type Table } from '../types/explore';
+import {
+    DimensionType,
+    FieldType,
+    MetricType,
+    type Source,
+} from '../types/field';
 import { FilterOperator } from '../types/filter';
-import { CreateWarehouseCredentials } from '../types/projects';
-import { WarehouseClient } from '../types/warehouse';
-import { UncompiledExplore } from './exploreCompiler';
+import { type CreateWarehouseCredentials } from '../types/projects';
+import { type WarehouseClient } from '../types/warehouse';
+import { type UncompiledExplore } from './exploreCompiler';
 
 export const warehouseClientMock: WarehouseClient = {
     credentials: {} as CreateWarehouseCredentials,
@@ -24,7 +29,6 @@ export const warehouseClientMock: WarehouseClient = {
         }),
     test: () => Promise.resolve(),
     getStartOfWeek: () => undefined,
-    getFieldQuoteChar: () => '"',
     getStringQuoteChar: () => "'",
     getEscapeStringQuoteChar: () => "'",
     getAdapterType: () => SupportedDbtAdapter.POSTGRES,
@@ -673,6 +677,7 @@ export const compiledSimpleJoinedExplore: Explore = {
             compiledSqlOn: '("a".dim1) = ("b".dim1)',
             type: undefined,
             hidden: undefined,
+            always: undefined,
         },
     ],
     tables: {
@@ -705,6 +710,7 @@ export const compiledSimpleJoinedExplore: Explore = {
         },
         b: {
             name: 'b',
+            originalName: 'b',
             label: 'Custom B label',
             database: 'database',
             schema: 'schema',
@@ -863,6 +869,7 @@ export const compiledJoinedExploreOverridingJoinAlias: Explore = {
             compiledSqlOn: '("a".dim1) = ("custom_alias".dim1)',
             type: undefined,
             hidden: undefined,
+            always: undefined,
         },
     ],
     tables: {
@@ -906,6 +913,7 @@ export const compiledJoinedExploreOverridingAliasAndLabel: Explore = {
             compiledSqlOn: '("a".dim1) = ("custom_alias".dim1)',
             type: undefined,
             hidden: undefined,
+            always: undefined,
         },
     ],
     tables: {
@@ -949,6 +957,7 @@ export const compiledExploreWithHiddenJoin: Explore = {
             compiledSqlOn: '("a".dim1) = ("b".dim1)',
             type: undefined,
             hidden: true,
+            always: undefined,
         },
     ],
     tables: {
@@ -1055,6 +1064,7 @@ export const compiledJoinedExploreWithJoinAliasAndSubsetOfFieldsThatDontIncludeS
                 compiledSqlOn: '("a".dim1) = ("custom_alias".dim1)',
                 type: undefined,
                 hidden: undefined,
+                always: undefined,
             },
         ],
         tables: {
@@ -1441,6 +1451,7 @@ export const exploreWithRequiredAttributesCompiled: Explore = {
             table: 'b',
             type: undefined,
             hidden: undefined,
+            always: undefined,
         },
     ],
     tables: {
@@ -1496,6 +1507,7 @@ export const exploreWithRequiredAttributesCompiled: Explore = {
         },
         b: {
             name: 'b',
+            originalName: 'b',
             label: 'b',
             database: 'database',
             schema: 'schema',
@@ -1554,4 +1566,29 @@ export const exploreWithRequiredAttributesCompiled: Explore = {
             },
         },
     },
+};
+
+export const simpleJoinedExploreWithAlwaysTrue: UncompiledExplore = {
+    ...simpleJoinedExplore,
+    joinedTables: [
+        {
+            table: 'b',
+            sqlOn: '${a.dim1} = ${b.dim1}',
+            always: true,
+        },
+    ],
+};
+
+export const compiledSimpleJoinedExploreWithAlwaysTrue: Explore = {
+    ...compiledSimpleJoinedExplore,
+    joinedTables: [
+        {
+            table: 'b',
+            sqlOn: '${a.dim1} = ${b.dim1}',
+            compiledSqlOn: '("a".dim1) = ("b".dim1)',
+            type: undefined,
+            hidden: undefined,
+            always: true,
+        },
+    ],
 };

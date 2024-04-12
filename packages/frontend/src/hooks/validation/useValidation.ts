@@ -1,8 +1,8 @@
 import { subject } from '@casl/ability';
 import {
-    ApiError,
-    ApiJobScheduledResponse,
-    ValidationResponse,
+    type ApiError,
+    type ApiJobScheduledResponse,
+    type ValidationResponse,
 } from '@lightdash/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import useLocalStorageState from 'use-local-storage-state';
@@ -81,10 +81,12 @@ export const useValidationMutation = (
         onSuccess: (data) => {
             // Wait until validation is complete
             pollJobStatus(data.jobId)
-                .then(() => {
+                .then(async () => {
                     onComplete();
                     // Invalidate validation to get latest results
-                    queryClient.invalidateQueries({ queryKey: ['validation'] });
+                    await queryClient.invalidateQueries({
+                        queryKey: ['validation'],
+                    });
                     showToastSuccess({ title: 'Validation completed' });
                 })
                 .catch((error: Error) => {

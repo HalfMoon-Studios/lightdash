@@ -15,9 +15,7 @@ import {
     getItemId,
     InlineErrorType,
     isDashboardChartTileType,
-    isDimension,
     isExploreError,
-    isMetric,
     OrganizationMemberRole,
     RequestMethod,
     SessionUser,
@@ -28,15 +26,15 @@ import {
     ValidationSourceType,
 } from '@lightdash/common';
 import { LightdashAnalytics } from '../../analytics/LightdashAnalytics';
-import { schedulerClient } from '../../clients/clients';
 import { LightdashConfig } from '../../config/parseConfig';
-import Logger from '../../logging/logger';
 import { DashboardModel } from '../../models/DashboardModel/DashboardModel';
 import { ProjectModel } from '../../models/ProjectModel/ProjectModel';
 import { SavedChartModel } from '../../models/SavedChartModel';
 import { SpaceModel } from '../../models/SpaceModel';
 import { ValidationModel } from '../../models/ValidationModel/ValidationModel';
-import { hasSpaceAccess } from '../SpaceService/SpaceService';
+import { SchedulerClient } from '../../scheduler/SchedulerClient';
+import { BaseService } from '../BaseService';
+import { hasViewAccessToSpace } from '../SpaceService/SpaceService';
 
 type ValidationServiceArguments = {
     lightdashConfig: LightdashConfig;
@@ -46,9 +44,10 @@ type ValidationServiceArguments = {
     savedChartModel: SavedChartModel;
     dashboardModel: DashboardModel;
     spaceModel: SpaceModel;
+    schedulerClient: SchedulerClient;
 };
 
-export class ValidationService {
+export class ValidationService extends BaseService {
     lightdashConfig: LightdashConfig;
 
     analytics: LightdashAnalytics;
@@ -63,6 +62,8 @@ export class ValidationService {
 
     spaceModel: SpaceModel;
 
+    schedulerClient: SchedulerClient;
+
     constructor({
         lightdashConfig,
         analytics,
@@ -71,7 +72,9 @@ export class ValidationService {
         savedChartModel,
         dashboardModel,
         spaceModel,
+        schedulerClient,
     }: ValidationServiceArguments) {
+        super();
         this.lightdashConfig = lightdashConfig;
         this.analytics = analytics;
         this.projectModel = projectModel;
@@ -79,6 +82,7 @@ export class ValidationService {
         this.validationModel = validationModel;
         this.dashboardModel = dashboardModel;
         this.spaceModel = spaceModel;
+        this.schedulerClient = schedulerClient;
     }
 
     private static getTableCalculationFieldIds(
@@ -168,7 +172,7 @@ export class ValidationService {
         const errors = explores.reduce<CreateTableValidation[]>(
             (acc, explore) => {
                 if (!isTableEnabled(explore)) {
-                    Logger.debug(
+                    this.logger.debug(
                         `Table ${explore.name} is disabled, skipping validation`,
                     );
                     return acc;
@@ -502,7 +506,7 @@ export class ValidationService {
         projectUuid: string,
         compiledExplores?: (Explore | ExploreError)[],
     ): Promise<CreateValidation[]> {
-        Logger.debug(
+        this.logger.debug(
             `Generating validation for project ${projectUuid} with explores ${
                 compiledExplores ? 'from CLI' : 'from cache'
             }`,
@@ -550,7 +554,7 @@ export class ValidationService {
         );
 
         if (!existingFields) {
-            Logger.warn(
+            this.logger.warn(
                 `No fields found for project validation ${projectUuid}`,
             );
             return [];
@@ -599,7 +603,7 @@ export class ValidationService {
 
         const fromCLI =
             context === RequestMethod.CLI_CI || context === RequestMethod.CLI;
-        const jobId = await schedulerClient.generateValidation({
+        const jobId = await this.schedulerClient.generateValidation({
             userUuid: user.userUuid,
             projectUuid,
             context: fromCLI ? 'cli' : 'lightdash_app',
@@ -630,18 +634,31 @@ export class ValidationService {
 
         const spaces = await this.spaceModel.find({ projectUuid });
         // Filter private content to developers
-        return validations.map((validation) => {
-            const space = spaces.find((s) => s.uuid === validation.spaceUuid);
-            const hasAccess = space && hasSpaceAccess(user, space);
-            if (hasAccess) return validation;
+        return Promise.all(
+            validations.map(async (validation) => {
+                const space = spaces.find(
+                    (s) => s.uuid === validation.spaceUuid,
+                );
+                const hasAccess =
+                    space &&
+                    hasViewAccessToSpace(
+                        user,
+                        space,
+                        await this.spaceModel.getUserSpaceAccess(
+                            user.userUuid,
+                            space.uuid,
+                        ),
+                    );
+                if (hasAccess) return validation;
 
-            return {
-                ...validation,
-                chartUuid: undefined,
-                dashboardUuid: undefined,
-                name: 'Private content',
-            };
-        });
+                return {
+                    ...validation,
+                    chartUuid: undefined,
+                    dashboardUuid: undefined,
+                    name: 'Private content',
+                };
+            }),
+        );
     }
 
     async get(

@@ -1,10 +1,12 @@
 import assertUnreachable from '../utils/assertUnreachable';
-import { ViewStatistics } from './analytics';
-import { ConditionalFormattingConfig } from './conditionalFormatting';
-import { CompactOrAlias } from './field';
-import { MetricQuery, MetricQueryRequest } from './metricQuery';
-import { LightdashUser, UpdatedByUser } from './user';
-import { ValidationSummary } from './validation';
+import { type ViewStatistics } from './analytics';
+import { type ConditionalFormattingConfig } from './conditionalFormatting';
+import { type CompactOrAlias } from './field';
+import { type MetricQuery, type MetricQueryRequest } from './metricQuery';
+// eslint-disable-next-line import/no-cycle
+import { type SpaceShare } from './space';
+import { type LightdashUser, type UpdatedByUser } from './user';
+import { type ValidationSummary } from './validation';
 
 export enum ChartKind {
     LINE = 'line',
@@ -102,6 +104,7 @@ export type TableChart = {
     showTableNames?: boolean;
     hideRowNumbers?: boolean;
     showResultsTotal?: boolean;
+    showSubtotals?: boolean;
     columns?: Record<string, ColumnProperties>;
     conditionalFormattings?: ConditionalFormattingConfig[];
     metricsAsRows?: boolean;
@@ -132,14 +135,18 @@ export const isPivotReferenceWithValues = (
 export type MarkLineData = {
     yAxis?: string;
     xAxis?: string;
-    name: string;
-    value: string;
+    name?: string;
+    value?: string;
+    type?: string;
+    uuid: string;
     lineStyle?: {
         color: string;
     };
     label?: {
         formatter?: string;
+        position?: 'start' | 'middle' | 'end';
     };
+    dynamicValue?: 'average';
 };
 export type MarkLine = {
     data: MarkLineData[];
@@ -282,6 +289,8 @@ export type ChartConfig =
 
 export type SavedChartType = ChartType;
 
+export type SavedChartDAO = Omit<SavedChart, 'isPrivate' | 'access'>;
+
 export type SavedChart = {
     uuid: string;
     projectUuid: string;
@@ -306,6 +315,8 @@ export type SavedChart = {
     dashboardUuid: string | null;
     dashboardName: string | null;
     colorPalette: string[];
+    isPrivate: boolean;
+    access: SpaceShare[];
 };
 
 type CreateChartBase = Pick<
@@ -347,7 +358,11 @@ export type CreateSavedChartVersion = Omit<
     | 'dashboardUuid'
     | 'dashboardName'
     | 'colorPalette'
->;
+    | 'isPrivate'
+    | 'access'
+> &
+    // For Charts created within a dashboard
+    Partial<Pick<SavedChart, 'dashboardUuid' | 'dashboardName'>>;
 
 export type UpdateSavedChart = Partial<
     Pick<SavedChart, 'name' | 'description' | 'spaceUuid'>
@@ -357,22 +372,6 @@ export type UpdateMultipleSavedChart = Pick<
     SavedChart,
     'uuid' | 'name' | 'description' | 'spaceUuid'
 >;
-
-export type SpaceQuery = Pick<
-    SavedChart,
-    | 'uuid'
-    | 'name'
-    | 'updatedAt'
-    | 'updatedByUser'
-    | 'description'
-    | 'spaceUuid'
-    | 'pinnedListUuid'
-    | 'pinnedListOrder'
-> &
-    ViewStatistics & {
-        chartType: ChartKind | undefined;
-        validationErrors?: ValidationSummary[];
-    };
 
 export const isCompleteLayout = (
     value: CartesianChartLayout | undefined,
@@ -542,11 +541,22 @@ export type ChartSummary = Pick<
     | 'pinnedListUuid'
     | 'dashboardUuid'
     | 'dashboardName'
-> & { chartType?: ChartType | undefined };
+> & { chartType?: ChartType | undefined; chartKind?: ChartKind | undefined };
+
+export type SpaceQuery = ChartSummary &
+    Pick<SavedChart, 'updatedAt' | 'updatedByUser' | 'pinnedListOrder'> &
+    ViewStatistics & {
+        validationErrors?: ValidationSummary[];
+    };
 
 export type ApiChartSummaryListResponse = {
     status: 'ok';
     results: ChartSummary[];
+};
+
+export type ApiChartListResponse = {
+    status: 'ok';
+    results: SpaceQuery[];
 };
 
 export type ChartHistory = {

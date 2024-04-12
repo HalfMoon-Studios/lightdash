@@ -1,18 +1,19 @@
 import {
-    ApiError,
-    CreateDashboard,
-    Dashboard,
-    DashboardAvailableFilters,
-    DashboardTile,
-    SavedChartsInfoForDashboardAvailableFilters,
-    UpdateDashboard,
+    type ApiError,
+    type CreateDashboard,
+    type Dashboard,
+    type DashboardAvailableFilters,
+    type DashboardFilters,
+    type DashboardTile,
+    type SavedChartsInfoForDashboardAvailableFilters,
+    type UpdateDashboard,
 } from '@lightdash/common';
 import { IconArrowRight } from '@tabler/icons-react';
 import {
     useMutation,
     useQuery,
     useQueryClient,
-    UseQueryOptions,
+    type UseQueryOptions,
 } from '@tanstack/react-query';
 import { useHistory, useParams } from 'react-router-dom';
 import { lightdashApi } from '../../api';
@@ -36,11 +37,12 @@ const createDashboard = async (projectUuid: string, data: CreateDashboard) =>
 const duplicateDashboard = async (
     projectUuid: string,
     dashboardUuid: string,
+    data: { dashboardName: string; dashboardDesc: string },
 ): Promise<Dashboard> =>
     lightdashApi<Dashboard>({
         url: `/projects/${projectUuid}/dashboards?duplicateFrom=${dashboardUuid}`,
         method: 'POST',
-        body: undefined,
+        body: JSON.stringify(data),
     });
 
 const updateDashboard = async (id: string, data: UpdateDashboard) =>
@@ -155,6 +157,51 @@ export const useExportDashboard = () => {
     );
 };
 
+const exportCsvDashboard = async (id: string, filters: DashboardFilters) =>
+    lightdashApi<string>({
+        url: `/dashboards/${id}/exportCsv`,
+        method: 'POST',
+        body: JSON.stringify({ filters }),
+    });
+
+export const useExportCsvDashboard = () => {
+    const { showToastSuccess, showToastError, showToastInfo } = useToaster();
+    return useMutation<
+        string,
+        ApiError,
+        {
+            dashboard: Dashboard;
+            filters: DashboardFilters;
+        }
+    >((data) => exportCsvDashboard(data.dashboard.uuid, data.filters), {
+        mutationKey: ['export_csv_dashboard'],
+        onMutate: (data) => {
+            showToastInfo({
+                key: 'dashboard_export_toast',
+                title: `${data.dashboard.name} is being exported. This might take a few seconds.`,
+                autoClose: false,
+                loading: true,
+            });
+        },
+        onSuccess: async (url, data) => {
+            if (url) {
+                window.open(url, '_blank');
+                showToastSuccess({
+                    key: 'dashboard_export_toast',
+                    title: `Success! ${data.dashboard.name} was exported.`,
+                });
+            }
+        },
+        onError: (error, data) => {
+            showToastError({
+                key: 'dashboard_export_toast',
+                title: `Failed to export ${data.dashboard.name}`,
+                subtitle: error.error.message,
+            });
+        },
+    });
+};
+
 export const useUpdateDashboard = (
     id?: string,
     showRedirectButton: boolean = false,
@@ -183,10 +230,7 @@ export const useUpdateDashboard = (
                 await queryClient.invalidateQueries([
                     'dashboards-containing-chart',
                 ]);
-                await queryClient.invalidateQueries([
-                    'saved_dashboard_query',
-                    id,
-                ]);
+                await queryClient.resetQueries(['saved_dashboard_query', id]);
                 const onlyUpdatedName: boolean =
                     Object.keys(variables).length === 1 &&
                     Object.keys(variables).includes('name');
@@ -316,8 +360,16 @@ export const useDuplicateDashboardMutation = (
     const { projectUuid } = useParams<{ projectUuid: string }>();
     const queryClient = useQueryClient();
     const { showToastSuccess, showToastError } = useToaster();
-    return useMutation<Dashboard, ApiError, Dashboard['uuid']>(
-        (dashboardUuid) => duplicateDashboard(projectUuid, dashboardUuid),
+    return useMutation<
+        Dashboard,
+        ApiError,
+        Pick<Dashboard, 'uuid' | 'name' | 'description'>
+    >(
+        ({ uuid, name, description }) =>
+            duplicateDashboard(projectUuid, uuid, {
+                dashboardName: name,
+                dashboardDesc: description ?? '',
+            }),
         {
             mutationKey: ['dashboard_create', projectUuid],
             onSuccess: async (data) => {

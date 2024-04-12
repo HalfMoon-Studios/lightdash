@@ -1,11 +1,10 @@
 import { subject } from '@casl/ability';
 import {
     Comment,
-    Dashboard,
-    DashboardTile,
+    DashboardDAO,
     ForbiddenError,
-    LightdashUser,
     SessionUser,
+    SpaceShare,
     SpaceSummary,
 } from '@lightdash/common';
 import * as Sentry from '@sentry/node';
@@ -15,7 +14,8 @@ import { DashboardModel } from '../../models/DashboardModel/DashboardModel';
 import { NotificationsModel } from '../../models/NotificationsModel/NotificationsModel';
 import { SpaceModel } from '../../models/SpaceModel';
 import { UserModel } from '../../models/UserModel';
-import { hasSpaceAccess } from '../SpaceService/SpaceService';
+import { BaseService } from '../BaseService';
+import { hasViewAccessToSpace } from '../SpaceService/SpaceService';
 
 type CommentServiceArguments = {
     analytics: LightdashAnalytics;
@@ -26,7 +26,7 @@ type CommentServiceArguments = {
     userModel: UserModel;
 };
 
-export class CommentService {
+export class CommentService extends BaseService {
     analytics: LightdashAnalytics;
 
     dashboardModel: DashboardModel;
@@ -47,6 +47,7 @@ export class CommentService {
         notificationsModel,
         userModel,
     }: CommentServiceArguments) {
+        super();
         this.analytics = analytics;
         this.dashboardModel = dashboardModel;
         this.spaceModel = spaceModel;
@@ -59,17 +60,22 @@ export class CommentService {
         user: SessionUser,
         spaceUuid: string,
     ): Promise<boolean> {
-        let space: SpaceSummary;
+        let space: Omit<SpaceSummary, 'userAccess'>;
+        let spaceAccess: SpaceShare[];
 
         try {
             space = await this.spaceModel.getSpaceSummary(spaceUuid);
+            spaceAccess = await this.spaceModel.getUserSpaceAccess(
+                user.userUuid,
+                spaceUuid,
+            );
         } catch (e) {
             Sentry.captureException(e);
             console.error(e);
             return false;
         }
 
-        return hasSpaceAccess(user, space);
+        return hasViewAccessToSpace(user, space, spaceAccess);
     }
 
     private async createCommentNotification({
@@ -80,7 +86,7 @@ export class CommentService {
     }: {
         userUuid: string;
         comment: Comment;
-        dashboard: Dashboard;
+        dashboard: DashboardDAO;
         dashboardTileUuid: string;
     }) {
         const commentingUsersInTile =
@@ -130,7 +136,7 @@ export class CommentService {
         dashboardUuid: string,
         dashboardTileUuid: string,
         text: string,
-        textHtml: string,
+        unsafeTextHtml: string,
         replyTo: string | null,
         mentions: string[],
     ): Promise<string> {
@@ -168,7 +174,7 @@ export class CommentService {
             dashboardUuid,
             dashboardTileUuid,
             text,
-            textHtml,
+            unsafeTextHtml,
             replyTo,
             user,
             mentions,

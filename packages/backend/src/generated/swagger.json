@@ -375,7 +375,7 @@
                 "type": "string",
                 "enum": ["inner", "full", "left", "right"]
             },
-            "Pick_ExploreJoin.table-or-sqlOn-or-type-or-hidden_": {
+            "Pick_ExploreJoin.table-or-sqlOn-or-type-or-hidden-or-always_": {
                 "properties": {
                     "table": {
                         "type": "string"
@@ -388,6 +388,9 @@
                     },
                     "hidden": {
                         "type": "boolean"
+                    },
+                    "always": {
+                        "type": "boolean"
                     }
                 },
                 "required": ["table", "sqlOn"],
@@ -397,7 +400,7 @@
             "CompiledExploreJoin": {
                 "allOf": [
                     {
-                        "$ref": "#/components/schemas/Pick_ExploreJoin.table-or-sqlOn-or-type-or-hidden_"
+                        "$ref": "#/components/schemas/Pick_ExploreJoin.table-or-sqlOn-or-type-or-hidden-or-always_"
                     },
                     {
                         "properties": {
@@ -446,6 +449,9 @@
                         "type": "string"
                     },
                     "description": {
+                        "type": "string"
+                    },
+                    "originalName": {
                         "type": "string"
                     },
                     "label": {
@@ -2233,6 +2239,10 @@
                 "enum": ["chart"],
                 "type": "string"
             },
+            "ChartType": {
+                "enum": ["cartesian", "table", "big_number", "pie", "custom"],
+                "type": "string"
+            },
             "ChartKind": {
                 "enum": [
                     "line",
@@ -2248,7 +2258,7 @@
                 ],
                 "type": "string"
             },
-            "Pick_SpaceQuery.uuid-or-name-or-chartType-or-firstViewedAt-or-views-or-pinnedListUuid-or-pinnedListOrder-or-spaceUuid-or-description-or-updatedAt-or-updatedByUser-or-validationErrors_": {
+            "Pick_SpaceQuery.uuid-or-name-or-chartType-or-chartKind-or-firstViewedAt-or-views-or-pinnedListUuid-or-pinnedListOrder-or-spaceUuid-or-description-or-updatedAt-or-updatedByUser-or-validationErrors_": {
                 "properties": {
                     "name": {
                         "type": "string"
@@ -2301,6 +2311,9 @@
                         "type": "array"
                     },
                     "chartType": {
+                        "$ref": "#/components/schemas/ChartType"
+                    },
+                    "chartKind": {
                         "$ref": "#/components/schemas/ChartKind"
                     }
                 },
@@ -2323,7 +2336,7 @@
                         "$ref": "#/components/schemas/ResourceItemCategory"
                     },
                     "data": {
-                        "$ref": "#/components/schemas/Pick_SpaceQuery.uuid-or-name-or-chartType-or-firstViewedAt-or-views-or-pinnedListUuid-or-pinnedListOrder-or-spaceUuid-or-description-or-updatedAt-or-updatedByUser-or-validationErrors_"
+                        "$ref": "#/components/schemas/Pick_SpaceQuery.uuid-or-name-or-chartType-or-chartKind-or-firstViewedAt-or-views-or-pinnedListUuid-or-pinnedListOrder-or-spaceUuid-or-description-or-updatedAt-or-updatedByUser-or-validationErrors_"
                     },
                     "type": {
                         "$ref": "#/components/schemas/ResourceViewItemType.CHART"
@@ -2841,6 +2854,9 @@
                             }
                         ],
                         "nullable": true
+                    },
+                    "quotedIdentifiersIgnoreCase": {
+                        "type": "boolean"
                     }
                 },
                 "required": [
@@ -3303,10 +3319,6 @@
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
-            "ChartType": {
-                "enum": ["cartesian", "table", "big_number", "pie", "custom"],
-                "type": "string"
-            },
             "ChartSummary": {
                 "allOf": [
                     {
@@ -3314,6 +3326,9 @@
                     },
                     {
                         "properties": {
+                            "chartKind": {
+                                "$ref": "#/components/schemas/ChartKind"
+                            },
                             "chartType": {
                                 "$ref": "#/components/schemas/ChartType"
                             }
@@ -3321,6 +3336,88 @@
                         "type": "object"
                     }
                 ]
+            },
+            "Pick_SavedChart.updatedAt-or-updatedByUser-or-pinnedListOrder_": {
+                "properties": {
+                    "updatedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "updatedByUser": {
+                        "$ref": "#/components/schemas/UpdatedByUser"
+                    },
+                    "pinnedListOrder": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    }
+                },
+                "required": ["updatedAt", "pinnedListOrder"],
+                "type": "object",
+                "description": "From T, pick a set of properties whose keys are in the union K"
+            },
+            "ViewStatistics": {
+                "properties": {
+                    "firstViewedAt": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "string"
+                            }
+                        ],
+                        "nullable": true
+                    },
+                    "views": {
+                        "type": "number",
+                        "format": "double"
+                    }
+                },
+                "required": ["firstViewedAt", "views"],
+                "type": "object"
+            },
+            "SpaceQuery": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/ChartSummary"
+                    },
+                    {
+                        "$ref": "#/components/schemas/Pick_SavedChart.updatedAt-or-updatedByUser-or-pinnedListOrder_"
+                    },
+                    {
+                        "$ref": "#/components/schemas/ViewStatistics"
+                    },
+                    {
+                        "properties": {
+                            "validationErrors": {
+                                "items": {
+                                    "$ref": "#/components/schemas/ValidationSummary"
+                                },
+                                "type": "array"
+                            }
+                        },
+                        "type": "object"
+                    }
+                ]
+            },
+            "ApiChartListResponse": {
+                "properties": {
+                    "results": {
+                        "items": {
+                            "$ref": "#/components/schemas/SpaceQuery"
+                        },
+                        "type": "array"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
             },
             "ApiChartSummaryListResponse": {
                 "properties": {
@@ -3378,6 +3475,55 @@
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
+            "SpaceMemberRole": {
+                "enum": ["viewer", "editor", "admin"],
+                "type": "string"
+            },
+            "SpaceShare": {
+                "properties": {
+                    "inheritedFrom": {
+                        "type": "string",
+                        "enum": ["organization", "project", "group"]
+                    },
+                    "inheritedRole": {
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/OrganizationMemberRole"
+                            },
+                            {
+                                "$ref": "#/components/schemas/ProjectMemberRole"
+                            }
+                        ]
+                    },
+                    "hasDirectAccess": {
+                        "type": "boolean"
+                    },
+                    "role": {
+                        "$ref": "#/components/schemas/SpaceMemberRole"
+                    },
+                    "email": {
+                        "type": "string"
+                    },
+                    "lastName": {
+                        "type": "string"
+                    },
+                    "firstName": {
+                        "type": "string"
+                    },
+                    "userUuid": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "hasDirectAccess",
+                    "role",
+                    "email",
+                    "lastName",
+                    "firstName",
+                    "userUuid"
+                ],
+                "type": "object"
+            },
             "SpaceSummary": {
                 "allOf": [
                     {
@@ -3398,6 +3544,9 @@
                                     "type": "string"
                                 },
                                 "type": "array"
+                            },
+                            "userAccess": {
+                                "$ref": "#/components/schemas/SpaceShare"
                             }
                         },
                         "required": ["dashboardCount", "chartCount", "access"],
@@ -4058,8 +4207,17 @@
             },
             "MarkLineData": {
                 "properties": {
+                    "dynamicValue": {
+                        "type": "string",
+                        "enum": ["average"],
+                        "nullable": false
+                    },
                     "label": {
                         "properties": {
+                            "position": {
+                                "type": "string",
+                                "enum": ["start", "middle", "end"]
+                            },
                             "formatter": {
                                 "type": "string"
                             }
@@ -4075,6 +4233,12 @@
                         "required": ["color"],
                         "type": "object"
                     },
+                    "uuid": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string"
+                    },
                     "value": {
                         "type": "string"
                     },
@@ -4088,7 +4252,7 @@
                         "type": "string"
                     }
                 },
-                "required": ["value", "name"],
+                "required": ["uuid"],
                 "type": "object"
             },
             "MarkLine": {
@@ -4541,6 +4705,9 @@
                     "columns": {
                         "$ref": "#/components/schemas/Record_string.ColumnProperties_"
                     },
+                    "showSubtotals": {
+                        "type": "boolean"
+                    },
                     "showResultsTotal": {
                         "type": "boolean"
                     },
@@ -4592,6 +4759,15 @@
             },
             "SavedChart": {
                 "properties": {
+                    "access": {
+                        "items": {
+                            "$ref": "#/components/schemas/SpaceShare"
+                        },
+                        "type": "array"
+                    },
+                    "isPrivate": {
+                        "type": "boolean"
+                    },
                     "colorPalette": {
                         "items": {
                             "type": "string"
@@ -4678,6 +4854,8 @@
                     }
                 },
                 "required": [
+                    "access",
+                    "isPrivate",
                     "colorPalette",
                     "dashboardName",
                     "dashboardUuid",
@@ -4978,6 +5156,9 @@
                     },
                     {
                         "properties": {
+                            "required": {
+                                "type": "boolean"
+                            },
                             "label": {
                                 "type": "string"
                             },
@@ -5478,94 +5659,6 @@
                 "required": ["results", "status"],
                 "type": "object"
             },
-            "Pick_SavedChart.uuid-or-name-or-updatedAt-or-updatedByUser-or-description-or-spaceUuid-or-pinnedListUuid-or-pinnedListOrder_": {
-                "properties": {
-                    "name": {
-                        "type": "string"
-                    },
-                    "description": {
-                        "type": "string"
-                    },
-                    "uuid": {
-                        "type": "string"
-                    },
-                    "updatedAt": {
-                        "type": "string",
-                        "format": "date-time"
-                    },
-                    "updatedByUser": {
-                        "$ref": "#/components/schemas/UpdatedByUser"
-                    },
-                    "spaceUuid": {
-                        "type": "string"
-                    },
-                    "pinnedListUuid": {
-                        "type": "string",
-                        "nullable": true
-                    },
-                    "pinnedListOrder": {
-                        "type": "number",
-                        "format": "double",
-                        "nullable": true
-                    }
-                },
-                "required": [
-                    "name",
-                    "uuid",
-                    "updatedAt",
-                    "spaceUuid",
-                    "pinnedListUuid",
-                    "pinnedListOrder"
-                ],
-                "type": "object",
-                "description": "From T, pick a set of properties whose keys are in the union K"
-            },
-            "ViewStatistics": {
-                "properties": {
-                    "firstViewedAt": {
-                        "anyOf": [
-                            {
-                                "type": "string",
-                                "format": "date-time"
-                            },
-                            {
-                                "type": "string"
-                            }
-                        ],
-                        "nullable": true
-                    },
-                    "views": {
-                        "type": "number",
-                        "format": "double"
-                    }
-                },
-                "required": ["firstViewedAt", "views"],
-                "type": "object"
-            },
-            "SpaceQuery": {
-                "allOf": [
-                    {
-                        "$ref": "#/components/schemas/Pick_SavedChart.uuid-or-name-or-updatedAt-or-updatedByUser-or-description-or-spaceUuid-or-pinnedListUuid-or-pinnedListOrder_"
-                    },
-                    {
-                        "$ref": "#/components/schemas/ViewStatistics"
-                    },
-                    {
-                        "properties": {
-                            "validationErrors": {
-                                "items": {
-                                    "$ref": "#/components/schemas/ValidationSummary"
-                                },
-                                "type": "array"
-                            },
-                            "chartType": {
-                                "$ref": "#/components/schemas/ChartKind"
-                            }
-                        },
-                        "type": "object"
-                    }
-                ]
-            },
             "Pick_Dashboard.uuid-or-name-or-description-or-updatedAt-or-projectUuid-or-updatedByUser-or-organizationUuid-or-spaceUuid-or-views-or-firstViewedAt-or-pinnedListUuid-or-pinnedListOrder_": {
                 "properties": {
                     "name": {
@@ -5655,55 +5748,6 @@
             "SpaceDashboard": {
                 "$ref": "#/components/schemas/DashboardBasicDetails"
             },
-            "SpaceMemberRole": {
-                "enum": ["viewer", "editor"],
-                "type": "string"
-            },
-            "SpaceShare": {
-                "properties": {
-                    "inheritedFrom": {
-                        "type": "string",
-                        "enum": ["organization", "project", "group"]
-                    },
-                    "inheritedRole": {
-                        "anyOf": [
-                            {
-                                "$ref": "#/components/schemas/OrganizationMemberRole"
-                            },
-                            {
-                                "$ref": "#/components/schemas/ProjectMemberRole"
-                            }
-                        ]
-                    },
-                    "hasDirectAccess": {
-                        "type": "boolean"
-                    },
-                    "role": {
-                        "$ref": "#/components/schemas/SpaceMemberRole"
-                    },
-                    "email": {
-                        "type": "string"
-                    },
-                    "lastName": {
-                        "type": "string"
-                    },
-                    "firstName": {
-                        "type": "string"
-                    },
-                    "userUuid": {
-                        "type": "string"
-                    }
-                },
-                "required": [
-                    "hasDirectAccess",
-                    "role",
-                    "email",
-                    "lastName",
-                    "firstName",
-                    "userUuid"
-                ],
-                "type": "object"
-            },
             "Space": {
                 "properties": {
                     "pinnedListOrder": {
@@ -5777,13 +5821,16 @@
                 "required": ["results", "status"],
                 "type": "object"
             },
-            "Pick_SpaceShare.userUuid_": {
+            "Pick_SpaceShare.userUuid-or-role_": {
                 "properties": {
                     "userUuid": {
                         "type": "string"
+                    },
+                    "role": {
+                        "$ref": "#/components/schemas/SpaceMemberRole"
                     }
                 },
-                "required": ["userUuid"],
+                "required": ["userUuid", "role"],
                 "type": "object",
                 "description": "From T, pick a set of properties whose keys are in the union K"
             },
@@ -5791,7 +5838,7 @@
                 "properties": {
                     "access": {
                         "items": {
-                            "$ref": "#/components/schemas/Pick_SpaceShare.userUuid_"
+                            "$ref": "#/components/schemas/Pick_SpaceShare.userUuid-or-role_"
                         },
                         "type": "array"
                     },
@@ -5817,13 +5864,16 @@
                 "required": ["isPrivate", "name"],
                 "type": "object"
             },
-            "AddSpaceShare": {
+            "AddSpaceUserAccess": {
                 "properties": {
+                    "spaceRole": {
+                        "$ref": "#/components/schemas/SpaceMemberRole"
+                    },
                     "userUuid": {
                         "type": "string"
                     }
                 },
-                "required": ["userUuid"],
+                "required": ["spaceRole", "userUuid"],
                 "type": "object"
             },
             "Pick_SshKeyPair.publicKey_": {
@@ -6404,6 +6454,56 @@
                 "required": ["credentials", "name"],
                 "type": "object"
             },
+            "OpenIdIdentityIssuerType": {
+                "enum": ["google", "okta", "oneLogin", "azuread", "oidc"],
+                "type": "string"
+            },
+            "LocalIssuerTypes": {
+                "enum": ["email", "apiToken"],
+                "type": "string"
+            },
+            "LoginOptionTypes": {
+                "anyOf": [
+                    {
+                        "$ref": "#/components/schemas/OpenIdIdentityIssuerType"
+                    },
+                    {
+                        "$ref": "#/components/schemas/LocalIssuerTypes"
+                    }
+                ]
+            },
+            "LoginOptions": {
+                "properties": {
+                    "redirectUri": {
+                        "type": "string"
+                    },
+                    "forceRedirect": {
+                        "type": "boolean"
+                    },
+                    "showOptions": {
+                        "items": {
+                            "$ref": "#/components/schemas/LoginOptionTypes"
+                        },
+                        "type": "array"
+                    }
+                },
+                "required": ["showOptions"],
+                "type": "object"
+            },
+            "ApiGetLoginOptionsResponse": {
+                "properties": {
+                    "results": {
+                        "$ref": "#/components/schemas/LoginOptions"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["ok"],
+                        "nullable": false
+                    }
+                },
+                "required": ["results", "status"],
+                "type": "object"
+            },
             "ValidationErrorType": {
                 "enum": [
                     "chart",
@@ -6483,7 +6583,7 @@
                             "fieldName": {
                                 "type": "string"
                             },
-                            "chartType": {
+                            "chartKind": {
                                 "$ref": "#/components/schemas/ChartKind"
                             },
                             "chartUuid": {
@@ -6641,7 +6741,7 @@
     },
     "info": {
         "title": "Lightdash API",
-        "version": "0.1024.8",
+        "version": "0.1066.0",
         "description": "Open API documentation for all public Lightdash API endpoints.  # Authentication Before you get started, you might need to create a Personal Access Token to authenticate via the API. You can create a token by following this guide: https://docs.lightdash.com/references/personal_tokens\n",
         "license": {
             "name": "MIT"
@@ -7311,6 +7411,9 @@
                                     },
                                     {
                                         "properties": {
+                                            "chartName": {
+                                                "type": "string"
+                                            },
                                             "hiddenFields": {
                                                 "items": {
                                                     "type": "string"
@@ -9004,7 +9107,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/ApiChartSummaryListResponse"
+                                    "$ref": "#/components/schemas/ApiChartListResponse"
                                 }
                             }
                         }
@@ -9021,6 +9124,47 @@
                     }
                 },
                 "description": "List all charts in a project",
+                "tags": ["Projects"],
+                "security": [],
+                "parameters": [
+                    {
+                        "description": "The uuid of the project to get charts for",
+                        "in": "path",
+                        "name": "projectUuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ]
+            }
+        },
+        "/api/v1/projects/{projectUuid}/chart-summaries": {
+            "get": {
+                "operationId": "ListChartSummariesInProject",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiChartSummaryListResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "List all charts summaries in a project",
                 "tags": ["Projects"],
                 "security": [],
                 "parameters": [
@@ -10890,7 +11034,7 @@
         },
         "/api/v1/projects/{projectUuid}/spaces/{spaceUuid}/share": {
             "post": {
-                "operationId": "AddSpaceShareToUser",
+                "operationId": "AddSpaceUserAccess",
                 "responses": {
                     "200": {
                         "description": "Success",
@@ -10940,7 +11084,7 @@
                     "content": {
                         "application/json": {
                             "schema": {
-                                "$ref": "#/components/schemas/AddSpaceShare"
+                                "$ref": "#/components/schemas/AddSpaceUserAccess"
                             }
                         }
                     }
@@ -11631,6 +11775,46 @@
                     {
                         "in": "path",
                         "name": "uuid",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ]
+            }
+        },
+        "/api/v1/user/login-options": {
+            "get": {
+                "operationId": "getLoginOptions",
+                "responses": {
+                    "200": {
+                        "description": "Ok",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiGetLoginOptionsResponse"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApiErrorPayload"
+                                }
+                            }
+                        }
+                    }
+                },
+                "description": "Get login options for email",
+                "tags": ["My Account"],
+                "security": [],
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "email",
                         "required": true,
                         "schema": {
                             "type": "string"

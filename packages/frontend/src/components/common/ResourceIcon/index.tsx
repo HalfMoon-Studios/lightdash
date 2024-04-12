@@ -1,19 +1,18 @@
 import {
     assertUnreachable,
     ChartKind,
-    ResourceViewItem,
     ResourceViewItemType,
+    type ResourceViewItem,
 } from '@lightdash/common';
 import {
     Center,
     Indicator,
-    IndicatorProps,
     Paper,
     Tooltip,
-    TooltipProps,
+    type IndicatorProps,
+    type TooltipProps,
 } from '@mantine/core';
 import {
-    Icon as TablerIconType,
     IconChartArea,
     IconChartAreaLine,
     IconChartBar,
@@ -25,10 +24,11 @@ import {
     IconLayoutDashboard,
     IconSquareNumber1,
     IconTable,
+    type Icon as TablerIconType,
 } from '@tabler/icons-react';
-import { FC, ReactNode, useRef, useState } from 'react';
-import { StyledComponent } from 'styled-components';
-import MantineIcon, { MantineIconProps } from '../MantineIcon';
+import { useRef, useState, type FC, type ReactNode } from 'react';
+import { type StyledComponent } from 'styled-components';
+import MantineIcon, { type MantineIconProps } from '../MantineIcon';
 
 interface ResourceIconProps {
     item: ResourceViewItem;
@@ -66,8 +66,8 @@ export const IconBox: FC<IconBoxProps> = ({
     </Paper>
 );
 
-export const getChartIcon = (chartType: ChartKind | undefined) => {
-    switch (chartType) {
+export const getChartIcon = (chartKind: ChartKind | undefined) => {
+    switch (chartKind) {
         case undefined:
         case ChartKind.VERTICAL_BAR:
             return IconChartBar;
@@ -91,20 +91,20 @@ export const getChartIcon = (chartType: ChartKind | undefined) => {
             return IconCode;
         default:
             return assertUnreachable(
-                chartType,
-                `Chart type ${chartType} not supported`,
+                chartKind,
+                `Chart type ${chartKind} not supported`,
             );
     }
 };
 
-export const ChartIcon: FC<{ chartType: ChartKind | undefined }> = ({
-    chartType,
+export const ChartIcon: FC<{ chartKind: ChartKind | undefined }> = ({
+    chartKind,
 }) => (
     <IconBox
-        icon={getChartIcon(chartType)}
+        icon={getChartIcon(chartKind)}
         color="blue.8"
         transform={
-            chartType === ChartKind.HORIZONTAL_BAR ? 'rotate(90)' : undefined
+            chartKind === ChartKind.HORIZONTAL_BAR ? 'rotate(90)' : undefined
         }
     />
 );
@@ -116,7 +116,7 @@ export const ResourceIcon: FC<ResourceIconProps> = ({ item }) => {
         case ResourceViewItemType.SPACE:
             return <IconBox icon={IconFolder} color="violet.8" />;
         case ResourceViewItemType.CHART:
-            return <ChartIcon chartType={item.data.chartType} />;
+            return <ChartIcon chartKind={item.data.chartKind} />;
         default:
             return assertUnreachable(item, 'Resource type not supported');
     }
@@ -224,9 +224,12 @@ export const ResourceIndicator: FC<
                     opened={opened || isHovering}
                 >
                     <MantineIcon
-                        {...iconProps}
+                        icon={iconProps.icon}
                         onMouseEnter={handleMouseEnter}
                         onMouseLeave={handleMouseLeave}
+                        style={{
+                            color: iconProps.color, // NOTE: If react-tabler icon is filled, then we have to override the color this way
+                        }}
                     />
                 </Tooltip>
             }

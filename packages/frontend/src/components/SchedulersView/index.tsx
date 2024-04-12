@@ -1,7 +1,7 @@
 import { ActionIcon, Group, Tabs, Title, Tooltip } from '@mantine/core';
 import { IconClock, IconRefresh, IconSend } from '@tabler/icons-react';
 import { useQueryClient } from '@tanstack/react-query';
-import React, { FC } from 'react';
+import React, { type FC } from 'react';
 import { useSchedulerLogs } from '../../features/scheduler/hooks/useScheduler';
 import { useTableTabStyles } from '../../hooks/styles/useTableTabStyles';
 import useToaster from '../../hooks/toaster/useToaster';
@@ -17,13 +17,15 @@ const SchedulersView: FC<{ projectUuid: string }> = ({ projectUuid }) => {
     const tableTabStyles = useTableTabStyles();
     const queryClient = useQueryClient();
     const { showToastSuccess } = useToaster();
+
     const handleRefresh = async () => {
-        queryClient.invalidateQueries(['schedulerLogs']).then(() =>
-            showToastSuccess({
-                title: 'Scheduled deliveries refreshed successfully',
-            }),
-        );
+        await queryClient.invalidateQueries(['schedulerLogs']);
+
+        showToastSuccess({
+            title: 'Scheduled deliveries refreshed successfully',
+        });
     };
+
     if (isInitialLoading) {
         return <LoadingState title="Loading scheduled deliveries" />;
     }

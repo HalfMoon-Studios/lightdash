@@ -1,5 +1,5 @@
 import { Box, createStyles } from '@mantine/core';
-import { FC } from 'react';
+import { type FC } from 'react';
 import { Helmet } from 'react-helmet';
 
 import { ProjectType } from '@lightdash/common';
@@ -135,7 +135,6 @@ type Props = {
     sidebar?: React.ReactNode;
     isSidebarOpen?: boolean;
     header?: React.ReactNode;
-    hasBanner?: boolean;
 } & Omit<StyleProps, 'withSidebar' | 'withHeader'>;
 
 const Page: FC<React.PropsWithChildren<Props>> = ({
@@ -152,7 +151,6 @@ const Page: FC<React.PropsWithChildren<Props>> = ({
     withNavbar = true,
     withPaddedContent = false,
     withSidebarFooter = false,
-    hasBanner = false,
 
     children,
 }) => {
@@ -166,8 +164,6 @@ const Page: FC<React.PropsWithChildren<Props>> = ({
             project.type === ProjectType.PREVIEW,
     );
 
-    hasBanner = hasBanner || isCurrentProjectPreview;
-
     const { classes } = usePageStyles(
         {
             withCenteredContent,
@@ -180,7 +176,7 @@ const Page: FC<React.PropsWithChildren<Props>> = ({
             withPaddedContent,
             withSidebar: !!sidebar,
             withSidebarFooter,
-            hasBanner,
+            hasBanner: isCurrentProjectPreview,
         },
         { name: 'Page' },
     );
@@ -203,7 +199,7 @@ const Page: FC<React.PropsWithChildren<Props>> = ({
                     </Sidebar>
                 ) : null}
 
-                <Box className={classes.content}>
+                <Box component="main" className={classes.content}>
                     <TrackSection name={SectionName.PAGE_CONTENT}>
                         {children}
                     </TrackSection>

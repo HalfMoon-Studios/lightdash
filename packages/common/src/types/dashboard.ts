@@ -1,8 +1,11 @@
-import { FilterableField } from './field';
-import { DashboardFilters } from './filter';
-import { ChartKind, SavedChartType } from './savedCharts';
-import { UpdatedByUser } from './user';
-import { ValidationSummary } from './validation';
+import { type FilterableField } from './field';
+import { type DashboardFilters } from './filter';
+// eslint-disable-next-line import/no-cycle
+import { type ChartKind, type SavedChartType } from './savedCharts';
+// eslint-disable-next-line import/no-cycle
+import { type SpaceShare } from './space';
+import { type UpdatedByUser } from './user';
+import { type ValidationSummary } from './validation';
 
 export enum DashboardTileTypes {
     SAVED_CHART = 'saved_chart',
@@ -90,9 +93,12 @@ export const isDashboardChartTileType = (
     tile: DashboardTile,
 ): tile is DashboardChartTile => tile.type === DashboardTileTypes.SAVED_CHART;
 
+export type DashboardDAO = Omit<Dashboard, 'isPrivate' | 'access'>;
+
 export type Dashboard = {
     organizationUuid: string;
     projectUuid: string;
+    dashboardVersionId: number;
     uuid: string;
     name: string;
     description?: string;
@@ -106,6 +112,26 @@ export type Dashboard = {
     firstViewedAt: Date | string | null;
     pinnedListUuid: string | null;
     pinnedListOrder: number | null;
+    isPrivate: boolean | null;
+    access: SpaceShare[] | null;
+};
+
+export enum DashboardSummaryTone {
+    FRIENDLY = 'friendly',
+    FORMAL = 'formal',
+    DIRECT = 'direct',
+    ENTHUSIASTIC = 'enthusiastic',
+}
+
+export type DashboardSummary = {
+    dashboardSummaryUuid: string;
+    dashboardUuid: string;
+    dashboardVersionId: number;
+    context?: string | null;
+    tone: DashboardSummaryTone;
+    audiences: string[];
+    summary: string;
+    createdAt: Date;
 };
 
 export type DashboardBasicDetails = Pick<
@@ -193,7 +219,7 @@ export const getDefaultChartTileSize = (
     }
 };
 
-export const hasChartsInDashboard = (dashboard: Dashboard) =>
+export const hasChartsInDashboard = (dashboard: DashboardDAO) =>
     dashboard.tiles.some(
         (tile) => isChartTile(tile) && tile.properties.belongsToDashboard,
     );

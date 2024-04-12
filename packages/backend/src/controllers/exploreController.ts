@@ -141,6 +141,7 @@ export class ExploreController extends BaseController {
             customLabels?: { [key: string]: string };
             columnOrder: string[];
             hiddenFields?: string[];
+            chartName?: string;
         },
     ): Promise<{ status: 'ok'; results: { jobId: string } }> {
         this.setStatus(200);
@@ -163,18 +164,21 @@ export class ExploreController extends BaseController {
             additionalMetrics: body.additionalMetrics,
             customDimensions: body.customDimensions,
         };
-        const { jobId } = await CsvService.scheduleDownloadCsv(req.user!, {
-            userUuid: req.user?.userUuid!,
-            projectUuid,
-            exploreId,
-            metricQuery,
-            onlyRaw,
-            csvLimit,
-            showTableNames,
-            customLabels,
-            columnOrder,
-            hiddenFields,
-        });
+        const { jobId } = await req.services
+            .getCsvService()
+            .scheduleDownloadCsv(req.user!, {
+                userUuid: req.user?.userUuid!,
+                projectUuid,
+                exploreId,
+                metricQuery,
+                onlyRaw,
+                csvLimit,
+                showTableNames,
+                customLabels,
+                columnOrder,
+                hiddenFields,
+                chartName: body.chartName,
+            });
 
         return {
             status: 'ok',

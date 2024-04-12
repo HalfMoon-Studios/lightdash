@@ -1,20 +1,21 @@
 import {
     ChartType,
-    CustomDimension,
-    Dimension,
     getDimensionsFromItemsMap,
     getMetricsFromItemsMap,
     getTableCalculationsFromItemsMap,
     isNumericItem,
-    ItemsMap,
-    Metric,
-    TableCalculation,
+    type CustomDimension,
+    type Dimension,
+    type ItemsMap,
+    type Metric,
+    type TableCalculation,
+    type TableCalculationMetadata,
 } from '@lightdash/common';
-import { FC, useEffect, useMemo } from 'react';
+import { useEffect, useMemo, type FC } from 'react';
 import usePieChartConfig from '../../hooks/usePieChartConfig';
 import {
-    VisualizationConfig,
-    VisualizationConfigCommon,
+    type VisualizationConfig,
+    type VisualizationConfigCommon,
 } from './VisualizationProvider';
 
 export type VisualizationConfigPie = {
@@ -35,6 +36,7 @@ type VisualizationConfigPieProps =
         // TODO: shared prop once all visualizations are converted
         itemsMap: ItemsMap | undefined;
         colorPalette: string[];
+        tableCalculationsMetadata?: TableCalculationMetadata[];
     };
 
 const VisualizationPieConfig: FC<VisualizationConfigPieProps> = ({
@@ -44,6 +46,7 @@ const VisualizationPieConfig: FC<VisualizationConfigPieProps> = ({
     itemsMap,
     colorPalette,
     children,
+    tableCalculationsMetadata,
 }) => {
     const { dimensions, numericMetrics } = useMemo(() => {
         const metrics = getMetricsFromItemsMap(itemsMap ?? {}, isNumericItem);
@@ -61,6 +64,7 @@ const VisualizationPieConfig: FC<VisualizationConfigPieProps> = ({
         dimensions,
         numericMetrics,
         colorPalette,
+        tableCalculationsMetadata,
     );
 
     useEffect(() => {

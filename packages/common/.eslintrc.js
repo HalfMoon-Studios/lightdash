@@ -11,15 +11,24 @@ module.exports = {
         'prettier',
         'plugin:json/recommended',
     ],
-    plugins: ['@typescript-eslint'],
     rules: {
         'no-case-declarations': 'off',
         'no-template-curly-in-string': 'off',
         'import/prefer-default-export': 'off',
-        'no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+        '@typescript-eslint/consistent-type-imports': [
+            'error',
+            {
+                prefer: 'type-imports',
+                fixStyle: 'inline-type-imports'
+            }
+        ],
         '@typescript-eslint/no-unused-vars': [
-            'warn',
-            { argsIgnorePattern: '^_' },
+            'error',
+            {
+                argsIgnorePattern: '^_',
+                varsIgnorePattern: '^_',
+                ignoreRestSiblings: true
+            },
         ],
     },
 };

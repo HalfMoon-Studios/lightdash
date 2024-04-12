@@ -1,4 +1,4 @@
-import { MarkLineData } from '@lightdash/common';
+import { type MarkLineData } from '@lightdash/common';
 
 export type ReferenceLineField = {
     fieldId?: string;
@@ -7,7 +7,7 @@ export type ReferenceLineField = {
 
 export const getMarkLineAxis = (
     xField: string | undefined,
-    flipAxes: boolean,
+    flipAxes: boolean | undefined,
     fieldId: string,
 ): string => {
     const isDefaultXAxis = xField === fieldId;

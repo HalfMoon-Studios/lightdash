@@ -1,4 +1,8 @@
-import { ColorScheme, MantineThemeOverride, rem } from '@mantine/core';
+import {
+    rem,
+    type ColorScheme,
+    type MantineThemeOverride,
+} from '@mantine/core';
 
 export const getMantineThemeOverride = (overrides?: {
     colorScheme?: ColorScheme;
@@ -65,6 +69,13 @@ export const getMantineThemeOverride = (overrides?: {
             defaultProps: {
                 withArrow: true,
             },
+            variants: {
+                xs: (theme) => ({
+                    tooltip: {
+                        fontSize: theme.fontSizes.xs,
+                    },
+                }),
+            },
         },
 
         Modal: {
@@ -82,6 +93,40 @@ export const getMantineThemeOverride = (overrides?: {
                     lineHeight: 1.55,
                 },
             }),
+        },
+
+        ScrollArea: {
+            variants: {
+                primary: (theme) => ({
+                    scrollbar: {
+                        '&, &:hover': {
+                            background: 'transparent',
+                        },
+                        '&[data-orientation="vertical"] .mantine-ScrollArea-thumb':
+                            {
+                                backgroundColor: theme.colors.gray['5'],
+                            },
+                        '&[data-orientation="vertical"][data-state="visible"] .mantine-ScrollArea-thumb':
+                            {
+                                // When visible, fade in
+                                animation: 'fadeIn 0.3s ease-in forwards',
+                            },
+
+                        '&[data-orientation="vertical"] .mantine-ScrollArea-thumb:hover':
+                            {
+                                backgroundColor: theme.fn.darken(
+                                    theme.colors.gray['5'],
+                                    0.1,
+                                ),
+                            },
+                    },
+                    viewport: {
+                        '.only-vertical & > div': {
+                            display: 'block !important', // Only way to override the display value (from `table`) of the Viewport's child element
+                        },
+                    },
+                }),
+            },
         },
         ...overrides?.components,
     },
@@ -108,12 +153,33 @@ export const getMantineThemeOverride = (overrides?: {
             fontWeight: 600,
         },
 
+        /**
+         * Markdown colors for dark mode. Does not account for syntax highlighting.
+         */
+        '[data-color-mode="dark"].wmde-markdown': {
+            '--color-canvas-default': theme.black,
+            '--color-canvas-subtle': theme.colors.dark[7],
+            '--color-border-default': theme.colors.dark[3],
+            '--color-border-muted': theme.colors.dark[3],
+            '--color-fg-default': theme.white,
+            '--color-fg-muted': theme.colors.dark[4],
+            '--color-fg-subtle': theme.colors.dark[2],
+        },
+
         '.react-draggable.react-draggable-dragging .tile-base': {
             border: `1px solid ${theme.colors.blue[5]}`,
         },
 
         '.ace_editor.ace_autocomplete': {
             width: '500px',
+        },
+        '.ace_editor *': {
+            fontFamily:
+                "Menlo, 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace",
+        },
+        '@keyframes fadeIn': {
+            from: { opacity: 0 },
+            to: { opacity: 1 },
         },
     }),
 });

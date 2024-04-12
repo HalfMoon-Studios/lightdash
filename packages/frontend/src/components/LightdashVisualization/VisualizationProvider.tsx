@@ -1,49 +1,50 @@
 import {
-    ApiQueryResults,
     assertUnreachable,
-    ChartConfig,
     ChartType,
-    DashboardFilters,
     getCustomDimensionId,
-    getDefaultSeriesColor,
-    ItemsMap,
+    type ApiQueryResults,
+    type ChartConfig,
+    type DashboardFilters,
+    type ItemsMap,
+    type TableCalculationMetadata,
 } from '@lightdash/common';
-import EChartsReact from 'echarts-for-react';
+import type EChartsReact from 'echarts-for-react';
 import isEqual from 'lodash/isEqual';
 import {
     createContext,
-    FC,
-    RefObject,
     useCallback,
     useContext,
     useEffect,
     useMemo,
     useRef,
     useState,
+    type FC,
+    type RefObject,
 } from 'react';
-import { CartesianTypeOptions } from '../../hooks/cartesianChartConfig/useCartesianChartConfig';
-import { EChartSeries } from '../../hooks/echarts/useEchartsCartesianConfig';
+import { type CartesianTypeOptions } from '../../hooks/cartesianChartConfig/useCartesianChartConfig';
+import { type EChartSeries } from '../../hooks/echarts/useEchartsCartesianConfig';
 import {
+    calculateSeriesLikeIdentifier,
     isGroupedSeries,
-    SeriesLike,
     useChartColorConfig,
+    type SeriesLike,
 } from '../../hooks/useChartColorConfig';
 import usePivotDimensions from '../../hooks/usePivotDimensions';
-import { EchartSeriesClickEvent } from '../SimpleChart';
+import { type EchartSeriesClickEvent } from '../SimpleChart';
 import VisualizationBigNumberConfig, {
-    VisualizationConfigBigNumber,
+    type VisualizationConfigBigNumber,
 } from './VisualizationBigNumberConfig';
 import VisualizationCartesianConfig, {
-    VisualizationConfigCartesian,
+    type VisualizationConfigCartesian,
 } from './VisualizationConfigCartesian';
 import VisualizationPieConfig, {
-    VisualizationConfigPie,
+    type VisualizationConfigPie,
 } from './VisualizationConfigPie';
 import VisualizationTableConfig, {
-    VisualizationConfigTable,
+    type VisualizationConfigTable,
 } from './VisualizationConfigTable';
 import VisualizationCustomConfig, {
-    VisualizationCustomConfigType,
+    type VisualizationCustomConfigType,
 } from './VisualizationCustomConfig';
 
 export type VisualizationConfig =
@@ -74,8 +75,8 @@ type VisualizationContext = {
     setChartType: (value: ChartType) => void;
     setPivotDimensions: (value: string[] | undefined) => void;
 
-    getSeriesColor: (seriesLike: SeriesLike, seriesIndex: number) => string;
-    getGroupColor: (groupNameOrId: string) => string;
+    getSeriesColor: (seriesLike: SeriesLike) => string;
+    getGroupColor: (groupPrefix: string, groupName: string) => string;
 
     colorPalette: string[];
 };
@@ -122,6 +123,7 @@ type Props = {
     dashboardFilters?: DashboardFilters;
     invalidateCache?: boolean;
     colorPalette: string[];
+    tableCalculationsMetadata?: TableCalculationMetadata[];
 };
 
 const VisualizationProvider: FC<React.PropsWithChildren<Props>> = ({
@@ -142,6 +144,7 @@ const VisualizationProvider: FC<React.PropsWithChildren<Props>> = ({
     dashboardFilters,
     invalidateCache,
     colorPalette,
+    tableCalculationsMetadata,
 }) => {
     const itemsMap = useMemo(() => {
         return resultsData?.fields;
@@ -194,6 +197,26 @@ const VisualizationProvider: FC<React.PropsWithChildren<Props>> = ({
         }
     }, [resultsData?.metricQuery, columnOrder]);
 
+    /**
+     * Build a local set of fallback colors, used when dealing with ungrouped series.
+     *
+     * Colors are pre-calculated per-series, and re-calculated when series change.
+     */
+    const fallbackColors = useMemo<Record<string, string>>(() => {
+        if (!chartConfig?.config || chartConfig.type !== ChartType.CARTESIAN) {
+            return {};
+        }
+
+        return Object.fromEntries(
+            (chartConfig.config.eChartsConfig.series ?? []).map((series, i) => {
+                return [
+                    calculateSeriesLikeIdentifier(series).join('|'),
+                    colorPalette[i % colorPalette.length],
+                ];
+            }),
+        );
+    }, [chartConfig, colorPalette]);
+
     const handleChartConfigChange = useCallback(
         (newChartConfig: ChartConfig) => {
             if (!onChartConfigChange) return;
@@ -215,13 +238,10 @@ const VisualizationProvider: FC<React.PropsWithChildren<Props>> = ({
 
     /**
      * Gets a shared color for a given group name.
-     *
-     * NOTE: The feature flag is handled by the caller; until the flag is removed,
-     * it's the easiest way to access the necessary context to get a fallback color.
      */
     const getGroupColor = useCallback(
-        (groupNameOrId: string) => {
-            return calculateKeyColorAssignment(groupNameOrId);
+        (groupPrefix: string, identifier: string) => {
+            return calculateKeyColorAssignment(groupPrefix, identifier);
         },
         [calculateKeyColorAssignment],
     );
@@ -230,7 +250,7 @@ const VisualizationProvider: FC<React.PropsWithChildren<Props>> = ({
      * Gets a shared color for a given series.
      */
     const getSeriesColor = useCallback(
-        (seriesLike: SeriesLike, seriesIndex: number) => {
+        (seriesLike: SeriesLike) => {
             if (seriesLike.color) return seriesLike.color;
 
             /**
@@ -239,10 +259,12 @@ const VisualizationProvider: FC<React.PropsWithChildren<Props>> = ({
              */
             return isGroupedSeries(seriesLike)
                 ? calculateSeriesColorAssignment(seriesLike)
-                : colorPalette[seriesIndex % colorPalette.length] ??
-                      getDefaultSeriesColor(seriesIndex);
+                : fallbackColors[
+                      // Note: we don't use getSeriesId since we may not be dealing with a Series type here
+                      calculateSeriesLikeIdentifier(seriesLike).join('|')
+                  ];
         },
-        [calculateSeriesColorAssignment, colorPalette],
+        [calculateSeriesColorAssignment, fallbackColors],
     );
 
     const value: Omit<VisualizationContext, 'visualizationConfig'> = {
@@ -278,6 +300,7 @@ const VisualizationProvider: FC<React.PropsWithChildren<Props>> = ({
                     setPivotDimensions={setPivotDimensions}
                     onChartConfigChange={handleChartConfigChange}
                     colorPalette={colorPalette}
+                    tableCalculationsMetadata={tableCalculationsMetadata}
                 >
                     {({ visualizationConfig }) => (
                         <Context.Provider
@@ -296,6 +319,7 @@ const VisualizationProvider: FC<React.PropsWithChildren<Props>> = ({
                     initialChartConfig={chartConfig.config}
                     onChartConfigChange={handleChartConfigChange}
                     colorPalette={colorPalette}
+                    tableCalculationsMetadata={tableCalculationsMetadata}
                 >
                     {({ visualizationConfig }) => (
                         <Context.Provider
@@ -313,6 +337,7 @@ const VisualizationProvider: FC<React.PropsWithChildren<Props>> = ({
                     resultsData={lastValidResultsData}
                     initialChartConfig={chartConfig.config}
                     onChartConfigChange={handleChartConfigChange}
+                    tableCalculationsMetadata={tableCalculationsMetadata}
                 >
                     {({ visualizationConfig }) => (
                         <Context.Provider

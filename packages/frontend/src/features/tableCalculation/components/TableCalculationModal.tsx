@@ -1,25 +1,25 @@
 import {
-    CustomFormat,
     CustomFormatType,
     NumberSeparator,
-    TableCalculation,
+    type CustomFormat,
+    type TableCalculation,
 } from '@lightdash/common';
 import {
     ActionIcon,
     Button,
     Group,
     Modal,
-    ModalProps,
     Stack,
     Tabs,
     TextInput,
     useMantineTheme,
+    type ModalProps,
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { IconMaximize, IconMinimize } from '@tabler/icons-react';
-import { FC } from 'react';
+import { type FC } from 'react';
 import { useToggle } from 'react-use';
-import { ValueOf } from 'type-fest';
+import { type ValueOf } from 'type-fest';
 import MantineIcon from '../../../components/common/MantineIcon';
 import { FormatForm } from '../../../components/Explorer/FormatForm';
 import useToaster from '../../../hooks/toaster/useToaster';
@@ -126,6 +126,7 @@ const TableCalculationModal: FC<Props> = ({
                         label="Name"
                         required
                         placeholder="E.g. Cumulative order count"
+                        data-testid="table-calculation-name-input"
                         {...form.getInputProps('name')}
                     />
                     <Tabs
@@ -177,7 +178,12 @@ const TableCalculationModal: FC<Props> = ({
                             <Button variant="outline" onClick={onClose}>
                                 Cancel
                             </Button>
-                            <Button type="submit"> Save </Button>
+                            <Button
+                                type="submit"
+                                data-testid="table-calculation-save-button"
+                            >
+                                Save
+                            </Button>
                         </Group>
                     </Group>
                 </Stack>

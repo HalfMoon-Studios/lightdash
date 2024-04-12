@@ -95,6 +95,7 @@ import {
     UserWarehouseCredentials,
     WarehouseClient,
     WarehouseTypes,
+    type ApiCreateProjectResults,
 } from '@lightdash/common';
 import { SshTunnel } from '@lightdash/warehouses';
 import opentelemetry, { SpanStatusCode } from '@opentelemetry/api';
@@ -110,7 +111,6 @@ import {
     QueryExecutionContext,
 } from '../../analytics/LightdashAnalytics';
 import { S3CacheClient } from '../../clients/Aws/S3CacheClient';
-import { schedulerClient } from '../../clients/clients';
 import EmailClient from '../../clients/EmailClient/EmailClient';
 import { LightdashConfig } from '../../config/parseConfig';
 import { errorHandler } from '../../errors';
@@ -130,13 +130,18 @@ import { isFeatureFlagEnabled } from '../../postHog';
 import { projectAdapterFromConfig } from '../../projectAdapters/projectAdapter';
 import { buildQuery, CompiledQuery } from '../../queryBuilder';
 import { compileMetricQuery } from '../../queryCompiler';
+import { SchedulerClient } from '../../scheduler/SchedulerClient';
 import { ProjectAdapter } from '../../types';
 import {
     runWorkerThread,
     wrapOtelSpan,
     wrapSentryTransaction,
 } from '../../utils';
-import { hasSpaceAccess } from '../SpaceService/SpaceService';
+import { BaseService } from '../BaseService';
+import {
+    hasDirectAccessToSpace,
+    hasViewAccessToSpace,
+} from '../SpaceService/SpaceService';
 import {
     doesExploreMatchRequiredAttributes,
     exploreHasFilteredAttribute,
@@ -166,9 +171,10 @@ type ProjectServiceArguments = {
     analyticsModel: AnalyticsModel;
     dashboardModel: DashboardModel;
     userWarehouseCredentialsModel: UserWarehouseCredentialsModel;
+    schedulerClient: SchedulerClient;
 };
 
-export class ProjectService {
+export class ProjectService extends BaseService {
     lightdashConfig: LightdashConfig;
 
     analytics: LightdashAnalytics;
@@ -199,6 +205,8 @@ export class ProjectService {
 
     userWarehouseCredentialsModel: UserWarehouseCredentialsModel;
 
+    schedulerClient: SchedulerClient;
+
     constructor({
         lightdashConfig,
         analytics,
@@ -214,7 +222,9 @@ export class ProjectService {
         analyticsModel,
         dashboardModel,
         userWarehouseCredentialsModel,
+        schedulerClient,
     }: ProjectServiceArguments) {
+        super();
         this.lightdashConfig = lightdashConfig;
         this.analytics = analytics;
         this.projectModel = projectModel;
@@ -230,6 +240,7 @@ export class ProjectService {
         this.analyticsModel = analyticsModel;
         this.dashboardModel = dashboardModel;
         this.userWarehouseCredentialsModel = userWarehouseCredentialsModel;
+        this.schedulerClient = schedulerClient;
     }
 
     private async _resolveWarehouseClientSshKeys<
@@ -283,6 +294,24 @@ export class ProjectService {
                 throw new UnexpectedServerError(
                     'User warehouse credentials are not compatible',
                 );
+            }
+
+            /**
+             * Disable QUOTED_IDENTIFIERS_IGNORE_CASE for Snowflake based on a feature flag, unless
+             * this option is explicitly set via the credentials.
+             *
+             * This is temporary until the feature flag is rolled over globally.
+             */
+            if (
+                credentials.type === WarehouseTypes.SNOWFLAKE &&
+                typeof credentials.quotedIdentifiersIgnoreCase ===
+                    'undefined' &&
+                (await isFeatureFlagEnabled(
+                    FeatureFlags.DisableSnowflakeQuotedIdentifiersIgnoreCase,
+                    { userUuid },
+                ))
+            ) {
+                credentials.quotedIdentifiersIgnoreCase = false;
             }
         }
         return credentials;
@@ -349,7 +378,7 @@ export class ProjectService {
         user: SessionUser,
         data: CreateProject,
         method: RequestMethod,
-    ): Promise<Project> {
+    ): Promise<ApiCreateProjectResults> {
         if (!isUserWithOrg(user)) {
             throw new ForbiddenError('User is not part of an organization');
         }
@@ -391,6 +420,8 @@ export class ProjectService {
             },
         });
 
+        let hasContentCopy = false;
+
         if (data.copiedFromProjectUuid) {
             try {
                 const { organizationUuid } = await this.projectModel.getSummary(
@@ -399,7 +430,7 @@ export class ProjectService {
                 // We only allow copying from projects if the user is an admin until we remove the `createProjectAccess` call above
                 if (
                     user.ability.cannot(
-                        'manage',
+                        'create',
                         subject('Project', {
                             organizationUuid,
                             projectUuid: data.copiedFromProjectUuid,
@@ -411,14 +442,22 @@ export class ProjectService {
                 await this.copyContentOnPreview(
                     data.copiedFromProjectUuid,
                     projectUuid,
+                    user,
                 );
+
+                hasContentCopy = true;
             } catch (e) {
                 Sentry.captureException(e);
-                Logger.error(`Unable to copy content on preview ${e}`);
+                this.logger.error(`Unable to copy content on preview ${e}`);
             }
         }
 
-        return this.projectModel.get(projectUuid);
+        const project = await this.projectModel.get(projectUuid);
+
+        return {
+            hasContentCopy,
+            project,
+        };
     }
 
     async create(
@@ -532,7 +571,7 @@ export class ProjectService {
 
         await this.jobModel.create(job);
         doAsyncWork().catch((e) =>
-            Logger.error(`Error running background job: ${e}`),
+            this.logger.error(`Error running background job: ${e}`),
         );
         return {
             jobUuid: job.jobUuid,
@@ -557,7 +596,7 @@ export class ProjectService {
         }
         await this.projectModel.saveExploresToCache(projectUuid, explores);
 
-        await schedulerClient.generateValidation({
+        await this.schedulerClient.generateValidation({
             userUuid: user.userUuid,
             projectUuid,
             context: 'cli',
@@ -612,7 +651,7 @@ export class ProjectService {
         await this.jobModel.create(job);
 
         if (updatedProject.dbtConnection.type !== DbtProjectType.NONE) {
-            await schedulerClient.testAndCompileProject({
+            await this.schedulerClient.testAndCompileProject({
                 organizationUuid: user.organizationUuid,
                 createdByUserUuid: user.userUuid,
                 projectUuid,
@@ -739,7 +778,7 @@ export class ProjectService {
 
     private static async testProjectAdapter(
         data: UpdateProject,
-        user: Pick<SessionUser, 'userUuid' | 'organizationUuid'>,
+        _user: Pick<SessionUser, 'userUuid' | 'organizationUuid'>,
     ): Promise<{
         adapter: ProjectAdapter;
         sshTunnel: SshTunnel<CreateWarehouseCredentials>;
@@ -1207,22 +1246,6 @@ export class ProjectService {
         );
         const { organizationUuid, projectUuid } = savedChart;
 
-        if (
-            user.ability.cannot(
-                'view',
-                subject('SavedChart', { organizationUuid, projectUuid }),
-            ) ||
-            user.ability.cannot(
-                'view',
-                subject('Project', {
-                    organizationUuid,
-                    projectUuid,
-                }),
-            )
-        ) {
-            throw new ForbiddenError();
-        }
-
         const [space, explore] = await Promise.all([
             this.spaceModel.getSpaceSummary(savedChart.spaceUuid),
             this.getExplore(
@@ -1233,7 +1256,29 @@ export class ProjectService {
             ),
         ]);
 
-        if (!hasSpaceAccess(user, space)) {
+        const access = await this.spaceModel.getUserSpaceAccess(
+            user.userUuid,
+            space.uuid,
+        );
+
+        if (
+            user.ability.cannot(
+                'view',
+                subject('SavedChart', {
+                    organizationUuid,
+                    projectUuid,
+                    isPrivate: space.isPrivate,
+                    access,
+                }),
+            ) ||
+            user.ability.cannot(
+                'view',
+                subject('Project', {
+                    organizationUuid,
+                    projectUuid,
+                }),
+            )
+        ) {
             throw new ForbiddenError();
         }
 
@@ -1291,22 +1336,6 @@ export class ProjectService {
         const savedChart = await this.savedChartModel.get(chartUuid);
         const { organizationUuid, projectUuid } = savedChart;
 
-        if (
-            user.ability.cannot(
-                'view',
-                subject('SavedChart', { organizationUuid, projectUuid }),
-            ) ||
-            user.ability.cannot(
-                'view',
-                subject('Project', {
-                    organizationUuid,
-                    projectUuid,
-                }),
-            )
-        ) {
-            throw new ForbiddenError();
-        }
-
         const [space, explore] = await Promise.all([
             this.spaceModel.getSpaceSummary(savedChart.spaceUuid),
             this.getExplore(
@@ -1317,7 +1346,29 @@ export class ProjectService {
             ),
         ]);
 
-        if (!hasSpaceAccess(user, space)) {
+        const access = await this.spaceModel.getUserSpaceAccess(
+            user.userUuid,
+            space.uuid,
+        );
+
+        if (
+            user.ability.cannot(
+                'view',
+                subject('SavedChart', {
+                    organizationUuid,
+                    projectUuid,
+                    isPrivate: space.isPrivate,
+                    access,
+                }),
+            ) ||
+            user.ability.cannot(
+                'view',
+                subject('Project', {
+                    organizationUuid,
+                    projectUuid,
+                }),
+            )
+        ) {
             throw new ForbiddenError();
         }
 
@@ -1341,10 +1392,19 @@ export class ProjectService {
                 dashboardFilters.tableCalculations,
             ),
         };
+        const isDashboardFilterOverrideEnabled: boolean =
+            await isFeatureFlagEnabled(
+                FeatureFlags.DashboardFilterOverridesChartFilters,
+                {
+                    userUuid: user.userUuid,
+                    organizationUuid,
+                },
+            );
         const metricQueryWithDashboardOverrides: MetricQuery = {
             ...addDashboardFiltersToMetricQuery(
                 savedChart.metricQuery,
                 appliedDashboardFilters,
+                isDashboardFilterOverrideEnabled,
             ),
             sorts:
                 dashboardSorts && dashboardSorts.length > 0
@@ -1395,7 +1455,7 @@ export class ProjectService {
         }
 
         return {
-            chart: savedChart,
+            chart: { ...savedChart, isPrivate: space.isPrivate, access },
             explore,
             metricQuery: metricQueryWithDashboardOverrides,
             cacheMetadata,
@@ -1632,7 +1692,7 @@ export class ProjectService {
                                 .cacheStateTimeSeconds *
                                 1000
                     ) {
-                        Logger.debug(
+                        this.logger.debug(
                             `Getting data from cache, key: ${queryHash}`,
                         );
                         const cacheEntry = await this.s3CacheClient.getResults(
@@ -1652,13 +1712,16 @@ export class ProjectService {
                                     },
                                 };
                             } catch (e) {
-                                Logger.error('Error parsing cache results:', e);
+                                this.logger.error(
+                                    'Error parsing cache results:',
+                                    e,
+                                );
                             }
                         }
                     }
                 }
 
-                Logger.debug(`Run query against warehouse warehouse`);
+                this.logger.debug(`Run query against warehouse warehouse`);
                 const warehouseResults = await wrapOtelSpan(
                     'runWarehouseQuery',
                     {
@@ -1700,7 +1763,9 @@ export class ProjectService {
                         : warehouseResults;
 
                 if (this.lightdashConfig.resultsCache?.enabled) {
-                    Logger.debug(`Writing data to cache with key ${queryHash}`);
+                    this.logger.debug(
+                        `Writing data to cache with key ${queryHash}`,
+                    );
                     const buffer = Buffer.from(
                         JSON.stringify(warehouseResultsWithTableCalculations),
                     );
@@ -1972,7 +2037,9 @@ export class ProjectService {
                         },
                     });
 
-                    Logger.debug(`Fetch query results from cache or warehouse`);
+                    this.logger.debug(
+                        `Fetch query results from cache or warehouse`,
+                    );
                     span.setAttribute('generatedSql', query);
 
                     /**
@@ -2048,7 +2115,7 @@ export class ProjectService {
             projectUuid,
             await this.getWarehouseCredentials(projectUuid, user.userUuid),
         );
-        Logger.debug(`Run query against warehouse`);
+        this.logger.debug(`Run query against warehouse`);
         const queryTags: RunQueryTags = {
             organization_uuid: organizationUuid,
             user_uuid: user.userUuid,
@@ -2160,7 +2227,7 @@ export class ProjectService {
             userAttributes,
         );
 
-        Logger.debug(`Run query against warehouse`);
+        this.logger.debug(`Run query against warehouse`);
         const queryTags: RunQueryTags = {
             organization_uuid: organizationUuid,
             user_uuid: user.userUuid,
@@ -2278,7 +2345,7 @@ export class ProjectService {
                                     );
                                 }
                             } catch (e) {
-                                Logger.error(
+                                this.logger.error(
                                     `Unable to reduce formattedFieldsCount. ${e}`,
                                 );
                             }
@@ -2415,7 +2482,7 @@ export class ProjectService {
 
         await this.jobModel.create(job);
 
-        await schedulerClient.compileProject({
+        await this.schedulerClient.compileProject({
             createdByUserUuid: user.userUuid,
             organizationUuid,
             projectUuid,
@@ -2487,7 +2554,7 @@ export class ProjectService {
         };
         await this.projectModel
             .tryAcquireProjectLock(projectUuid, onLockAcquired, onLockFailed)
-            .catch((e) => Logger.error(`Background job failed: ${e}`));
+            .catch((e) => this.logger.error(`Background job failed: ${e}`));
     }
 
     async getAllExploresSummary(
@@ -2761,16 +2828,25 @@ export class ProjectService {
                     savedChartUuid,
                 ]);
 
-            if (
-                user.ability.cannot('view', subject('SavedChart', savedChart))
-            ) {
-                throw new ForbiddenError();
-            }
-
             const space = await this.spaceModel.getSpaceSummary(
                 savedChart.spaceUuid,
             );
-            if (!hasSpaceAccess(user, space)) {
+
+            const access = await this.spaceModel.getUserSpaceAccess(
+                user.userUuid,
+                space.uuid,
+            );
+
+            if (
+                user.ability.cannot(
+                    'view',
+                    subject('SavedChart', {
+                        ...savedChart,
+                        isPrivate: space.isPrivate,
+                        access,
+                    }),
+                )
+            ) {
                 throw new ForbiddenError();
             }
 
@@ -2845,17 +2921,22 @@ export class ProjectService {
             });
 
             const filterPromises = savedCharts.map(async (savedChart) => {
+                const spaceAccess = spaceAccessMap.get(savedChart.spaceUuid);
+                const access = await this.spaceModel.getUserSpaceAccess(
+                    user.userUuid,
+                    savedChart.spaceUuid,
+                );
+
                 if (
                     user.ability.cannot(
                         'view',
-                        subject('SavedChart', savedChart),
+                        subject('SavedChart', {
+                            ...savedChart,
+                            isPrivate: spaceAccess?.isPrivate,
+                            access,
+                        }),
                     )
                 ) {
-                    return { uuid: savedChart.uuid, filters: [] };
-                }
-
-                const spaceAccess = spaceAccessMap.get(savedChart.spaceUuid);
-                if (!spaceAccess || !hasSpaceAccess(user, spaceAccess)) {
                     return { uuid: savedChart.uuid, filters: [] };
                 }
 
@@ -3170,6 +3251,48 @@ export class ProjectService {
     async getCharts(
         user: SessionUser,
         projectUuid: string,
+    ): Promise<SpaceQuery[]> {
+        const { organizationUuid } = await this.projectModel.getSummary(
+            projectUuid,
+        );
+        if (
+            user.ability.cannot(
+                'view',
+                subject('Project', { organizationUuid, projectUuid }),
+            )
+        ) {
+            throw new ForbiddenError();
+        }
+
+        const spaces = await this.spaceModel.find({ projectUuid });
+
+        const allowedSpacesBooleans = await Promise.all(
+            spaces.map(
+                async (space) =>
+                    space.projectUuid === projectUuid &&
+                    hasViewAccessToSpace(
+                        user,
+                        space,
+                        await this.spaceModel.getUserSpaceAccess(
+                            user.userUuid,
+                            space.uuid,
+                        ),
+                    ),
+            ),
+        );
+
+        const allowedSpaces = spaces.filter(
+            (_, index) => allowedSpacesBooleans[index],
+        );
+
+        return this.spaceModel.getSpaceQueries(
+            allowedSpaces.map((s) => s.uuid),
+        );
+    }
+
+    async getChartSummaries(
+        user: SessionUser,
+        projectUuid: string,
     ): Promise<ChartSummary[]> {
         const { organizationUuid } = await this.projectModel.getSummary(
             projectUuid,
@@ -3184,17 +3307,30 @@ export class ProjectService {
         }
 
         const spaces = await this.spaceModel.find({ projectUuid });
-        const allowedSpaces = spaces.filter(
-            (space) =>
-                space.projectUuid === projectUuid &&
-                hasSpaceAccess(user, space, true),
+
+        const allowedSpacesBooleans = await Promise.all(
+            spaces.map(
+                async (space) =>
+                    space.projectUuid === projectUuid &&
+                    hasViewAccessToSpace(
+                        user,
+                        space,
+                        await this.spaceModel.getUserSpaceAccess(
+                            user.userUuid,
+                            space.uuid,
+                        ),
+                    ),
+            ),
         );
 
-        const charts = await this.savedChartModel.find({
+        const allowedSpaces = spaces.filter(
+            (_, index) => allowedSpacesBooleans[index],
+        );
+
+        return this.savedChartModel.find({
             projectUuid,
             spaceUuids: allowedSpaces.map((s) => s.uuid),
         });
-        return charts;
     }
 
     async getMostPopularAndRecentlyUpdated(
@@ -3217,7 +3353,7 @@ export class ProjectService {
         const allowedSpaces = spaces.filter(
             (space) =>
                 space.projectUuid === projectUuid &&
-                hasSpaceAccess(user, space, false), // NOTE: We don't check for admin access to the space - exclude private spaces from this panel if admin
+                hasDirectAccessToSpace(user, space), // NOTE: We don't check for admin access to the space - exclude private spaces from this panel if admin
         );
 
         const mostPopular = await this.getMostPopular(allowedSpaces);
@@ -3240,7 +3376,7 @@ export class ProjectService {
     }
 
     async getMostPopular(
-        allowedSpaces: SpaceSummary[],
+        allowedSpaces: Pick<SpaceSummary, 'uuid'>[],
     ): Promise<(SpaceQuery | DashboardBasicDetails)[]> {
         const mostPopularCharts = await this.spaceModel.getSpaceQueries(
             allowedSpaces.map(({ uuid }) => uuid),
@@ -3260,7 +3396,7 @@ export class ProjectService {
     }
 
     async getRecentlyUpdated(
-        allowedSpaces: SpaceSummary[],
+        allowedSpaces: Pick<SpaceSummary, 'uuid'>[],
     ): Promise<(SpaceQuery | DashboardBasicDetails)[]> {
         const recentlyUpdatedCharts = await this.spaceModel.getSpaceQueries(
             allowedSpaces.map(({ uuid }) => uuid),
@@ -3297,17 +3433,37 @@ export class ProjectService {
         }
 
         const spaces = await this.spaceModel.find({ projectUuid });
-        const allowedSpaces = spaces.filter((space) =>
-            hasSpaceAccess(user, space, true),
+
+        const spacesWithUserAccess = await Promise.all(
+            spaces.map(async (spaceSummary) => {
+                const [userAccess] = await this.spaceModel.getUserSpaceAccess(
+                    user.userUuid,
+                    spaceSummary.uuid,
+                );
+                return {
+                    ...spaceSummary,
+                    userAccess,
+                };
+            }),
         );
+
+        const allowedSpaces = spacesWithUserAccess.filter((space) =>
+            hasViewAccessToSpace(
+                user,
+                space,
+                space.userAccess ? [space.userAccess] : [],
+            ),
+        );
+
         return allowedSpaces;
     }
 
     async copyContentOnPreview(
         projectUuid: string,
         previewProjectUuid: string,
+        user: SessionUser,
     ): Promise<void> {
-        Logger.debug(
+        this.logger.info(
             `Copying content from project ${projectUuid} to preview project ${previewProjectUuid}`,
         );
         await wrapSentryTransaction<void>(
@@ -3316,9 +3472,28 @@ export class ProjectService {
                 projectUuid,
             },
             async () => {
+                const spaces = await this.spaceModel.find({ projectUuid }); // Get all spaces in the project
+                const allowedSpacesBooleans = await Promise.all(
+                    spaces.map(async (space) =>
+                        hasViewAccessToSpace(
+                            user,
+                            space,
+                            await this.spaceModel.getUserSpaceAccess(
+                                user.userUuid,
+                                space.uuid,
+                            ),
+                        ),
+                    ),
+                );
+
+                const allowedSpaces = spaces.filter(
+                    (_, index) => allowedSpacesBooleans[index],
+                );
+
                 await this.projectModel.duplicateContent(
                     projectUuid,
                     previewProjectUuid,
+                    allowedSpaces,
                 );
             },
         );
@@ -3478,17 +3653,41 @@ export class ProjectService {
                   ),
               }
             : undefined;
+
+        const isDashboardFilterOverrideEnabled: boolean =
+            await isFeatureFlagEnabled(
+                FeatureFlags.DashboardFilterOverridesChartFilters,
+                {
+                    userUuid: user.userUuid,
+                    organizationUuid,
+                },
+            );
+
         const metricQuery: MetricQuery = appliedDashboardFilters
             ? addDashboardFiltersToMetricQuery(
                   savedChart.metricQuery,
                   appliedDashboardFilters,
+                  isDashboardFilterOverrideEnabled,
               )
             : savedChart.metricQuery;
+
+        const space = await this.spaceModel.getSpaceSummary(
+            savedChart.spaceUuid,
+        );
+        const access = await this.spaceModel.getUserSpaceAccess(
+            user.userUuid,
+            savedChart.spaceUuid,
+        );
 
         if (
             user.ability.cannot(
                 'view',
-                subject('SavedChart', { organizationUuid, projectUuid }),
+                subject('SavedChart', {
+                    organizationUuid,
+                    projectUuid,
+                    isPrivate: space.isPrivate,
+                    access,
+                }),
             ) ||
             user.ability.cannot(
                 'view',
@@ -3554,7 +3753,6 @@ export class ProjectService {
         const explores = await this.projectModel.getExploresFromCache(
             projectUuid,
         );
-
         if (!explores) {
             throw new NotFoundError('No explores found');
         }
@@ -3574,15 +3772,14 @@ export class ProjectService {
                 label: chart.name,
                 description: chart.description ?? '',
                 url: `${this.lightdashConfig.siteUrl}/projects/${projectUuid}/saved/${chart.uuid}/view`,
-                dependsOn: Object.keys(
+                dependsOn: Object.values(
                     explores.find(({ name }) => name === chart.tableName)
                         ?.tables || {},
-                ).map((tableName) => `ref('${tableName}')`),
+                ).map((table) => `ref('${table.originalName || table.name}')`),
                 tags: ['lightdash', 'chart'],
             });
             return acc;
         }, []);
-
         const dashboards = await this.dashboardModel.findInfoForDbtExposures(
             projectUuid,
         );

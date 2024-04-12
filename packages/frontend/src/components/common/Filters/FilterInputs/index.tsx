@@ -1,29 +1,30 @@
 import {
     assertUnreachable,
-    ConditionalRule,
-    ConditionalRuleLabels,
     DimensionType,
-    Field,
-    FilterableField,
-    FilterableItem,
     FilterOperator,
     FilterType,
     formatBoolean,
     formatDate,
-    formatTimestamp,
     getFilterTypeFromItem,
     getItemId,
+    getLocalTimeDisplay,
     isDashboardFilterRule,
     isDimension,
     isField,
     isFilterableItem,
     isFilterRule,
     isMomentInput,
-    TableCalculation,
+    type ConditionalRule,
+    type ConditionalRuleLabels,
+    type Field,
+    type FilterableField,
+    type FilterableItem,
+    type TableCalculation,
 } from '@lightdash/common';
-import { PopoverProps } from '@mantine/core';
+import { type PopoverProps } from '@mantine/core';
 import isEmpty from 'lodash/isEmpty';
 import uniq from 'lodash/uniq';
+import { type MomentInput } from 'moment';
 import BooleanFilterInputs from './BooleanFilterInputs';
 import DateFilterInputs from './DateFilterInputs';
 import DefaultFilterInputs from './DefaultFilterInputs';
@@ -171,7 +172,10 @@ const getValueAsString = (
                         rule.settings?.completed ? 'completed ' : ''
                     }${rule.settings?.unitOfTime}`;
                 case FilterOperator.IN_BETWEEN:
-                    return `${firstValue} and ${secondValue}`;
+                    return `${getLocalTimeDisplay(
+                        firstValue as MomentInput,
+                        false,
+                    )} and ${getLocalTimeDisplay(secondValue as MomentInput)}`;
                 case FilterOperator.IN_THE_CURRENT:
                     if (!isFilterRule(rule)) throw new Error('Invalid rule');
 
@@ -195,10 +199,7 @@ const getValueAsString = (
                                 isMomentInput(value) &&
                                 field.type === DimensionType.TIMESTAMP
                             ) {
-                                return formatTimestamp(
-                                    value,
-                                    field.timeInterval,
-                                );
+                                return getLocalTimeDisplay(value);
                             } else if (
                                 isDimension(field) &&
                                 isMomentInput(value) &&

@@ -1,6 +1,6 @@
 import { ProjectType } from '@lightdash/common';
 import { Stack } from '@mantine/core';
-import { FC, memo } from 'react';
+import { memo, type FC } from 'react';
 import { useParams } from 'react-router-dom';
 import { useExplore } from '../../hooks/useExplore';
 import { useProjects } from '../../hooks/useProjects';
@@ -24,6 +24,9 @@ const Explorer: FC<{ hideHeader?: boolean }> = memo(
         const unsavedChartVersionMetricQuery = useExplorerContext(
             (context) => context.state.unsavedChartVersion.metricQuery,
         );
+        const isEditMode = useExplorerContext(
+            (context) => context.state.isEditMode,
+        );
         const { projectUuid } = useParams<{ projectUuid: string }>();
 
         const { data: projects } = useProjects({ refetchOnMount: false });
@@ -41,7 +44,7 @@ const Explorer: FC<{ hideHeader?: boolean }> = memo(
                 explore={explore}
             >
                 <Stack sx={{ flexGrow: 1 }}>
-                    {!hideHeader && <ExplorerHeader />}
+                    {!hideHeader && isEditMode && <ExplorerHeader />}
 
                     <FiltersCard />
 

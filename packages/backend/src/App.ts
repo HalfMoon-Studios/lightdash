@@ -5,7 +5,6 @@ import * as Tracing from '@sentry/tracing';
 import { SamplingContext } from '@sentry/types';
 import flash from 'connect-flash';
 import connectSessionKnex from 'connect-session-knex';
-import cookieParser from 'cookie-parser';
 import express, {
     Express,
     NextFunction,
@@ -15,38 +14,47 @@ import express, {
 } from 'express';
 import expressSession from 'express-session';
 import expressStaticGzip from 'express-static-gzip';
+import knex, { Knex } from 'knex';
 import passport from 'passport';
 import refresh from 'passport-oauth2-refresh';
 import path from 'path';
 import reDoc from 'redoc-express';
 import { URL } from 'url';
 import { LightdashAnalytics } from './analytics/LightdashAnalytics';
-import * as clients from './clients/clients';
-import { SlackService } from './clients/Slack/Slackbot';
+import {
+    ClientProviderMap,
+    ClientRepository,
+} from './clients/ClientRepository';
+import { SlackBot } from './clients/Slack/Slackbot';
 import { LightdashConfig } from './config/parseConfig';
 import {
     apiKeyPassportStrategy,
-    azureAdPassportStrategy,
+    createAzureAdPassportStrategy,
+    createGenericOidcPassportStrategy,
     googlePassportStrategy,
+    isAzureAdPassportStrategyAvailableToUse,
+    isGenericOidcPassportStrategyAvailableToUse,
     isOktaPassportStrategyAvailableToUse,
     localPassportStrategy,
     oneLoginPassportStrategy,
     OpenIDClientOktaStrategy,
 } from './controllers/authentication';
-import database from './database/database';
 import { errorHandler } from './errors';
 import { RegisterRoutes } from './generated/routes';
 import apiSpec from './generated/swagger.json';
 import Logger from './logging/logger';
 import { expressWinstonMiddleware } from './logging/winston';
-import { slackAuthenticationModel, userModel } from './models/models';
+import { ModelProviderMap, ModelRepository } from './models/ModelRepository';
 import { registerNodeMetrics } from './nodeMetrics';
 import { postHogClient } from './postHog';
 import { apiV1Router } from './routers/apiV1Router';
 import { SchedulerWorker } from './scheduler/SchedulerWorker';
-import type { ServiceRepository } from './services/ServiceRepository';
-import * as services from './services/services';
-import { wrapOtelSpan } from './utils';
+import {
+    OperationContext,
+    ServiceProviderMap,
+    ServiceRepository,
+} from './services/ServiceRepository';
+import { UtilProviderMap, UtilRepository } from './utils/UtilRepository';
 import { VERSION } from './version';
 
 // We need to override this interface to have our user typing
@@ -59,6 +67,10 @@ declare global {
          */
         interface Request {
             services: ServiceRepository;
+            /**
+             * @deprecated Clients should be used inside services. This will be removed soon.
+             */
+            clients: ClientRepository;
         }
 
         interface User extends SessionUser {}
@@ -70,9 +82,19 @@ type AppArguments = {
     port: string | number;
     otelSdk: NodeSDK;
     environment?: 'production' | 'development';
+    serviceProviders?: ServiceProviderMap;
+    knexConfig: {
+        production: Knex.Config<Knex.PgConnectionConfig>;
+        development: Knex.Config<Knex.PgConnectionConfig>;
+    };
+    clientProviders?: ClientProviderMap;
+    modelProviders?: ModelProviderMap;
+    utilProviders?: UtilProviderMap;
 };
 
 export default class App {
+    private readonly serviceRepository: ServiceRepository;
+
     private readonly lightdashConfig: LightdashConfig;
 
     private readonly analytics: LightdashAnalytics;
@@ -84,6 +106,14 @@ export default class App {
     private readonly environment: 'production' | 'development';
 
     private schedulerWorker: SchedulerWorker | undefined;
+
+    private readonly clients: ClientRepository;
+
+    private readonly utils: UtilRepository;
+
+    private readonly models: ModelRepository;
+
+    private readonly database: Knex;
 
     constructor(args: AppArguments) {
         this.lightdashConfig = args.lightdashConfig;
@@ -102,6 +132,40 @@ export default class App {
                     this.lightdashConfig.rudder.dataPlaneUrl,
             },
         });
+        this.database = knex(
+            this.environment === 'production'
+                ? args.knexConfig.production
+                : args.knexConfig.development,
+        );
+        this.utils = new UtilRepository({
+            utilProviders: args.utilProviders,
+            lightdashConfig: this.lightdashConfig,
+        });
+        this.models = new ModelRepository({
+            modelProviders: args.modelProviders,
+            lightdashConfig: this.lightdashConfig,
+            database: this.database,
+            utils: this.utils,
+        });
+        this.clients = new ClientRepository({
+            clientProviders: args.clientProviders,
+            context: new OperationContext({
+                operationId: 'App#ctor',
+                lightdashAnalytics: this.analytics,
+                lightdashConfig: this.lightdashConfig,
+            }),
+            models: this.models,
+        });
+        this.serviceRepository = new ServiceRepository({
+            serviceProviders: args.serviceProviders,
+            context: new OperationContext({
+                operationId: 'App#ctor',
+                lightdashAnalytics: this.analytics,
+                lightdashConfig: this.lightdashConfig,
+            }),
+            clients: this.clients,
+            models: this.models,
+        });
     }
 
     async start() {
@@ -115,7 +179,7 @@ export default class App {
             App.initNodeProcessMonitor();
         }
 
-        const expressApp = this.initExpress();
+        const expressApp = await this.initExpress();
         this.initSentry(expressApp);
         this.initSlack();
         if (this.lightdashConfig.scheduler?.enabled) {
@@ -123,13 +187,13 @@ export default class App {
         }
     }
 
-    private initExpress() {
+    private async initExpress() {
         const expressApp = express();
 
         const KnexSessionStore = connectSessionKnex(expressSession);
 
         const store = new KnexSessionStore({
-            knex: database as any,
+            knex: this.database as any,
             createtable: false,
             tablename: 'sessions',
             sidfieldname: 'sid',
@@ -141,7 +205,6 @@ export default class App {
 
         expressApp.use(express.json());
         expressApp.use(express.urlencoded({ extended: false }));
-        expressApp.use(cookieParser());
 
         expressApp.use(
             expressSession({
@@ -185,8 +248,8 @@ export default class App {
          * request context - for now we simply proxy the existing service repository singleton.
          */
         expressApp.use((req, res, next) => {
-            req.services = services.serviceRepository;
-
+            req.services = this.serviceRepository;
+            req.clients = this.clients;
             next();
         });
 
@@ -290,8 +353,14 @@ export default class App {
         );
 
         // Authentication
-        passport.use(apiKeyPassportStrategy);
-        passport.use(localPassportStrategy);
+        const userService = this.serviceRepository.getUserService();
+
+        passport.use(apiKeyPassportStrategy({ userService }));
+        passport.use(
+            localPassportStrategy({
+                userService,
+            }),
+        );
         if (googlePassportStrategy) {
             passport.use(googlePassportStrategy);
             refresh.use(googlePassportStrategy);
@@ -302,38 +371,47 @@ export default class App {
         if (oneLoginPassportStrategy) {
             passport.use('oneLogin', oneLoginPassportStrategy);
         }
-        if (azureAdPassportStrategy) {
-            passport.use('azuread', azureAdPassportStrategy);
+        if (isAzureAdPassportStrategyAvailableToUse) {
+            passport.use('azuread', await createAzureAdPassportStrategy());
         }
+        if (isGenericOidcPassportStrategyAvailableToUse) {
+            passport.use('oidc', await createGenericOidcPassportStrategy());
+        }
+
         passport.serializeUser((user, done) => {
             // On login (user changes), user.userUuid is written to the session store in the `sess.passport.data` field
-            done(null, user.userUuid);
+            done(null, {
+                id: user.userUuid,
+                organization: user.organizationUuid,
+            });
         });
 
         // Before each request handler we read `sess.passport.user` from the session store
-        passport.deserializeUser(async (id: string, done) => {
-            // Convert to a full user profile
-            try {
-                const user = await wrapOtelSpan(
-                    'Passport.deserializeUser',
-                    {},
-                    () => userModel.findSessionUserByUUID(id),
-                );
-                // Store that user on the request (`req`) object
-                done(null, user);
-            } catch (e) {
-                done(e);
-            }
-        });
+        passport.deserializeUser(
+            async (
+                passportUser: { id: string; organization: string },
+                done,
+            ) => {
+                // Convert to a full user profile
+                try {
+                    done(null, await userService.findSessionUser(passportUser));
+                } catch (e) {
+                    done(e);
+                }
+            },
+        );
 
         return expressApp;
     }
 
     private initSlack() {
-        const slackService = new SlackService({
-            slackAuthenticationModel,
+        const slackBot = new SlackBot({
+            slackAuthenticationModel: this.models.getSlackAuthenticationModel(),
             lightdashConfig: this.lightdashConfig,
             analytics: this.analytics,
+
+            // TODO: Do not use serviceRepository singleton here:
+            unfurlService: this.serviceRepository.getUnfurlService(),
         });
     }
 
@@ -396,9 +474,26 @@ export default class App {
         this.schedulerWorker = new SchedulerWorker({
             lightdashConfig: this.lightdashConfig,
             analytics: this.analytics,
-            ...services,
-            ...clients,
+            // TODO: Do not use serviceRepository singleton:
+            ...{
+                unfurlService: this.serviceRepository.getUnfurlService(),
+                csvService: this.serviceRepository.getCsvService(),
+                dashboardService: this.serviceRepository.getDashboardService(),
+                projectService: this.serviceRepository.getProjectService(),
+                schedulerService: this.serviceRepository.getSchedulerService(),
+                validationService:
+                    this.serviceRepository.getValidationService(),
+                userService: this.serviceRepository.getUserService(),
+            },
+            ...{
+                emailClient: this.clients.getEmailClient(),
+                googleDriveClient: this.clients.getGoogleDriveClient(),
+                s3Client: this.clients.getS3Client(),
+                schedulerClient: this.clients.getSchedulerClient(),
+                slackClient: this.clients.getSlackClient(),
+            },
         });
+
         this.schedulerWorker.run().catch((e) => {
             Logger.error('Error starting scheduler worker', e);
         });

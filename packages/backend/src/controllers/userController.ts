@@ -2,9 +2,11 @@ import {
     ApiEmailStatusResponse,
     ApiErrorPayload,
     ApiGetAuthenticatedUserResponse,
+    ApiGetLoginOptionsResponse,
     ApiRegisterUserResponse,
     ApiSuccessEmpty,
     ApiUserAllowedOrganizationsResponse,
+    LoginOptions,
     ParameterError,
     RegisterOrActivateUser,
     UpsertUserWarehouseCredentials,
@@ -28,7 +30,6 @@ import {
     Tags,
 } from '@tsoa/runtime';
 import express from 'express';
-import { userModel } from '../models/models';
 import { UserModel } from '../models/UserModel';
 import {
     allowApiKeyAuthentication,
@@ -179,9 +180,9 @@ export class UserController extends BaseController {
         await this.services
             .getUserService()
             .joinOrg(req.user!, organizationUuid);
-        const sessionUser = await userModel.findSessionUserByUUID(
-            req.user!.userUuid,
-        );
+        const sessionUser = await req.services
+            .getUserService()
+            .getSessionByUserUuid(req.user!.userUuid);
         await new Promise<void>((resolve, reject) => {
             req.login(sessionUser, (err) => {
                 if (err) {
@@ -210,6 +211,15 @@ export class UserController extends BaseController {
         await this.services
             .getUserService()
             .delete(req.user!, req.user!.userUuid);
+
+        await new Promise<void>((resolve, reject) => {
+            req.session.destroy((err) => {
+                if (err) {
+                    reject(err);
+                }
+                resolve();
+            });
+        });
         this.setStatus(200);
         return {
             status: 'ok',
@@ -298,6 +308,25 @@ export class UserController extends BaseController {
         return {
             status: 'ok',
             results: undefined,
+        };
+    }
+
+    /**
+     * Get login options for email
+     */
+    @Get('/login-options')
+    @OperationId('getLoginOptions')
+    async getLoginOptions(
+        @Request() req: express.Request,
+        @Query() email: string,
+    ): Promise<ApiGetLoginOptionsResponse> {
+        const loginOptions = await this.services
+            .getUserService()
+            .getLoginOptions(email);
+        this.setStatus(200);
+        return {
+            status: 'ok',
+            results: loginOptions,
         };
     }
 }

@@ -1,11 +1,11 @@
 import { OrganizationMemberRole } from '../types/organizationMemberProfile';
 import {
-    GroupRole,
-    InheritedProjectRole,
-    OrganizationRole,
     ProjectMemberRole,
-    ProjectRole,
     ProjectRoleOrder,
+    type GroupRole,
+    type InheritedProjectRole,
+    type OrganizationRole,
+    type ProjectRole,
 } from '../types/projectMemberRole';
 import { SpaceMemberRole } from '../types/space';
 import assertUnreachable from './assertUnreachable';
@@ -72,7 +72,7 @@ export const convertProjectRoleToSpaceRole = (
         case ProjectMemberRole.DEVELOPER:
             return SpaceMemberRole.EDITOR;
         case ProjectMemberRole.ADMIN:
-            return SpaceMemberRole.EDITOR;
+            return SpaceMemberRole.ADMIN;
         default:
             return assertUnreachable(
                 projectRole,

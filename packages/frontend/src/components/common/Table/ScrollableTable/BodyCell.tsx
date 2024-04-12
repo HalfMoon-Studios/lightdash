@@ -1,12 +1,11 @@
-import { ResultRow } from '@lightdash/common';
-import { getHotkeyHandler, useDisclosure } from '@mantine/hooks';
-import { Cell } from '@tanstack/react-table';
-import copy from 'copy-to-clipboard';
-import { FC, useCallback, useEffect, useRef, useState } from 'react';
-import { CSSProperties } from 'styled-components';
+import { type ResultRow } from '@lightdash/common';
+import { getHotkeyHandler, useClipboard, useDisclosure } from '@mantine/hooks';
+import { type Cell } from '@tanstack/react-table';
+import { useCallback, useEffect, useRef, useState, type FC } from 'react';
+import { type CSSProperties } from 'styled-components';
 import useToaster from '../../../../hooks/toaster/useToaster';
 import { Td } from '../Table.styles';
-import { CellContextMenuProps } from '../types';
+import { type CellContextMenuProps } from '../types';
 import CellMenu from './CellMenu';
 import CellTooltip from './CellTooltip';
 import RichBodyCell from './RichBodyCell';
@@ -43,6 +42,7 @@ const BodyCell: FC<React.PropsWithChildren<CommonBodyCellProps>> = ({
 }) => {
     const elementRef = useRef<HTMLTableCellElement>(null);
     const { showToastSuccess } = useToaster();
+    const { copy } = useClipboard();
 
     const [isCopying, setCopying] = useState(false);
     const [isMenuOpen, { toggle: toggleMenu }] = useDisclosure(false);
@@ -74,7 +74,7 @@ const BodyCell: FC<React.PropsWithChildren<CommonBodyCellProps>> = ({
             }
             return true;
         });
-    }, [cell, isMenuOpen, showToastSuccess]);
+    }, [isMenuOpen, cell, copy, showToastSuccess]);
 
     useEffect(() => {
         const handleKeyDown = getHotkeyHandler([['mod+C', handleCopy]]);

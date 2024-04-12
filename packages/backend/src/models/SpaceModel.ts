@@ -1,5 +1,6 @@
 import {
     ChartKind,
+    ChartType,
     convertOrganizationRoleToProjectRole,
     convertProjectRoleToSpaceRole,
     getHighestProjectRole,
@@ -11,6 +12,7 @@ import {
     ProjectRole,
     Space,
     SpaceDashboard,
+    SpaceMemberRole,
     SpaceQuery,
     SpaceShare,
     SpaceSummary,
@@ -44,11 +46,14 @@ import {
 import { ProjectGroupAccessTableName } from '../database/entities/projectGroupAccess';
 import { ProjectMembershipsTableName } from '../database/entities/projectMemberships';
 import { DbProject, ProjectTableName } from '../database/entities/projects';
-import { SavedChartsTableName } from '../database/entities/savedCharts';
+import {
+    SavedChartsTableName,
+    SavedChartVersionsTableName,
+} from '../database/entities/savedCharts';
 import {
     DbSpace,
-    SpaceShareTableName,
     SpaceTableName,
+    SpaceUserAccessTableName,
 } from '../database/entities/spaces';
 import { UserTableName } from '../database/entities/users';
 import { DbValidationTable } from '../database/entities/validation';
@@ -105,20 +110,19 @@ export class SpaceModel {
                 `${PinnedSpaceTableName}.pinned_list_uuid`,
             )
             .leftJoin(
-                SpaceShareTableName,
-                `${SpaceShareTableName}.space_id`,
-                `${SpaceTableName}.space_id`,
+                SpaceUserAccessTableName,
+                `${SpaceUserAccessTableName}.space_uuid`,
+                `${SpaceTableName}.space_uuid`,
             )
             .leftJoin(
                 'users',
-                `${SpaceShareTableName}.user_id`,
-                `${UserTableName}.user_id`,
+                `${SpaceUserAccessTableName}.user_uuid`,
+                `${UserTableName}.user_uuid`,
             )
             .where((q) => {
-                q.where(`${UserTableName}.user_uuid`, userUuid).orWhere(
-                    `${SpaceTableName}.is_private`,
-                    false,
-                );
+                void q
+                    .where(`${UserTableName}.user_uuid`, userUuid)
+                    .orWhere(`${SpaceTableName}.is_private`, false);
             })
             .where(`${ProjectTableName}.project_uuid`, projectUuid)
             .select<
@@ -161,6 +165,11 @@ export class SpaceModel {
         const space = await this.getFirstAccessibleSpace(projectUuid, userUuid);
         const savedQueries = await this.database('saved_queries')
             .leftJoin(
+                SpaceTableName,
+                `saved_queries.space_id`,
+                `${SpaceTableName}.space_id`,
+            )
+            .leftJoin(
                 'users',
                 'saved_queries.last_version_updated_by_user_uuid',
                 'users.user_uuid',
@@ -175,6 +184,21 @@ export class SpaceModel {
                 `${PinnedListTableName}.pinned_list_uuid`,
                 `${PinnedChartTableName}.pinned_list_uuid`,
             )
+            .leftJoin(
+                ProjectTableName,
+                `${ProjectTableName}.project_id`,
+                `${SpaceTableName}.project_id`,
+            )
+            .leftJoin(
+                OrganizationTableName,
+                `${OrganizationTableName}.organization_id`,
+                `${ProjectTableName}.organization_id`,
+            )
+            .leftJoin(
+                DashboardsTableName,
+                `${DashboardsTableName}.dashboard_uuid`,
+                `${SavedChartsTableName}.dashboard_uuid`,
+            )
             .select<
                 {
                     saved_query_uuid: string;
@@ -187,30 +211,41 @@ export class SpaceModel {
                     pinned_list_uuid: string | null;
                     order: number | null;
                     chart_kind: ChartKind;
+                    chart_type: ChartType;
                     views: string;
                     first_viewed_at: Date | null;
+                    project_uuid: string;
+                    organization_uuid: string;
+                    dashboard_uuid: string;
+                    dashboard_name: string;
                 }[]
             >([
                 `saved_queries.saved_query_uuid`,
                 `saved_queries.name`,
                 `saved_queries.description`,
-                `saved_queries.last_version_updated_at`,
-                `saved_queries.last_version_chart_kind`,
+                `saved_queries.last_version_updated_at as created_at`,
                 `users.user_uuid`,
                 `users.first_name`,
                 `users.last_name`,
                 `${PinnedListTableName}.pinned_list_uuid`,
                 `${PinnedChartTableName}.order`,
-
+                `saved_queries.last_version_chart_kind as chart_kind`,
+                this.database.raw(
+                    `(SELECT ${SavedChartVersionsTableName}.chart_type FROM ${SavedChartVersionsTableName} WHERE ${SavedChartVersionsTableName}.saved_query_id = saved_queries.saved_query_id ORDER BY ${SavedChartVersionsTableName}.created_at DESC LIMIT 1) as chart_type`,
+                ),
                 this.database.raw(
                     `(SELECT COUNT('${AnalyticsChartViewsTableName}.chart_uuid') FROM ${AnalyticsChartViewsTableName} WHERE saved_queries.saved_query_uuid = ${AnalyticsChartViewsTableName}.chart_uuid) as views`,
                 ),
                 this.database.raw(
                     `(SELECT ${AnalyticsChartViewsTableName}.timestamp FROM ${AnalyticsChartViewsTableName} WHERE saved_queries.saved_query_uuid = ${AnalyticsChartViewsTableName}.chart_uuid ORDER BY ${AnalyticsChartViewsTableName}.timestamp ASC LIMIT 1) as first_viewed_at`,
                 ),
+                `${ProjectTableName}.project_uuid`,
+                `${OrganizationTableName}.organization_uuid`,
+                `${DashboardsTableName}.dashboard_uuid`,
+                `${DashboardsTableName}.name as dashboard_name`,
             ])
             .orderBy('saved_queries.last_version_updated_at', 'desc')
-            .where('space_id', space.space_id);
+            .where('saved_queries.space_id', space.space_id);
 
         return {
             organizationUuid: space.organization_uuid,
@@ -222,6 +257,11 @@ export class SpaceModel {
             queries: savedQueries.map((savedQuery) => ({
                 uuid: savedQuery.saved_query_uuid,
                 name: savedQuery.name,
+                spaceName: space.name,
+                projectUuid: savedQuery.project_uuid,
+                organizationUuid: savedQuery.organization_uuid,
+                dashboardUuid: savedQuery.dashboard_uuid,
+                dashboardName: savedQuery.dashboard_name,
                 description: savedQuery.description,
                 updatedAt: savedQuery.created_at,
                 updatedByUser: {
@@ -232,7 +272,8 @@ export class SpaceModel {
                 spaceUuid: space.space_uuid,
                 pinnedListUuid: savedQuery.pinned_list_uuid,
                 pinnedListOrder: savedQuery.order,
-                chartType: savedQuery.chart_kind,
+                chartType: savedQuery.chart_type,
+                chartKind: savedQuery.chart_kind,
                 views: parseInt(savedQuery.views, 10) || 0,
                 firstViewedAt: savedQuery.first_viewed_at,
             })),
@@ -245,7 +286,7 @@ export class SpaceModel {
     async find(filters: {
         projectUuid?: string;
         spaceUuid?: string;
-    }): Promise<SpaceSummary[]> {
+    }): Promise<Omit<SpaceSummary, 'userAccess'>[]> {
         const transaction = Sentry.getCurrentHub()
             ?.getScope()
             ?.getTransaction();
@@ -276,14 +317,14 @@ export class SpaceModel {
                     `${PinnedSpaceTableName}.pinned_list_uuid`,
                 )
                 .leftJoin(
-                    'space_share',
-                    'space_share.space_id',
-                    'spaces.space_id',
+                    `${SpaceUserAccessTableName}`,
+                    `${SpaceUserAccessTableName}.space_uuid`,
+                    'spaces.space_uuid',
                 )
                 .leftJoin(
                     'users as shared_with',
-                    'space_share.user_id',
-                    'shared_with.user_id',
+                    `${SpaceUserAccessTableName}.user_uuid`,
+                    'shared_with.user_uuid',
                 )
                 .groupBy(
                     `${PinnedListTableName}.pinned_list_uuid`,
@@ -318,10 +359,10 @@ export class SpaceModel {
                         ),
                 });
             if (filters.projectUuid) {
-                query.where('projects.project_uuid', filters.projectUuid);
+                void query.where('projects.project_uuid', filters.projectUuid);
             }
             if (filters.spaceUuid) {
-                query.where('spaces.space_uuid', filters.spaceUuid);
+                void query.where('spaces.space_uuid', filters.spaceUuid);
             }
             return await query;
         } finally {
@@ -454,8 +495,8 @@ export class SpaceModel {
                 this.database.raw(`
                     COALESCE(
                         (
-                            SELECT json_agg(validations.*) 
-                            FROM validations 
+                            SELECT json_agg(validations.*)
+                            FROM validations
                             WHERE validations.dashboard_uuid = ${DashboardsTableName}.dashboard_uuid
                         ), '[]'
                     ) as validation_errors
@@ -535,7 +576,10 @@ export class SpaceModel {
         );
     }
 
-    async getSpaceAccess(spaceUuid: string): Promise<SpaceShare[]> {
+    private async _getSpaceAccess(
+        spaceUuid: string,
+        filters?: { userUuid?: string },
+    ): Promise<SpaceShare[]> {
         const access = await this.database
             .table(SpaceTableName)
             .leftJoin(
@@ -547,6 +591,11 @@ export class SpaceModel {
                 OrganizationMembershipsTableName,
                 `${OrganizationMembershipsTableName}.organization_id`,
                 `${ProjectTableName}.organization_id`,
+            )
+            .leftJoin(
+                UserTableName,
+                `${OrganizationMembershipsTableName}.user_id`,
+                `${UserTableName}.user_id`,
             )
             .leftJoin(
                 ProjectMembershipsTableName,
@@ -562,15 +611,15 @@ export class SpaceModel {
                     );
                 },
             )
-            .leftJoin(SpaceShareTableName, function joinSpaceShareTable() {
+            .leftJoin(SpaceUserAccessTableName, function joinSpaceShareTable() {
                 this.on(
-                    `${OrganizationMembershipsTableName}.user_id`,
+                    `${UserTableName}.user_uuid`,
                     '=',
-                    `${SpaceShareTableName}.user_id`,
+                    `${SpaceUserAccessTableName}.user_uuid`,
                 ).andOn(
-                    `${SpaceTableName}.space_id`,
+                    `${SpaceTableName}.space_uuid`,
                     '=',
-                    `${SpaceShareTableName}.space_id`,
+                    `${SpaceUserAccessTableName}.space_uuid`,
                 );
             })
             .leftJoin(
@@ -592,11 +641,6 @@ export class SpaceModel {
                     );
                 },
             )
-            .leftJoin(
-                UserTableName,
-                `${OrganizationMembershipsTableName}.user_id`,
-                `${UserTableName}.user_id`,
-            )
             .innerJoin(
                 EmailTableName,
                 `${UserTableName}.user_id`,
@@ -604,16 +648,24 @@ export class SpaceModel {
             )
             .where(`${EmailTableName}.is_primary`, true)
             .where(`${SpaceTableName}.space_uuid`, spaceUuid)
+            .modify((query) => {
+                if (filters?.userUuid) {
+                    void query.where(
+                        `${UserTableName}.user_uuid`,
+                        filters.userUuid,
+                    );
+                }
+            })
             .where((query) => {
-                query
+                void query
                     .where((query1) => {
                         // if space is private, only return user with direct access or admin role
-                        query1
+                        void query1
                             .where(`${SpaceTableName}.is_private`, true)
                             .andWhere((query2) => {
-                                query2
+                                void query2
                                     .whereNotNull(
-                                        `${SpaceShareTableName}.user_id`,
+                                        `${SpaceUserAccessTableName}.user_uuid`,
                                     )
                                     .orWhere(
                                         `${ProjectMembershipsTableName}.role`,
@@ -637,9 +689,11 @@ export class SpaceModel {
                 `${UserTableName}.first_name`,
                 `${UserTableName}.last_name`,
                 `${EmailTableName}.email`,
+                `${SpaceTableName}.is_private`,
                 `${ProjectMembershipsTableName}.role`,
                 `${OrganizationMembershipsTableName}.role`,
-                `${SpaceShareTableName}.user_id`,
+                `${SpaceUserAccessTableName}.user_uuid`,
+                `${SpaceUserAccessTableName}.space_role`,
             )
             .select<
                 {
@@ -647,6 +701,8 @@ export class SpaceModel {
                     first_name: string;
                     last_name: string;
                     email: string;
+                    is_private: boolean;
+                    space_role: SpaceMemberRole;
                     user_with_direct_access: boolean;
                     project_role: ProjectMemberRole | null;
                     organization_role: OrganizationMemberRole;
@@ -657,8 +713,10 @@ export class SpaceModel {
                 `users.first_name`,
                 `users.last_name`,
                 `emails.email`,
+                `spaces.is_private`,
+                `space_user_access.space_role`,
                 this.database.raw(
-                    `CASE WHEN ${SpaceShareTableName}.user_id IS NULL THEN false ELSE true end as user_with_direct_access`,
+                    `CASE WHEN ${SpaceUserAccessTableName}.user_uuid IS NULL THEN false ELSE true end as user_with_direct_access`,
                 ),
                 `${ProjectMembershipsTableName}.role as project_role`,
                 `${OrganizationMembershipsTableName}.role as organization_role`,
@@ -675,6 +733,8 @@ export class SpaceModel {
                     first_name,
                     last_name,
                     email,
+                    is_private,
+                    space_role,
                     user_with_direct_access,
                     project_role,
                     organization_role,
@@ -703,11 +763,23 @@ export class SpaceModel {
                     ...inheritedGroupRoles,
                 ]);
 
-                // exclude all users that were converted to organization members and have no space access
+                // exclude users with no space role
                 if (!highestRole) {
-                    this.removeSpaceAccess(spaceUuid, user_uuid); // remove access from the space if it exists
                     return acc;
                 }
+
+                let spaceRole;
+
+                if (highestRole.role === ProjectMemberRole.ADMIN) {
+                    spaceRole = SpaceMemberRole.ADMIN;
+                } else if (user_with_direct_access) {
+                    spaceRole = space_role;
+                } else if (!is_private && !user_with_direct_access) {
+                    spaceRole = convertProjectRoleToSpaceRole(highestRole.role);
+                } else {
+                    return acc;
+                }
+
                 return [
                     ...acc,
                     {
@@ -715,7 +787,7 @@ export class SpaceModel {
                         firstName: first_name,
                         lastName: last_name,
                         email,
-                        role: convertProjectRoleToSpaceRole(highestRole.role),
+                        role: spaceRole,
                         hasDirectAccess: !!user_with_direct_access,
                         inheritedRole: highestRole.role,
                         inheritedFrom: highestRole.type,
@@ -724,6 +796,13 @@ export class SpaceModel {
             },
             [],
         );
+    }
+
+    async getUserSpaceAccess(
+        userUuid: string,
+        spaceUuid: string,
+    ): Promise<SpaceShare[]> {
+        return this._getSpaceAccess(spaceUuid, { userUuid });
     }
 
     async getSpaceQueries(
@@ -755,6 +834,21 @@ export class SpaceModel {
                 `${PinnedListTableName}.pinned_list_uuid`,
                 `${PinnedChartTableName}.pinned_list_uuid`,
             )
+            .leftJoin(
+                ProjectTableName,
+                `${ProjectTableName}.project_id`,
+                `${SpaceTableName}.project_id`,
+            )
+            .leftJoin(
+                OrganizationTableName,
+                `${OrganizationTableName}.organization_id`,
+                `${ProjectTableName}.organization_id`,
+            )
+            .leftJoin(
+                DashboardsTableName,
+                `${DashboardsTableName}.dashboard_uuid`,
+                `${SavedChartsTableName}.dashboard_uuid`,
+            )
             .select<
                 {
                     saved_query_uuid: string;
@@ -767,10 +861,16 @@ export class SpaceModel {
                     views: string;
                     first_viewed_at: Date | null;
                     chart_kind: ChartKind;
+                    chart_type: ChartType;
                     pinned_list_uuid: string;
                     order: number;
                     validation_errors: DbValidationTable[];
                     space_uuid: string;
+                    space_name: string;
+                    project_uuid: string;
+                    organization_uuid: string;
+                    dashboard_uuid: string | null;
+                    dashboard_name: string | null;
                 }[]
             >([
                 `saved_queries.saved_query_uuid`,
@@ -787,18 +887,26 @@ export class SpaceModel {
                     `(SELECT ${AnalyticsChartViewsTableName}.timestamp FROM ${AnalyticsChartViewsTableName} WHERE ${AnalyticsChartViewsTableName}.chart_uuid = saved_queries.saved_query_uuid ORDER BY ${AnalyticsChartViewsTableName}.timestamp ASC LIMIT 1) as first_viewed_at`,
                 ),
                 `saved_queries.last_version_chart_kind as chart_kind`,
+                this.database.raw(
+                    `(SELECT ${SavedChartVersionsTableName}.chart_type FROM ${SavedChartVersionsTableName} WHERE ${SavedChartVersionsTableName}.saved_query_id = saved_queries.saved_query_id ORDER BY ${SavedChartVersionsTableName}.created_at DESC LIMIT 1) as chart_type`,
+                ),
                 `${PinnedListTableName}.pinned_list_uuid`,
                 `${PinnedChartTableName}.order`,
                 this.database.raw(`
                     COALESCE(
                         (
-                            SELECT json_agg(validations.*) 
-                            FROM validations 
+                            SELECT json_agg(validations.*)
+                            FROM validations
                             WHERE validations.saved_chart_uuid = saved_queries.saved_query_uuid
                         ), '[]'
                     ) as validation_errors
                 `),
                 `${SpaceTableName}.space_uuid`,
+                `${SpaceTableName}.name as space_name`,
+                `${ProjectTableName}.project_uuid`,
+                `${OrganizationTableName}.organization_uuid`,
+                `${DashboardsTableName}.dashboard_uuid`,
+                `${DashboardsTableName}.name as dashboard_name`,
             ]);
 
         if (filters?.recentlyUpdated || filters?.mostPopular) {
@@ -833,6 +941,11 @@ export class SpaceModel {
         return savedQueries.map((savedQuery) => ({
             uuid: savedQuery.saved_query_uuid,
             name: savedQuery.name,
+            spaceName: savedQuery.space_name,
+            dashboardName: savedQuery.dashboard_name,
+            organizationUuid: savedQuery.organization_uuid,
+            projectUuid: savedQuery.project_uuid,
+            dashboardUuid: savedQuery.dashboard_uuid,
             description: savedQuery.description,
             updatedAt: savedQuery.created_at,
             updatedByUser: {
@@ -843,7 +956,8 @@ export class SpaceModel {
             spaceUuid: savedQuery.space_uuid,
             views: parseInt(savedQuery.views, 10),
             firstViewedAt: savedQuery.first_viewed_at,
-            chartType: savedQuery.chart_kind,
+            chartType: savedQuery.chart_type,
+            chartKind: savedQuery.chart_kind,
             pinnedListUuid: savedQuery.pinned_list_uuid,
             pinnedListOrder: savedQuery.order,
             validationErrors: savedQuery.validation_errors.map(
@@ -856,55 +970,9 @@ export class SpaceModel {
         }));
     }
 
-    async getAllSpaces(projectUuid: string): Promise<Space[]> {
-        const results = await this.database(SpaceTableName)
-            .innerJoin('projects', 'projects.project_id', 'spaces.project_id')
-            .innerJoin(
-                'organizations',
-                'organizations.organization_id',
-                'projects.organization_id',
-            )
-            .leftJoin(
-                PinnedSpaceTableName,
-                `${PinnedSpaceTableName}.space_uuid`,
-                `${SpaceTableName}.space_uuid`,
-            )
-            .leftJoin(
-                PinnedListTableName,
-                `${PinnedListTableName}.pinned_list_uuid`,
-                `${PinnedSpaceTableName}.pinned_list_uuid`,
-            )
-            .where(`${ProjectTableName}.project_uuid`, projectUuid)
-            .select<
-                (DbSpace &
-                    DbProject &
-                    DbOrganization &
-                    Pick<DbPinnedList, 'pinned_list_uuid'> &
-                    Pick<DBPinnedSpace, 'order'>)[]
-            >([
-                'spaces.*',
-                'projects.project_uuid',
-                'organizations.organization_uuid',
-                `${PinnedListTableName}.pinned_list_uuid`,
-                `${PinnedSpaceTableName}.order`,
-            ]);
-        return Promise.all(
-            results.map(async (row) => ({
-                organizationUuid: row.organization_uuid,
-                name: row.name,
-                isPrivate: row.is_private,
-                uuid: row.space_uuid,
-                projectUuid: row.project_uuid,
-                pinnedListUuid: row.pinned_list_uuid,
-                pinnedListOrder: row.order,
-                queries: await this.getSpaceQueries([row.space_uuid]),
-                dashboards: await this.getSpaceDashboards([row.space_uuid]),
-                access: await this.getSpaceAccess(row.space_uuid),
-            })),
-        );
-    }
-
-    async getSpaceSummary(spaceUuid: string): Promise<SpaceSummary> {
+    async getSpaceSummary(
+        spaceUuid: string,
+    ): Promise<Omit<SpaceSummary, 'userAccess'>> {
         return wrapOtelSpan('SpaceModel.getSpaceSummary', {}, async () => {
             const [space] = await this.find({ spaceUuid });
             if (space === undefined)
@@ -920,10 +988,7 @@ export class SpaceModel {
     ): Promise<
         Map<
             string,
-            Pick<
-                SpaceSummary | Space,
-                'isPrivate' | 'access' | 'organizationUuid' | 'projectUuid'
-            >
+            Pick<SpaceSummary, 'isPrivate' | 'organizationUuid' | 'projectUuid'>
         >
     > {
         const spaces = await this.database('spaces')
@@ -933,11 +998,15 @@ export class SpaceModel {
                 'organizations.organization_id',
                 'projects.organization_id',
             )
-            .leftJoin('space_share', 'space_share.space_id', 'spaces.space_id')
+            .leftJoin(
+                'space_user_access',
+                'space_user_access.space_uuid',
+                'spaces.space_uuid',
+            )
             .leftJoin(
                 'users as shared_with',
-                'space_share.user_id',
-                'shared_with.user_id',
+                'space_user_access.user_uuid',
+                'shared_with.user_uuid',
             )
             .whereIn('spaces.space_uuid', spaceUuids)
             .select({
@@ -961,7 +1030,6 @@ export class SpaceModel {
                 organizationUuid: space.organizationUuid,
                 projectUuid: space.projectUuid,
                 isPrivate: space.isPrivate,
-                access: space.access,
             });
         });
 
@@ -980,7 +1048,7 @@ export class SpaceModel {
             pinnedListOrder: space.pinnedListOrder,
             queries: await this.getSpaceQueries([space.uuid]),
             dashboards: await this.getSpaceDashboards([space.uuid]),
-            access: await this.getSpaceAccess(space.uuid),
+            access: await this._getSpaceAccess(space.uuid),
         };
     }
 
@@ -1033,21 +1101,18 @@ export class SpaceModel {
         return this.getFullSpace(spaceUuid);
     }
 
-    async addSpaceAccess(spaceUuid: string, userUuid: string): Promise<void> {
-        const [space] = await this.database('spaces')
-            .select('space_id')
-            .where('space_uuid', spaceUuid);
-
-        const [user] = await this.database('users')
-            .select('user_id')
-            .where('user_uuid', userUuid);
-
-        await this.database(SpaceShareTableName)
+    async addSpaceAccess(
+        spaceUuid: string,
+        userUuid: string,
+        spaceRole: SpaceMemberRole,
+    ): Promise<void> {
+        await this.database(SpaceUserAccessTableName)
             .insert({
-                space_id: space.space_id,
-                user_id: user.user_id,
+                space_uuid: spaceUuid,
+                user_uuid: userUuid,
+                space_role: spaceRole,
             })
-            .onConflict(['user_id', 'space_id'])
+            .onConflict(['user_uuid', 'space_uuid'])
             .merge();
     }
 
@@ -1055,32 +1120,9 @@ export class SpaceModel {
         spaceUuid: string,
         userUuid: string,
     ): Promise<void> {
-        const [space] = await this.database('spaces')
-            .select('space_id')
-            .where('space_uuid', spaceUuid);
-
-        const [user] = await this.database('users')
-            .select('user_id')
-            .where('user_uuid', userUuid);
-
-        await this.database(SpaceShareTableName)
-            .where('space_id', space.space_id)
-            .andWhere('user_id', user.user_id)
-            .delete();
-    }
-
-    async clearSpaceAccess(spaceUuid: string, userUuid: string): Promise<void> {
-        const [space] = await this.database('spaces')
-            .select('space_id')
-            .where('space_uuid', spaceUuid);
-
-        const [user] = await this.database('users')
-            .select('user_id')
-            .where('user_uuid', userUuid);
-
-        await this.database('space_share')
-            .where('space_id', space.space_id)
-            .andWhereNot('user_id', user.user_id)
+        await this.database(SpaceUserAccessTableName)
+            .where('space_uuid', spaceUuid)
+            .andWhere('user_uuid', userUuid)
             .delete();
     }
 }

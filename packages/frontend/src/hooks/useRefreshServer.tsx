@@ -1,10 +1,10 @@
 import {
-    ApiError,
-    ApiRefreshResults,
-    Job,
     JobStatusType,
-    JobStep,
     JobStepStatusType,
+    type ApiError,
+    type ApiRefreshResults,
+    type Job,
+    type JobStep,
 } from '@lightdash/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
@@ -98,9 +98,9 @@ export const useJob = (
                 ? false
                 : 500,
         staleTime: 0,
-        onSuccess: (job) => {
+        onSuccess: async (job) => {
             if (job.jobStatus === JobStatusType.DONE) {
-                queryClient.invalidateQueries(['tables']);
+                await queryClient.invalidateQueries(['tables']);
             }
             onSuccess(job);
         },

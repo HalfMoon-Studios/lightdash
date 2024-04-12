@@ -19,6 +19,7 @@ import {
     ProjectType,
     sensitiveCredentialsFieldNames,
     sensitiveDbtCredentialsFieldNames,
+    SpaceSummary,
     SupportedDbtVersions,
     TablesConfiguration,
     UnexpectedServerError,
@@ -26,6 +27,7 @@ import {
     WarehouseCredentials,
     WarehouseTypes,
 } from '@lightdash/common';
+
 import {
     WarehouseCatalog,
     warehouseClientFromCredentials,
@@ -55,18 +57,19 @@ import {
     DbProject,
     ProjectTableName,
 } from '../../database/entities/projects';
-import { DbSavedChart } from '../../database/entities/savedCharts';
+import { DbSavedChart, InsertChart } from '../../database/entities/savedCharts';
+import { DbSpace } from '../../database/entities/spaces';
 import { DbUser } from '../../database/entities/users';
 import { WarehouseCredentialTableName } from '../../database/entities/warehouseCredentials';
 import Logger from '../../logging/logger';
-import { EncryptionService } from '../../services/EncryptionService/EncryptionService';
 import { wrapOtelSpan } from '../../utils';
+import { EncryptionUtil } from '../../utils/EncryptionUtil/EncryptionUtil';
 import Transaction = Knex.Transaction;
 
 type ProjectModelArguments = {
     database: Knex;
     lightdashConfig: LightdashConfig;
-    encryptionService: EncryptionService;
+    encryptionUtil: EncryptionUtil;
 };
 
 const CACHED_EXPLORES_PG_LOCK_NAMESPACE = 1;
@@ -76,12 +79,12 @@ export class ProjectModel {
 
     private lightdashConfig: LightdashConfig;
 
-    private encryptionService: EncryptionService;
+    private encryptionUtil: EncryptionUtil;
 
     constructor(args: ProjectModelArguments) {
         this.database = args.database;
         this.lightdashConfig = args.lightdashConfig;
-        this.encryptionService = args.encryptionService;
+        this.encryptionUtil = args.encryptionUtil;
     }
 
     static mergeMissingDbtConfigSecrets(
@@ -185,7 +188,7 @@ export class ProjectModel {
             }) => {
                 try {
                     const warehouseCredentials = JSON.parse(
-                        this.encryptionService.decrypt(encrypted_credentials),
+                        this.encryptionUtil.decrypt(encrypted_credentials),
                     ) as CreateWarehouseCredentials;
                     return {
                         name,
@@ -211,7 +214,7 @@ export class ProjectModel {
     ): Promise<void> {
         let encryptedCredentials: Buffer;
         try {
-            encryptedCredentials = this.encryptionService.encrypt(
+            encryptedCredentials = this.encryptionUtil.encrypt(
                 JSON.stringify(data),
             );
         } catch (e) {
@@ -254,7 +257,7 @@ export class ProjectModel {
         return this.database.transaction(async (trx) => {
             let encryptedCredentials: Buffer;
             try {
-                encryptedCredentials = this.encryptionService.encrypt(
+                encryptedCredentials = this.encryptionUtil.encrypt(
                     JSON.stringify(data.dbtConnection),
                 );
             } catch (e) {
@@ -302,7 +305,7 @@ export class ProjectModel {
         await this.database.transaction(async (trx) => {
             let encryptedCredentials: Buffer;
             try {
-                encryptedCredentials = this.encryptionService.encrypt(
+                encryptedCredentials = this.encryptionUtil.encrypt(
                     JSON.stringify(data.dbtConnection),
                 );
             } catch (e) {
@@ -422,7 +425,7 @@ export class ProjectModel {
                 let dbtSensitiveCredentials: DbtProjectConfig;
                 try {
                     dbtSensitiveCredentials = JSON.parse(
-                        this.encryptionService.decrypt(project.dbt_connection),
+                        this.encryptionUtil.decrypt(project.dbt_connection),
                     ) as DbtProjectConfig;
                 } catch (e) {
                     throw new UnexpectedServerError(
@@ -444,7 +447,7 @@ export class ProjectModel {
                 let sensitiveCredentials: CreateWarehouseCredentials;
                 try {
                     sensitiveCredentials = JSON.parse(
-                        this.encryptionService.decrypt(
+                        this.encryptionUtil.decrypt(
                             project.encrypted_credentials,
                         ),
                     ) as CreateWarehouseCredentials;
@@ -994,7 +997,7 @@ export class ProjectModel {
         if (row === undefined) {
             return undefined;
         }
-        const serviceToken = this.encryptionService.decrypt(row.service_token);
+        const serviceToken = this.encryptionUtil.decrypt(row.service_token);
         return {
             metricsJobId: row.metrics_job_id,
             serviceToken,
@@ -1013,7 +1016,7 @@ export class ProjectModel {
                 `Cannot find project with id '${projectUuid}'`,
             );
         }
-        const encryptedServiceToken = this.encryptionService.encrypt(
+        const encryptedServiceToken = this.encryptionUtil.encrypt(
             integration.serviceToken,
         );
         await this.database('dbt_cloud_integrations')
@@ -1055,7 +1058,7 @@ export class ProjectModel {
         }
         try {
             return JSON.parse(
-                this.encryptionService.decrypt(row.encrypted_credentials),
+                this.encryptionUtil.decrypt(row.encrypted_credentials),
             ) as CreateWarehouseCredentials;
         } catch (e) {
             throw new UnexpectedServerError(
@@ -1064,8 +1067,12 @@ export class ProjectModel {
         }
     }
 
-    async duplicateContent(projectUuid: string, previewProjectUuid: string) {
-        Logger.debug(
+    async duplicateContent(
+        projectUuid: string,
+        previewProjectUuid: string,
+        spaces: Pick<SpaceSummary, 'uuid'>[],
+    ) {
+        Logger.info(
             `Duplicating content from ${projectUuid} to ${previewProjectUuid}`,
         );
 
@@ -1080,19 +1087,33 @@ export class ProjectModel {
                 .select('project_id');
             const projectId = project.project_id;
 
-            const spaces = await trx('spaces').where('project_id', projectId);
+            const dbSpaces = await trx('spaces').whereIn(
+                'space_uuid',
+                spaces.map((s) => s.uuid),
+            );
 
-            Logger.debug(
+            Logger.info(
                 `Duplicating ${spaces.length} spaces on ${previewProjectUuid}`,
             );
-            const spaceIds = spaces.map((s) => s.space_id);
+            const spaceIds = dbSpaces.map((s) => s.space_id);
+            const spaceUuids = dbSpaces.map((s) => s.space_uuid);
 
             const newSpaces =
                 spaces.length > 0
                     ? await trx('spaces')
                           .insert(
-                              spaces.map((d) => {
-                                  const createSpace = {
+                              dbSpaces.map((d) => {
+                                  type CloneSpace = Omit<
+                                      DbSpace,
+                                      | 'space_id'
+                                      | 'space_uuid'
+                                      | 'search_vector'
+                                  > & {
+                                      search_vector?: undefined;
+                                      space_id?: number;
+                                      space_uuid?: string;
+                                  };
+                                  const createSpace: CloneSpace = {
                                       ...d,
                                       search_vector: undefined,
                                       space_id: undefined,
@@ -1101,6 +1122,7 @@ export class ProjectModel {
                                   };
                                   // Remove the keys for the autogenerated fields
                                   // Some databases do not support undefined values
+                                  delete createSpace.search_vector;
                                   delete createSpace.space_id;
                                   delete createSpace.space_uuid;
                                   return createSpace;
@@ -1109,25 +1131,31 @@ export class ProjectModel {
                           .returning('*')
                     : [];
 
-            const spaceMapping = spaces.map((s, i) => ({
+            const spaceMapping = dbSpaces.map((s, i) => ({
                 id: s.space_id,
+                uuid: s.space_uuid,
                 newId: newSpaces[i].space_id,
+                newUuid: newSpaces[i].space_uuid,
             }));
 
-            const getNewSpace = (oldSpaceId: number): number =>
-                spaceMapping.find((s) => s.id === oldSpaceId)?.newId!;
-            const spaceShares = await trx('space_share').whereIn(
-                'space_id',
-                spaceIds,
+            const getNewSpaceId = (oldSpacId: number): number =>
+                spaceMapping.find((s) => s.id === oldSpacId)?.newId!;
+
+            const getNewSpaceUuid = (oldSpaceUuid: string): string =>
+                spaceMapping.find((s) => s.uuid === oldSpaceUuid)?.newUuid!;
+
+            const spaceUserAccesses = await trx('space_user_access').whereIn(
+                'space_uuid',
+                spaceUuids,
             );
 
-            const newSpaceShare =
-                spaceShares.length > 0
-                    ? await trx('space_share')
+            const newSpaceUserAccess =
+                spaceUserAccesses.length > 0
+                    ? await trx('space_user_access')
                           .insert(
-                              spaceShares.map((d) => ({
+                              spaceUserAccesses.map((d) => ({
                                   ...d,
-                                  space_id: getNewSpace(d.space_id),
+                                  space_uuid: getNewSpaceUuid(d.space_uuid),
                               })),
                           )
                           .returning('*')
@@ -1135,12 +1163,18 @@ export class ProjectModel {
 
             const charts = await trx('saved_queries')
                 .leftJoin('spaces', 'saved_queries.space_id', 'spaces.space_id')
-                .where('spaces.project_id', projectId)
+                .whereIn('saved_queries.space_id', spaceIds)
+                .andWhere('spaces.project_id', projectId)
                 .select<DbSavedChart[]>('saved_queries.*');
 
-            Logger.debug(
+            Logger.info(
                 `Duplicating ${charts.length} charts on ${previewProjectUuid}`,
             );
+            type CloneChart = InsertChart & {
+                search_vector?: string;
+                saved_query_id?: number;
+                saved_query_uuid?: string;
+            };
 
             const newCharts =
                 charts.length > 0
@@ -1152,14 +1186,15 @@ export class ProjectModel {
                                           `Chart ${d.saved_query_id} has no space_id`,
                                       );
                                   }
-                                  const createChart = {
+                                  const createChart: CloneChart = {
                                       ...d,
                                       search_vector: undefined,
                                       saved_query_id: undefined,
                                       saved_query_uuid: undefined,
-                                      space_id: getNewSpace(d.space_id),
+                                      space_id: getNewSpaceId(d.space_id),
                                       dashboard_uuid: null,
                                   };
+                                  delete createChart.search_vector;
                                   delete createChart.saved_query_id;
                                   delete createChart.saved_query_uuid;
                                   return createChart;
@@ -1176,9 +1211,10 @@ export class ProjectModel {
                 )
                 .leftJoin('spaces', 'dashboards.space_id', 'spaces.space_id')
                 .where('spaces.project_id', projectId)
+                .andWhere('saved_queries.space_id', null)
                 .select<DbSavedChart[]>('saved_queries.*');
 
-            Logger.debug(
+            Logger.info(
                 `Duplicating ${chartsInDashboards.length} charts in dashboards on ${previewProjectUuid}`,
             );
 
@@ -1193,14 +1229,13 @@ export class ProjectModel {
                                           `Chart in dashboard ${d.saved_query_id} has no dashboard_uuid`,
                                       );
                                   }
-                                  const createChart = {
+                                  const createChart: CloneChart = {
                                       ...d,
                                       search_vector: undefined,
-                                      saved_query_id: undefined,
-                                      saved_query_uuid: undefined,
                                       space_id: null,
-                                      dashboard_uuid: d.dashboard_uuid,
+                                      dashboard_uuid: d.dashboard_uuid, // we'll update this later
                                   };
+                                  delete createChart.search_vector;
                                   delete createChart.saved_query_id;
                                   delete createChart.saved_query_uuid;
 
@@ -1336,12 +1371,13 @@ export class ProjectModel {
 
             const dashboards = await trx('dashboards')
                 .leftJoin('spaces', 'dashboards.space_id', 'spaces.space_id')
-                .where('spaces.project_id', projectId)
+                .whereIn('dashboards.space_id', spaceIds)
+                .andWhere('spaces.project_id', projectId)
                 .select<DbDashboard[]>('dashboards.*');
 
             const dashboardIds = dashboards.map((d) => d.dashboard_id);
 
-            Logger.debug(
+            Logger.info(
                 `Duplicating ${dashboards.length} dashboards on ${previewProjectUuid}`,
             );
 
@@ -1350,13 +1386,24 @@ export class ProjectModel {
                     ? await trx('dashboards')
                           .insert(
                               dashboards.map((d) => {
-                                  const createDashboard = {
+                                  type CloneDashboard = Omit<
+                                      DbDashboard,
+                                      | 'dashboard_id'
+                                      | 'dashboard_uuid'
+                                      | 'search_vector'
+                                  > & {
+                                      search_vector?: string;
+                                      dashboard_id?: number;
+                                      dashboard_uuid?: string;
+                                  };
+                                  const createDashboard: CloneDashboard = {
                                       ...d,
                                       search_vector: undefined,
                                       dashboard_id: undefined,
                                       dashboard_uuid: undefined,
-                                      space_id: getNewSpace(d.space_id),
+                                      space_id: getNewSpaceId(d.space_id),
                                   };
+                                  delete createDashboard.search_vector;
                                   delete createDashboard.dashboard_id;
                                   delete createDashboard.dashboard_uuid;
                                   return createDashboard;
@@ -1415,7 +1462,7 @@ export class ProjectModel {
                 dashboardVersionIds,
             );
 
-            Logger.debug(
+            Logger.info(
                 `Duplicating ${dashboardViews.length} dashboard views on ${previewProjectUuid}`,
             );
 
@@ -1436,7 +1483,7 @@ export class ProjectModel {
                 dashboardVersionIds,
             );
 
-            Logger.debug(
+            Logger.info(
                 `Duplicating ${dashboardTiles.length} dashboard tiles on ${previewProjectUuid}`,
             );
 
@@ -1444,21 +1491,31 @@ export class ProjectModel {
                 (dv) => dv.dashboard_tile_uuid,
             );
 
-            Logger.debug(
+            Logger.info(
                 `Updating ${chartsInDashboards.length} charts in dashboards`,
             );
             // Update chart in dashboards with new dashboardUuids
-            await newChartsInDashboards.map(async (chart) => {
-                const newDashboardUuid = dashboardMapping.find(
-                    (m) => m.uuid === chart.dashboard_uuid,
-                )?.newUuid;
+            const updateChartInDashboards = newChartsInDashboards.map(
+                (chart) => {
+                    const newDashboardUuid = dashboardMapping.find(
+                        (m) => m.uuid === chart.dashboard_uuid,
+                    )?.newUuid;
 
-                return trx('saved_queries')
-                    .update({
-                        dashboard_uuid: newDashboardUuid,
-                    })
-                    .where('saved_query_id', chart.saved_query_id);
-            });
+                    if (!newDashboardUuid) {
+                        // The dashboard was not copied, perhaps becuase it belongs to a space the user doesn't have access to
+                        // We delete this chart in dashboard
+                        return trx('saved_queries')
+                            .where('saved_query_id', chart.saved_query_id)
+                            .delete();
+                    }
+                    return trx('saved_queries')
+                        .update({
+                            dashboard_uuid: newDashboardUuid,
+                        })
+                        .where('saved_query_id', chart.saved_query_id);
+                },
+            );
+            await Promise.all(updateChartInDashboards);
 
             const newDashboardTiles =
                 dashboardTiles.length > 0

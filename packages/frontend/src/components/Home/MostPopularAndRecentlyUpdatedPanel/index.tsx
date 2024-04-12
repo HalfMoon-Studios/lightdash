@@ -1,15 +1,15 @@
-import { subject } from '@casl/ability';
 import {
     LightdashMode,
-    MostPopularAndRecentlyUpdated,
     ResourceItemCategory,
     ResourceViewItemType,
     wrapResource,
+    type MostPopularAndRecentlyUpdated,
 } from '@lightdash/common';
 import { Button } from '@mantine/core';
 import { IconChartBar, IconPlus } from '@tabler/icons-react';
-import { FC, useMemo } from 'react';
+import { useMemo, type FC } from 'react';
 import { useHistory } from 'react-router-dom';
+import useCreateInAnySpaceAccess from '../../../hooks/user/useCreateInAnySpaceAccess';
 import { useApp } from '../../../providers/AppProvider';
 import MantineIcon from '../../common/MantineIcon';
 import MantineLinkButton from '../../common/MantineLinkButton';
@@ -26,7 +26,7 @@ export const MostPopularAndRecentlyUpdatedPanel: FC<Props> = ({
 }) => {
     const MAX_NUMBER_OF_ITEMS_IN_PANEL = 10;
     const history = useHistory();
-    const { user, health } = useApp();
+    const { health } = useApp();
 
     const mostPopularAndRecentlyUpdatedItems = useMemo(() => {
         const mostPopularItems =
@@ -58,12 +58,9 @@ export const MostPopularAndRecentlyUpdatedPanel: FC<Props> = ({
 
     const isDemo = health.data?.mode === LightdashMode.DEMO;
 
-    const userCanManageCharts = user.data?.ability?.can(
-        'manage',
-        subject('SavedChart', {
-            organizationUuid: user.data?.organizationUuid,
-            projectUuid,
-        }),
+    const userCanCreateCharts = useCreateInAnySpaceAccess(
+        projectUuid,
+        'SavedChart',
     );
 
     return (
@@ -110,14 +107,14 @@ export const MostPopularAndRecentlyUpdatedPanel: FC<Props> = ({
             }
             emptyStateProps={{
                 icon: <MantineIcon icon={IconChartBar} size={30} />,
-                title: userCanManageCharts
+                title: userCanCreateCharts
                     ? 'Feels a little bit empty over here'
                     : 'No items added yet',
-                description: userCanManageCharts
+                description: userCanCreateCharts
                     ? 'get started by creating some charts'
                     : undefined,
                 action:
-                    !isDemo && userCanManageCharts ? (
+                    !isDemo && userCanCreateCharts ? (
                         <Button
                             leftIcon={<MantineIcon icon={IconPlus} size={18} />}
                             onClick={handleCreateChart}

@@ -16,7 +16,7 @@ import {
     NotFoundError,
     Organization,
     Project,
-    SavedChart,
+    SavedChartDAO,
     SessionUser,
     SortField,
     Space,
@@ -428,7 +428,7 @@ export class SavedChartModel {
             .where(`${SavedChartsTableName}.saved_query_uuid`, chartUuid)
             .andWhere(function whereRecentVersionsOrCurrentVersion() {
                 // get all versions from the last X days + the current version ( in case is older than X days )
-                this.whereRaw(
+                void this.whereRaw(
                     `${SavedChartVersionsTableName}.created_at >= DATE(current_timestamp - interval '?? days')`,
                     [daysLimit],
                 ).orWhere(
@@ -460,7 +460,7 @@ export class SavedChartModel {
         projectUuid: string,
         userUuid: string,
         data: CreateSavedChart & { updatedByUser: UpdatedByUser },
-    ): Promise<SavedChart> {
+    ): Promise<SavedChartDAO> {
         const newSavedChartUuid = await createSavedChart(
             this.database,
             projectUuid,
@@ -474,7 +474,7 @@ export class SavedChartModel {
         savedChartUuid: string,
         data: CreateSavedChartVersion,
         user: SessionUser,
-    ): Promise<SavedChart> {
+    ): Promise<SavedChartDAO> {
         await this.database.transaction(async (trx) => {
             const [savedChart] = await trx('saved_queries')
                 .select(['saved_query_id'])
@@ -503,7 +503,7 @@ export class SavedChartModel {
     async update(
         savedChartUuid: string,
         data: UpdateSavedChart,
-    ): Promise<SavedChart> {
+    ): Promise<SavedChartDAO> {
         await this.database('saved_queries')
             .update({
                 name: data.name,
@@ -520,7 +520,7 @@ export class SavedChartModel {
 
     async updateMultiple(
         data: UpdateMultipleSavedChart[],
-    ): Promise<SavedChart[]> {
+    ): Promise<SavedChartDAO[]> {
         await this.database.transaction(async (trx) => {
             const promises = data.map(async (savedChart) =>
                 trx('saved_queries')
@@ -541,7 +541,7 @@ export class SavedChartModel {
         );
     }
 
-    async delete(savedChartUuid: string): Promise<SavedChart> {
+    async delete(savedChartUuid: string): Promise<SavedChartDAO> {
         const savedChart = await this.get(savedChartUuid);
         await this.database('saved_queries')
             .delete()
@@ -552,7 +552,7 @@ export class SavedChartModel {
     async get(
         savedChartUuid: string,
         versionUuid?: string,
-    ): Promise<SavedChart> {
+    ): Promise<SavedChartDAO> {
         const transaction = Sentry.getCurrentHub()
             ?.getScope()
             ?.getTransaction();
@@ -649,7 +649,7 @@ export class SavedChartModel {
                 .limit(1);
 
             if (versionUuid) {
-                chartQuery.where(
+                void chartQuery.where(
                     `${SavedChartVersionsTableName}.saved_queries_version_uuid`,
                     versionUuid,
                 );
@@ -887,10 +887,10 @@ export class SavedChartModel {
         try {
             const query = this.getChartSummaryQuery();
             if (filters.projectUuid) {
-                query.where('projects.project_uuid', filters.projectUuid);
+                void query.where('projects.project_uuid', filters.projectUuid);
             }
             if (filters.spaceUuids) {
-                query
+                void query
                     .whereNotNull(`${SavedChartsTableName}.space_id`)
                     .whereIn('spaces.space_uuid', filters.spaceUuids);
             }
@@ -956,7 +956,7 @@ export class SavedChartModel {
     async getInfoForAvailableFilters(savedChartUuids: string[]): Promise<
         ({
             spaceUuid: Space['uuid'];
-        } & Pick<SavedChart, 'uuid' | 'name' | 'tableName'> &
+        } & Pick<SavedChartDAO, 'uuid' | 'name' | 'tableName'> &
             Pick<Project, 'projectUuid'> &
             Pick<Organization, 'organizationUuid'>)[]
     > {
@@ -1023,7 +1023,7 @@ export class SavedChartModel {
         projectUuid: string,
     ): Promise<
         Array<
-            Pick<SavedChart, 'uuid' | 'name' | 'description' | 'tableName'> &
+            Pick<SavedChartDAO, 'uuid' | 'name' | 'description' | 'tableName'> &
                 Pick<LightdashUser, 'firstName' | 'lastName'>
         >
     > {

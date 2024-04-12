@@ -1,41 +1,47 @@
-import { assertUnreachable, ChartType, SavedChart } from '@lightdash/common';
+import {
+    assertUnreachable,
+    ChartType,
+    type SavedChart,
+} from '@lightdash/common';
 import { Button, Drawer, Group, Text } from '@mantine/core';
 import {
     IconLayoutSidebarLeftCollapse,
     IconLayoutSidebarLeftExpand,
 } from '@tabler/icons-react';
-import { FC, memo, useMemo } from 'react';
+import { memo, useMemo, type FC } from 'react';
 import { COLLAPSABLE_CARD_BUTTON_PROPS } from '../../common/CollapsableCard';
 import MantineIcon from '../../common/MantineIcon';
-import BigNumberConfigTabs from '../../VisualizationConfigs/BigNumberConfig/BigNumberConfigTabs';
-import ChartConfigTabs from '../../VisualizationConfigs/ChartConfigPanel/ChartConfigTabs';
+import { BANNER_HEIGHT, NAVBAR_HEIGHT } from '../../NavBar';
+import { ConfigTabs as BigNumberConfigTabs } from '../../VisualizationConfigs/BigNumberConfig/BigNumberConfigTabs';
+import { ConfigTabs as ChartConfigTabs } from '../../VisualizationConfigs/ChartConfigPanel/ConfigTabs';
 import CustomVisConfigTabs from '../../VisualizationConfigs/ChartConfigPanel/CustomVisConfigTabs';
-import PieChartConfigTabs from '../../VisualizationConfigs/PieChartConfig/PieChartConfigTabs';
-import TableConfigTabs from '../../VisualizationConfigs/TableConfigPanel/TableConfigTabs';
+import { ConfigTabs as PieChartConfigTabs } from '../../VisualizationConfigs/PieChartConfig/PieChartConfigTabs';
+import { ConfigTabs as TableConfigTabs } from '../../VisualizationConfigs/TableConfigPanel/TableConfigTabs';
 import VisualizationCardOptions from '../VisualizationCardOptions';
 
 const VisualizationSidebar: FC<{
     chartType: ChartType;
     savedChart?: SavedChart;
     isProjectPreview?: boolean;
-    isEditingDashboardChart?: boolean;
     isOpen: boolean;
     onClose: () => void;
     onOpen: () => void;
 }> = memo(
-    ({
-        chartType,
-        savedChart,
-        isProjectPreview,
-        isEditingDashboardChart,
-        isOpen,
-        onOpen,
-        onClose,
-    }) => {
-        const sidebarVerticalOffset =
-            (isProjectPreview && !isEditingDashboardChart ? 35 : 0) + // Preview header
-            (isEditingDashboardChart ? 35 : 50) + // Normal header or dashboardChart header
-            (savedChart === undefined ? 0 : 80); // Include the saved chart header or not
+    ({ chartType, savedChart, isProjectPreview, isOpen, onOpen, onClose }) => {
+        const sidebarVerticalOffset = useMemo(() => {
+            let offset = NAVBAR_HEIGHT;
+
+            if (isProjectPreview) {
+                offset += BANNER_HEIGHT;
+            }
+
+            const isQueryingFromTables = savedChart === undefined;
+            if (!isQueryingFromTables) {
+                offset += 65;
+            }
+
+            return offset;
+        }, [isProjectPreview, savedChart]);
 
         const ConfigTab = useMemo(() => {
             switch (chartType) {

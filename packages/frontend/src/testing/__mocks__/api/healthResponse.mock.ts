@@ -1,4 +1,4 @@
-import { HealthState, LightdashMode } from '@lightdash/common';
+import { LightdashMode, type HealthState } from '@lightdash/common';
 
 export default function mockHealthResponse(
     overrides: Partial<HealthState> = {},
@@ -59,6 +59,10 @@ export default function mockHealthResponse(
             },
             azuread: {
                 loginPath: '/login/azuread',
+                enabled: false,
+            },
+            oidc: {
+                loginPath: '/login/oidc',
                 enabled: false,
             },
         },

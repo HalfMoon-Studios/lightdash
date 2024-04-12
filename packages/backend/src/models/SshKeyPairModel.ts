@@ -1,58 +1,26 @@
-import { SshKeyPair } from '@lightdash/common';
-import { generateKeyPair } from 'crypto';
+import { type SshKeyPair } from '@lightdash/common';
 import { Knex } from 'knex';
-import { parseKey } from 'sshpk';
-import { EncryptionService } from '../services/EncryptionService/EncryptionService';
+import { generateOpenSshKeyPair } from '../utils';
+import { type EncryptionUtil } from '../utils/EncryptionUtil/EncryptionUtil';
 
 type SshKeyPairModelArguments = {
-    encryptionService: EncryptionService;
+    encryptionUtil: EncryptionUtil;
     database: Knex;
 };
-
-const generateOpenSshKeyPair = async (): Promise<SshKeyPair> =>
-    new Promise<SshKeyPair>((resolve, reject) => {
-        generateKeyPair(
-            'rsa',
-            {
-                modulusLength: 4096,
-                publicKeyEncoding: {
-                    type: 'pkcs1',
-                    format: 'pem',
-                },
-                privateKeyEncoding: {
-                    type: 'pkcs1',
-                    format: 'pem',
-                },
-            },
-            (err, publicKey, privateKey) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    const parsedPublicKey = parseKey(publicKey, 'pem');
-                    parsedPublicKey.comment = `(generated_by_lightdash_at_${new Date().toISOString()})`;
-                    const openSshPublicKey = parsedPublicKey.toString('ssh');
-                    resolve({
-                        publicKey: openSshPublicKey,
-                        privateKey,
-                    });
-                }
-            },
-        );
-    });
 
 export class SshKeyPairModel {
     private readonly database: Knex;
 
-    private readonly encryptionService: EncryptionService;
+    private readonly encryptionUtil: EncryptionUtil;
 
-    constructor({ encryptionService, database }: SshKeyPairModelArguments) {
+    constructor({ encryptionUtil, database }: SshKeyPairModelArguments) {
         this.database = database;
-        this.encryptionService = encryptionService;
+        this.encryptionUtil = encryptionUtil;
     }
 
     async create(): Promise<SshKeyPair> {
         const { publicKey, privateKey } = await generateOpenSshKeyPair();
-        const encryptedPrivateKey = this.encryptionService.encrypt(privateKey);
+        const encryptedPrivateKey = this.encryptionUtil.encrypt(privateKey);
         await this.database('ssh_key_pairs').insert({
             public_key: publicKey,
             private_key: encryptedPrivateKey,
@@ -70,7 +38,7 @@ export class SshKeyPairModel {
         if (row === undefined) {
             throw new Error('Public SSH Key not recognised');
         }
-        const privateKey = this.encryptionService.decrypt(row.private_key);
+        const privateKey = this.encryptionUtil.decrypt(row.private_key);
         return {
             publicKey,
             privateKey,

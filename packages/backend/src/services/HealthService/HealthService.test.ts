@@ -1,33 +1,34 @@
 import { LightdashInstallType, LightdashMode } from '@lightdash/common';
 import { getDockerHubVersion } from '../../clients/DockerHub/DockerHub';
-import { organizationModel } from '../../models/models';
+import { lightdashConfigMock } from '../../config/lightdashConfig.mock';
+import { MigrationModel } from '../../models/MigrationModel/MigrationModel';
+import { OrganizationModel } from '../../models/OrganizationModel';
 import { HealthService } from './HealthService';
-import { BaseResponse, Config } from './HealthService.mock';
+import { BaseResponse, userMock } from './HealthService.mock';
 
 jest.mock('../../version', () => ({
     VERSION: '0.1.0',
 }));
 
-jest.mock('../../models/models', () => ({
-    organizationModel: {
-        hasOrgs: jest.fn(async () => true),
-    },
-}));
+const organizationModel = {
+    hasOrgs: jest.fn(async () => true),
+};
 jest.mock('../../clients/DockerHub/DockerHub', () => ({
     getDockerHubVersion: jest.fn(() => '0.2.7'),
 }));
 
-jest.mock('../../database/database', () => ({
+const migrationModel = {
     getMigrationStatus: jest.fn(() => ({
         isComplete: true,
         currentVersion: 'example',
     })),
-}));
+};
 
 describe('health', () => {
     const healthService = new HealthService({
-        organizationModel,
-        lightdashConfig: Config,
+        organizationModel: organizationModel as unknown as OrganizationModel,
+        lightdashConfig: lightdashConfigMock,
+        migrationModel: migrationModel as unknown as MigrationModel,
     });
 
     afterEach(() => {
@@ -41,34 +42,38 @@ describe('health', () => {
     });
 
     it('Should get current and latest version', async () => {
-        expect(await healthService.getHealthState(false)).toEqual(BaseResponse);
+        expect(await healthService.getHealthState(undefined)).toEqual(
+            BaseResponse,
+        );
     });
     it('Should return last version as undefined when fails fetch', async () => {
         (getDockerHubVersion as jest.Mock).mockImplementationOnce(
             () => undefined,
         );
 
-        expect(await healthService.getHealthState(false)).toEqual({
+        expect(await healthService.getHealthState(undefined)).toEqual({
             ...BaseResponse,
             latest: { version: undefined },
         });
     });
 
     it('Should return isAuthenticated true', async () => {
-        expect(await healthService.getHealthState(true)).toEqual({
+        expect(await healthService.getHealthState(userMock)).toEqual({
             ...BaseResponse,
             isAuthenticated: true,
         });
     });
     it('Should return localDbtEnabled false when in cloud beta mode', async () => {
         const service = new HealthService({
-            organizationModel,
+            organizationModel:
+                organizationModel as unknown as OrganizationModel,
             lightdashConfig: {
-                ...Config,
+                ...lightdashConfigMock,
                 mode: LightdashMode.CLOUD_BETA,
             },
+            migrationModel: migrationModel as unknown as MigrationModel,
         });
-        expect(await service.getHealthState(false)).toEqual({
+        expect(await service.getHealthState(undefined)).toEqual({
             ...BaseResponse,
             mode: LightdashMode.CLOUD_BETA,
             localDbtEnabled: false,
@@ -76,7 +81,7 @@ describe('health', () => {
     });
     it('Should return localDbtEnabled false when install type is heroku', async () => {
         process.env.LIGHTDASH_INSTALL_TYPE = LightdashInstallType.HEROKU;
-        expect(await healthService.getHealthState(false)).toEqual({
+        expect(await healthService.getHealthState(undefined)).toEqual({
             ...BaseResponse,
             localDbtEnabled: false,
         });
@@ -86,7 +91,7 @@ describe('health', () => {
             async () => false,
         );
 
-        expect(await healthService.getHealthState(false)).toEqual({
+        expect(await healthService.getHealthState(undefined)).toEqual({
             ...BaseResponse,
             requiresOrgRegistration: true,
         });

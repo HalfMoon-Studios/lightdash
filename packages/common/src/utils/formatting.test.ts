@@ -1,20 +1,29 @@
+import dayjs from 'dayjs';
+import moment from 'moment';
 import {
     Compact,
-    CustomFormat,
     CustomFormatType,
     DimensionType,
     Format,
     MetricType,
     NumberSeparator,
+    type CustomFormat,
 } from '../types/field';
+import { TimeFrames } from '../types/timeFrames';
 import {
     applyCustomFormat,
     currencies,
     formatItemValue,
     formatNumberValue,
     getCustomFormatFromLegacy,
+    isMomentInput,
 } from './formatting';
-import { dimension, metric, tableCalculation } from './formatting.mock';
+import {
+    additionalMetric,
+    dimension,
+    metric,
+    tableCalculation,
+} from './formatting.mock';
 
 describe('Formatting', () => {
     describe('convert legacy Format type', () => {
@@ -739,6 +748,16 @@ describe('Formatting', () => {
                     new Date('2021-03-10T00:00:00.000Z'),
                 ),
             ).toEqual('2021-03-10, 00:00:00:000 (+00:00)');
+            expect(
+                formatItemValue(
+                    {
+                        ...dimension,
+                        timeInterval: TimeFrames.YEAR_NUM,
+                        type: DimensionType.NUMBER,
+                    },
+                    2021,
+                ),
+            ).toEqual('2021');
         });
 
         test('formatItemValue should return the right format when field is Metric', () => {
@@ -797,6 +816,112 @@ describe('Formatting', () => {
                     1000,
                 ),
             ).toEqual('1K');
+        });
+    });
+    describe('additional metric formatting', () => {
+        test('format additional metric with custom format DATE', () => {
+            expect(
+                formatItemValue(
+                    {
+                        ...additionalMetric,
+                        type: MetricType.MIN,
+                        formatOptions: { type: CustomFormatType.DATE },
+                    },
+                    new Date('2021-03-10T00:00:00.000Z'),
+                ),
+            ).toEqual('2021-03-10');
+            expect(
+                formatItemValue(
+                    {
+                        ...additionalMetric,
+                        type: MetricType.MAX,
+                        formatOptions: {
+                            type: CustomFormatType.DATE,
+                            timeInterval: TimeFrames.DAY,
+                        },
+                    },
+                    new Date('2021-03-10T00:00:00.000Z'),
+                ),
+            ).toEqual('2021-03-10');
+            expect(
+                formatItemValue(
+                    {
+                        ...additionalMetric,
+                        type: MetricType.MIN,
+                        formatOptions: {
+                            type: CustomFormatType.DATE,
+                            timeInterval: TimeFrames.YEAR,
+                        },
+                    },
+                    new Date('2021-03-10T00:00:00.000Z'),
+                ),
+            ).toEqual('2021');
+            expect(
+                formatItemValue(
+                    {
+                        ...additionalMetric,
+                        type: MetricType.MAX,
+                        formatOptions: {
+                            type: CustomFormatType.DATE,
+                            timeInterval: TimeFrames.MONTH,
+                        },
+                    },
+                    new Date('2021-03-10T00:00:00.000Z'),
+                ),
+            ).toEqual('2021-03');
+        });
+
+        test('format additional metric with custom format TIMESTAMP', () => {
+            expect(
+                formatItemValue(
+                    {
+                        ...additionalMetric,
+                        type: MetricType.MIN,
+                        formatOptions: { type: CustomFormatType.TIMESTAMP },
+                    },
+                    new Date('2021-03-10T00:00:00.000Z'),
+                ),
+            ).toEqual('2021-03-10, 00:00:00:000 (+00:00)');
+
+            expect(
+                formatItemValue(
+                    {
+                        ...additionalMetric,
+                        type: MetricType.MAX,
+                        formatOptions: {
+                            type: CustomFormatType.TIMESTAMP,
+                            timeInterval: TimeFrames.HOUR,
+                        },
+                    },
+                    new Date('2021-03-10T00:00:00.000Z'),
+                ),
+            ).toEqual('2021-03-10, 00 (+00:00)');
+            expect(
+                formatItemValue(
+                    {
+                        ...additionalMetric,
+                        type: MetricType.MIN,
+                        formatOptions: {
+                            type: CustomFormatType.TIMESTAMP,
+                            timeInterval: TimeFrames.MINUTE,
+                        },
+                    },
+                    new Date('2021-03-10T00:00:00.000Z'),
+                ),
+            ).toEqual('2021-03-10, 00:00 (+00:00)');
+            expect(
+                formatItemValue(
+                    {
+                        ...additionalMetric,
+                        type: MetricType.MAX,
+                        formatOptions: {
+                            type: CustomFormatType.TIMESTAMP,
+                            timeInterval: TimeFrames.SECOND,
+                        },
+                    },
+                    new Date('2021-03-10T00:00:00.000Z'),
+                ),
+            ).toEqual('2021-03-10, 00:00:00 (+00:00)');
         });
     });
 
@@ -1145,6 +1270,29 @@ describe('Formatting', () => {
                     }),
                 ).toEqual(expectedValue[i]),
             );
+        });
+    });
+
+    describe('isMomentInput', () => {
+        test('should return true for moment object', () => {
+            expect(isMomentInput(moment())).toBe(true);
+        });
+
+        test('should return true for dayjs object', () => {
+            expect(isMomentInput(dayjs())).toBe(true);
+        });
+
+        test('should return true for dates', () => {
+            expect(isMomentInput(new Date())).toBe(true);
+        });
+
+        test('should return true for strings', () => {
+            expect(isMomentInput('2021-03-10')).toBe(true);
+        });
+
+        test('should return false for non-dates-strings-moment-dayjs types', () => {
+            expect(isMomentInput(undefined)).toBe(false);
+            expect(isMomentInput(null)).toBe(false);
         });
     });
 });

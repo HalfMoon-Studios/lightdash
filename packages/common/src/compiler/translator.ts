@@ -2,36 +2,37 @@ import {
     buildModelGraph,
     convertColumnMetric,
     convertModelMetric,
-    DbtMetric,
-    DbtModelColumn,
-    DbtModelNode,
+    convertToGroups,
     isV9MetricRef,
-    LineageGraph,
     SupportedDbtAdapter,
+    type DbtMetric,
+    type DbtModelColumn,
+    type DbtModelNode,
+    type LineageGraph,
 } from '../types/dbt';
 import { MissingCatalogEntryError, ParseError } from '../types/errors';
-import { Explore, ExploreError, Table } from '../types/explore';
+import { type Explore, type ExploreError, type Table } from '../types/explore';
 import {
     defaultSql,
-    Dimension,
     DimensionType,
     FieldType,
     friendlyName,
-    Metric,
     MetricType,
     parseMetricType,
-    Source,
+    type Dimension,
+    type Metric,
+    type Source,
 } from '../types/field';
 import { parseFilters } from '../types/filterGrammar';
-import { OrderFieldsByStrategy } from '../types/table';
-import { TimeFrames } from '../types/timeFrames';
-import { WarehouseClient } from '../types/warehouse';
+import { OrderFieldsByStrategy, type GroupType } from '../types/table';
+import { type TimeFrames } from '../types/timeFrames';
+import { type WarehouseClient } from '../types/warehouse';
 import assertUnreachable from '../utils/assertUnreachable';
 import {
     getDefaultTimeFrames,
     timeFrameConfigs,
     validateTimeFrames,
-    WeekDay,
+    type WeekDay,
 } from '../utils/timeFrames';
 import { ExploreCompiler } from './exploreCompiler';
 
@@ -74,6 +75,16 @@ const convertTimezone = (
     }
 };
 
+const isInterval = (
+    dimensionType: DimensionType,
+    { meta }: DbtModelColumn,
+): boolean =>
+    [DimensionType.DATE, DimensionType.TIMESTAMP].includes(dimensionType) &&
+    meta.dimension?.time_intervals !== false &&
+    ((meta.dimension?.time_intervals &&
+        meta.dimension.time_intervals !== 'OFF') ||
+        !meta.dimension?.time_intervals);
+
 const convertDimension = (
     index: number,
     targetWarehouse: SupportedDbtAdapter,
@@ -97,14 +108,22 @@ const convertDimension = (
             {},
         );
     }
-    let group: string | undefined;
     let name = column.meta.dimension?.name || column.name;
     let sql = column.meta.dimension?.sql || defaultSql(column.name);
     let label = column.meta.dimension?.label || friendlyName(name);
     if (type === DimensionType.TIMESTAMP) {
         sql = convertTimezone(sql, 'UTC', 'UTC', targetWarehouse);
     }
+    const isIntervalBase =
+        timeInterval === undefined && isInterval(type, column);
+
+    let timeIntervalBaseDimensionName: string | undefined;
+    const groups: string[] = convertToGroups(
+        column.meta.dimension?.groups,
+        column.meta.dimension?.group_label,
+    );
     if (timeInterval) {
+        timeIntervalBaseDimensionName = name;
         sql = timeFrameConfigs[timeInterval].getSql(
             targetWarehouse,
             timeInterval,
@@ -116,7 +135,12 @@ const convertDimension = (
         label = `${label} ${timeFrameConfigs[timeInterval]
             .getLabel()
             .toLowerCase()}`;
-        group = column.name;
+
+        groups.push(
+            column.meta.dimension?.label ??
+                friendlyName(timeIntervalBaseDimensionName),
+        );
+
         type = timeFrameConfigs[timeInterval].getDimensionType(type);
     }
     return {
@@ -130,18 +154,20 @@ const convertDimension = (
         type,
         description: column.meta.dimension?.description || column.description,
         source,
-        group,
         timeInterval,
+        timeIntervalBaseDimensionName,
         hidden: !!column.meta.dimension?.hidden,
         format: column.meta.dimension?.format,
         round: column.meta.dimension?.round,
         compact: column.meta.dimension?.compact,
         requiredAttributes: column.meta.dimension?.required_attributes,
-        groupLabel: column.meta.dimension?.group_label,
+        colors: column.meta.dimension?.colors,
         ...(column.meta.dimension?.urls
             ? { urls: column.meta.dimension.urls }
             : {}),
         ...(isAdditionalDimension ? { isAdditionalDimension } : {}),
+        groups,
+        isIntervalBase,
     };
 };
 
@@ -219,7 +245,10 @@ const convertDbtMetricToLightdashMetric = (
             .join(' AND ');
         sql = `CASE WHEN ${filterSql} THEN ${sql} ELSE NULL END`;
     }
-
+    const groups: string[] = convertToGroups(
+        metric.meta?.groups,
+        metric.meta?.group_label,
+    );
     return {
         fieldType: FieldType.METRIC,
         type,
@@ -235,7 +264,7 @@ const convertDbtMetricToLightdashMetric = (
         round: metric.meta?.round,
         compact: metric.meta?.compact,
         format: metric.meta?.format,
-        groupLabel: metric.meta?.group_label,
+        groups,
         percentile: metric.meta?.percentile,
         showUnderlyingValues: metric.meta?.show_underlying_values,
         filters: parseFilters(metric.meta?.filters),
@@ -269,15 +298,7 @@ export const convertTable = (
 
             let extraDimensions = {};
 
-            if (
-                [DimensionType.DATE, DimensionType.TIMESTAMP].includes(
-                    dimension.type,
-                ) &&
-                column.meta.dimension?.time_intervals !== false &&
-                ((column.meta.dimension?.time_intervals &&
-                    column.meta.dimension.time_intervals !== 'OFF') ||
-                    !column.meta.dimension?.time_intervals)
-            ) {
+            if (isInterval(dimension.type, column)) {
                 let intervals: TimeFrames[] = [];
                 if (
                     column.meta.dimension?.time_intervals &&
@@ -409,6 +430,15 @@ export const convertTable = (
     if (!model.relation_name) {
         throw new Error(`Model "${model.name}" has no table relation`);
     }
+    const groupDetails: Record<string, GroupType> = {};
+    if (meta.group_details) {
+        Object.entries(meta.group_details).forEach(([key, data]) => {
+            groupDetails[key] = {
+                label: data.label,
+                description: data.description,
+            };
+        });
+    }
 
     return {
         name: model.name,
@@ -428,7 +458,9 @@ export const convertTable = (
                 : OrderFieldsByStrategy.LABEL,
         groupLabel: meta.group_label,
         sqlWhere: meta.sql_filter || meta.sql_where,
+        requiredFilters: parseFilters(meta.required_filters),
         requiredAttributes: meta.required_attributes,
+        groupDetails,
     };
 };
 
@@ -540,6 +572,27 @@ export const convertExplores = async (
     );
 
     const exploreCompiler = new ExploreCompiler(warehouseClient);
+    const joinAliases = validModels.reduce<
+        Record<string, Record<string, string>>
+    >((acc, model) => {
+        const joins = model.config?.meta?.joins;
+        if (joins === undefined) return acc;
+
+        const aliases = joins.reduce<Record<string, string>>((acc2, join) => {
+            if (join.alias && tableLookup[join.join]) {
+                return {
+                    ...acc2,
+                    [join.alias]: join.join,
+                };
+            }
+            return acc2;
+        }, {});
+        return {
+            ...acc,
+            [model.name]: aliases,
+        };
+    }, {});
+
     const explores: (Explore | ExploreError)[] = validModels.map((model) => {
         const meta = model.config?.meta || model.meta; // Config block takes priority, then meta block
         try {
@@ -557,12 +610,14 @@ export const convertExplores = async (
                     label: join.label,
                     fields: join.fields,
                     hidden: join.hidden,
+                    always: join.always,
                 })),
                 tables: tableLookup,
                 targetDatabase: adapterType,
                 warehouse: model.config?.snowflake_warehouse,
                 ymlPath: model.patch_path?.split('://')?.[1],
                 sqlPath: model.path,
+                joinAliases,
             });
         } catch (e) {
             return {

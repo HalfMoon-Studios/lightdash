@@ -3,9 +3,9 @@ import {
     ChartKind,
     CreateDashboard,
     CreateDashboardChartTile,
-    Dashboard,
     DashboardBasicDetails,
     DashboardChartTile,
+    DashboardDAO,
     DashboardLoomTile,
     DashboardMarkdownTile,
     DashboardTileTypes,
@@ -35,13 +35,14 @@ const tileWithoutId: CreateDashboardChartTile = {
     properties: {
         savedChartUuid: '123',
     },
+    tabUuid: undefined,
 };
 const tileWithId: DashboardChartTile = {
     uuid: '2a93d63d-ca81-421c-b88b-1124a2f02407',
     ...tileWithoutId,
 };
 
-export const createDashboard: CreateDashboard = {
+export const createDashboard: CreateDashboard & { slug: string } = {
     name: 'my new dashboard',
     description: 'description',
     tiles: [tileWithoutId],
@@ -50,6 +51,8 @@ export const createDashboard: CreateDashboard = {
         metrics: [],
         tableCalculations: [],
     },
+    tabs: [],
+    slug: 'my-new-dashboard',
 };
 
 export const createDashboardWithTileIds: CreateDashboard = {
@@ -64,6 +67,7 @@ export const addDashboardVersion: DashboardVersionedFields = {
         metrics: [],
         tableCalculations: [],
     },
+    tabs: [],
 };
 
 export const addDashboardVersionWithAllTiles: DashboardVersionedFields = {
@@ -120,6 +124,8 @@ export const projectEntry: Pick<
 export const spaceEntry: SpaceTable['base'] = {
     space_id: 0,
     space_uuid: '123',
+    slug: 'space-name',
+
     name: 'space name',
     is_private: false,
     created_at: new Date(),
@@ -132,6 +138,8 @@ export const savedChartEntry: SavedChartTable['base'] = {
     saved_query_uuid: '123',
     space_id: 0,
     name: 'chart name',
+    slug: 'chart-name',
+
     description: 'My description',
     created_at: new Date(),
     last_version_chart_kind: ChartKind.VERTICAL_BAR,
@@ -139,16 +147,22 @@ export const savedChartEntry: SavedChartTable['base'] = {
     last_version_updated_by_user_uuid: undefined,
     dashboard_uuid: null,
     search_vector: '',
+    views_count: 0,
+    first_viewed_at: null,
 };
 
 export const dashboardEntry: DashboardTable['base'] = {
     dashboard_id: 0,
     dashboard_uuid: 'my_dashboard_uuid',
     name: 'name',
+    slug: 'name',
+
     description: 'description',
     space_id: 0,
     created_at: new Date(),
     search_vector: '',
+    views_count: 0,
+    first_viewed_at: null,
 };
 
 export const dashboardVersionEntry: DashboardVersionTable['base'] = {
@@ -176,6 +190,8 @@ export const dashboardWithVersionEntry: GetDashboardQuery = {
     dashboard_id: dashboardEntry.dashboard_id,
     dashboard_uuid: dashboardEntry.dashboard_uuid,
     name: dashboardEntry.name,
+    slug: `name`,
+
     description: dashboardEntry.description,
     dashboard_version_id: dashboardVersionEntry.dashboard_version_id,
     created_at: dashboardVersionEntry.created_at,
@@ -184,7 +200,7 @@ export const dashboardWithVersionEntry: GetDashboardQuery = {
     last_name: 'lastName',
     pinned_list_uuid: 'pinnedUuid',
     order: 0,
-    views: '1',
+    views_count: 1,
     first_viewed_at: new Date(1),
 };
 
@@ -196,6 +212,7 @@ export const dashboardTileEntry: DashboardTileTable['base'] = {
     y_offset: 5,
     height: 10,
     width: 10,
+    tab_uuid: undefined,
 };
 
 export const dashboardTileWithSavedChartEntry = {
@@ -224,11 +241,14 @@ export const dashboardChartTileEntry: GetChartTileQuery = {
 
 // Expected returns
 
-export const expectedDashboard: Dashboard = {
+export const expectedDashboard: DashboardDAO = {
     organizationUuid: 'organizationUuid',
     projectUuid: projectEntry.project_uuid,
+    dashboardVersionId: dashboardVersionEntry.dashboard_version_id,
     uuid: dashboardEntry.dashboard_uuid,
     name: dashboardEntry.name,
+    slug: `name`,
+
     description: dashboardEntry.description,
     updatedAt: dashboardVersionEntry.created_at,
     tiles: [
@@ -270,6 +290,7 @@ export const expectedDashboard: Dashboard = {
             y: dashboardTileEntry.y_offset,
             h: dashboardTileEntry.height,
             w: dashboardTileEntry.width,
+            tabUuid: undefined,
         } as DashboardMarkdownTile,
     ],
     filters: {
@@ -288,6 +309,7 @@ export const expectedDashboard: Dashboard = {
     pinnedListOrder: 0,
     views: 1,
     firstViewedAt: new Date(1),
+    tabs: [],
 };
 
 export const expectedAllDashboards: DashboardBasicDetails[] = [

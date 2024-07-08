@@ -1,43 +1,52 @@
 import {
-    AdditionalMetric,
     assertUnreachable,
-    BigNumberConfig,
-    CartesianChartConfig,
-    ChartConfig,
     ChartType,
     convertFieldRefToFieldId,
-    CreateSavedChartVersion,
-    CustomDimension,
-    CustomVisConfig,
     deepEqual,
-    Dimension,
-    FieldId,
-    fieldId as getFieldId,
-    getCustomDimensionId,
     getFieldRef,
+    getItemId,
     lightdashVariablePattern,
-    MetricQuery,
-    MetricType,
-    PieChartConfig,
     removeEmptyProperties,
     removeFieldFromFilterGroup,
-    SavedChart,
-    SortField,
-    TableCalculation,
-    TableChartConfig,
     toggleArrayValue,
     updateFieldIdInFilters,
+    type AdditionalMetric,
+    type BigNumberConfig,
+    type CartesianChartConfig,
+    type ChartConfig,
+    type CreateSavedChartVersion,
+    type CustomDimension,
+    type CustomVisConfig,
+    type Dimension,
+    type FieldId,
+    type FunnelChartConfig,
+    type MetricQuery,
+    type MetricType,
+    type PieChartConfig,
+    type SavedChart,
+    type SortField,
+    type TableCalculation,
+    type TableCalculationMetadata,
+    type TableChartConfig,
+    type TimeZone,
 } from '@lightdash/common';
-import produce from 'immer';
+import { produce } from 'immer';
 import cloneDeep from 'lodash/cloneDeep';
-import { FC, useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
+import {
+    useCallback,
+    useEffect,
+    useMemo,
+    useReducer,
+    useRef,
+    type FC,
+} from 'react';
 import { useHistory } from 'react-router-dom';
 import { createContext, useContextSelector } from 'use-context-selector';
 import { EMPTY_CARTESIAN_CHART_CONFIG } from '../hooks/cartesianChartConfig/useCartesianChartConfig';
 import useDefaultSortField from '../hooks/useDefaultSortField';
 import {
-    useChartVersionResultsMutation,
-    useQueryResults,
+    type useChartVersionResultsMutation,
+    type useQueryResults,
 } from '../hooks/useQueryResults';
 
 export enum ExplorerSection {
@@ -65,6 +74,7 @@ export enum ActionType {
     REMOVE_SORT_FIELD,
     MOVE_SORT_FIELDS,
     SET_ROW_LIMIT,
+    SET_TIME_ZONE,
     SET_FILTERS,
     SET_COLUMN_ORDER,
     ADD_TABLE_CALCULATION,
@@ -122,6 +132,10 @@ type Action =
     | {
           type: ActionType.SET_ROW_LIMIT;
           payload: number;
+      }
+    | {
+          type: ActionType.SET_TIME_ZONE;
+          payload: TimeZone;
       }
     | {
           type: ActionType.SET_FILTERS;
@@ -191,7 +205,7 @@ type Action =
           type: ActionType.EDIT_CUSTOM_DIMENSION;
           payload: {
               customDimension: CustomDimension;
-              previousCustomDimensionName: string;
+              previousCustomDimensionId: string;
           };
       }
     | {
@@ -209,18 +223,23 @@ type Action =
 export interface ExplorerReduceState {
     shouldFetchResults: boolean;
     expandedSections: ExplorerSection[];
+    metadata?: {
+        // Temporary state that tracks changes to `table calculations` - keeps track of new name and previous name to ensure these get updated correctly when making changes to the layout & config of a chart
+        tableCalculations?: TableCalculationMetadata[];
+    };
     unsavedChartVersion: CreateSavedChartVersion;
     previouslyFetchedState?: MetricQuery;
     modals: {
         additionalMetric: {
             isOpen: boolean;
             isEditing?: boolean;
-            item?: Dimension | AdditionalMetric;
+            item?: Dimension | AdditionalMetric | CustomDimension;
             type?: MetricType;
         };
         customDimension: {
             isOpen: boolean;
             isEditing?: boolean;
+            table?: string;
             item?: Dimension | CustomDimension;
         };
     };
@@ -255,6 +274,7 @@ export interface ExplorerContext {
         removeSortField: (fieldId: FieldId) => void;
         moveSortFields: (sourceIndex: number, destinationIndex: number) => void;
         setRowLimit: (limit: number) => void;
+        setTimeZone: (timezone: TimeZone) => void;
         setFilters: (
             filters: MetricQuery['filters'],
             syncPristineState: boolean,
@@ -286,7 +306,7 @@ export interface ExplorerContext {
         addCustomDimension: (customDimension: CustomDimension) => void;
         editCustomDimension: (
             customDimension: CustomDimension,
-            previousCustomDimensionName: string,
+            previousCustomDimensionId: string,
         ) => void;
         removeCustomDimension: (key: FieldId) => void;
         toggleCustomDimensionModal: (
@@ -315,6 +335,7 @@ const defaultState: ExplorerReduceState = {
             limit: 500,
             tableCalculations: [],
             additionalMetrics: [],
+            timezone: undefined,
         },
         pivotConfig: undefined,
         tableConfig: {
@@ -393,6 +414,19 @@ export const getValidChartConfig = (
                         : {},
             };
         }
+        case ChartType.FUNNEL: {
+            const cachedConfig = cachedConfigs?.[chartType];
+
+            return {
+                type: chartType,
+                config:
+                    chartConfig && chartConfig.type === ChartType.FUNNEL
+                        ? chartConfig.config
+                        : cachedConfig
+                        ? cachedConfig
+                        : {},
+            };
+        }
         case ChartType.CUSTOM: {
             const cachedConfig = cachedConfigs?.[chartType];
 
@@ -439,6 +473,59 @@ const calcColumnOrder = (
     } else {
         return [...cleanColumnOrder, ...missingColumns];
     }
+};
+
+const updateChartConfigWithTableCalc = (
+    prevChartConfig: ChartConfig,
+    oldTableCalculationName: string,
+    newTableCalculationName: string,
+) => {
+    const newConfig = cloneDeep(prevChartConfig);
+
+    if (newConfig.type !== ChartType.CARTESIAN || !newConfig.config) {
+        return newConfig;
+    }
+
+    if (newConfig.config.layout.xField === oldTableCalculationName) {
+        newConfig.config.layout.xField = newTableCalculationName;
+    }
+
+    if (newConfig.config.layout.yField) {
+        const index = newConfig.config.layout.yField.indexOf(
+            oldTableCalculationName,
+        );
+
+        if (index > -1)
+            newConfig.config.layout.yField[index] = newTableCalculationName;
+    }
+
+    return newConfig;
+};
+
+const getTableCalculationsMetadata = (
+    state: ExplorerReduceState,
+    oldTableCalculationName: string,
+    newTableCalculationName: string,
+) => {
+    const tcMetadataIndex =
+        state.metadata?.tableCalculations?.findIndex((tc) => {
+            return tc.name === oldTableCalculationName;
+        }) ?? -1;
+
+    if (tcMetadataIndex >= 0) {
+        return [
+            ...(state.metadata?.tableCalculations?.slice(0, tcMetadataIndex) ??
+                []),
+            { name: newTableCalculationName, oldName: oldTableCalculationName },
+            ...(state.metadata?.tableCalculations?.slice(tcMetadataIndex + 1) ??
+                []),
+        ];
+    }
+
+    return [
+        ...(state.metadata?.tableCalculations ?? []),
+        { name: newTableCalculationName, oldName: oldTableCalculationName },
+    ];
 };
 
 function reducer(
@@ -534,9 +621,6 @@ function reducer(
                             state.unsavedChartVersion.tableConfig.columnOrder,
                             [
                                 ...dimensions,
-                                ...(state.unsavedChartVersion.metricQuery.customDimensions?.map(
-                                    getCustomDimensionId,
-                                ) || []),
                                 ...state.unsavedChartVersion.metricQuery
                                     .metrics,
                                 ...state.unsavedChartVersion.metricQuery.tableCalculations.map(
@@ -572,9 +656,6 @@ function reducer(
                             [
                                 ...state.unsavedChartVersion.metricQuery
                                     .dimensions,
-                                ...(state.unsavedChartVersion.metricQuery.customDimensions?.map(
-                                    getCustomDimensionId,
-                                ) || []),
                                 ...metrics,
                                 ...state.unsavedChartVersion.metricQuery.tableCalculations.map(
                                     ({ name }) => name,
@@ -593,9 +674,6 @@ function reducer(
                 ...state.unsavedChartVersion.metricQuery.tableCalculations.map(
                     (tc) => tc.name,
                 ),
-                ...(state.unsavedChartVersion.metricQuery.customDimensions?.map(
-                    getCustomDimensionId,
-                ) || []),
             ]);
             if (!activeFields.has(sortFieldId)) {
                 return state;
@@ -647,9 +725,6 @@ function reducer(
                 ...state.unsavedChartVersion.metricQuery.tableCalculations.map(
                     (tc) => tc.name,
                 ),
-                ...(state.unsavedChartVersion.metricQuery.customDimensions?.map(
-                    getCustomDimensionId,
-                ) || []),
             ]);
             return {
                 ...state,
@@ -709,6 +784,18 @@ function reducer(
                 },
             };
         }
+        case ActionType.SET_TIME_ZONE: {
+            return {
+                ...state,
+                unsavedChartVersion: {
+                    ...state.unsavedChartVersion,
+                    metricQuery: {
+                        ...state.unsavedChartVersion.metricQuery,
+                        timezone: action.payload,
+                    },
+                },
+            };
+        }
         case ActionType.SET_FILTERS: {
             return {
                 ...state,
@@ -724,9 +811,7 @@ function reducer(
         case ActionType.ADD_ADDITIONAL_METRIC: {
             const isMetricAlreadyInList = (
                 state.unsavedChartVersion.metricQuery.additionalMetrics || []
-            ).find(
-                (metric) => getFieldId(metric) === getFieldId(action.payload),
-            );
+            ).find((metric) => getItemId(metric) === getItemId(action.payload));
             return {
                 ...state,
                 unsavedChartVersion: {
@@ -747,10 +832,16 @@ function reducer(
         }
 
         case ActionType.ADD_CUSTOM_DIMENSION: {
-            const newCustomDimensions = [
+            const newCustomDimension = action.payload;
+            const allCustomDimensions = [
                 ...(state.unsavedChartVersion.metricQuery.customDimensions ||
                     []),
-                action.payload,
+                newCustomDimension,
+            ];
+
+            const dimensions = [
+                ...state.unsavedChartVersion.metricQuery.dimensions,
+                getItemId(newCustomDimension),
             ];
             return {
                 ...state,
@@ -758,18 +849,15 @@ function reducer(
                     ...state.unsavedChartVersion,
                     metricQuery: {
                         ...state.unsavedChartVersion.metricQuery,
-                        customDimensions: newCustomDimensions,
+                        dimensions,
+                        customDimensions: allCustomDimensions,
                     },
                     tableConfig: {
                         ...state.unsavedChartVersion.tableConfig,
                         columnOrder: calcColumnOrder(
                             state.unsavedChartVersion.tableConfig.columnOrder,
                             [
-                                ...state.unsavedChartVersion.metricQuery
-                                    .dimensions,
-                                ...newCustomDimensions.map(
-                                    getCustomDimensionId,
-                                ),
+                                ...dimensions,
                                 ...state.unsavedChartVersion.metricQuery
                                     .metrics,
                                 ...state.unsavedChartVersion.metricQuery.tableCalculations.map(
@@ -783,23 +871,26 @@ function reducer(
         }
 
         case ActionType.EDIT_CUSTOM_DIMENSION: {
+            //The id of the custom dimension changes on edit if the name was updated, so we need to update the dimension array
+            const dimensions = [
+                ...state.unsavedChartVersion.metricQuery.dimensions.filter(
+                    (dimension) =>
+                        dimension !== action.payload.previousCustomDimensionId,
+                ),
+                getItemId(action.payload.customDimension),
+            ];
             return {
                 ...state,
                 unsavedChartVersion: {
                     ...state.unsavedChartVersion,
                     metricQuery: {
                         ...state.unsavedChartVersion.metricQuery,
-                        dimensions:
-                            state.unsavedChartVersion.metricQuery.dimensions.filter(
-                                (dimension) =>
-                                    dimension !==
-                                    action.payload.previousCustomDimensionName,
-                            ),
+                        dimensions,
                         customDimensions:
                             state.unsavedChartVersion.metricQuery.customDimensions?.map(
                                 (customDimension) =>
                                     customDimension.name ===
-                                    action.payload.previousCustomDimensionName
+                                    action.payload.previousCustomDimensionId
                                         ? action.payload.customDimension
                                         : customDimension,
                             ),
@@ -820,8 +911,7 @@ function reducer(
                                 .customDimensions || []
                         ).filter(
                             (customDimension) =>
-                                getCustomDimensionId(customDimension) !==
-                                action.payload,
+                                getItemId(customDimension) !== action.payload,
                         ),
                         dimensions:
                             state.unsavedChartVersion.metricQuery.dimensions.filter(
@@ -856,7 +946,7 @@ function reducer(
         }
 
         case ActionType.EDIT_ADDITIONAL_METRIC: {
-            const additionalMetricFieldId = getFieldId(
+            const additionalMetricFieldId = getItemId(
                 action.payload.additionalMetric,
             );
             return {
@@ -966,7 +1056,7 @@ function reducer(
                             state.unsavedChartVersion.metricQuery
                                 .additionalMetrics || []
                         ).filter(
-                            (metric) => getFieldId(metric) !== action.payload,
+                            (metric) => getItemId(metric) !== action.payload,
                         ),
                         metrics:
                             state.unsavedChartVersion.metricQuery.metrics.filter(
@@ -1026,9 +1116,7 @@ function reducer(
                         ...state.unsavedChartVersion.tableConfig,
                         columnOrder: calcColumnOrder(action.payload, [
                             ...state.unsavedChartVersion.metricQuery.dimensions,
-                            ...(state.unsavedChartVersion.metricQuery.customDimensions?.map(
-                                getCustomDimensionId,
-                            ) || []),
+
                             ...state.unsavedChartVersion.metricQuery.metrics,
                             ...state.unsavedChartVersion.metricQuery.tableCalculations.map(
                                 ({ name }) => name,
@@ -1058,9 +1146,7 @@ function reducer(
                             [
                                 ...state.unsavedChartVersion.metricQuery
                                     .dimensions,
-                                ...(state.unsavedChartVersion.metricQuery.customDimensions?.map(
-                                    getCustomDimensionId,
-                                ) || []),
+
                                 ...state.unsavedChartVersion.metricQuery
                                     .metrics,
                                 ...newTableCalculations.map(({ name }) => name),
@@ -1073,6 +1159,14 @@ function reducer(
         case ActionType.UPDATE_TABLE_CALCULATION: {
             return {
                 ...state,
+                metadata: {
+                    ...state.metadata,
+                    tableCalculations: getTableCalculationsMetadata(
+                        state,
+                        action.payload.oldName,
+                        action.payload.tableCalculation.name,
+                    ),
+                },
                 unsavedChartVersion: {
                     ...state.unsavedChartVersion,
                     metricQuery: {
@@ -1097,6 +1191,11 @@ function reducer(
                                     : field,
                         ),
                     },
+                    chartConfig: updateChartConfigWithTableCalc(
+                        state.unsavedChartVersion.chartConfig,
+                        action.payload.oldName,
+                        action.payload.tableCalculation.name,
+                    ),
                     tableConfig: {
                         ...state.unsavedChartVersion.tableConfig,
                         columnOrder:
@@ -1118,6 +1217,13 @@ function reducer(
                 );
             return {
                 ...state,
+                metadata: {
+                    ...state.metadata,
+                    tableCalculations:
+                        state.metadata?.tableCalculations?.filter(
+                            (tc) => tc.name !== action.payload,
+                        ),
+                },
                 unsavedChartVersion: {
                     ...state.unsavedChartVersion,
                     metricQuery: {
@@ -1134,9 +1240,7 @@ function reducer(
                             [
                                 ...state.unsavedChartVersion.metricQuery
                                     .dimensions,
-                                ...(state.unsavedChartVersion.metricQuery.customDimensions?.map(
-                                    getCustomDimensionId,
-                                ) || []),
+
                                 ...state.unsavedChartVersion.metricQuery
                                     .metrics,
                                 ...newTableCalculations.map(({ name }) => name),
@@ -1197,6 +1301,7 @@ function reducer(
 
 type ConfigCacheMap = {
     [ChartType.PIE]: PieChartConfig['config'];
+    [ChartType.FUNNEL]: FunnelChartConfig['config'];
     [ChartType.BIG_NUMBER]: BigNumberConfig['config'];
     [ChartType.TABLE]: TableChartConfig['config'];
     [ChartType.CARTESIAN]: CartesianChartConfig['config'];
@@ -1234,9 +1339,6 @@ export const ExplorerProvider: FC<
             ...unsavedChartVersion.metricQuery.tableCalculations.map(
                 ({ name }) => name,
             ),
-            ...(unsavedChartVersion.metricQuery.customDimensions?.map(
-                getCustomDimensionId,
-            ) || []),
         ]);
         return [fields, fields.size > 0];
     }, [unsavedChartVersion]);
@@ -1358,6 +1460,16 @@ export const ExplorerProvider: FC<
         });
     }, []);
 
+    const setTimeZone = useCallback((timezone: TimeZone) => {
+        dispatch({
+            type: ActionType.SET_TIME_ZONE,
+            payload: timezone,
+            options: {
+                shouldFetchResults: true,
+            },
+        });
+    }, []);
+
     const setFilters = useCallback(
         (filters: MetricQuery['filters'], shouldFetchResults: boolean) => {
             dispatch({
@@ -1413,7 +1525,7 @@ export const ExplorerProvider: FC<
             });
             dispatch({
                 type: ActionType.TOGGLE_METRIC,
-                payload: getFieldId(additionalMetric),
+                payload: getItemId(additionalMetric),
             });
         },
         [],
@@ -1531,11 +1643,14 @@ export const ExplorerProvider: FC<
     const editCustomDimension = useCallback(
         (
             customDimension: CustomDimension,
-            previousCustomDimensionName: string,
+            previousCustomDimensionId: string,
         ) => {
             dispatch({
                 type: ActionType.EDIT_CUSTOM_DIMENSION,
-                payload: { customDimension, previousCustomDimensionName },
+                payload: { customDimension, previousCustomDimensionId },
+                options: {
+                    shouldFetchResults: true,
+                },
             });
             // TODO: add dispatch toggle
         },
@@ -1630,11 +1745,12 @@ export const ExplorerProvider: FC<
     useEffect(() => {
         if (!state.shouldFetchResults) return;
 
-        mutateAsync().then(() => {
-            dispatch({
-                type: ActionType.SET_FETCH_RESULTS_FALSE,
-            });
-        });
+        async function fetchResults() {
+            await mutateAsync();
+            dispatch({ type: ActionType.SET_FETCH_RESULTS_FALSE });
+        }
+
+        void fetchResults();
     }, [mutateAsync, state.shouldFetchResults]);
 
     const clearExplore = useCallback(async () => {
@@ -1672,7 +1788,7 @@ export const ExplorerProvider: FC<
         if (unsavedChartVersion.metricQuery.sorts.length <= 0 && defaultSort) {
             setSortFields([defaultSort]);
         } else {
-            mutateAsync();
+            return mutateAsync();
         }
     }, [defaultSort, mutateAsync, unsavedChartVersion, setSortFields]);
 
@@ -1691,6 +1807,7 @@ export const ExplorerProvider: FC<
             moveSortFields,
             setFilters,
             setRowLimit,
+            setTimeZone,
             setColumnOrder,
             addAdditionalMetric,
             editAdditionalMetric,
@@ -1723,6 +1840,7 @@ export const ExplorerProvider: FC<
             moveSortFields,
             setFilters,
             setRowLimit,
+            setTimeZone,
             setColumnOrder,
             addAdditionalMetric,
             editAdditionalMetric,

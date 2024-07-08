@@ -1,13 +1,13 @@
 import {
     ChartType,
-    fieldId,
     FieldType,
+    getItemId,
     isTableErrorSearchResult,
     SearchItemType,
-    SearchResults,
+    type SearchResults,
 } from '@lightdash/common';
 import { getExplorerUrlFromCreateSavedChartVersion } from '../../../hooks/useExplorerRoute';
-import { SearchItem } from '../types/searchItem';
+import { type SearchItem } from '../types/searchItem';
 
 export const getSearchItemMap = (
     results: SearchResults,
@@ -84,11 +84,11 @@ export const getSearchItemMap = (
                     exploreName: item.explore,
                     dimensions:
                         item.fieldType === FieldType.DIMENSION
-                            ? [fieldId(item)]
+                            ? [getItemId(item)]
                             : [],
                     metrics:
                         item.fieldType === FieldType.METRIC
-                            ? [fieldId(item)]
+                            ? [getItemId(item)]
                             : [],
                     filters: {},
                     sorts: [],

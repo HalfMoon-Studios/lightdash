@@ -1,7 +1,7 @@
 import {
-    AdditionalMetric,
-    CompiledTable,
-    CustomDimension,
+    type AdditionalMetric,
+    type CompiledTable,
+    type CustomDimension,
 } from '@lightdash/common';
 import { MantineProvider, NavLink, Text } from '@mantine/core';
 import { IconTable } from '@tabler/icons-react';
@@ -71,7 +71,12 @@ type Props = {
     onSelectedNodeChange: (itemId: string, isDimension: boolean) => void;
     missingCustomMetrics: AdditionalMetric[];
     customDimensions?: CustomDimension[];
-    missingFields?: string[];
+    missingCustomDimensions?: CustomDimension[];
+    missingFields?: {
+        all: string[];
+        customDimensions: CustomDimension[] | undefined;
+        customMetrics: AdditionalMetric[] | undefined;
+    };
     selectedDimensions?: string[];
 };
 
@@ -103,6 +108,7 @@ const TableTree: FC<Props> = ({
     additionalMetrics,
     customDimensions,
     missingCustomMetrics,
+    missingCustomDimensions,
     searchQuery,
     missingFields,
     selectedDimensions,
@@ -124,7 +130,6 @@ const TableTree: FC<Props> = ({
                         searchQuery={searchQuery}
                         additionalMetrics={additionalMetrics}
                         customDimensions={customDimensions}
-                        missingCustomMetrics={missingCustomMetrics}
                         missingFields={missingFields}
                         selectedDimensions={selectedDimensions}
                         {...rest}

@@ -1,7 +1,8 @@
 import assertUnreachable from '../utils/assertUnreachable';
-import { Explore, ExploreError } from './explore';
-import { DashboardFilterRule } from './filter';
-import { MetricQuery } from './metricQuery';
+import { type Explore, type ExploreError } from './explore';
+import { type DashboardFilterRule } from './filter';
+import { type MetricQuery } from './metricQuery';
+import { type ValidationTarget } from './validation';
 
 export type SchedulerCsvOptions = {
     formatted: boolean;
@@ -46,7 +47,8 @@ export type SchedulerLog = {
         | 'uploadGsheetFromQuery'
         | 'compileProject'
         | 'testAndCompileProject'
-        | 'validateProject';
+        | 'validateProject'
+        | 'sqlRunner';
     schedulerUuid?: string;
     jobId: string;
     jobGroup?: string;
@@ -378,6 +380,7 @@ export type DownloadCsvPayload = {
     columnOrder: string[];
     customLabels: Record<string, string> | undefined;
     hiddenFields: string[] | undefined;
+    chartName: string | undefined;
 };
 
 export type ApiCsvUrlResponse = {
@@ -404,6 +407,7 @@ export type ValidateProjectPayload = {
     userUuid: string;
     organizationUuid: string | undefined;
     explores?: (Explore | ExploreError)[];
+    validationTargets?: ValidationTarget[];
 };
 
 export type ApiJobScheduledResponse = {

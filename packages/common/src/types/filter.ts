@@ -1,4 +1,4 @@
-import { ConditionalOperator, ConditionalRule } from './conditionalRule';
+import { ConditionalOperator, type ConditionalRule } from './conditionalRule';
 import type { SchedulerFilterRule } from './scheduler';
 
 export enum FilterType {
@@ -46,6 +46,7 @@ export interface FilterRule<
     target: T;
     settings?: S;
     disabled?: boolean;
+    required?: boolean;
 }
 
 export interface MetricFilterRule
@@ -56,7 +57,7 @@ export type DashboardFieldTarget = {
     tableName: string;
 };
 
-type DashboardTileTarget = DashboardFieldTarget | false;
+export type DashboardTileTarget = DashboardFieldTarget | false;
 
 export type DashboardFilterRule<
     O = ConditionalOperator,
@@ -66,6 +67,12 @@ export type DashboardFilterRule<
 > = FilterRule<O, T, V, S> & {
     tileTargets?: Record<string, DashboardTileTarget>;
     label: undefined | string;
+};
+
+export type FilterDashboardToRule = DashboardFilterRule & {
+    target: {
+        fieldName: string;
+    };
 };
 
 export type DashboardFilterRuleOverride = Omit<
@@ -135,8 +142,18 @@ export const isAndFilterGroup = (
 export const isFilterGroup = (value: FilterGroupItem): value is FilterGroup =>
     isOrFilterGroup(value) || isAndFilterGroup(value);
 
-export const isFilterRule = (value: ConditionalRule): value is FilterRule =>
+export const isFilterRule = (
+    value: ConditionalRule | FilterGroupItem,
+): value is FilterRule =>
     'id' in value && 'target' in value && 'operator' in value;
+
+export const isFilterTarget = (value: unknown): value is FieldTarget =>
+    !!value && typeof value === 'object' && 'fieldId' in value;
+
+export const isMetricFilterTarget = (
+    value: unknown,
+): value is { fieldRef: string } =>
+    !!value && typeof value === 'object' && 'fieldRef' in value;
 
 export const getFilterRules = (filters: Filters): FilterRule[] => {
     const rules: FilterRule[] = [];
@@ -377,5 +394,41 @@ export const compressDashboardFiltersToParam = (
         }),
         { dimensions: [], metrics: [], tableCalculations: [] },
     );
+
+export const isFilterRuleDefinedForFieldId = (
+    filterGroup: FilterGroup,
+    fieldId: string,
+    isInterval: boolean = false,
+): boolean => {
+    // Check if the filter group is an 'and' or 'or' group
+    const filterGroupItems = isAndFilterGroup(filterGroup)
+        ? filterGroup.and
+        : filterGroup.or;
+
+    // If the item is a filter rule, check if its id matches the provided filter rule id
+    const isMatchingFieldId = (item: FilterGroupItem) => {
+        if (!isFilterGroup(item)) {
+            // If the item is not a filter group, check if it matches the fieldId
+            return isInterval
+                ? item.target.fieldId.startsWith(fieldId)
+                : item.target.fieldId === fieldId;
+        }
+        return false;
+    };
+    const isFilterRulePresent = (
+        item: OrFilterGroup | AndFilterGroup | FilterRule,
+    ): boolean => {
+        if (isMatchingFieldId(item)) {
+            return true;
+        }
+        if (isFilterGroup(item)) {
+            // If the item is a filter group, recursively check its items
+            return isFilterRuleDefinedForFieldId(item, fieldId, isInterval);
+        }
+        return false;
+    };
+    // If the filter rule was not found in the filter group, return false
+    return filterGroupItems.some(isFilterRulePresent);
+};
 
 export { ConditionalOperator as FilterOperator };

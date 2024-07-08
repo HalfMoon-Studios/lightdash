@@ -1,7 +1,7 @@
 import assertUnreachable from '../utils/assertUnreachable';
-import { DashboardBasicDetails } from './dashboard';
-import { SpaceQuery } from './savedCharts';
-import { Space, SpaceSummary } from './space';
+import { type DashboardBasicDetails } from './dashboard';
+import { type SpaceQuery } from './savedCharts';
+import { type Space, type SpaceSummary } from './space';
 
 export enum ResourceViewItemType {
     CHART = 'chart',
@@ -22,6 +22,7 @@ export type ResourceViewChartItem = {
         | 'uuid'
         | 'name'
         | 'chartType'
+        | 'chartKind'
         | 'firstViewedAt'
         | 'views'
         | 'pinnedListUuid'

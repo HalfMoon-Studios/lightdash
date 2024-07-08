@@ -1,10 +1,22 @@
 import { SupportedDbtAdapter } from '../types/dbt';
-import { Explore, Table } from '../types/explore';
-import { DimensionType, FieldType, MetricType, Source } from '../types/field';
+import { type Explore, type Table } from '../types/explore';
+import {
+    CustomDimensionType,
+    DimensionType,
+    FieldType,
+    MetricType,
+    type CompiledCustomSqlDimension,
+    type CustomSqlDimension,
+    type Source,
+} from '../types/field';
 import { FilterOperator } from '../types/filter';
-import { CreateWarehouseCredentials } from '../types/projects';
-import { WarehouseClient } from '../types/warehouse';
-import { UncompiledExplore } from './exploreCompiler';
+import { type CreateWarehouseCredentials } from '../types/projects';
+import { TimeFrames } from '../types/timeFrames';
+import {
+    type WarehouseCatalog,
+    type WarehouseClient,
+} from '../types/warehouse';
+import { type UncompiledExplore } from './exploreCompiler';
 
 export const warehouseClientMock: WarehouseClient = {
     credentials: {} as CreateWarehouseCredentials,
@@ -17,6 +29,13 @@ export const warehouseClientMock: WarehouseClient = {
             },
         },
     }),
+    streamQuery: (_query, streamCallback) => {
+        streamCallback({
+            fields: {},
+            rows: [],
+        });
+        return Promise.resolve();
+    },
     runQuery: () =>
         Promise.resolve({
             fields: {},
@@ -24,7 +43,6 @@ export const warehouseClientMock: WarehouseClient = {
         }),
     test: () => Promise.resolve(),
     getStartOfWeek: () => undefined,
-    getFieldQuoteChar: () => '"',
     getStringQuoteChar: () => "'",
     getEscapeStringQuoteChar: () => "'",
     getAdapterType: () => SupportedDbtAdapter.POSTGRES,
@@ -41,6 +59,15 @@ export const warehouseClientMock: WarehouseClient = {
         }
     },
     concatString: (...args) => `CONCAT(${args.join(', ')})`,
+    getTables(): Promise<WarehouseCatalog> {
+        throw new Error('Function not implemented.');
+    },
+    getFields(): Promise<WarehouseCatalog> {
+        throw new Error('Function not implemented.');
+    },
+    parseWarehouseCatalog(): WarehouseCatalog {
+        throw new Error('Function not implemented.');
+    },
 };
 
 const sourceMock: Source = {
@@ -673,6 +700,7 @@ export const compiledSimpleJoinedExplore: Explore = {
             compiledSqlOn: '("a".dim1) = ("b".dim1)',
             type: undefined,
             hidden: undefined,
+            always: undefined,
         },
     ],
     tables: {
@@ -705,6 +733,7 @@ export const compiledSimpleJoinedExplore: Explore = {
         },
         b: {
             name: 'b',
+            originalName: 'b',
             label: 'Custom B label',
             database: 'database',
             schema: 'schema',
@@ -723,6 +752,165 @@ export const compiledSimpleJoinedExplore: Explore = {
                     tablesReferences: ['b'],
                     source: sourceMock,
                     hidden: false,
+                },
+            },
+            metrics: {},
+            lineageGraph: {},
+            groupLabel: undefined,
+            source: sourceMock,
+            hidden: undefined,
+        },
+    },
+};
+
+export const exploreWithJoinWithFieldsAndGroups: UncompiledExplore = {
+    ...simpleJoinedExplore,
+    joinedTables: [
+        {
+            ...simpleJoinedExplore.joinedTables[0],
+            fields: ['dim2'],
+        },
+    ],
+    tables: {
+        ...simpleJoinedExplore.tables,
+        b: {
+            ...simpleJoinedExplore.tables.b,
+            dimensions: {
+                dim1: {
+                    fieldType: FieldType.DIMENSION,
+                    type: DimensionType.STRING,
+                    name: 'dim1',
+                    label: 'dim1',
+                    table: 'b',
+                    tableLabel: 'Custom B label',
+                    sql: '${TABLE}.dim1',
+                    source: sourceMock,
+                    hidden: false,
+                },
+                dim2: {
+                    fieldType: FieldType.DIMENSION,
+                    type: DimensionType.DATE,
+                    name: 'dim2',
+                    label: 'dim2',
+                    table: 'b',
+                    tableLabel: 'Custom B label',
+                    sql: '${TABLE}.dim2',
+                    source: sourceMock,
+                    hidden: false,
+                    timeInterval: TimeFrames.DAY,
+                    groups: ['test'],
+                },
+                dim2_DAY: {
+                    fieldType: FieldType.DIMENSION,
+                    type: DimensionType.DATE,
+                    name: 'dim2_DAY',
+                    label: 'dim2_DAY',
+                    table: 'b',
+                    tableLabel: 'Custom B label',
+                    sql: '${TABLE}.dim2',
+                    source: sourceMock,
+                    hidden: false,
+                    timeInterval: TimeFrames.DAY,
+                    timeIntervalBaseDimensionName: 'dim2',
+                    groups: ['test', 'dim2'],
+                },
+            },
+        },
+    },
+};
+
+export const compiledExploreWithJoinWithFieldsAndGroups: Explore = {
+    ...exploreBase,
+    joinedTables: [
+        {
+            table: 'b',
+            sqlOn: '${a.dim1} = ${b.dim1}',
+            compiledSqlOn: '("a".dim1) = ("b".dim1)',
+            type: undefined,
+            hidden: undefined,
+            always: undefined,
+        },
+    ],
+    tables: {
+        a: {
+            name: 'a',
+            label: 'Custom A label',
+            database: 'database',
+            schema: 'schema',
+            sqlTable: 'test.table',
+            sqlWhere: undefined,
+            dimensions: {
+                dim1: {
+                    fieldType: FieldType.DIMENSION,
+                    type: DimensionType.STRING,
+                    name: 'dim1',
+                    label: 'dim1',
+                    table: 'a',
+                    tableLabel: 'Custom A label',
+                    sql: '${TABLE}.dim1',
+                    compiledSql: '"a".dim1',
+                    tablesReferences: ['a'],
+                    source: sourceMock,
+                    hidden: false,
+                },
+            },
+            metrics: {},
+            lineageGraph: {},
+            groupLabel: undefined,
+            source: sourceMock,
+        },
+        b: {
+            name: 'b',
+            originalName: 'b',
+            label: 'Custom B label',
+            database: 'database',
+            schema: 'schema',
+            sqlTable: 'test.tableb',
+            sqlWhere: undefined,
+            dimensions: {
+                dim1: {
+                    fieldType: FieldType.DIMENSION,
+                    type: DimensionType.STRING,
+                    name: 'dim1',
+                    label: 'dim1',
+                    table: 'b',
+                    tableLabel: 'Custom B label',
+                    sql: '${TABLE}.dim1',
+                    compiledSql: '"b".dim1',
+                    tablesReferences: ['b'],
+                    source: sourceMock,
+                    hidden: true,
+                },
+                dim2: {
+                    fieldType: FieldType.DIMENSION,
+                    type: DimensionType.DATE,
+                    name: 'dim2',
+                    label: 'dim2',
+                    table: 'b',
+                    tableLabel: 'Custom B label',
+                    sql: '${TABLE}.dim2',
+                    compiledSql: '"b".dim2',
+                    tablesReferences: ['b'],
+                    source: sourceMock,
+                    hidden: false,
+                    timeInterval: TimeFrames.DAY,
+                    groups: ['test'],
+                },
+                dim2_DAY: {
+                    fieldType: FieldType.DIMENSION,
+                    type: DimensionType.DATE,
+                    name: 'dim2_DAY',
+                    label: 'dim2_DAY',
+                    table: 'b',
+                    tableLabel: 'Custom B label',
+                    sql: '${TABLE}.dim2',
+                    compiledSql: '"b".dim2',
+                    tablesReferences: ['b'],
+                    source: sourceMock,
+                    hidden: false,
+                    timeInterval: TimeFrames.DAY,
+                    timeIntervalBaseDimensionName: 'dim2',
+                    groups: ['test', 'dim2'],
                 },
             },
             metrics: {},
@@ -863,6 +1051,7 @@ export const compiledJoinedExploreOverridingJoinAlias: Explore = {
             compiledSqlOn: '("a".dim1) = ("custom_alias".dim1)',
             type: undefined,
             hidden: undefined,
+            always: undefined,
         },
     ],
     tables: {
@@ -906,6 +1095,7 @@ export const compiledJoinedExploreOverridingAliasAndLabel: Explore = {
             compiledSqlOn: '("a".dim1) = ("custom_alias".dim1)',
             type: undefined,
             hidden: undefined,
+            always: undefined,
         },
     ],
     tables: {
@@ -949,6 +1139,7 @@ export const compiledExploreWithHiddenJoin: Explore = {
             compiledSqlOn: '("a".dim1) = ("b".dim1)',
             type: undefined,
             hidden: true,
+            always: undefined,
         },
     ],
     tables: {
@@ -1055,6 +1246,7 @@ export const compiledJoinedExploreWithJoinAliasAndSubsetOfFieldsThatDontIncludeS
                 compiledSqlOn: '("a".dim1) = ("custom_alias".dim1)',
                 type: undefined,
                 hidden: undefined,
+                always: undefined,
             },
         ],
         tables: {
@@ -1441,6 +1633,7 @@ export const exploreWithRequiredAttributesCompiled: Explore = {
             table: 'b',
             type: undefined,
             hidden: undefined,
+            always: undefined,
         },
     ],
     tables: {
@@ -1496,6 +1689,7 @@ export const exploreWithRequiredAttributesCompiled: Explore = {
         },
         b: {
             name: 'b',
+            originalName: 'b',
             label: 'b',
             database: 'database',
             schema: 'schema',
@@ -1555,3 +1749,60 @@ export const exploreWithRequiredAttributesCompiled: Explore = {
         },
     },
 };
+
+export const simpleJoinedExploreWithAlwaysTrue: UncompiledExplore = {
+    ...simpleJoinedExplore,
+    joinedTables: [
+        {
+            table: 'b',
+            sqlOn: '${a.dim1} = ${b.dim1}',
+            always: true,
+        },
+    ],
+};
+
+export const compiledSimpleJoinedExploreWithAlwaysTrue: Explore = {
+    ...compiledSimpleJoinedExplore,
+    joinedTables: [
+        {
+            table: 'b',
+            sqlOn: '${a.dim1} = ${b.dim1}',
+            compiledSqlOn: '("a".dim1) = ("b".dim1)',
+            type: undefined,
+            hidden: undefined,
+            always: true,
+        },
+    ],
+};
+
+export const customSqlDimensionWithNoReferences: CustomSqlDimension = {
+    id: 'test',
+    name: 'Test',
+    table: 'orders',
+    type: CustomDimensionType.SQL,
+    sql: '`orders`.`id`',
+    dimensionType: DimensionType.STRING,
+};
+
+export const expectedCompiledCustomSqlDimensionWithNoReferences: CompiledCustomSqlDimension =
+    {
+        ...customSqlDimensionWithNoReferences,
+        compiledSql: '`orders`.`id`',
+        tablesReferences: [],
+    };
+
+export const customSqlDimensionWithReferences: CustomSqlDimension = {
+    id: 'test',
+    name: 'Test',
+    table: 'orders',
+    type: CustomDimensionType.SQL,
+    sql: '${a.dim1} + ${b.dim1}',
+    dimensionType: DimensionType.STRING,
+};
+
+export const expectedCompiledCustomSqlDimensionWithReferences: CompiledCustomSqlDimension =
+    {
+        ...customSqlDimensionWithReferences,
+        compiledSql: '("a".dim1) + ("b".dim1)',
+        tablesReferences: ['a', 'b'],
+    };

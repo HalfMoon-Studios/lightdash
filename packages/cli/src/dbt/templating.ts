@@ -13,12 +13,18 @@ const nunjucksContext = {
 
 export const renderProfilesYml = (
     raw: string,
-    context?: Record<string, any>,
+    context?: Record<string, unknown>,
 ) => {
     const template = nunjucks.compile(raw, nunjucksEnv);
     const rendered = template.render({
         ...nunjucksContext,
         ...(context || {}),
     });
-    return rendered;
+    // Fix multiline privatekey strings
+    // Prevents error: Error: error:1E08010C:DECODER routines::unsupported
+    const privateKeyRegex =
+        /-----BEGIN PRIVATE KEY-----[\s\S]*?-----END PRIVATE KEY-----/g;
+    return rendered.replace(privateKeyRegex, (match) =>
+        match.replace(/\n/g, '\\n'),
+    );
 };

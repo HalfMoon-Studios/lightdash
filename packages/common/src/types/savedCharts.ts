@@ -1,10 +1,12 @@
 import assertUnreachable from '../utils/assertUnreachable';
-import { ViewStatistics } from './analytics';
-import { ConditionalFormattingConfig } from './conditionalFormatting';
-import { CompactOrAlias } from './field';
-import { MetricQuery, MetricQueryRequest } from './metricQuery';
-import { LightdashUser, UpdatedByUser } from './user';
-import { ValidationSummary } from './validation';
+import { type ViewStatistics } from './analytics';
+import { type ConditionalFormattingConfig } from './conditionalFormatting';
+import { type CompactOrAlias } from './field';
+import { type MetricQuery, type MetricQueryRequest } from './metricQuery';
+// eslint-disable-next-line import/no-cycle
+import { type SpaceShare } from './space';
+import { type LightdashUser, type UpdatedByUser } from './user';
+import { type ValidationSummary } from './validation';
 
 export enum ChartKind {
     LINE = 'line',
@@ -16,6 +18,7 @@ export enum ChartKind {
     PIE = 'pie',
     TABLE = 'table',
     BIG_NUMBER = 'big_number',
+    FUNNEL = 'funnel',
     CUSTOM = 'custom',
 }
 
@@ -24,6 +27,7 @@ export enum ChartType {
     TABLE = 'table',
     BIG_NUMBER = 'big_number',
     PIE = 'pie',
+    FUNNEL = 'funnel',
     CUSTOM = 'custom',
 }
 
@@ -75,6 +79,9 @@ export const PieChartLegendPositionDefault = Object.keys(
     PieChartLegendPositions,
 )[0] as PieChartLegendPosition;
 
+export type SeriesMetadata = {
+    color: string;
+};
 export type PieChart = {
     groupFieldIds?: string[];
     metricId?: string;
@@ -88,6 +95,39 @@ export type PieChart = {
     groupSortOverrides?: string[];
     showLegend?: boolean;
     legendPosition?: PieChartLegendPosition;
+    metadata?: Record<string, SeriesMetadata>;
+};
+
+export enum FunnelChartDataInput {
+    ROW = 'row',
+    COLUMN = 'column',
+}
+
+export enum FunnelChartLabelPosition {
+    INSIDE = 'inside',
+    LEFT = 'left',
+    RIGHT = 'right',
+    HIDDEN = 'hidden',
+}
+
+export enum FunnelChartLegendPosition {
+    HORIZONTAL = 'horizontal',
+    VERTICAL = 'vertical',
+}
+
+export type FunnelChart = {
+    dataInput?: FunnelChartDataInput;
+    fieldId?: string;
+    metadata?: Record<string, SeriesMetadata>;
+    labelOverrides?: Record<string, string>;
+    colorOverrides?: Record<string, string>;
+    labels?: {
+        position?: FunnelChartLabelPosition;
+        showValue?: boolean;
+        showPercentage?: boolean;
+    };
+    showLegend?: boolean;
+    legendPosition?: FunnelChartLegendPosition;
 };
 
 export type ColumnProperties = {
@@ -102,6 +142,7 @@ export type TableChart = {
     showTableNames?: boolean;
     hideRowNumbers?: boolean;
     showResultsTotal?: boolean;
+    showSubtotals?: boolean;
     columns?: Record<string, ColumnProperties>;
     conditionalFormattings?: ConditionalFormattingConfig[];
     metricsAsRows?: boolean;
@@ -132,14 +173,18 @@ export const isPivotReferenceWithValues = (
 export type MarkLineData = {
     yAxis?: string;
     xAxis?: string;
-    name: string;
-    value: string;
+    name?: string;
+    value?: string;
+    type?: string;
+    uuid: string;
     lineStyle?: {
         color: string;
     };
     label?: {
         formatter?: string;
+        position?: 'start' | 'middle' | 'end';
     };
+    dynamicValue?: 'average';
 };
 export type MarkLine = {
     data: MarkLineData[];
@@ -225,6 +270,8 @@ type Axis = {
     name?: string;
     min?: string | undefined;
     max?: string | undefined;
+    minOffset?: string | undefined;
+    maxOffset?: string | undefined;
     inverse?: boolean;
     rotate?: number;
 };
@@ -246,6 +293,7 @@ export type CustomVis = {
 export type CartesianChart = {
     layout: CartesianChartLayout;
     eChartsConfig: EChartsConfig;
+    metadata?: Record<string, SeriesMetadata>;
 };
 
 export type BigNumberConfig = {
@@ -268,6 +316,11 @@ export type PieChartConfig = {
     config?: PieChart;
 };
 
+export type FunnelChartConfig = {
+    type: ChartType.FUNNEL;
+    config?: FunnelChart;
+};
+
 export type TableChartConfig = {
     type: ChartType.TABLE;
     config?: TableChart;
@@ -278,9 +331,12 @@ export type ChartConfig =
     | CartesianChartConfig
     | CustomVisConfig
     | PieChartConfig
+    | FunnelChartConfig
     | TableChartConfig;
 
 export type SavedChartType = ChartType;
+
+export type SavedChartDAO = Omit<SavedChart, 'isPrivate' | 'access'>;
 
 export type SavedChart = {
     uuid: string;
@@ -306,6 +362,9 @@ export type SavedChart = {
     dashboardUuid: string | null;
     dashboardName: string | null;
     colorPalette: string[];
+    isPrivate: boolean;
+    access: SpaceShare[];
+    slug: string;
 };
 
 type CreateChartBase = Pick<
@@ -347,7 +406,12 @@ export type CreateSavedChartVersion = Omit<
     | 'dashboardUuid'
     | 'dashboardName'
     | 'colorPalette'
->;
+    | 'isPrivate'
+    | 'access'
+    | 'slug'
+> &
+    // For Charts created within a dashboard
+    Partial<Pick<SavedChart, 'dashboardUuid' | 'dashboardName'>>;
 
 export type UpdateSavedChart = Partial<
     Pick<SavedChart, 'name' | 'description' | 'spaceUuid'>
@@ -357,22 +421,6 @@ export type UpdateMultipleSavedChart = Pick<
     SavedChart,
     'uuid' | 'name' | 'description' | 'spaceUuid'
 >;
-
-export type SpaceQuery = Pick<
-    SavedChart,
-    | 'uuid'
-    | 'name'
-    | 'updatedAt'
-    | 'updatedByUser'
-    | 'description'
-    | 'spaceUuid'
-    | 'pinnedListUuid'
-    | 'pinnedListOrder'
-> &
-    ViewStatistics & {
-        chartType: ChartKind | undefined;
-        validationErrors?: ValidationSummary[];
-    };
 
 export const isCompleteLayout = (
     value: CartesianChartLayout | undefined,
@@ -468,6 +516,8 @@ export const getChartType = (chartKind: ChartKind | undefined): ChartType => {
     switch (chartKind) {
         case ChartKind.PIE:
             return ChartType.PIE;
+        case ChartKind.FUNNEL:
+            return ChartType.FUNNEL;
         case ChartKind.BIG_NUMBER:
             return ChartType.BIG_NUMBER;
         case ChartKind.TABLE:
@@ -483,6 +533,8 @@ export const getChartKind = (
     switch (chartType) {
         case ChartType.PIE:
             return ChartKind.PIE;
+        case ChartType.FUNNEL:
+            return ChartKind.FUNNEL;
         case ChartType.BIG_NUMBER:
             return ChartKind.BIG_NUMBER;
         case ChartType.TABLE:
@@ -542,11 +594,22 @@ export type ChartSummary = Pick<
     | 'pinnedListUuid'
     | 'dashboardUuid'
     | 'dashboardName'
-> & { chartType?: ChartType | undefined };
+> & { chartType?: ChartType | undefined; chartKind?: ChartKind | undefined };
+
+export type SpaceQuery = ChartSummary &
+    Pick<SavedChart, 'updatedAt' | 'updatedByUser' | 'pinnedListOrder'> &
+    ViewStatistics & {
+        validationErrors?: ValidationSummary[];
+    };
 
 export type ApiChartSummaryListResponse = {
     status: 'ok';
     results: ChartSummary[];
+};
+
+export type ApiChartListResponse = {
+    status: 'ok';
+    results: SpaceQuery[];
 };
 
 export type ChartHistory = {

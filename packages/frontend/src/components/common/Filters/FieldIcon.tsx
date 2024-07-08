@@ -1,16 +1,19 @@
 import {
-    AdditionalMetric,
-    CustomDimension,
     DimensionType,
-    Field,
     getItemColor,
     getItemIcon,
-    isCustomDimension,
+    isCustomBinDimension,
+    isCustomSqlDimension,
     isDimension,
     isField,
     isMetric,
+    isTableCalculation,
     MetricType,
-    TableCalculation,
+    TableCalculationType,
+    type AdditionalMetric,
+    type CustomDimension,
+    type Field,
+    type TableCalculation,
 } from '@lightdash/common';
 import {
     Icon123,
@@ -22,19 +25,31 @@ import {
     IconToggleLeft,
 } from '@tabler/icons-react';
 import { forwardRef } from 'react';
-import MantineIcon, { MantineIconProps } from '../MantineIcon';
+import MantineIcon, { type MantineIconProps } from '../MantineIcon';
 
-const getItemIconName = (type: DimensionType | MetricType) => {
+export const getItemIconName = (
+    type: DimensionType | MetricType | TableCalculationType,
+) => {
     switch (type) {
-        case DimensionType.STRING || MetricType.STRING:
+        case DimensionType.STRING:
+        case MetricType.STRING:
+        case TableCalculationType.STRING:
             return 'citation';
-        case DimensionType.NUMBER || MetricType.NUMBER:
+        case DimensionType.NUMBER:
+        case MetricType.NUMBER:
+        case TableCalculationType.NUMBER:
             return 'numerical';
-        case DimensionType.DATE || MetricType.DATE:
+        case DimensionType.DATE:
+        case MetricType.DATE:
+        case TableCalculationType.DATE:
             return 'calendar';
-        case DimensionType.BOOLEAN || MetricType.BOOLEAN:
+        case DimensionType.BOOLEAN:
+        case MetricType.BOOLEAN:
+        case TableCalculationType.BOOLEAN:
             return 'segmented-control';
-        case DimensionType.TIMESTAMP || MetricType.TIMESTAMP:
+        case DimensionType.TIMESTAMP:
+        case MetricType.TIMESTAMP:
+        case TableCalculationType.TIMESTAMP:
             return 'time';
         default:
             return 'numerical';
@@ -44,12 +59,19 @@ const getItemIconName = (type: DimensionType | MetricType) => {
 const getFieldIcon = (
     field: Field | TableCalculation | AdditionalMetric | CustomDimension,
 ) => {
-    if (isCustomDimension(field)) {
+    if (isCustomBinDimension(field)) {
         return 'citation';
     }
-    if (isField(field) && (isDimension(field) || isMetric(field))) {
-        return getItemIconName(field.type);
+    if (isCustomSqlDimension(field)) {
+        return getItemIconName(field.dimensionType);
     }
+    if (
+        (isField(field) && (isDimension(field) || isMetric(field))) ||
+        isTableCalculation(field)
+    ) {
+        if (field.type) return getItemIconName(field.type);
+    }
+
     return getItemIcon(field);
 };
 
@@ -70,7 +92,6 @@ const FieldIcon = forwardRef<SVGSVGElement, Props>(
             size,
             color: iconColor,
         };
-
         switch (getFieldIcon(item)) {
             case 'citation':
                 return <MantineIcon icon={IconAbc} {...props} />;

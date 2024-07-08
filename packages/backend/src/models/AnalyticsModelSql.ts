@@ -4,23 +4,25 @@ export const usersInProjectSql = (
 ) => `
 SELECT 
   DISTINCT ON (users.user_uuid) user_uuid,
-  CASE WHEN project_memberships.role IS NULL THEN
-    organization_memberships.role
-    else project_memberships.role end as role
+  COALESCE(project_memberships.role, project_group_access.role, organization_memberships.role) as role
 from users 
   left join emails on emails.user_id = users.user_id
   LEFT JOIN organization_memberships ON users.user_id  =  organization_memberships.user_id
   LEFT JOIN organizations ON organization_memberships.organization_id = organizations.organization_id
   LEFT JOIN project_memberships ON project_memberships.user_id = users.user_id
   LEFT JOIN projects on project_memberships.project_id = projects.project_id
+  LEFT JOIN group_memberships ON group_memberships.user_id = users.user_id
+  LEFT JOIN project_group_access ON project_group_access.group_uuid = group_memberships.group_uuid
 WHERE 
   emails.is_primary = true 
   AND ( 
       (organization_memberships.role != 'member'
         AND organization_uuid = '${organizationUuid}')
   OR 
-      (projects.project_uuid = project_uuid
-        AND project_uuid = '${projectUuid}'))
+      (projects.project_uuid = '${projectUuid}')
+  OR (
+    project_group_access.project_uuid = '${projectUuid}'
+  ))
 `;
 
 export const numberWeeklyQueryingUsersSql = (
@@ -223,4 +225,32 @@ where projects.project_uuid = '${projectUuid}'
 group by dv.dashboard_uuid, d.name
 order by count(dv.dashboard_uuid) desc
 limit 20
+`;
+
+export const userMostViewedDashboardSql = (projectUuid: string) => `
+WITH RankedResults AS (
+  SELECT
+      u.user_uuid,
+      u.first_name,
+      u.last_name,
+      d."name" AS dashboard_name,
+      COUNT(dv.dashboard_uuid) AS dashboard_count,
+      ROW_NUMBER() OVER (PARTITION BY u.first_name ORDER BY COUNT(dv.dashboard_uuid) DESC) AS rank
+  FROM public.analytics_dashboard_views dv
+  LEFT JOIN users u ON u.user_uuid = dv.user_uuid
+  LEFT JOIN dashboards d ON dv.dashboard_uuid = d.dashboard_uuid
+  left join spaces s on s.space_id  = d.space_id 
+  left join projects on projects.project_id = s.project_id
+  WHERE projects.project_uuid = '${projectUuid}' 
+    AND u.user_uuid IS NOT NULL
+  GROUP BY u.user_uuid, u.first_name, u.last_name, d."name"
+)
+SELECT
+  user_uuid, 
+  first_name,
+  last_name,
+  dashboard_name,
+  dashboard_count as count
+FROM RankedResults
+WHERE rank = 1;
 `;

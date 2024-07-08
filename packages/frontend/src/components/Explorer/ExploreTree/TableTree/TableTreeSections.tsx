@@ -1,13 +1,16 @@
+import { subject } from '@casl/ability';
 import {
-    AdditionalMetric,
-    CompiledTable,
-    CustomDimension,
-    getCustomDimensionId,
     getItemId,
+    type AdditionalMetric,
+    type CompiledTable,
+    type CustomDimension,
 } from '@lightdash/common';
-import { Center, Group, Text, Tooltip } from '@mantine/core';
-import { IconAlertTriangle } from '@tabler/icons-react';
-import { FC, useMemo } from 'react';
+import { Button, Center, Group, Text, Tooltip } from '@mantine/core';
+import { IconAlertTriangle, IconPlus } from '@tabler/icons-react';
+import { useMemo, type FC } from 'react';
+import { useParams } from 'react-router-dom';
+import { useApp } from '../../../../providers/AppProvider';
+import { useExplorerContext } from '../../../../providers/ExplorerProvider';
 import MantineIcon from '../../../common/MantineIcon';
 import DocumentationHelpButton from '../../../DocumentationHelpButton';
 import { getSearchResults, TreeProvider } from './Tree/TreeProvider';
@@ -19,9 +22,12 @@ type Props = {
     additionalMetrics: AdditionalMetric[];
     selectedItems: Set<string>;
     onSelectedNodeChange: (itemId: string, isDimension: boolean) => void;
-    missingCustomMetrics: AdditionalMetric[];
     customDimensions?: CustomDimension[];
-    missingFields?: string[];
+    missingFields?: {
+        all: string[];
+        customDimensions: CustomDimension[] | undefined;
+        customMetrics: AdditionalMetric[] | undefined;
+    };
     selectedDimensions?: string[];
 };
 const TableTreeSections: FC<Props> = ({
@@ -30,11 +36,23 @@ const TableTreeSections: FC<Props> = ({
     additionalMetrics,
     customDimensions,
     selectedItems,
-    missingCustomMetrics,
     missingFields,
     selectedDimensions,
     onSelectedNodeChange,
 }) => {
+    const { projectUuid } = useParams<{ projectUuid: string }>();
+    const { user } = useApp();
+    const canManageCustomSql = user.data?.ability?.can(
+        'manage',
+        subject('CustomSql', {
+            organizationUuid: user.data.organizationUuid,
+            projectUuid,
+        }),
+    );
+    const toggleCustomDimensionModal = useExplorerContext(
+        (context) => context.actions.toggleCustomDimensionModal,
+    );
+
     const dimensions = useMemo(() => {
         return Object.values(table.dimensions).reduce(
             (acc, item) => ({ ...acc, [getItemId(item)]: item }),
@@ -54,16 +72,21 @@ const TableTreeSections: FC<Props> = ({
             (metric) => metric.table === table.name,
         );
 
-        return [...customMetricsTable, ...missingCustomMetrics].reduce<
-            Record<string, AdditionalMetric>
-        >((acc, item) => ({ ...acc, [getItemId(item)]: item }), {});
-    }, [additionalMetrics, , missingCustomMetrics, table]);
+        return [
+            ...customMetricsTable,
+            ...(missingFields?.customMetrics ?? []),
+        ].reduce<Record<string, AdditionalMetric>>(
+            (acc, item) => ({ ...acc, [getItemId(item)]: item }),
+            {},
+        );
+    }, [additionalMetrics, missingFields?.customMetrics, table.name]);
+
     const customDimensionsMap = useMemo(() => {
         if (customDimensions === undefined) return undefined;
         return customDimensions
             .filter((customDimension) => customDimension.table === table.name)
             .reduce<Record<string, CustomDimension>>(
-                (acc, item) => ({ ...acc, [getCustomDimensionId(item)]: item }),
+                (acc, item) => ({ ...acc, [getItemId(item)]: item }),
                 {},
             );
     }, [customDimensions, table]);
@@ -77,7 +100,7 @@ const TableTreeSections: FC<Props> = ({
 
     return (
         <>
-            {missingFields && missingFields.length > 0 && (
+            {missingFields && missingFields.all.length > 0 && (
                 <>
                     {' '}
                     <Group mt="sm" mb="xs">
@@ -85,7 +108,7 @@ const TableTreeSections: FC<Props> = ({
                             Missing fields
                         </Text>
                     </Group>
-                    {missingFields.map((missingField) => {
+                    {missingFields.all.map((missingField) => {
                         return (
                             <Tooltip
                                 key={missingField}
@@ -123,10 +146,33 @@ const TableTreeSections: FC<Props> = ({
             )}
             {isSearching &&
             getSearchResults(dimensions, searchQuery).size === 0 ? null : (
-                <Group mt="sm" mb="xs">
+                <Group mt="sm" mb="xs" position={'apart'}>
                     <Text fw={600} color="blue.9">
                         Dimensions
                     </Text>
+
+                    {canManageCustomSql && (
+                        <Tooltip
+                            label="Add a custom dimension with SQL"
+                            variant="xs"
+                        >
+                            <Button
+                                size="xs"
+                                variant={'subtle'}
+                                compact
+                                leftIcon={<MantineIcon icon={IconPlus} />}
+                                onClick={() =>
+                                    toggleCustomDimensionModal({
+                                        isEditing: false,
+                                        table: table.name,
+                                        item: undefined,
+                                    })
+                                }
+                            >
+                                Add
+                            </Button>
+                        </Tooltip>
+                    )}
                 </Group>
             )}
 
@@ -136,6 +182,7 @@ const TableTreeSections: FC<Props> = ({
                     searchQuery={searchQuery}
                     itemsMap={dimensions}
                     selectedItems={selectedItems}
+                    groupDetails={table.groupDetails}
                     onItemClick={(key) => onSelectedNodeChange(key, true)}
                 >
                     <TreeRoot />
@@ -184,6 +231,7 @@ const TableTreeSections: FC<Props> = ({
                     searchQuery={searchQuery}
                     itemsMap={metrics}
                     selectedItems={selectedItems}
+                    groupDetails={table.groupDetails}
                     onItemClick={(key) => onSelectedNodeChange(key, false)}
                 >
                     <TreeRoot />
@@ -225,7 +273,8 @@ const TableTreeSections: FC<Props> = ({
                     searchQuery={searchQuery}
                     itemsMap={customMetrics}
                     selectedItems={selectedItems}
-                    missingCustomMetrics={missingCustomMetrics}
+                    missingCustomMetrics={missingFields?.customMetrics}
+                    groupDetails={table.groupDetails}
                     onItemClick={(key) => onSelectedNodeChange(key, false)}
                 >
                     <TreeRoot />
@@ -267,10 +316,10 @@ const TableTreeSections: FC<Props> = ({
                     orderFieldsBy={table.orderFieldsBy}
                     searchQuery={searchQuery}
                     itemsMap={customDimensionsMap}
+                    missingCustomDimensions={missingFields?.customDimensions}
                     selectedItems={selectedItems}
-                    onItemClick={() => {
-                        //TODO implement
-                    }}
+                    groupDetails={table.groupDetails}
+                    onItemClick={(key) => onSelectedNodeChange(key, true)}
                 >
                     <TreeRoot />
                 </TreeProvider>

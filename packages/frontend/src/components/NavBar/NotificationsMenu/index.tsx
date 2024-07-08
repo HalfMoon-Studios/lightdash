@@ -1,7 +1,7 @@
 import { NotificationResourceType } from '@lightdash/common';
 import { Button, Indicator, Menu } from '@mantine/core';
 import { IconBell } from '@tabler/icons-react';
-import { FC } from 'react';
+import { type FC } from 'react';
 import { useDashboardCommentsCheck } from '../../../features/comments';
 import {
     DashboardCommentsNotifications,
@@ -22,7 +22,7 @@ export const NotificationsMenu: FC<{ projectUuid: string }> = ({
     const { user } = useApp();
 
     // Validator notifications
-    const { data: validationData } = useValidation(projectUuid, false);
+    const { data: validationData } = useValidation(projectUuid, user, false);
     const canUserManageValidations = useValidationUserAbility(projectUuid);
     const [hasReadValidationNotification, setHasReadValidationNotification] =
         useValidationNotificationChecker();
@@ -72,6 +72,7 @@ export const NotificationsMenu: FC<{ projectUuid: string }> = ({
         >
             <Menu.Target>
                 <Button
+                    aria-label="Notifications"
                     variant="default"
                     size="xs"
                     // NOTE: Set validation notification as read (Local Storage)

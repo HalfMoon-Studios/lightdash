@@ -10,26 +10,51 @@ export type DbSpace = {
     organization_uuid: string;
     created_by_user_id?: number;
     search_vector: string;
+    slug: string;
 };
 
 export type CreateDbSpace = Pick<
     DbSpace,
-    'name' | 'project_id' | 'is_private' | 'created_by_user_id'
+    'name' | 'project_id' | 'is_private' | 'created_by_user_id' | 'slug'
 >;
 
 export type SpaceTable = Knex.CompositeTableType<DbSpace, CreateDbSpace>;
 export const SpaceTableName = 'spaces';
 
-export type DbSpaceShare = {
-    space_id: number;
-    user_id: number;
+export type DbSpaceUserAccess = {
+    user_uuid: string;
+    space_uuid: string;
+    space_role: string;
+    created_at: Date;
+    updated_at: Date;
 };
 
-type CreateDbSpaceShare = Pick<DbSpaceShare, 'space_id' | 'user_id'>;
-
-export type SpaceShareTable = Knex.CompositeTableType<
-    DbSpaceShare,
-    CreateDbSpaceShare
+export type CreateDbSpaceUserAccess = Pick<
+    DbSpaceUserAccess,
+    'user_uuid' | 'space_uuid' | 'space_role'
 >;
 
-export const SpaceShareTableName = 'space_share';
+export type SpaceUserAccessTable = Knex.CompositeTableType<
+    DbSpaceUserAccess | CreateDbSpaceUserAccess
+>;
+
+export const SpaceUserAccessTableName = 'space_user_access';
+
+export type DbSpaceGroupAccess = {
+    group_uuid: string;
+    space_uuid: string;
+    space_role: string;
+    created_at: Date;
+    updated_at: Date;
+};
+
+export type CreateDbSpaceGroupAccess = Pick<
+    DbSpaceGroupAccess,
+    'group_uuid' | 'space_uuid' | 'space_role'
+>;
+
+export type SpaceGroupAccessTable = Knex.CompositeTableType<
+    DbSpaceGroupAccess | CreateDbSpaceGroupAccess
+>;
+
+export const SpaceGroupAccessTableName = 'space_group_access';

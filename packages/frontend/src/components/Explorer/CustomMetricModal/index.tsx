@@ -1,15 +1,19 @@
 import {
     AdditionalMetric,
     canApplyFormattingToCustomMetric,
-    CustomFormat,
     CustomFormatType,
-    Dimension,
-    fieldId as getFieldId,
     friendlyName,
+    getFilterableDimensionsFromItemsMap,
+    getItemId,
     isAdditionalMetric,
+    isCustomDimension,
     isDimension,
     MetricType,
     NumberSeparator,
+    type AdditionalMetric,
+    type CustomFormat,
+    type Dimension,
+    type FilterableDimension,
 } from '@lightdash/common';
 import {
     Accordion,
@@ -23,14 +27,14 @@ import {
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ValueOf } from 'type-fest';
+import { type ValueOf } from 'type-fest';
 import { v4 as uuidv4 } from 'uuid';
 import useToaster from '../../../hooks/toaster/useToaster';
 import { useExplore } from '../../../hooks/useExplore';
 import { useExplorerContext } from '../../../providers/ExplorerProvider';
 import { FiltersProvider } from '../../common/Filters/FiltersProvider';
 import { FormatForm } from '../FormatForm';
-import { FilterForm, MetricFilterRuleWithFieldId } from './FilterForm';
+import { FilterForm, type MetricFilterRuleWithFieldId } from './FilterForm';
 import { useDataForFiltersProvider } from './hooks/useDataForFiltersProvider';
 import {
     addFieldIdToMetricFilterRule,
@@ -85,6 +89,8 @@ export const CustomMetricModal = () => {
 
     const { projectUuid, fieldsMap, startOfWeek } = useDataForFiltersProvider();
 
+    const dimensionsMap = getFilterableDimensionsFromItemsMap(fieldsMap);
+
     const form = useForm<
         Pick<AdditionalMetric, 'percentile'> & {
             format: CustomFormat;
@@ -112,6 +118,7 @@ export const CustomMetricModal = () => {
                 if (!item) return null;
 
                 const metricName = getCustomMetricName(
+                    item.table,
                     label,
                     isEditing &&
                         isAdditionalMetric(item) &&
@@ -144,13 +151,14 @@ export const CustomMetricModal = () => {
     useEffect(() => {
         if (!item || !customMetricType) return;
 
-        if (item.label && customMetricType) {
+        const label = isCustomDimension(item) ? item.name : item.label;
+        if (label && customMetricType) {
             setFieldValue(
                 'customMetricLabel',
                 isEditing
-                    ? item.label
+                    ? label
                     : customMetricType
-                    ? `${friendlyName(customMetricType)} of ${item.label}`
+                    ? `${friendlyName(customMetricType)} of ${label}`
                     : '',
             );
         }
@@ -215,7 +223,7 @@ export const CustomMetricModal = () => {
                         ...item,
                         ...data,
                     },
-                    getFieldId(item),
+                    getItemId(item),
                 );
                 showToastSuccess({
                     title: 'Custom metric edited successfully',
@@ -229,6 +237,15 @@ export const CustomMetricModal = () => {
                 showToastSuccess({
                     title: 'Custom metric added successfully',
                 });
+            } else if (isCustomDimension(item)) {
+                addAdditionalMetric({
+                    uuid: uuidv4(),
+                    // Do not add baseDimensionName to avoid invalid validation errors in queryBuilder
+                    ...data,
+                });
+                showToastSuccess({
+                    title: 'Custom metric added successfully',
+                });
             }
             handleClose();
         },
@@ -236,7 +253,7 @@ export const CustomMetricModal = () => {
 
     const defaultFilterRuleFieldId = useMemo(() => {
         if (item) {
-            if (!isEditing) return getFieldId(item);
+            if (!isEditing) return getItemId(item);
 
             if (
                 isEditing &&
@@ -320,9 +337,11 @@ export const CustomMetricModal = () => {
                                 </Text>
                             </Accordion.Control>
                             <Accordion.Panel>
-                                <FiltersProvider
+                                <FiltersProvider<
+                                    Record<string, FilterableDimension>
+                                >
                                     projectUuid={projectUuid}
-                                    fieldsMap={fieldsMap}
+                                    itemsMap={dimensionsMap}
                                     startOfWeek={startOfWeek ?? undefined}
                                     popoverProps={{
                                         withinPortal: true,

@@ -1,53 +1,62 @@
-import { LightdashMode, SessionUser } from '@lightdash/common';
-import { NodeSDK } from '@opentelemetry/sdk-node';
+// organize-imports-ignore
+// eslint-disable-next-line import/order
+import './sentry'; // Sentry has to be initialized before anything else
+
+import {
+    LightdashError,
+    LightdashMode,
+    SessionUser,
+    UnexpectedServerError,
+} from '@lightdash/common';
 import * as Sentry from '@sentry/node';
-import * as Tracing from '@sentry/tracing';
-import { SamplingContext } from '@sentry/types';
 import flash from 'connect-flash';
 import connectSessionKnex from 'connect-session-knex';
-import cookieParser from 'cookie-parser';
-import express, {
-    Express,
-    NextFunction,
-    Request,
-    RequestHandler,
-    Response,
-} from 'express';
+import express, { Express, NextFunction, Request, Response } from 'express';
 import expressSession from 'express-session';
 import expressStaticGzip from 'express-static-gzip';
+import helmet from 'helmet';
+import knex, { Knex } from 'knex';
 import passport from 'passport';
 import refresh from 'passport-oauth2-refresh';
 import path from 'path';
 import reDoc from 'redoc-express';
 import { URL } from 'url';
 import { LightdashAnalytics } from './analytics/LightdashAnalytics';
-import * as clients from './clients/clients';
-import { SlackService } from './clients/Slack/Slackbot';
+import {
+    ClientProviderMap,
+    ClientRepository,
+} from './clients/ClientRepository';
+import { SlackBot } from './clients/Slack/Slackbot';
 import { LightdashConfig } from './config/parseConfig';
 import {
     apiKeyPassportStrategy,
-    azureAdPassportStrategy,
+    createAzureAdPassportStrategy,
+    createGenericOidcPassportStrategy,
     googlePassportStrategy,
+    isAzureAdPassportStrategyAvailableToUse,
+    isGenericOidcPassportStrategyAvailableToUse,
     isOktaPassportStrategyAvailableToUse,
     localPassportStrategy,
     oneLoginPassportStrategy,
     OpenIDClientOktaStrategy,
 } from './controllers/authentication';
-import database from './database/database';
 import { errorHandler } from './errors';
 import { RegisterRoutes } from './generated/routes';
 import apiSpec from './generated/swagger.json';
 import Logger from './logging/logger';
 import { expressWinstonMiddleware } from './logging/winston';
-import { slackAuthenticationModel, userModel } from './models/models';
-import { registerNodeMetrics } from './nodeMetrics';
+import { ModelProviderMap, ModelRepository } from './models/ModelRepository';
 import { postHogClient } from './postHog';
 import { apiV1Router } from './routers/apiV1Router';
 import { SchedulerWorker } from './scheduler/SchedulerWorker';
-import type { ServiceRepository } from './services/ServiceRepository';
-import * as services from './services/services';
-import { wrapOtelSpan } from './utils';
+import {
+    OperationContext,
+    ServiceProviderMap,
+    ServiceRepository,
+} from './services/ServiceRepository';
+import { UtilProviderMap, UtilRepository } from './utils/UtilRepository';
 import { VERSION } from './version';
+import PrometheusMetrics from './prometheus';
 
 // We need to override this interface to have our user typing
 declare global {
@@ -59,25 +68,76 @@ declare global {
          */
         interface Request {
             services: ServiceRepository;
+            /**
+             * @deprecated Clients should be used inside services. This will be removed soon.
+             */
+            clients: ClientRepository;
         }
 
         interface User extends SessionUser {}
     }
 }
 
+const schedulerWorkerFactory = (context: {
+    lightdashConfig: LightdashConfig;
+    analytics: LightdashAnalytics;
+    serviceRepository: ServiceRepository;
+    models: ModelRepository;
+    clients: ClientRepository;
+    utils: UtilRepository;
+}) =>
+    new SchedulerWorker({
+        lightdashConfig: context.lightdashConfig,
+        analytics: context.analytics,
+        unfurlService: context.serviceRepository.getUnfurlService(),
+        csvService: context.serviceRepository.getCsvService(),
+        dashboardService: context.serviceRepository.getDashboardService(),
+        projectService: context.serviceRepository.getProjectService(),
+        schedulerService: context.serviceRepository.getSchedulerService(),
+        validationService: context.serviceRepository.getValidationService(),
+        userService: context.serviceRepository.getUserService(),
+        emailClient: context.clients.getEmailClient(),
+        googleDriveClient: context.clients.getGoogleDriveClient(),
+        s3Client: context.clients.getS3Client(),
+        schedulerClient: context.clients.getSchedulerClient(),
+        slackClient: context.clients.getSlackClient(),
+    });
+
+const slackBotFactory = (context: {
+    lightdashConfig: LightdashConfig;
+    analytics: LightdashAnalytics;
+    serviceRepository: ServiceRepository;
+    models: ModelRepository;
+}) =>
+    new SlackBot({
+        lightdashConfig: context.lightdashConfig,
+        analytics: context.analytics,
+        slackAuthenticationModel: context.models.getSlackAuthenticationModel(),
+        unfurlService: context.serviceRepository.getUnfurlService(),
+    });
+
 type AppArguments = {
     lightdashConfig: LightdashConfig;
     port: string | number;
-    otelSdk: NodeSDK;
     environment?: 'production' | 'development';
+    serviceProviders?: ServiceProviderMap;
+    knexConfig: {
+        production: Knex.Config<Knex.PgConnectionConfig>;
+        development: Knex.Config<Knex.PgConnectionConfig>;
+    };
+    clientProviders?: ClientProviderMap;
+    modelProviders?: ModelProviderMap;
+    utilProviders?: UtilProviderMap;
+    slackBotFactory?: typeof slackBotFactory;
+    schedulerWorkerFactory?: typeof schedulerWorkerFactory;
 };
 
 export default class App {
+    private readonly serviceRepository: ServiceRepository;
+
     private readonly lightdashConfig: LightdashConfig;
 
     private readonly analytics: LightdashAnalytics;
-
-    private readonly otelSdk: NodeSDK;
 
     private readonly port: string | number;
 
@@ -85,9 +145,22 @@ export default class App {
 
     private schedulerWorker: SchedulerWorker | undefined;
 
+    private readonly clients: ClientRepository;
+
+    private readonly utils: UtilRepository;
+
+    private readonly models: ModelRepository;
+
+    private readonly database: Knex;
+
+    private readonly slackBotFactory: typeof slackBotFactory;
+
+    private readonly schedulerWorkerFactory: typeof schedulerWorkerFactory;
+
+    private readonly prometheusMetrics: PrometheusMetrics;
+
     constructor(args: AppArguments) {
         this.lightdashConfig = args.lightdashConfig;
-        this.otelSdk = args.otelSdk;
         this.port = args.port;
         this.environment = args.environment || 'production';
         this.analytics = new LightdashAnalytics({
@@ -102,34 +175,87 @@ export default class App {
                     this.lightdashConfig.rudder.dataPlaneUrl,
             },
         });
+        this.database = knex(
+            this.environment === 'production'
+                ? args.knexConfig.production
+                : args.knexConfig.development,
+        );
+        this.utils = new UtilRepository({
+            utilProviders: args.utilProviders,
+            lightdashConfig: this.lightdashConfig,
+        });
+        this.models = new ModelRepository({
+            modelProviders: args.modelProviders,
+            lightdashConfig: this.lightdashConfig,
+            database: this.database,
+            utils: this.utils,
+        });
+        this.clients = new ClientRepository({
+            clientProviders: args.clientProviders,
+            context: new OperationContext({
+                operationId: 'App#ctor',
+                lightdashAnalytics: this.analytics,
+                lightdashConfig: this.lightdashConfig,
+            }),
+            models: this.models,
+        });
+        this.serviceRepository = new ServiceRepository({
+            serviceProviders: args.serviceProviders,
+            context: new OperationContext({
+                operationId: 'App#ctor',
+                lightdashAnalytics: this.analytics,
+                lightdashConfig: this.lightdashConfig,
+            }),
+            clients: this.clients,
+            models: this.models,
+        });
+        this.slackBotFactory = args.slackBotFactory || slackBotFactory;
+        this.schedulerWorkerFactory =
+            args.schedulerWorkerFactory || schedulerWorkerFactory;
+        this.prometheusMetrics = new PrometheusMetrics(
+            this.lightdashConfig.prometheus,
+        );
     }
 
     async start() {
+        this.prometheusMetrics.start();
         // @ts-ignore
         // eslint-disable-next-line no-extend-native, func-names
         BigInt.prototype.toJSON = function () {
             return this.toString();
         };
 
-        if (this.environment !== 'development') {
-            App.initNodeProcessMonitor();
-        }
+        const expressApp = express();
 
-        const expressApp = this.initExpress();
-        this.initSentry(expressApp);
-        this.initSlack();
+        // Slack must be initialized before our own middleware / routes, which cause the slack app to fail
+        this.initSlack(expressApp).catch((e) => {
+            Logger.error('Error starting slack bot', e);
+        });
+
+        Sentry.setTags({
+            k8s_pod_name: this.lightdashConfig.k8s.podName,
+            k8s_pod_namespace: this.lightdashConfig.k8s.podNamespace,
+            k8s_node_name: this.lightdashConfig.k8s.nodeName,
+            lightdash_cloud_instance:
+                this.lightdashConfig.lightdashCloudInstance,
+        });
+
+        // Load Lightdash middleware/routes last
+        await this.initExpress(expressApp);
+
         if (this.lightdashConfig.scheduler?.enabled) {
             this.initSchedulerWorker();
+            this.prometheusMetrics.monitorQueues(
+                this.clients.getSchedulerClient(),
+            );
         }
     }
 
-    private initExpress() {
-        const expressApp = express();
-
+    private async initExpress(expressApp: Express) {
         const KnexSessionStore = connectSessionKnex(expressSession);
 
         const store = new KnexSessionStore({
-            knex: database as any,
+            knex: this.database as any,
             createtable: false,
             tablename: 'sessions',
             sidfieldname: 'sid',
@@ -139,9 +265,114 @@ export default class App {
             express.json({ limit: this.lightdashConfig.maxPayloadSize }),
         );
 
+        const reportUris: URL[] = [];
+        try {
+            if (this.lightdashConfig.sentry.backend.securityReportUri) {
+                const sentryReportUri = new URL(
+                    this.lightdashConfig.sentry.backend.securityReportUri,
+                );
+                sentryReportUri.searchParams.set(
+                    'sentry_environment',
+                    this.environment === 'development'
+                        ? 'development'
+                        : this.lightdashConfig.mode,
+                );
+                sentryReportUri.searchParams.set('sentry_release', VERSION);
+                reportUris.push(sentryReportUri);
+            }
+            if (this.lightdashConfig.security.contentSecurityPolicy.reportUri) {
+                reportUris.push(
+                    new URL(
+                        this.lightdashConfig.security.contentSecurityPolicy.reportUri,
+                    ),
+                );
+            }
+        } catch (e) {
+            Logger.warn('Invalid security report URI', e);
+        }
+
+        const contentSecurityPolicyAllowedDomains: string[] = [
+            'https://*.sentry.io',
+            'https://analytics.lightdash.com',
+            'https://*.usepylon.com',
+            'https://*.pusher.com', // used by pylon
+            'wss://*.pusher.com', // used by pylon
+            'https://*.headwayapp.co',
+            'https://headway-widget.net',
+            'https://*.posthog.com',
+            'https://*.intercom.com',
+            'https://*.intercom.io',
+            'wss://*.intercom.io',
+            'https://*.intercomcdn.com',
+            'https://*.rudderlabs.com',
+            'https://www.googleapis.com',
+            'https://apis.google.com',
+            'https://accounts.google.com',
+            'https://vega.github.io',
+            'https://cdn.jsdelivr.net/npm/monaco-editor@0.43.0/',
+            ...this.lightdashConfig.security.contentSecurityPolicy
+                .allowedDomains,
+        ];
+
+        expressApp.use(
+            helmet({
+                contentSecurityPolicy: {
+                    directives: {
+                        'default-src': [
+                            "'self'",
+                            ...contentSecurityPolicyAllowedDomains,
+                        ],
+                        'img-src': ["'self'", 'data:', 'https://*'],
+                        'frame-src': ["'self'", 'https://*'],
+                        'frame-ancestors': ["'self'", 'https://*'],
+                        'worker-src': [
+                            "'self'",
+                            'blob:',
+                            ...contentSecurityPolicyAllowedDomains,
+                        ],
+                        'child-src': [
+                            // Fallback of worker-src for safari older than 15.5
+                            "'self'",
+                            'blob:',
+                            ...contentSecurityPolicyAllowedDomains,
+                        ],
+                        'script-src': [
+                            "'self'",
+                            "'unsafe-eval'",
+                            ...contentSecurityPolicyAllowedDomains,
+                        ],
+                        'script-src-elem': [
+                            "'self'",
+                            "'unsafe-inline'",
+                            ...contentSecurityPolicyAllowedDomains,
+                        ],
+                        'report-uri': reportUris.map((uri) => uri.href),
+                    },
+                    reportOnly:
+                        this.lightdashConfig.security.contentSecurityPolicy
+                            .reportOnly,
+                },
+                strictTransportSecurity: {
+                    maxAge: 31536000,
+                    includeSubDomains: true,
+                    preload: true,
+                },
+                referrerPolicy: {
+                    policy: 'strict-origin-when-cross-origin',
+                },
+                noSniff: true,
+                xFrameOptions: false,
+            }),
+        );
+
+        // Permissions-Policy header that is not yet supported by helmet. More details here: https://github.com/helmetjs/helmet/issues/234
+        expressApp.use((req, res, next) => {
+            res.setHeader('Permissions-Policy', 'camera=(), microphone=()');
+            next();
+        });
+
         expressApp.use(express.json());
         expressApp.use(express.urlencoded({ extended: false }));
-        expressApp.use(cookieParser());
 
         expressApp.use(
             expressSession({
@@ -185,8 +416,8 @@ export default class App {
          * request context - for now we simply proxy the existing service repository singleton.
          */
         expressApp.use((req, res, next) => {
-            req.services = services.serviceRepository;
-
+            req.services = this.serviceRepository;
+            req.clients = this.clients;
             next();
         });
 
@@ -256,10 +487,16 @@ export default class App {
         });
 
         // Errors
-        expressApp.use(Sentry.Handlers.errorHandler()); // The Sentry error handler must be before any other error middleware and after all controllers
+        Sentry.setupExpressErrorHandler(expressApp);
         expressApp.use(
             (error: Error, req: Request, res: Response, _: NextFunction) => {
                 const errorResponse = errorHandler(error);
+                if (
+                    error instanceof UnexpectedServerError ||
+                    !(error instanceof LightdashError)
+                ) {
+                    console.error(error); // Log original error for debug purposes
+                }
                 Logger.error(
                     `Handled error of type ${errorResponse.name} on [${req.method}] ${req.path}`,
                     errorResponse,
@@ -284,14 +521,24 @@ export default class App {
                         name: errorResponse.name,
                         message: errorResponse.message,
                         data: errorResponse.data,
+                        id:
+                            errorResponse.statusCode === 500
+                                ? Sentry.lastEventId()
+                                : undefined,
                     },
                 });
             },
         );
 
         // Authentication
-        passport.use(apiKeyPassportStrategy);
-        passport.use(localPassportStrategy);
+        const userService = this.serviceRepository.getUserService();
+
+        passport.use(apiKeyPassportStrategy({ userService }));
+        passport.use(
+            localPassportStrategy({
+                userService,
+            }),
+        );
         if (googlePassportStrategy) {
             passport.use(googlePassportStrategy);
             refresh.use(googlePassportStrategy);
@@ -302,114 +549,68 @@ export default class App {
         if (oneLoginPassportStrategy) {
             passport.use('oneLogin', oneLoginPassportStrategy);
         }
-        if (azureAdPassportStrategy) {
-            passport.use('azuread', azureAdPassportStrategy);
+        if (isAzureAdPassportStrategyAvailableToUse) {
+            passport.use('azuread', await createAzureAdPassportStrategy());
         }
+        if (isGenericOidcPassportStrategyAvailableToUse) {
+            passport.use('oidc', await createGenericOidcPassportStrategy());
+        }
+
         passport.serializeUser((user, done) => {
             // On login (user changes), user.userUuid is written to the session store in the `sess.passport.data` field
-            done(null, user.userUuid);
+            done(null, {
+                id: user.userUuid,
+                organization: user.organizationUuid,
+            });
         });
 
         // Before each request handler we read `sess.passport.user` from the session store
-        passport.deserializeUser(async (id: string, done) => {
-            // Convert to a full user profile
-            try {
-                const user = await wrapOtelSpan(
-                    'Passport.deserializeUser',
-                    {},
-                    () => userModel.findSessionUserByUUID(id),
-                );
-                // Store that user on the request (`req`) object
-                done(null, user);
-            } catch (e) {
-                done(e);
-            }
-        });
+        passport.deserializeUser(
+            async (
+                passportUser: { id: string; organization: string },
+                done,
+            ) => {
+                // Set the organization tag so we can filter by it in Sentry
+                Sentry.setTag('organization', passportUser.organization);
+                // Convert to a full user profile
+                try {
+                    done(null, await userService.findSessionUser(passportUser));
+                } catch (e) {
+                    done(e);
+                }
+            },
+        );
 
         return expressApp;
     }
 
-    private initSlack() {
-        const slackService = new SlackService({
-            slackAuthenticationModel,
+    private async initSlack(expressApp: Express) {
+        const slackBot = this.slackBotFactory({
             lightdashConfig: this.lightdashConfig,
             analytics: this.analytics,
+            serviceRepository: this.serviceRepository,
+            models: this.models,
         });
-    }
-
-    private initSentry(expressApp: Express) {
-        Sentry.init({
-            release: VERSION,
-            dsn: this.lightdashConfig.sentry.dsn,
-            environment:
-                this.environment === 'development'
-                    ? 'development'
-                    : this.lightdashConfig.mode,
-            integrations: [
-                new Sentry.Integrations.Http({ tracing: true }),
-                new Tracing.Integrations.Express({
-                    app: expressApp,
-                }),
-            ],
-            ignoreErrors: ['WarehouseQueryError', 'FieldReferenceError'],
-            tracesSampler: (context: SamplingContext): boolean | number => {
-                if (
-                    context.request?.url?.endsWith('/status') ||
-                    context.request?.url?.endsWith('/health') ||
-                    context.request?.url?.endsWith('/favicon.ico') ||
-                    context.request?.url?.endsWith('/robots.txt') ||
-                    context.request?.url?.endsWith('livez') ||
-                    context.request?.headers?.['user-agent']?.includes(
-                        'GoogleHC',
-                    )
-                ) {
-                    return 0.0;
-                }
-                return 0.2;
-            },
-            beforeBreadcrumb(breadcrumb) {
-                if (
-                    breadcrumb.category === 'http' &&
-                    breadcrumb?.data?.url &&
-                    new URL(breadcrumb?.data.url).host ===
-                        new URL('https://hub.docker.com').host
-                ) {
-                    return null;
-                }
-                return breadcrumb;
-            },
-        });
-        expressApp.use(
-            Sentry.Handlers.requestHandler({
-                user: [
-                    'userUuid',
-                    'organizationUuid',
-                    'organizationName',
-                    'email',
-                ],
-            }) as RequestHandler,
-        );
-        expressApp.use(Sentry.Handlers.tracingHandler());
+        await slackBot.start(expressApp);
     }
 
     private initSchedulerWorker() {
-        this.schedulerWorker = new SchedulerWorker({
+        this.schedulerWorker = this.schedulerWorkerFactory({
             lightdashConfig: this.lightdashConfig,
             analytics: this.analytics,
-            ...services,
-            ...clients,
+            serviceRepository: this.serviceRepository,
+            models: this.models,
+            clients: this.clients,
+            utils: this.utils,
         });
+
         this.schedulerWorker.run().catch((e) => {
             Logger.error('Error starting scheduler worker', e);
         });
     }
 
-    static initNodeProcessMonitor() {
-        // Monitor Node.js process with opentelemetry
-        registerNodeMetrics();
-    }
-
     async stop() {
+        this.prometheusMetrics.stop();
         if (this.schedulerWorker && this.schedulerWorker.runner) {
             try {
                 await this.schedulerWorker.runner.stop();
@@ -424,14 +625,6 @@ export default class App {
                 Logger.info('Stopped PostHog Client');
             } catch (e) {
                 Logger.error('Error stopping PostHog Client', e);
-            }
-        }
-        if (this.otelSdk) {
-            try {
-                await this.otelSdk.shutdown();
-                Logger.info('Stopped OpenTelemetry SDK');
-            } catch (e) {
-                Logger.error('Error stopping OpenTelemetry SDK', e);
             }
         }
     }

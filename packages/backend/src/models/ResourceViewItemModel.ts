@@ -1,5 +1,4 @@
 import {
-    getChartType,
     ResourceViewChartItem,
     ResourceViewDashboardItem,
     ResourceViewItemType,
@@ -35,12 +34,8 @@ const getCharts = async (
             name: 'saved_queries.name',
             description: 'saved_queries.description',
             updated_at: 'saved_queries.last_version_updated_at',
-        })
-        .min({
-            first_viewed_at: 'analytics_chart_views.timestamp',
-        })
-        .count({
-            views: 'analytics_chart_views.timestamp',
+            views: 'saved_queries.views_count',
+            first_viewed_at: 'saved_queries.first_viewed_at',
         })
         .innerJoin(
             'pinned_chart',
@@ -58,30 +53,10 @@ const getCharts = async (
             'saved_queries.last_version_updated_by_user_uuid',
             'users.user_uuid',
         )
-        .leftJoin(
-            'analytics_chart_views',
-            'saved_queries.saved_query_uuid',
-            'analytics_chart_views.chart_uuid',
-        )
         .whereIn('spaces.space_uuid', allowedSpaceUuids)
         .andWhere('pinned_list.pinned_list_uuid', pinnedListUuid)
         .andWhere('pinned_list.project_uuid', projectUuid)
-        .orderBy('pinned_chart.order', 'asc')
-        .groupBy([
-            'pinned_list.project_uuid',
-            'pinned_list.pinned_list_uuid',
-            'spaces.space_uuid',
-            'pinned_chart.saved_chart_uuid',
-            'users.first_name',
-            'users.last_name',
-
-            'saved_queries.last_version_updated_by_user_uuid',
-            'pinned_chart.order',
-            `saved_queries.last_version_chart_kind`,
-            'saved_queries.name',
-            'saved_queries.description',
-            'saved_queries.last_version_updated_at',
-        ])) as Record<string, any>[];
+        .orderBy('pinned_chart.order', 'asc')) as Record<string, any>[];
     const resourceType: ResourceViewItemType.CHART = ResourceViewItemType.CHART;
     const items = rows.map((row) => ({
         type: resourceType,
@@ -95,7 +70,7 @@ const getCharts = async (
             updatedAt: row.updated_at,
             views: row.views,
             firstViewedAt: row.first_viewed_at,
-            chartType: row.chart_kind,
+            chartKind: row.chart_kind,
             updatedByUser: row.updated_by_user_uuid && {
                 userUuid: row.updated_by_user_uuid,
                 firstName: row.updated_by_user_first_name,
@@ -141,11 +116,6 @@ const getDashboards = async (
             'dashboards.dashboard_id',
             'dv.dashboard_id',
         )
-        .leftJoin(
-            'analytics_dashboard_views',
-            'dashboards.dashboard_uuid',
-            'analytics_dashboard_views.dashboard_uuid',
-        )
         .leftJoin('users', 'dv.updated_by_user_uuid', 'users.user_uuid')
         .whereIn('spaces.space_uuid', allowedSpaceUuids)
         .andWhere('pinned_list.pinned_list_uuid', pinnedListUuid)
@@ -160,15 +130,13 @@ const getDashboards = async (
         )
         .max({
             name: 'dashboards.name',
+            views: 'dashboards.views_count',
+            first_viewed_at: 'dashboards.first_viewed_at',
             description: 'dashboards.description',
             updated_at: 'dv.updated_at',
             updated_by_user_first_name: 'users.first_name',
             updated_by_user_last_name: 'users.last_name',
         })
-        .min({
-            first_viewed_at: 'analytics_dashboard_views.timestamp',
-        })
-        .count({ views: 'analytics_dashboard_views.timestamp' })
         .orderBy('pinned_dashboard.order', 'asc')
         .groupBy(1, 2, 3, 4, 5, 6)) as Record<string, any>[];
     const resourceType: ResourceViewItemType.DASHBOARD =
@@ -210,7 +178,7 @@ const getAllSpaces = async (
                 ps.order,
                 MAX(s.name) as name,
                 BOOL_OR(s.is_private) as is_private,
-                COUNT(DISTINCT ss.user_id) as access_list_length,
+                COUNT(DISTINCT sua.user_uuid) as access_list_length,
                 COALESCE(json_agg(distinct u.user_uuid) FILTER (WHERE u.user_uuid is not null), '[]') as access,
                 COUNT(DISTINCT d.dashboard_id) as dashboard_count,
                 COUNT(DISTINCT sq.saved_query_id) as chart_count
@@ -221,8 +189,8 @@ const getAllSpaces = async (
             inner join pinned_space ps on pl.pinned_list_uuid = ps.pinned_list_uuid
                 and ps.pinned_list_uuid = :pinnedListUuid
             inner join spaces s on ps.space_uuid = s.space_uuid
-            left join space_share ss on s.space_id = ss.space_id
-            left join users u on ss.user_id = u.user_id
+            left join space_user_access sua on s.space_uuid = sua.space_uuid
+            left join users u on sua.user_uuid = u.user_uuid
             left join dashboards d on s.space_id = d.space_id
             left join saved_queries sq on s.space_id = sq.space_id
             group by 1, 2, 3, 4, 5

@@ -1,14 +1,16 @@
 import { LightdashMode } from '@lightdash/common';
 import * as Sentry from '@sentry/node';
 import { App, ExpressReceiver, LogLevel } from '@slack/bolt';
+import { Express } from 'express';
 import { nanoid } from 'nanoid';
 import { LightdashAnalytics } from '../../analytics/LightdashAnalytics';
 import { LightdashConfig } from '../../config/parseConfig';
 import Logger from '../../logging/logger';
 import { SlackAuthenticationModel } from '../../models/SlackAuthenticationModel';
-import { apiV1Router } from '../../routers/apiV1Router';
-import { unfurlService } from '../../services/services';
-import { Unfurl } from '../../services/UnfurlService/UnfurlService';
+import {
+    Unfurl,
+    type UnfurlService,
+} from '../../services/UnfurlService/UnfurlService';
 import { getUnfurlBlocks } from './SlackMessageBlocks';
 import { slackOptions } from './SlackOptions';
 
@@ -17,6 +19,7 @@ const notifySlackError = async (
     url: string,
     client: any,
     event: any,
+    { appProfilePhotoUrl }: { appProfilePhotoUrl?: string },
 ): Promise<void> => {
     /** Expected slack errors:
      * - cannot_parse_attachment: Means the image on the blocks is not accessible from slack, is the URL public ?
@@ -28,6 +31,7 @@ const notifySlackError = async (
         .postMessage({
             thread_ts: event.message_ts,
             channel: event.channel,
+            ...(appProfilePhotoUrl ? { icon_url: appProfilePhotoUrl } : {}),
             text: `:fire: Unable to unfurl ${url}: ${error}`,
         })
         .catch((er: any) =>
@@ -35,71 +39,69 @@ const notifySlackError = async (
         );
 };
 
-type SlackServiceArguments = {
+export type SlackBotArguments = {
     slackAuthenticationModel: SlackAuthenticationModel;
     lightdashConfig: LightdashConfig;
     analytics: LightdashAnalytics;
+    unfurlService: UnfurlService;
 };
 
-export class SlackService {
+export class SlackBot {
     slackAuthenticationModel: SlackAuthenticationModel;
 
     lightdashConfig: LightdashConfig;
 
     analytics: LightdashAnalytics;
+
+    unfurlService: UnfurlService;
 
     constructor({
         slackAuthenticationModel,
         lightdashConfig,
         analytics,
-    }: SlackServiceArguments) {
+        unfurlService,
+    }: SlackBotArguments) {
         this.lightdashConfig = lightdashConfig;
         this.analytics = analytics;
         this.slackAuthenticationModel = slackAuthenticationModel;
-        this.start();
+        this.unfurlService = unfurlService;
     }
 
-    async start() {
-        if (this.lightdashConfig.slack?.appToken) {
-            try {
-                const slackReceiver = new ExpressReceiver({
-                    ...slackOptions,
-                    installationStore: {
-                        storeInstallation: (i) =>
-                            this.slackAuthenticationModel.createInstallation(i),
-                        fetchInstallation: (i) =>
-                            this.slackAuthenticationModel.getInstallation(i),
-                        deleteInstallation: (i) =>
-                            this.slackAuthenticationModel.deleteInstallation(i),
-                    },
-                    router: apiV1Router,
-                });
-
-                await slackReceiver.start(parseInt('4352', 10));
-
-                const app = new App({
-                    ...slackOptions,
-                    installationStore: {
-                        storeInstallation: (i) =>
-                            this.slackAuthenticationModel.createInstallation(i),
-                        fetchInstallation: (i) =>
-                            this.slackAuthenticationModel.getInstallation(i),
-                    },
-                    logLevel: LogLevel.INFO,
-                    port: this.lightdashConfig.slack.port,
-                    socketMode: true,
-                    appToken: this.lightdashConfig.slack.appToken,
-                });
-
-                app.event('link_shared', (m) => this.unfurlSlackUrls(m));
-
-                await app.start();
-            } catch (e: unknown) {
-                Logger.error(`Unable to start Slack app ${e}`);
-            }
-        } else {
-            Logger.warn(`Missing "SLACK_APP_TOKEN", Slack App will not run`);
+    async start(expressApp: Express) {
+        if (!this.lightdashConfig.slack?.clientId) {
+            Logger.warn(`Missing "SLACK_CLIENT_ID", Slack App will not run`);
+            return;
         }
+
+        try {
+            const slackReceiver = new ExpressReceiver({
+                ...slackOptions,
+                installationStore: {
+                    storeInstallation: (i) =>
+                        this.slackAuthenticationModel.createInstallation(i),
+                    fetchInstallation: (i) =>
+                        this.slackAuthenticationModel.getInstallation(i),
+                    deleteInstallation: (i) =>
+                        this.slackAuthenticationModel.deleteInstallation(i),
+                },
+                logLevel: LogLevel.INFO,
+                app: expressApp,
+            });
+
+            const app = new App({
+                ...slackOptions,
+
+                receiver: slackReceiver,
+            });
+
+            this.addEventListeners(app);
+        } catch (e: unknown) {
+            Logger.error(`Unable to start Slack app ${e}`);
+        }
+    }
+
+    protected addEventListeners(app: App) {
+        app.event('link_shared', (m) => this.unfurlSlackUrls(m));
     }
 
     private async sendUnfurl(
@@ -133,6 +135,7 @@ export class SlackService {
 
     async unfurlSlackUrls(message: any) {
         const { event, client, context } = message;
+        let appProfilePhotoUrl: string | undefined;
 
         if (event.channel === 'COMPOSER') return; // Do not unfurl urls when typing, only when message is sent
 
@@ -143,7 +146,7 @@ export class SlackService {
 
             try {
                 const { teamId } = context;
-                const details = await unfurlService.unfurlDetails(l.url);
+                const details = await this.unfurlService.unfurlDetails(l.url);
 
                 if (details) {
                     this.analytics.track({
@@ -164,7 +167,14 @@ export class SlackService {
                     const authUserUuid =
                         await this.slackAuthenticationModel.getUserUuid(teamId);
 
-                    const { imageUrl } = await unfurlService.unfurlImage({
+                    const installation =
+                        await this.slackAuthenticationModel.getInstallationFromOrganizationUuid(
+                            details?.organizationUuid,
+                        );
+
+                    appProfilePhotoUrl = installation?.appProfilePhotoUrl;
+
+                    const { imageUrl } = await this.unfurlService.unfurlImage({
                         url: details.minimalUrl,
                         lightdashPage: details.pageType,
                         imageId,
@@ -190,8 +200,11 @@ export class SlackService {
                     }
                 }
             } catch (e) {
-                if (this.lightdashConfig.mode === LightdashMode.PR)
-                    notifySlackError(e, l.url, client, event);
+                if (this.lightdashConfig.mode === LightdashMode.PR) {
+                    void notifySlackError(e, l.url, client, event, {
+                        appProfilePhotoUrl,
+                    });
+                }
 
                 Sentry.captureException(e);
 

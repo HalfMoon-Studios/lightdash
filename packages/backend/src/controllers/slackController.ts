@@ -1,8 +1,9 @@
 import {
     ApiErrorPayload,
     ApiSlackChannelsResponse,
-    ApiSlackNotificationChannelResponse,
+    ApiSlackCustomSettingsResponse,
     ForbiddenError,
+    SlackAppCustomSettings,
 } from '@lightdash/common';
 import {
     Body,
@@ -17,7 +18,6 @@ import {
     Tags,
 } from '@tsoa/runtime';
 import express from 'express';
-import { slackClient } from '../clients/clients';
 import {
     allowApiKeyAuthentication,
     isAuthenticated,
@@ -45,7 +45,9 @@ export class SlackController extends BaseController {
         if (!organizationUuid) throw new ForbiddenError();
         return {
             status: 'ok',
-            results: await slackClient.getChannels(organizationUuid),
+            results: await req.clients
+                .getSlackClient()
+                .getChannels(organizationUuid),
         };
     }
 
@@ -59,22 +61,24 @@ export class SlackController extends BaseController {
         unauthorisedInDemo,
     ])
     @SuccessResponse('200', 'Success')
-    @Put('/notification-channel')
-    @OperationId('UpdateNotificationChannel')
-    async updateNotificationChannel(
+    @Put('/custom-settings')
+    @OperationId('UpdateCustomSettings')
+    async updateCustomSettings(
         @Request() req: express.Request,
-        @Body() body: { channelId: string | null },
-    ): Promise<ApiSlackNotificationChannelResponse> {
+        @Body() body: SlackAppCustomSettings,
+    ): Promise<ApiSlackCustomSettingsResponse> {
         this.setStatus(200);
         const organizationUuid = req.user?.organizationUuid;
         if (!organizationUuid) throw new ForbiddenError();
         return {
             status: 'ok',
-            results: await slackClient.updateNotificationChannel(
-                `${req.user?.firstName} ${req.user?.lastName}`,
-                organizationUuid,
-                body.channelId,
-            ),
+            results: await req.clients
+                .getSlackClient()
+                .updateAppCustomSettings(
+                    `${req.user?.firstName} ${req.user?.lastName}`,
+                    organizationUuid,
+                    body,
+                ),
         };
     }
 }

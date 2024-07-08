@@ -3,12 +3,11 @@ import {
     getHiddenTableFields,
     NotFoundError,
 } from '@lightdash/common';
-import { FC, memo, useCallback, useMemo, useState } from 'react';
-
 import { useDisclosure } from '@mantine/hooks';
+import { memo, useCallback, useMemo, useState, type FC } from 'react';
 import { downloadCsv } from '../../../api/csv';
-import useDashboardStorage from '../../../hooks/dashboard/useDashboardStorage';
-import { EChartSeries } from '../../../hooks/echarts/useEchartsCartesianConfig';
+import { ErrorBoundary } from '../../../features/errorBoundary';
+import { type EChartSeries } from '../../../hooks/echarts/useEchartsCartesianConfig';
 import { uploadGsheet } from '../../../hooks/gdrive/useGdrive';
 import { useOrganization } from '../../../hooks/organization/useOrganization';
 import { useExplore } from '../../../hooks/useExplore';
@@ -21,7 +20,7 @@ import { ChartDownloadMenu } from '../../ChartDownload';
 import CollapsableCard from '../../common/CollapsableCard';
 import LightdashVisualization from '../../LightdashVisualization';
 import VisualizationProvider from '../../LightdashVisualization/VisualizationProvider';
-import { EchartSeriesClickEvent } from '../../SimpleChart';
+import { type EchartSeriesClickEvent } from '../../SimpleChart';
 import { SeriesContextMenu } from './SeriesContextMenu';
 import VisualizationSidebar from './VisualizationSidebar';
 
@@ -69,6 +68,9 @@ const VisualizationCard: FC<{
     const unsavedChartVersion = useExplorerContext(
         (context) => context.state.unsavedChartVersion,
     );
+    const tableCalculationsMetadata = useExplorerContext(
+        (context) => context.state.metadata?.tableCalculations,
+    );
 
     const isOpen = useMemo(
         () => expandedSections.includes(ExplorerSection.VISUALIZATION),
@@ -86,8 +88,6 @@ const VisualizationCard: FC<{
 
     const [echartsClickEvent, setEchartsClickEvent] =
         useState<EchartsClickEvent>();
-
-    const { getIsEditingDashboardChart } = useDashboardStorage();
 
     const [isSidebarOpen, { open: openSidebar, close: closeSidebar }] =
         useDisclosure();
@@ -159,62 +159,66 @@ const VisualizationCard: FC<{
     }
 
     return (
-        <VisualizationProvider
-            chartConfig={unsavedChartVersion.chartConfig}
-            initialPivotDimensions={unsavedChartVersion.pivotConfig?.columns}
-            resultsData={queryResults}
-            isLoading={isLoadingQueryResults}
-            columnOrder={unsavedChartVersion.tableConfig.columnOrder}
-            onSeriesContextMenu={onSeriesContextMenu}
-            pivotTableMaxColumnLimit={health.data.pivotTable.maxColumnLimit}
-            savedChartUuid={isEditMode ? undefined : savedChart?.uuid}
-            onChartConfigChange={setChartConfig}
-            onChartTypeChange={setChartType}
-            onPivotDimensionsChange={setPivotFields}
-            colorPalette={org?.chartColors ?? ECHARTS_DEFAULT_COLORS}
-        >
-            <CollapsableCard
-                title="Chart"
-                isOpen={isOpen}
-                isVisualizationCard
-                onToggle={toggleSection}
-                rightHeaderElement={
-                    isOpen && (
-                        <>
-                            {isEditMode ? (
-                                <VisualizationSidebar
-                                    chartType={
-                                        unsavedChartVersion.chartConfig.type
-                                    }
-                                    savedChart={savedChart}
-                                    isEditingDashboardChart={getIsEditingDashboardChart()}
-                                    isProjectPreview={isProjectPreview}
-                                    isOpen={isSidebarOpen}
-                                    onOpen={openSidebar}
-                                    onClose={closeSidebar}
-                                />
-                            ) : null}
-
-                            <ChartDownloadMenu
-                                getCsvLink={getCsvLink}
-                                projectUuid={projectUuid!}
-                                getGsheetLink={getGsheetLink}
-                            />
-                        </>
-                    )
+        <ErrorBoundary>
+            <VisualizationProvider
+                chartConfig={unsavedChartVersion.chartConfig}
+                initialPivotDimensions={
+                    unsavedChartVersion.pivotConfig?.columns
                 }
+                resultsData={queryResults}
+                isLoading={isLoadingQueryResults}
+                columnOrder={unsavedChartVersion.tableConfig.columnOrder}
+                onSeriesContextMenu={onSeriesContextMenu}
+                pivotTableMaxColumnLimit={health.data.pivotTable.maxColumnLimit}
+                savedChartUuid={isEditMode ? undefined : savedChart?.uuid}
+                onChartConfigChange={setChartConfig}
+                onChartTypeChange={setChartType}
+                onPivotDimensionsChange={setPivotFields}
+                colorPalette={org?.chartColors ?? ECHARTS_DEFAULT_COLORS}
+                tableCalculationsMetadata={tableCalculationsMetadata}
             >
-                <LightdashVisualization
-                    className="sentry-block ph-no-capture"
-                    data-testid="visualization"
-                />
-                <SeriesContextMenu
-                    echartSeriesClickEvent={echartsClickEvent?.event}
-                    dimensions={echartsClickEvent?.dimensions}
-                    series={echartsClickEvent?.series}
-                />
-            </CollapsableCard>
-        </VisualizationProvider>
+                <CollapsableCard
+                    title="Chart"
+                    isOpen={isOpen}
+                    isVisualizationCard
+                    onToggle={toggleSection}
+                    rightHeaderElement={
+                        isOpen && (
+                            <>
+                                {isEditMode ? (
+                                    <VisualizationSidebar
+                                        chartType={
+                                            unsavedChartVersion.chartConfig.type
+                                        }
+                                        savedChart={savedChart}
+                                        isProjectPreview={isProjectPreview}
+                                        isOpen={isSidebarOpen}
+                                        onOpen={openSidebar}
+                                        onClose={closeSidebar}
+                                    />
+                                ) : null}
+
+                                <ChartDownloadMenu
+                                    getCsvLink={getCsvLink}
+                                    projectUuid={projectUuid!}
+                                    getGsheetLink={getGsheetLink}
+                                />
+                            </>
+                        )
+                    }
+                >
+                    <LightdashVisualization
+                        className="sentry-block ph-no-capture"
+                        data-testid="visualization"
+                    />
+                    <SeriesContextMenu
+                        echartSeriesClickEvent={echartsClickEvent?.event}
+                        dimensions={echartsClickEvent?.dimensions}
+                        series={echartsClickEvent?.series}
+                    />
+                </CollapsableCard>
+            </VisualizationProvider>
+        </ErrorBoundary>
     );
 });
 

@@ -1,17 +1,22 @@
 import { assertUnreachable } from '@lightdash/common';
-import { Box, BoxProps as BoxPropsBase, Text, Tooltip } from '@mantine/core';
+import {
+    Box,
+    Text,
+    Tooltip,
+    type BoxProps as BoxPropsBase,
+} from '@mantine/core';
 import { getHotkeyHandler, useClipboard, useId } from '@mantine/hooks';
-import { PolymorphicComponentProps } from '@mantine/utils';
+import { type PolymorphicComponentProps } from '@mantine/utils';
 import debounce from 'lodash/debounce';
 import {
     createContext,
-    FC,
     forwardRef,
     useCallback,
     useContext,
     useEffect,
     useMemo,
     useState,
+    type FC,
 } from 'react';
 import { useScroll } from 'react-use';
 import {
@@ -21,7 +26,7 @@ import {
     useTableStyles,
 } from './styles';
 
-const SMALL_TEXT_LENGTH = 20;
+const SMALL_TEXT_LENGTH = 35;
 
 type BoxProps = Omit<BoxPropsBase, 'component' | 'children'>;
 
@@ -356,17 +361,17 @@ const BaseCell = (cellType: CellType) => {
                 sectionType,
                 cellType,
                 index,
-                isSelected,
                 withColor,
                 withBackground,
             });
 
-            const hasLargeText = useMemo(() => {
+            const cellHasLargeContent = useMemo(() => {
                 return (
+                    sectionType === SectionType.Body &&
                     typeof children === 'string' &&
                     children.length > SMALL_TEXT_LENGTH
                 );
-            }, [children]);
+            }, [sectionType, children]);
 
             const component = useMemo(() => {
                 switch (cellType) {
@@ -382,28 +387,16 @@ const BaseCell = (cellType: CellType) => {
                 }
             }, []);
 
-            const truncatedText = useMemo(() => {
-                return (
-                    <Text
-                        truncate
-                        className={cx({
-                            [classes.withLargeText]: hasLargeText,
-                        })}
-                    >
-                        {children}
-                    </Text>
-                );
-            }, [children, cx, classes.withLargeText, hasLargeText]);
-
             const cellElement = useMemo(
                 () => (
                     <Box
                         component={component}
                         ref={ref}
                         {...rest}
+                        data-is-selected={isSelected}
                         className={cx(classes.root, rest.className, {
                             [classes.withSticky]: withSticky,
-                            [classes.withLargeContainer]: hasLargeText,
+                            [classes.withLargeContent]: cellHasLargeContent,
                             [classes.withMinimalWidth]: withMinimalWidth,
                             [classes.withAlignRight]: withAlignRight,
                             [classes.withBoldFont]: withBoldFont,
@@ -420,7 +413,7 @@ const BaseCell = (cellType: CellType) => {
                                 : undefined
                         }
                     >
-                        {withTooltip ? (
+                        {children && withTooltip ? (
                             <Tooltip
                                 position="top"
                                 disabled={isSelected}
@@ -429,10 +422,10 @@ const BaseCell = (cellType: CellType) => {
                                 multiline
                                 label={withTooltip}
                             >
-                                {truncatedText}
+                                <Text span>{children}</Text>
                             </Tooltip>
                         ) : (
-                            truncatedText
+                            <>{children}</>
                         )}
                     </Box>
                 ),
@@ -443,7 +436,7 @@ const BaseCell = (cellType: CellType) => {
                     cx,
                     classes.root,
                     classes.withSticky,
-                    classes.withLargeContainer,
+                    classes.withLargeContent,
                     classes.withMinimalWidth,
                     classes.withAlignRight,
                     classes.withBoldFont,
@@ -452,7 +445,7 @@ const BaseCell = (cellType: CellType) => {
                     classes.withBackground,
                     classes.withCopying,
                     withSticky,
-                    hasLargeText,
+                    cellHasLargeContent,
                     withMinimalWidth,
                     withAlignRight,
                     withBoldFont,
@@ -462,9 +455,9 @@ const BaseCell = (cellType: CellType) => {
                     clipboard.copied,
                     withTooltip,
                     isSelected,
-                    truncatedText,
                     toggleCell,
                     cellId,
+                    children,
                 ],
             );
 

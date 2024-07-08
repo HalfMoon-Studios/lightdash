@@ -8,7 +8,7 @@ import {
     TextInput,
 } from '@mantine/core';
 
-import React, { FC } from 'react';
+import React, { type FC } from 'react';
 import { Controller, useFormContext } from 'react-hook-form';
 import { useToggle } from 'react-use';
 import { useFeatureFlagEnabled } from '../../../hooks/useFeatureFlagEnabled';
@@ -224,7 +224,10 @@ const SnowflakeForm: FC<{
                                 },
                             })}
                         />
-                        <StartOfWeekSelect disabled={disabled} />
+                        <StartOfWeekSelect
+                            disabled={disabled}
+                            isRedeployRequired={false}
+                        />
                     </Stack>
                 </FormSection>
                 <FormCollapseButton isSectionOpen={isOpen} onClick={toggleOpen}>

@@ -8,13 +8,22 @@ import {
     SupportedDbtAdapter,
     WarehouseConnectionError,
     WarehouseQueryError,
+    WarehouseResults,
 } from '@lightdash/common';
 import * as crypto from 'crypto';
-import { Connection, ConnectionOptions, createConnection } from 'snowflake-sdk';
+import {
+    configure,
+    Connection,
+    ConnectionOptions,
+    createConnection,
+} from 'snowflake-sdk';
 import { pipeline, Transform, Writable } from 'stream';
 import * as Util from 'util';
 import { WarehouseCatalog } from '../types';
 import WarehouseBaseClient from './WarehouseBaseClient';
+
+// Prevent snowflake sdk from flooding the output with info logs
+configure({ logLevel: 'ERROR' });
 
 export enum SnowflakeTypes {
     NUMBER = 'NUMBER',
@@ -109,6 +118,8 @@ const parseRows = (rows: Record<string, any>[]) => rows.map(parseRow);
 export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflakeCredentials> {
     connectionOptions: ConnectionOptions;
 
+    quotedIdentifiersIgnoreCase?: boolean;
+
     constructor(credentials: CreateSnowflakeCredentials) {
         super(credentials);
         let decodedPrivateKey: string | Buffer | undefined =
@@ -128,12 +139,29 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
             });
         }
 
+        if (typeof credentials.quotedIdentifiersIgnoreCase !== 'undefined') {
+            this.quotedIdentifiersIgnoreCase =
+                credentials.quotedIdentifiersIgnoreCase;
+        }
+
+        let authenticationOptions: Partial<ConnectionOptions> = {};
+
+        if (credentials.password) {
+            authenticationOptions = {
+                password: credentials.password,
+                authenticator: 'SNOWFLAKE',
+            };
+        } else if (decodedPrivateKey) {
+            authenticationOptions = {
+                privateKey: decodedPrivateKey,
+                authenticator: 'SNOWFLAKE_JWT',
+            };
+        }
+
         this.connectionOptions = {
             account: credentials.account,
             username: credentials.user,
-            password: credentials.password,
-            authenticator: decodedPrivateKey ? 'SNOWFLAKE_JWT' : undefined,
-            privateKey: decodedPrivateKey,
+            ...authenticationOptions,
             database: credentials.database,
             schema: credentials.schema,
             warehouse: credentials.warehouse,
@@ -144,7 +172,15 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
         } as ConnectionOptions; // force type because accessUrl property is not recognised
     }
 
-    async runQuery(sqlText: string, tags?: Record<string, string>) {
+    async streamQuery(
+        sql: string,
+        streamCallback: (data: WarehouseResults) => void,
+        options: {
+            values?: any[];
+            tags?: Record<string, string>;
+            timezone?: string;
+        },
+    ): Promise<void> {
         let connection: Connection;
         try {
             connection = createConnection(this.connectionOptions);
@@ -154,6 +190,7 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
         }
         try {
             if (this.connectionOptions.warehouse) {
+                // eslint-disable-next-line no-console
                 console.debug(
                     `Running snowflake query on warehouse: ${this.connectionOptions.warehouse}`,
                 );
@@ -169,21 +206,41 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
                     `ALTER SESSION SET WEEK_START = ${snowflakeStartOfWeekIndex};`,
                 );
             }
-            if (tags) {
+            if (options?.tags) {
                 await this.executeStatement(
                     connection,
-                    `ALTER SESSION SET QUERY_TAG = '${JSON.stringify(tags)}';`,
+                    `ALTER SESSION SET QUERY_TAG = '${JSON.stringify(
+                        options?.tags,
+                    )}';`,
                 );
             }
+            const timezoneQuery = options?.timezone || 'UTC';
+            console.debug(
+                `Setting Snowflake session timezone to ${timezoneQuery}`,
+            );
             await this.executeStatement(
                 connection,
-                "ALTER SESSION SET TIMEZONE = 'UTC'",
+                `ALTER SESSION SET TIMEZONE = '${timezoneQuery}';`,
             );
-            const result = await this.executeStreamStatement(
+
+            /**
+             * Force QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE to avoid casing inconsistencies
+             * between Snowflake <> Lightdash
+             */
+            console.debug(
+                'Setting Snowflake session QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE',
+            );
+            await this.executeStatement(
                 connection,
-                sqlText,
+                `ALTER SESSION SET QUOTED_IDENTIFIERS_IGNORE_CASE = FALSE;`,
             );
-            return result;
+
+            await this.executeStreamStatement(
+                connection,
+                sql,
+                streamCallback,
+                options,
+            );
         } catch (e) {
             throw new WarehouseQueryError(e.message);
         } finally {
@@ -201,19 +258,35 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
     private async executeStreamStatement(
         connection: Connection,
         sqlText: string,
-    ) {
-        return new Promise<{
-            fields: Record<string, { type: DimensionType }>;
-            rows: any[];
-        }>((resolve, reject) => {
+        streamCallback: (data: WarehouseResults) => void,
+        options?: {
+            values?: any[];
+        },
+    ): Promise<void> {
+        return new Promise<void>((resolve, reject) => {
             connection.execute({
                 sqlText,
+                binds: options?.values,
                 streamResult: true,
                 complete: (err, stmt) => {
                     if (err) {
                         reject(new WarehouseQueryError(err.message));
                     }
-                    const rows: any[] = [];
+
+                    const columns = stmt.getColumns();
+                    const fields = columns
+                        ? columns.reduce(
+                              (acc, column) => ({
+                                  ...acc,
+                                  [column.getName()]: {
+                                      type: mapFieldType(
+                                          column.getType().toUpperCase(),
+                                      ),
+                                  },
+                              }),
+                              {},
+                          )
+                        : {};
 
                     pipeline(
                         stmt.streamRows(),
@@ -226,7 +299,7 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
                         new Writable({
                             objectMode: true,
                             write(chunk, encoding, callback) {
-                                rows.push(chunk);
+                                streamCallback({ fields, rows: [chunk] });
                                 callback();
                             },
                         }),
@@ -234,24 +307,7 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
                             if (error) {
                                 reject(new WarehouseQueryError(error.message));
                             } else {
-                                const columns = stmt.getColumns();
-                                const fields = columns
-                                    ? columns.reduce(
-                                          (acc, column) => ({
-                                              ...acc,
-                                              [column.getName()]: {
-                                                  type: mapFieldType(
-                                                      column
-                                                          .getType()
-                                                          .toUpperCase(),
-                                                  ),
-                                              },
-                                          }),
-                                          {},
-                                      )
-                                    : {};
-
-                                resolve({ fields, rows });
+                                resolve();
                             }
                         },
                     );
@@ -375,10 +431,6 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
         }, {});
     }
 
-    getFieldQuoteChar() {
-        return '"';
-    }
-
     getStringQuoteChar() {
         return "'";
     }
@@ -402,5 +454,55 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
             default:
                 return super.getMetricSql(sql, metric);
         }
+    }
+
+    async getTables(
+        schema?: string,
+        tags?: Record<string, string>,
+    ): Promise<WarehouseCatalog> {
+        const schemaFilter = schema ? `AND TABLE_SCHEMA ILIKE ?` : '';
+        const query = `
+            SELECT 
+                LOWER(TABLE_CATALOG) as "table_catalog", 
+                LOWER(TABLE_SCHEMA) as "table_schema",
+                LOWER(TABLE_NAME) as "table_name"
+            FROM information_schema.tables
+            WHERE TABLE_TYPE = 'BASE TABLE' 
+            ${schemaFilter}
+            ORDER BY 1,2,3
+        `;
+        const { rows } = await this.runQuery(
+            query,
+            tags,
+            undefined,
+            schema ? [schema] : undefined,
+        );
+        return this.parseWarehouseCatalog(rows, mapFieldType);
+    }
+
+    async getFields(
+        tableName: string,
+        schema?: string,
+        tags?: Record<string, string>,
+    ): Promise<WarehouseCatalog> {
+        const schemaFilter = schema ? `AND TABLE_SCHEMA ILIKE ?` : '';
+
+        const query = `
+            SELECT LOWER(TABLE_CATALOG) as "table_catalog",
+                   LOWER(TABLE_SCHEMA)  as "table_schema",
+                   LOWER(TABLE_NAME)    as "table_name",
+                   LOWER(COLUMN_NAME)   as "column_name",
+                   DATA_TYPE            as "data_type"
+            FROM information_schema.columns
+            WHERE TABLE_NAME ILIKE ? ${schemaFilter}
+            ORDER BY 1, 2, 3;
+        `;
+        const { rows } = await this.runQuery(
+            query,
+            tags,
+            undefined,
+            schema ? [tableName, schema] : [tableName],
+        );
+        return this.parseWarehouseCatalog(rows, mapFieldType);
     }
 }

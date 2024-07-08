@@ -1,8 +1,9 @@
-import { getItemId, getItemLabel, ItemsMap } from '@lightdash/common';
+import { getItemId, getItemLabel, type ItemsMap } from '@lightdash/common';
 import {
     columnHelper,
-    TableColumn,
+    type TableColumn,
 } from '../../../components/common/Table/types';
+import { getRawValueCell } from '../../../hooks/useColumns';
 
 export default function convertFieldMapToTableColumns(itemsMap: ItemsMap) {
     return Object.values(itemsMap).map<TableColumn>((item) => {
@@ -10,13 +11,7 @@ export default function convertFieldMapToTableColumns(itemsMap: ItemsMap) {
         return columnHelper.accessor((row) => row[fieldId], {
             id: fieldId,
             header: () => getItemLabel(item),
-            cell: (info) => {
-                const raw = info.getValue()?.value.raw;
-                if (raw === null) return '∅';
-                if (raw === undefined) return '-';
-                if (raw instanceof Date) return raw.toISOString();
-                return `${raw}`;
-            },
+            cell: getRawValueCell,
             meta: {
                 item,
             },

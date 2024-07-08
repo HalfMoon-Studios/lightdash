@@ -1,7 +1,7 @@
 import {
-    ApiCompiledQueryResults,
-    ApiError,
-    MetricQuery,
+    type ApiCompiledQueryResults,
+    type ApiError,
+    type MetricQuery,
 } from '@lightdash/common';
 import { useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
@@ -41,6 +41,7 @@ export const useCompiledSql = () => {
         tableCalculations,
         additionalMetrics,
         customDimensions,
+        timezone,
     } = useExplorerContext(
         (context) => context.state.unsavedChartVersion.metricQuery,
     );
@@ -56,8 +57,15 @@ export const useCompiledSql = () => {
         tableCalculations,
         additionalMetrics,
         customDimensions,
+        timezone: timezone ?? undefined,
     };
-    const queryKey = ['compiledQuery', tableId, metricQuery, projectUuid];
+    const queryKey = [
+        'compiledQuery',
+        tableId,
+        metricQuery,
+        projectUuid,
+        timezone,
+    ];
     return useQuery<ApiCompiledQueryResults, ApiError>({
         enabled: tableId !== undefined,
         queryKey,

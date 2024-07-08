@@ -32,6 +32,30 @@ type StopPreviewHandlerOptions = {
     verbose: boolean;
 };
 
+const deletePreviewProject = async (
+    projectUuid: string | undefined,
+): Promise<void> => {
+    /**
+     * projectUuid may be undefined here if a command fails early enough
+     * that a project was never created, or we were otherwise unable to
+     * retrieve a UUID. We know `undefined` will always fail, so we avoid
+     * the round-trip.
+     */
+    if (typeof projectUuid === 'undefined') {
+        GlobalState.debug(
+            'no projectUuid available to delete, may not have been ready yet - skipping',
+        );
+
+        return;
+    }
+
+    await lightdashApi({
+        method: 'DELETE',
+        url: `/api/v1/org/projects/${projectUuid}`,
+        body: undefined,
+    });
+};
+
 const cleanupProject = async (
     executionId: string,
     projectUuid: string,
@@ -39,11 +63,7 @@ const cleanupProject = async (
     const teardownSpinner = GlobalState.startSpinner(`  Cleaning up`);
 
     try {
-        await lightdashApi({
-            method: 'DELETE',
-            url: `/api/v1/org/projects/${projectUuid}`,
-            body: undefined,
-        });
+        await deletePreviewProject(projectUuid);
         await LightdashAnalytics.track({
             event: 'preview.stopped',
             properties: {
@@ -111,15 +131,28 @@ export const previewHandler = async (
     }
 
     let project: Project | undefined;
+    let hasContentCopy = false;
 
     const config = await getConfig();
+
+    if (!config.context?.project) {
+        console.error(
+            styles.warning(
+                `\n\nDeveloper preview will be deployed without any copied content!\nPlease set a project to copy content from by running 'lightdash config set-project'.\n`,
+            ),
+        );
+    }
+
     try {
-        project = await createProject({
+        const results = await createProject({
             ...options,
             name,
             type: ProjectType.PREVIEW,
-            copiedFromProjectUuid: config.context?.project,
+            upstreamProjectUuid: config.context?.project,
         });
+
+        project = results?.project;
+        hasContentCopy = Boolean(results?.hasContentCopy);
     } catch (e) {
         GlobalState.debug(`> Unable to create project: ${e}`);
         spinner.fail();
@@ -157,13 +190,21 @@ export const previewHandler = async (
             ignoreErrors: true,
         });
 
-        setPreviewProject(project.projectUuid, name);
+        await setPreviewProject(project.projectUuid, name);
 
         process.on('SIGINT', async () => {
             await cleanupProject(executionId, project!.projectUuid);
 
             process.exit(0);
         });
+
+        if (!hasContentCopy) {
+            console.error(
+                styles.warning(
+                    `\n\nDeveloper preview deployed without any copied content!\n`,
+                ),
+            );
+        }
 
         spinner.succeed(
             `  Developer preview "${name}" ready at: ${await projectUrl(
@@ -225,13 +266,9 @@ export const previewHandler = async (
         pressToShutdown.clear();
     } catch (e) {
         spinner.fail('Error creating developer preview');
-        await lightdashApi({
-            method: 'DELETE',
-            url: `/api/v1/org/projects/${project.projectUuid}`,
-            body: undefined,
-        });
 
-        unsetPreviewProject();
+        await deletePreviewProject(project.projectUuid);
+        await unsetPreviewProject();
 
         await LightdashAnalytics.track({
             event: 'preview.error',
@@ -288,14 +325,25 @@ export const startPreviewHandler = async (
     } else {
         const config = await getConfig();
 
+        if (!config.context?.project) {
+            console.error(
+                styles.warning(
+                    `\n\nDeveloper preview will be deployed without any copied content!\nPlease set a project to copy content from by running 'lightdash config set-project'.\n`,
+                ),
+            );
+        }
+
         // Create
         console.error(`Creating new project preview ${projectName}`);
-        const project = await createProject({
+        const results = await createProject({
             ...options,
             name: projectName,
             type: ProjectType.PREVIEW,
-            copiedFromProjectUuid: config.context?.project,
+            upstreamProjectUuid: config.context?.project,
         });
+
+        const project = results?.project;
+        const hasContentCopy = Boolean(results?.hasContentCopy);
 
         if (!project) {
             console.error(
@@ -312,7 +360,7 @@ export const startPreviewHandler = async (
             return;
         }
 
-        setPreviewProject(project.projectUuid, projectName);
+        await setPreviewProject(project.projectUuid, projectName);
 
         await LightdashAnalytics.track({
             event: 'start_preview.create',
@@ -329,6 +377,14 @@ export const startPreviewHandler = async (
             ignoreErrors: true,
         });
         const url = await projectUrl(project);
+
+        if (!hasContentCopy) {
+            console.error(
+                styles.warning(
+                    `\n\nDeveloper preview deployed without any copied content!\n`,
+                ),
+            );
+        }
 
         console.error(`New project created on ${url}`);
         if (process.env.CI === 'true') {
@@ -351,7 +407,7 @@ export const stopPreviewHandler = async (
 
     const projectName = options.name;
 
-    unsetPreviewProject();
+    await unsetPreviewProject();
 
     const previewProject = await getPreviewProject(projectName);
     if (previewProject) {
@@ -364,11 +420,7 @@ export const stopPreviewHandler = async (
             },
         });
 
-        await lightdashApi({
-            method: 'DELETE',
-            url: `/api/v1/org/projects/${previewProject.projectUuid}`,
-            body: undefined,
-        });
+        await deletePreviewProject(previewProject.projectUuid);
         console.error(
             `Successfully deleted preview project named ${projectName}`,
         );

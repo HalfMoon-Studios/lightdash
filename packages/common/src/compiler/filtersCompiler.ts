@@ -1,29 +1,54 @@
-import moment from 'moment/moment';
+import moment from 'moment-timezone';
 import { SupportedDbtAdapter } from '../types/dbt';
 import {
-    CompiledField,
-    CompiledTableCalculation,
     CustomFormatType,
     DimensionType,
-    fieldId,
+    isCompiledCustomSqlDimension,
     isMetric,
     MetricType,
+    TableCalculationType,
+    type CompiledCustomSqlDimension,
+    type CompiledField,
+    type CompiledTableCalculation,
 } from '../types/field';
 import {
-    DateFilterRule,
     FilterOperator,
-    FilterRule,
+    isFilterTarget,
+    isMetricFilterTarget,
     UnitOfTime,
     unitOfTimeFormat,
+    type DateFilterRule,
+    type FilterRule,
 } from '../types/filter';
 import assertUnreachable from '../utils/assertUnreachable';
 import { formatDate } from '../utils/formatting';
 import { getItemId } from '../utils/item';
 import { getMomentDateWithCustomStartOfWeek } from '../utils/time';
-import { WeekDay } from '../utils/timeFrames';
+import { type WeekDay } from '../utils/timeFrames';
 
-const formatTimestamp = (date: Date): string =>
-    moment(date).format('YYYY-MM-DD HH:mm:ss');
+// NOTE: This function requires a complete date as input.
+// It produces a timezoneless string which is implied to be in UTC.
+// We could probably have it be a string WITH a timezone in the future.
+// Calling .utc() here makes it safe to drop the tz.
+const formatTimestampAsUTCWithNoTimezone = (date: Date): string =>
+    moment(date).utc().format('YYYY-MM-DD HH:mm:ss');
+
+const raiseInvalidFilterError = (
+    type: string,
+    filter: FilterRule<FilterOperator, unknown>,
+): never => {
+    let targetString = '';
+
+    if (isMetricFilterTarget(filter.target)) {
+        targetString = ` on "${filter.target.fieldRef}" field`;
+    } else if (isFilterTarget(filter.target)) {
+        targetString = ` on "${filter.target.fieldId}" field`;
+    }
+
+    throw Error(
+        `No function has been implemented to render SQL for the filter operator "${filter.operator}"${targetString} of type "${type}"`,
+    );
+};
 
 export const renderStringFilterSql = (
     dimensionSql: string,
@@ -31,7 +56,6 @@ export const renderStringFilterSql = (
     stringQuoteChar: string,
     escapeStringQuoteChar: string,
 ): string => {
-    const filterType = filter.operator;
     const escapedFilterValues = filter.values?.map((v) =>
         typeof v === 'string'
             ? v.replaceAll(
@@ -88,9 +112,7 @@ export const renderStringFilterSql = (
             );
             return endsWithQuery?.join('\n  OR\n  ') || 'true';
         default:
-            throw Error(
-                `No function implemented to render sql for filter type ${filterType} on dimension of string type`,
-            );
+            return raiseInvalidFilterError('string', filter);
     }
 };
 
@@ -98,7 +120,6 @@ export const renderNumberFilterSql = (
     dimensionSql: string,
     filter: FilterRule<FilterOperator, unknown>,
 ): string => {
-    const filterType = filter.operator;
     switch (filter.operator) {
         case FilterOperator.EQUALS:
             return !filter.values || filter.values.length === 0
@@ -123,9 +144,7 @@ export const renderNumberFilterSql = (
         case FilterOperator.LESS_THAN_OR_EQUAL:
             return `(${dimensionSql}) <= (${filter.values?.[0] || 0})`;
         default:
-            throw Error(
-                `No function implemented to render sql for filter type ${filterType} on dimension of number type`,
-            );
+            return raiseInvalidFilterError('number', filter);
     }
 };
 
@@ -133,10 +152,10 @@ export const renderDateFilterSql = (
     dimensionSql: string,
     filter: DateFilterRule,
     adapterType: SupportedDbtAdapter,
+    timezone: string,
     dateFormatter: (date: Date) => string = formatDate,
     startOfWeek: WeekDay | null | undefined = undefined,
 ): string => {
-    const filterType = filter.operator;
     const castValue = (value: string): string => {
         switch (adapterType) {
             case SupportedDbtAdapter.TRINO: {
@@ -254,19 +273,50 @@ export const renderDateFilterSql = (
         case FilterOperator.IN_THE_CURRENT: {
             const unitOfTime: UnitOfTime =
                 filter.settings?.unitOfTime || UnitOfTime.days;
+
             const fromDate = dateFormatter(
                 getMomentDateWithCustomStartOfWeek(startOfWeek)
+                    .tz(timezone)
                     .startOf(unitOfTime)
+                    .utc()
                     .toDate(),
             );
             const untilDate = dateFormatter(
                 getMomentDateWithCustomStartOfWeek(startOfWeek)
+                    .tz(timezone)
                     .endOf(unitOfTime)
+                    .utc()
                     .toDate(),
             );
-            return `((${dimensionSql}) >= ${castValue(
-                fromDate,
-            )} AND (${dimensionSql}) <= ${castValue(untilDate)})`;
+
+            const castedFromDate = castValue(fromDate);
+            const castedUntilDate = castValue(untilDate);
+
+            return `((${dimensionSql}) >= ${castedFromDate} AND (${dimensionSql}) <= ${castedUntilDate})`;
+        }
+        case FilterOperator.NOT_IN_THE_CURRENT: {
+            const unitOfTime: UnitOfTime =
+                filter.settings?.unitOfTime || UnitOfTime.days;
+
+            const fromDate = dateFormatter(
+                getMomentDateWithCustomStartOfWeek(startOfWeek)
+                    .tz(timezone)
+                    .startOf(unitOfTime)
+                    .utc()
+                    .toDate(),
+            );
+            const untilDate = dateFormatter(
+                getMomentDateWithCustomStartOfWeek(startOfWeek)
+                    .tz(timezone)
+                    .endOf(unitOfTime)
+                    .utc()
+                    .toDate(),
+            );
+
+            const castedFromDate = castValue(fromDate);
+            const castedUntilDate = castValue(untilDate);
+
+            return `(NOT ((${dimensionSql}) >= ${castedFromDate} AND (${dimensionSql}) <= ${castedUntilDate}))`;
         }
         case FilterOperator.IN_BETWEEN: {
             const startDate = dateFormatter(filter.values?.[0]);
@@ -277,9 +327,7 @@ export const renderDateFilterSql = (
             )} AND (${dimensionSql}) <= ${castValue(endDate)})`;
         }
         default:
-            throw Error(
-                `No function implemented to render sql for filter type ${filterType} on dimension of date type`,
-            );
+            return raiseInvalidFilterError('date', filter);
     }
 };
 
@@ -287,7 +335,6 @@ const renderBooleanFilterSql = (
     dimensionSql: string,
     filter: FilterRule<FilterOperator, unknown>,
 ): string => {
-    const { operator } = filter;
     switch (filter.operator) {
         case 'equals':
             return `(${dimensionSql}) = ${!!filter.values?.[0]}`;
@@ -299,9 +346,7 @@ const renderBooleanFilterSql = (
         case 'notNull':
             return `(${dimensionSql}) IS NOT NULL`;
         default:
-            throw Error(
-                `No function implemented to render sql for filter type ${operator} on dimension of boolean type`,
-            );
+            return raiseInvalidFilterError('boolean', filter);
     }
 };
 
@@ -311,51 +356,79 @@ export const renderTableCalculationFilterRuleSql = (
     fieldQuoteChar: string,
     stringQuoteChar: string,
     escapeStringQuoteChar: string,
+    adapterType: SupportedDbtAdapter,
+    startOfWeek: WeekDay | null | undefined,
+    timezone: string = 'UTC',
 ): string => {
     if (!field) return '1=1';
 
     const fieldSql = `${fieldQuoteChar}${getItemId(field)}${fieldQuoteChar}`;
 
-    switch (field.format?.type) {
-        case CustomFormatType.DEFAULT:
+    // First we default to field.type
+    // otherwise, we check the custom format for backwards compatibility
+    switch (field.type) {
+        case TableCalculationType.STRING:
             return renderStringFilterSql(
                 fieldSql,
                 filterRule,
                 stringQuoteChar,
                 escapeStringQuoteChar,
             );
+        case TableCalculationType.DATE:
+        case TableCalculationType.TIMESTAMP:
+            return renderDateFilterSql(
+                fieldSql,
+                filterRule,
+                adapterType,
+                timezone,
+                undefined,
+                startOfWeek,
+            );
+        case TableCalculationType.NUMBER:
+            return renderNumberFilterSql(fieldSql, filterRule);
+        case TableCalculationType.BOOLEAN:
+            return renderBooleanFilterSql(fieldSql, filterRule);
+        default:
+        // Do nothing here. This will try with format.type for backwards compatibility
+    }
+
+    switch (field.format?.type) {
         case CustomFormatType.PERCENT:
         case CustomFormatType.CURRENCY:
         case CustomFormatType.NUMBER: {
             return renderNumberFilterSql(fieldSql, filterRule);
         }
-        default: {
-            throw Error(
-                `No function implemented to render filter sql for table calculation type ${field.format?.type}`,
+        default:
+            return renderStringFilterSql(
+                fieldSql,
+                filterRule,
+                stringQuoteChar,
+                escapeStringQuoteChar,
             );
-        }
     }
 };
 
 export const renderFilterRuleSql = (
     filterRule: FilterRule<FilterOperator, unknown>,
-    field: CompiledField,
+    field: CompiledField | CompiledCustomSqlDimension,
     fieldQuoteChar: string,
     stringQuoteChar: string,
     escapeStringQuoteChar: string,
     startOfWeek: WeekDay | null | undefined,
     adapterType: SupportedDbtAdapter,
+    timezone: string = 'UTC',
 ): string => {
     if (filterRule.disabled) {
         return `1=1`; // When filter is disabled, we want to return all rows
     }
-
-    const fieldType = field.type;
+    const fieldType = isCompiledCustomSqlDimension(field)
+        ? field.dimensionType
+        : field.type;
     const fieldSql = isMetric(field)
-        ? `${fieldQuoteChar}${fieldId(field)}${fieldQuoteChar}`
+        ? `${fieldQuoteChar}${getItemId(field)}${fieldQuoteChar}`
         : field.compiledSql;
 
-    switch (field.type) {
+    switch (fieldType) {
         case DimensionType.STRING:
         case MetricType.STRING: {
             return renderStringFilterSql(
@@ -383,6 +456,7 @@ export const renderFilterRuleSql = (
                 fieldSql,
                 filterRule,
                 adapterType,
+                timezone,
                 undefined,
                 startOfWeek,
             );
@@ -393,7 +467,8 @@ export const renderFilterRuleSql = (
                 fieldSql,
                 filterRule,
                 adapterType,
-                formatTimestamp,
+                timezone,
+                formatTimestampAsUTCWithNoTimezone,
                 startOfWeek,
             );
         }
@@ -403,7 +478,7 @@ export const renderFilterRuleSql = (
         }
         default: {
             return assertUnreachable(
-                field,
+                fieldType,
                 `No function implemented to render sql for filter group type ${fieldType}`,
             );
         }

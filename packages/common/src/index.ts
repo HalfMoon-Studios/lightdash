@@ -1,113 +1,122 @@
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import { z } from 'zod';
-import { UserActivity, ViewStatistics } from './types/analytics';
+import { type UserActivity, type ViewStatistics } from './types/analytics';
 import {
-    Dashboard,
-    DashboardAvailableFilters,
-    DashboardBasicDetails,
+    type Dashboard,
+    type DashboardAvailableFilters,
+    type DashboardBasicDetails,
+    type DashboardSummary,
 } from './types/dashboard';
-import { DbtCloudIntegration } from './types/dbtCloud';
-import { Explore, SummaryExplore } from './types/explore';
+import { type DbtCloudIntegration } from './types/dbtCloud';
+import { type Explore, type SummaryExplore } from './types/explore';
 import {
-    CompiledField,
-    CustomDimension,
-    Dimension,
     DimensionType,
-    Field,
-    FieldId,
-    fieldId,
-    FilterableField,
     friendlyName,
+    isCustomDimension,
     isDimension,
     isField,
+    isFilterableDimension,
     isMetric,
     isTableCalculation,
-    ItemsMap,
-    Metric,
-    TableCalculation,
+    type CompiledField,
+    type CustomDimension,
+    type Dimension,
+    type Field,
+    type FieldId,
+    type FilterableDimension,
+    type FilterableField,
+    type ItemsMap,
+    type Metric,
+    type TableCalculation,
 } from './types/field';
+import { type AdditionalMetric, type MetricQuery } from './types/metricQuery';
 import {
-    AdditionalMetric,
-    getCustomDimensionId,
-    isAdditionalMetric,
-    isCustomDimension,
-    MetricQuery,
-} from './types/metricQuery';
-import {
-    OrganizationMemberProfile,
-    OrganizationMemberRole,
+    type OrganizationMemberProfile,
+    type OrganizationMemberRole,
 } from './types/organizationMemberProfile';
 import {
-    CreatePersonalAccessToken,
-    PersonalAccessToken,
+    type CreatePersonalAccessToken,
+    type PersonalAccessToken,
 } from './types/personalAccessToken';
-import { ProjectMemberProfile } from './types/projectMemberProfile';
+import { type ProjectMemberProfile } from './types/projectMemberProfile';
 import {
-    ApiCalculateTotalResponse,
-    ChartHistory,
-    ChartVersion,
-    SavedChart,
-    Series,
+    type ApiCalculateTotalResponse,
+    type ChartHistory,
+    type ChartVersion,
+    type SavedChart,
+    type Series,
 } from './types/savedCharts';
-import { SearchResults } from './types/search';
-import { ShareUrl } from './types/share';
-import { SlackSettings } from './types/slackSettings';
+import { type SearchResults } from './types/search';
+import { type ShareUrl } from './types/share';
+import { type SlackSettings } from './types/slackSettings';
 
 import {
-    ApiCreateComment,
-    ApiDeleteComment,
-    ApiGetComments,
+    type ApiCreateComment,
+    type ApiDeleteComment,
+    type ApiGetComments,
 } from './types/api/comments';
-import { Email } from './types/api/email';
-import { ApiSuccessEmpty } from './types/api/success';
-import { DbtExposure } from './types/dbt';
-import { EmailStatusExpiring } from './types/email';
-import { FieldValueSearchResult } from './types/fieldMatch';
-import { DashboardFilters } from './types/filter';
+import { type Email } from './types/api/email';
+import { type ApiSuccessEmpty } from './types/api/success';
+import { type DbtExposure } from './types/dbt';
+import { type EmailStatusExpiring } from './types/email';
+import { type FieldValueSearchResult } from './types/fieldMatch';
+import { type DashboardFilters } from './types/filter';
 import {
-    GitIntegrationConfiguration,
-    GitRepo,
-    PullRequestCreated,
+    type GitIntegrationConfiguration,
+    type GitRepo,
+    type PullRequestCreated,
 } from './types/gitIntegration';
 import {
-    DeleteOpenIdentity,
-    OpenIdIdentitySummary,
+    type DeleteOpenIdentity,
+    type OpenIdIdentitySummary,
 } from './types/openIdIdentity';
 import {
-    AllowedEmailDomains,
-    OnboardingStatus,
-    Organization,
-    OrganizationProject,
-    UpdateAllowedEmailDomains,
+    type AllowedEmailDomains,
+    type OnboardingStatus,
+    type Organization,
+    type OrganizationProject,
+    type UpdateAllowedEmailDomains,
 } from './types/organization';
-import { PinnedItems } from './types/pinning';
-import { ProjectGroupAccess } from './types/projectGroupAccess';
-import { ProjectMemberRole } from './types/projectMemberRole';
+import { type ApiTogglePinnedItem, type PinnedItems } from './types/pinning';
+import { type ProjectGroupAccess } from './types/projectGroupAccess';
+import { type ProjectMemberRole } from './types/projectMemberRole';
 import {
-    CreateWarehouseCredentials,
-    DbtProjectConfig,
     DbtProjectType,
-    Project,
     ProjectType,
-    WarehouseCredentials,
+    type CreateWarehouseCredentials,
+    type DbtProjectConfig,
+    type Project,
+    type WarehouseCredentials,
 } from './types/projects';
-import { MostPopularAndRecentlyUpdated } from './types/resourceViewItem';
-import { ResultRow } from './types/results';
+import { type MostPopularAndRecentlyUpdated } from './types/resourceViewItem';
+import { type ResultRow } from './types/results';
 import {
-    ApiJobScheduledResponse,
-    ApiJobStatusResponse,
-    SchedulerAndTargets,
-    SchedulerJobStatus,
-    SchedulerWithLogs,
+    type ApiJobScheduledResponse,
+    type ApiJobStatusResponse,
+    type SchedulerAndTargets,
+    type SchedulerJobStatus,
+    type SchedulerWithLogs,
 } from './types/scheduler';
-import { SlackChannel } from './types/slack';
-import { Space } from './types/space';
-import { ApiSshKeyPairResponse } from './types/SshKeyPair';
-import { TableBase } from './types/table';
-import { LightdashUser, UserAllowedOrganization } from './types/user';
-import { UserWarehouseCredentials } from './types/userWarehouseCredentials';
-import { ValidationResponse } from './types/validation';
+import { type SlackChannel } from './types/slack';
+import { type Space } from './types/space';
+import { type ApiSshKeyPairResponse } from './types/SshKeyPair';
+import { type TableBase } from './types/table';
+import {
+    type LightdashUser,
+    type LoginOptions,
+    type UserAllowedOrganization,
+} from './types/user';
+import { type UserWarehouseCredentials } from './types/userWarehouseCredentials';
+import { type ValidationResponse } from './types/validation';
+
+import {
+    type ApiCatalogAnalyticsResults,
+    type ApiCatalogMetadataResults,
+} from './types/catalog';
+import { type ApiPromotionChangesResponse } from './types/promotion';
+import { TimeFrames } from './types/timeFrames';
+import { type ApiWarehouseTableFields } from './types/warehouse';
 import { convertAdditionalMetric } from './utils/additionalMetrics';
 import { getFields } from './utils/fields';
 import { formatItemValue } from './utils/formatting';
@@ -123,6 +132,7 @@ export * from './compiler/translator';
 export * from './dbt/validation';
 export { default as lightdashDbtYamlSchema } from './schemas/json/lightdash-dbt-2.0.json';
 export * from './templating/template';
+export * from './transformers';
 export * from './types/analytics';
 export * from './types/api';
 export * from './types/api/comments';
@@ -132,6 +142,7 @@ export * from './types/api/notifications';
 export * from './types/api/share';
 export * from './types/api/success';
 export * from './types/api/uuid';
+export * from './types/catalog';
 export * from './types/comments';
 export * from './types/conditionalFormatting';
 export * from './types/conditionalRule';
@@ -163,6 +174,7 @@ export * from './types/projectGroupAccess';
 export * from './types/projectMemberProfile';
 export * from './types/projectMemberRole';
 export * from './types/projects';
+export * from './types/promotion';
 export * from './types/resourceViewItem';
 export * from './types/results';
 export * from './types/savedCharts';
@@ -172,9 +184,11 @@ export * from './types/share';
 export * from './types/slack';
 export * from './types/slackSettings';
 export * from './types/space';
+export * from './types/sqlRunner';
 export * from './types/SshKeyPair';
 export * from './types/table';
 export * from './types/timeFrames';
+export * from './types/timezone';
 export * from './types/user';
 export * from './types/userAttributes';
 export * from './types/userWarehouseCredentials';
@@ -192,9 +206,12 @@ export * from './utils/formatting';
 export * from './utils/github';
 export * from './utils/item';
 export * from './utils/projectMemberRole';
+export * from './utils/sanitizeHtml';
 export * from './utils/scheduler';
+export * from './utils/slugs';
 export * from './utils/time';
 export * from './utils/timeFrames';
+export * from './utils/warehouse';
 
 export const validateEmail = (email: string): boolean => {
     if (/\s/.test(email)) {
@@ -345,7 +362,7 @@ export const findFieldByIdInExplore = (
     explore: Explore,
     id: FieldId,
 ): Field | undefined =>
-    getFields(explore).find((field) => fieldId(field) === id);
+    getFields(explore).find((field) => getItemId(field) === id);
 
 export const snakeCaseName = (text: string): string =>
     text
@@ -423,6 +440,9 @@ export type UpdateProjectMember = {
     role: ProjectMemberRole;
 };
 
+export type UpdateMetadata = {
+    upstreamProjectUuid?: string | null; // null means we unset this value
+};
 export type ApiCompiledQueryResults = string;
 
 export type ApiExploresResults = SummaryExplore[];
@@ -523,9 +543,24 @@ export type CreateInviteLink = Pick<InviteLink, 'expiresAt' | 'email'> & {
     role?: OrganizationMemberRole;
 };
 
+export type ApiCreateProjectResults = {
+    project: Project;
+    hasContentCopy: boolean;
+};
+
 export type ProjectSavedChartStatus = boolean;
 
 export type ApiFlashResults = Record<string, string[]>;
+
+export type ApiAiDashboardSummaryResponse = {
+    status: 'ok';
+    results: DashboardSummary;
+};
+
+export type ApiAiGetDashboardSummaryResponse = {
+    status: 'ok';
+    results: DashboardSummary;
+};
 
 type ApiResults =
     | ApiQueryResults
@@ -538,6 +573,7 @@ type ApiResults =
     | ApiHealthResults
     | Organization
     | LightdashUser
+    | LoginOptions
     | SavedChart
     | SavedChart[]
     | Space[]
@@ -601,18 +637,27 @@ type ApiResults =
     | ApiCreateComment['results']
     | ApiGetComments['results']
     | ApiDeleteComment
-    | ApiSuccessEmpty;
+    | ApiSuccessEmpty
+    | ApiCreateProjectResults
+    | ApiAiDashboardSummaryResponse['results']
+    | ApiAiGetDashboardSummaryResponse['results']
+    | ApiCatalogMetadataResults
+    | ApiCatalogAnalyticsResults
+    | ApiPromotionChangesResponse['results']
+    | ApiWarehouseTableFields['results']
+    | ApiTogglePinnedItem['results'];
 
 export type ApiResponse<T extends ApiResults = ApiResults> = {
     status: 'ok';
     results: T;
 };
 
-type ApiErrorDetail = {
+export type ApiErrorDetail = {
     name: string;
     statusCode: number;
     message: string;
     data: { [key: string]: string };
+    id?: string;
 };
 export type ApiError = {
     status: 'error';
@@ -637,6 +682,25 @@ export enum LightdashInstallType {
     UNKNOWN = 'unknown',
 }
 
+export type SentryConfig = {
+    backend: {
+        dsn: string;
+        securityReportUri: string;
+    };
+    frontend: {
+        dsn: string;
+    };
+    release: string;
+    environment: string;
+    tracesSampleRate: number;
+    profilesSampleRate: number;
+    anr: {
+        enabled: boolean;
+        timeout?: number;
+        captureStacktrace: boolean;
+    };
+};
+
 export type HealthState = {
     healthy: boolean;
     mode: LightdashMode;
@@ -653,11 +717,14 @@ export type HealthState = {
         writeKey: string;
         dataPlaneUrl: string;
     };
-    sentry: {
-        dsn: string;
-        environment: string;
-        release: string;
-    };
+    sentry: Pick<
+        SentryConfig,
+        | 'frontend'
+        | 'release'
+        | 'environment'
+        | 'tracesSampleRate'
+        | 'profilesSampleRate'
+    >;
     auth: {
         disablePasswordAuthentication: boolean;
         google: {
@@ -678,6 +745,10 @@ export type HealthState = {
             enabled: boolean;
             loginPath: string;
         };
+        oidc: {
+            enabled: boolean;
+            loginPath: string;
+        };
     };
     posthog: {
         projectApiKey: string;
@@ -687,6 +758,10 @@ export type HealthState = {
     intercom: {
         appId: string;
         apiBase: string;
+    };
+    pylon: {
+        appId: string;
+        verificationHash?: string;
     };
     staticIp: string;
     query: {
@@ -741,25 +816,71 @@ export type UpdateProject = Omit<
 
 export const getResultValueArray = (
     rows: ResultRow[],
-    onlyRaw: boolean = false,
-): Record<string, unknown>[] =>
-    rows.map((row) =>
-        Object.keys(row).reduce<Record<string, unknown>>((acc, key) => {
-            const value = onlyRaw
-                ? row[key]?.value.raw
-                : row[key]?.value.formatted || row[key]?.value.raw;
+    preferRaw: boolean = false,
+    calculateMinAndMax: boolean = false,
+): {
+    results: Record<string, unknown>[];
+    minsAndMaxes?: Record<string, { min: number; max: number }>;
+} => {
+    const minMax: Record<string, { min: number; max: number }> = {};
 
-            return { ...acc, [key]: value };
+    const results = rows.map((row) =>
+        Object.keys(row).reduce<Record<string, unknown>>((acc, key) => {
+            const rawWithFallback =
+                row[key]?.value.raw ?? row[key]?.value.formatted; // using nullish coalescing operator to handle null and undefined only
+            const formattedWithFallback =
+                row[key]?.value.formatted || row[key]?.value.raw;
+
+            const value = preferRaw ? rawWithFallback : formattedWithFallback;
+
+            acc[key] = value;
+
+            if (calculateMinAndMax) {
+                const numericValue = Number(value);
+                if (!Number.isNaN(numericValue)) {
+                    if (!minMax[key]) {
+                        minMax[key] = { min: numericValue, max: numericValue };
+                    } else {
+                        minMax[key].min = Math.min(
+                            minMax[key].min,
+                            numericValue,
+                        );
+                        minMax[key].max = Math.max(
+                            minMax[key].max,
+                            numericValue,
+                        );
+                    }
+                }
+            }
+
+            return acc;
         }, {}),
     );
+
+    return calculateMinAndMax ? { results, minsAndMaxes: minMax } : { results };
+};
 
 export const getDateGroupLabel = (axisItem: ItemsMap[string]) => {
     if (
         isDimension(axisItem) &&
         [DimensionType.DATE, DimensionType.TIMESTAMP].includes(axisItem.type) &&
-        axisItem.group
-    )
-        return friendlyName(axisItem.group);
+        (axisItem.group || (axisItem.groups && axisItem.groups.length > 0)) &&
+        axisItem.label &&
+        axisItem.timeInterval
+    ) {
+        const timeFrame =
+            TimeFrames[axisItem.timeInterval]?.toLowerCase() || '';
+
+        if (timeFrame && axisItem.label.endsWith(` ${timeFrame}`)) {
+            // Remove the time frame from the end of the label - e.g. from 'Order created day' to 'Order created'.
+            return getItemLabelWithoutTableName(axisItem).replace(
+                new RegExp(`\\s+${timeFrame}$`),
+                '',
+            );
+        }
+
+        return friendlyName(axisItem.label);
+    }
 
     return undefined;
 };
@@ -805,7 +926,7 @@ export function getFieldMap(
     return [...getFields(explore), ...additionalMetrics].reduce(
         (sum, field) => ({
             ...sum,
-            [fieldId(field)]: field,
+            [getItemId(field)]: field,
         }),
         {},
     );
@@ -838,7 +959,7 @@ export function getItemMap(
     ].reduce(
         (acc, item) => ({
             ...acc,
-            [isAdditionalMetric(item) ? fieldId(item) : getItemId(item)]: item,
+            [getItemId(item)]: item,
         }),
         {},
     );
@@ -853,6 +974,17 @@ export const getDimensionsFromItemsMap = (itemsMap: ItemsMap) =>
         }
         return acc;
     }, {});
+
+export const getFilterableDimensionsFromItemsMap = (itemsMap: ItemsMap) =>
+    Object.entries(itemsMap).reduce<Record<string, FilterableDimension>>(
+        (acc, [key, value]) => {
+            if (isDimension(value) && isFilterableDimension(value)) {
+                return { ...acc, [key]: value };
+            }
+            return acc;
+        },
+        {},
+    );
 
 export const getMetricsFromItemsMap = (
     itemsMap: ItemsMap,
@@ -888,7 +1020,6 @@ export function itemsInMetricQuery(
               ...metricQuery.metrics,
               ...metricQuery.dimensions,
               ...(metricQuery.tableCalculations || []).map((tc) => tc.name),
-              ...(metricQuery.customDimensions || []).map(getCustomDimensionId),
           ];
 }
 

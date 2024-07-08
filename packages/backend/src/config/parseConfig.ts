@@ -1,6 +1,12 @@
-import { isLightdashMode, LightdashMode, ParseError } from '@lightdash/common';
+import {
+    isLightdashMode,
+    LightdashMode,
+    ParseError,
+    SentryConfig,
+} from '@lightdash/common';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
+import { type ClientAuthMethod } from 'openid-client';
 import lightdashV1JsonSchema from '../jsonSchemas/lightdashConfig/v1.json';
 import { VERSION } from '../version';
 
@@ -19,6 +25,121 @@ export const getIntegerFromEnvironmentVariable = (
     }
     return parsed;
 };
+
+export const getFloatFromEnvironmentVariable = (
+    name: string,
+): number | undefined => {
+    const raw = process.env[name];
+    if (raw === undefined) {
+        return undefined;
+    }
+    const parsed = Number.parseFloat(raw);
+    if (Number.isNaN(parsed)) {
+        throw new ParseError(
+            `Cannot parse environment variable "${name}". Value must be a float but ${name}=${raw}`,
+        );
+    }
+    return parsed;
+};
+
+export const getFloatArrayFromEnvironmentVariable = (
+    name: string,
+): undefined | number[] => {
+    const raw = process.env[name];
+    if (!raw) {
+        return undefined;
+    }
+    return raw.split(',').map((duration) => {
+        const parsed = Number.parseFloat(duration);
+        if (Number.isNaN(parsed)) {
+            throw new ParseError(
+                `Cannot parse environment variable "${name}". All values must be numbers and separated by commas but ${name}=${raw}`,
+            );
+        }
+        return parsed;
+    });
+};
+
+export const getObjectFromEnvironmentVariable = (
+    name: string,
+): undefined | object => {
+    const raw = process.env[name];
+    if (!raw) {
+        return undefined;
+    }
+    try {
+        return JSON.parse(raw);
+    } catch (e) {
+        throw new ParseError(
+            `Cannot parse environment variable "${name}". Value must be valid JSON but ${name}=${raw}. Error: ${e.message}`,
+        );
+    }
+};
+
+/**
+ * Given a value, uses the arguments provided to figure out if that value
+ * should be decoded as a base64 string.
+ *
+ * This can be used to circumvent limitations with some secret managers, or to
+ * simplify passing some types of values around (e.g file contents)
+ */
+export const getMaybeBase64EncodedFromEnvironmentVariable = (
+    stringContent: string | undefined,
+    {
+        decodeIfStartsWith,
+        decodeUnlessStartsWith,
+        stripPrefix = true,
+    }: {
+        decodeIfStartsWith?: string;
+        decodeUnlessStartsWith?: string;
+        stripPrefix?: boolean;
+    } = {},
+) => {
+    if (!stringContent) {
+        return undefined;
+    }
+
+    if (decodeIfStartsWith && decodeUnlessStartsWith) {
+        throw new Error(
+            'invariant: Cannot use decodeIfstartsWith and decodeUnlessStartsWith in the same check',
+        );
+    }
+
+    if (
+        (decodeIfStartsWith && stringContent.startsWith(decodeIfStartsWith)) ||
+        (decodeUnlessStartsWith &&
+            !stringContent.startsWith(decodeUnlessStartsWith))
+    ) {
+        /**
+         * If we have a match, figure out if we also want to strip the positive
+         * match string from the beginning of the content. This allows us to use
+         * things like a `base64:` prefix to tag base64-encoded content, and also
+         * strip it from the string to be decoded.
+         */
+        const contentMaybeWithoutPrefix = stripPrefix
+            ? stringContent.substring(decodeIfStartsWith?.length ?? 0)
+            : stringContent;
+
+        return Buffer.from(contentMaybeWithoutPrefix, 'base64').toString(
+            'utf-8',
+        );
+    }
+
+    return stringContent;
+};
+
+/**
+ * Minimal wrapper around getMaybeBase64EncodedFromEnvironmentVariable for PEM-encoded certificates
+ * and private keys.
+ */
+export const getPemFileContent = (certValue: string | undefined) =>
+    getMaybeBase64EncodedFromEnvironmentVariable(certValue, {
+        /**
+         * Use to figure out if we should potentially base64-decode PEM-encoded certificates or not,
+         * as part of `private_key_jwt` configuration.
+         */
+        decodeUnlessStartsWith: '-----BEGIN ', // -----BEGIN CERTIFICATE | -----BEGIN PRIVATE KEY
+    });
 
 export type LightdashConfigIn = {
     version: '1.0';
@@ -73,6 +194,13 @@ export type LightdashConfig = {
     version: '1.0';
     lightdashSecret: string;
     secureCookies: boolean;
+    security: {
+        contentSecurityPolicy: {
+            reportOnly: boolean;
+            allowedDomains: string[];
+            reportUri?: string;
+        };
+    };
     cookiesMaxAgeHours?: number;
     trustProxy: boolean;
     databaseConnectionUri?: string;
@@ -83,8 +211,24 @@ export type LightdashConfig = {
     sentry: SentryConfig;
     auth: AuthConfig;
     intercom: IntercomConfig;
+    pylon: PylonConfig;
     siteUrl: string;
     staticIp: string;
+    lightdashCloudInstance: string | undefined;
+    k8s: {
+        nodeName: string | undefined;
+        podName: string | undefined;
+        podNamespace: string | undefined;
+    };
+    prometheus: {
+        enabled: boolean;
+        port: string | number;
+        path: string;
+        prefix?: string;
+        gcDurationBuckets?: number[];
+        eventLoopMonitoringPrecision?: number;
+        labels?: Object;
+    };
     database: {
         connectionUri: string | undefined;
         maxConnections: number | undefined;
@@ -95,6 +239,7 @@ export type LightdashConfig = {
     query: {
         maxLimit: number;
         csvCellsLimit: number;
+        timezone: string | undefined;
     };
     pivotTable: {
         maxColumnLimit: number;
@@ -136,8 +281,6 @@ export type LightdashConfig = {
 };
 
 export type SlackConfig = {
-    appToken?: string;
-    port: number;
     signingSecret?: string;
     clientId?: string;
     clientSecret?: string;
@@ -160,10 +303,9 @@ export type IntercomConfig = {
     apiBase: string;
 };
 
-export type SentryConfig = {
-    dsn: string;
-    release: string;
-    environment: string;
+type PylonConfig = {
+    appId: string;
+    identityVerificationSecret?: string;
 };
 
 export type RudderConfig = {
@@ -176,13 +318,37 @@ export type PosthogConfig = {
     apiHost: string;
 };
 
+type JwtKeySetConfig = {
+    /**
+     * Path or content of the x509 pem-encoded public key certificate for use as part of
+     * private_key_jwt token auth,
+     */
+    x509PublicKeyCertPath: string | undefined;
+    x509PublicKeyCert: string | undefined;
+
+    /**
+     * Path or content of the private key file used as part of private_key_jwt. Must be a
+     * valid key for x509PublicKeyCert[Path] defined above.
+     */
+    privateKeyFilePath: string | undefined;
+    privateKeyFile: string | undefined;
+};
+
 export type AuthAzureADConfig = {
     oauth2ClientId: string | undefined;
     oauth2ClientSecret: string | undefined;
     oauth2TenantId: string | undefined;
     loginPath: string;
     callbackPath: string;
-};
+
+    /**
+     * OpenID Connect metadata endpoint, available under the Azure application's
+     * Endpoints section.
+     *
+     * Inferred from the tenantID, if not specified (and the tenantID is available)
+     */
+    openIdConnectMetadataEndpoint: string | undefined;
+} & JwtKeySetConfig;
 
 export type AuthGoogleConfig = {
     oauth2ClientId: string | undefined;
@@ -212,13 +378,27 @@ type AuthOneLoginConfig = {
     loginPath: string;
 };
 
+type AuthOidcConfig = {
+    callbackPath: string;
+    loginPath: string;
+    clientId: string | undefined;
+    clientSecret: string | undefined;
+    metadataDocumentEndpoint: string | undefined;
+    authSigningAlg: string | undefined;
+    authMethod: ClientAuthMethod | undefined;
+    scopes: string | undefined;
+} & JwtKeySetConfig;
+
 export type AuthConfig = {
     disablePasswordAuthentication: boolean;
     enableGroupSync: boolean;
+    enableOidcLinking: boolean;
     google: AuthGoogleConfig;
     okta: AuthOktaConfig;
     oneLogin: AuthOneLoginConfig;
     azuread: AuthAzureADConfig;
+    oidc: AuthOidcConfig;
+    disablePat: boolean;
 };
 
 export type SmtpConfig = {
@@ -271,6 +451,17 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
     return {
         ...config,
         mode,
+        security: {
+            contentSecurityPolicy: {
+                reportOnly: process.env.LIGHTDASH_CSP_REPORT_ONLY !== 'false', // defaults to true
+                allowedDomains: (
+                    process.env.LIGHTDASH_CSP_ALLOWED_DOMAINS || ''
+                )
+                    .split(',')
+                    .map((domain) => domain.trim()),
+                reportUri: process.env.LIGHTDASH_CSP_REPORT_URI,
+            },
+        },
         smtp: process.env.EMAIL_SMTP_HOST
             ? {
                   host: process.env.EMAIL_SMTP_HOST,
@@ -302,10 +493,31 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
                 'https://analytics.lightdash.com',
         },
         sentry: {
-            dsn: process.env.SENTRY_DSN || '',
+            backend: {
+                dsn: process.env.SENTRY_BE_DSN || process.env.SENTRY_DSN || '',
+                securityReportUri:
+                    process.env.SENTRY_BE_SECURITY_REPORT_URI || '',
+            },
+            frontend: {
+                dsn: process.env.SENTRY_FE_DSN || process.env.SENTRY_DSN || '',
+            },
             release: VERSION,
             environment:
                 process.env.NODE_ENV === 'development' ? 'development' : mode,
+            tracesSampleRate:
+                getFloatFromEnvironmentVariable('SENTRY_TRACES_SAMPLE_RATE') ||
+                0.1,
+            profilesSampleRate:
+                getFloatFromEnvironmentVariable(
+                    'SENTRY_PROFILES_SAMPLE_RATE',
+                ) || 0.2,
+            anr: {
+                enabled: process.env.SENTRY_ANR_ENABLED === 'true',
+                captureStacktrace:
+                    process.env.SENTRY_ANR_CAPTURE_STACKTRACE === 'true',
+                timeout:
+                    getIntegerFromEnvironmentVariable('SENTRY_ANR_TIMEOUT'),
+            },
         },
         lightdashSecret,
         secureCookies: process.env.SECURE_COOKIES === 'true',
@@ -321,9 +533,11 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
                 getIntegerFromEnvironmentVariable('PGMINCONNECTIONS'),
         },
         auth: {
+            disablePat: process.env.DISABLE_PAT === 'true',
             disablePasswordAuthentication:
                 process.env.AUTH_DISABLE_PASSWORD_AUTHENTICATION === 'true',
             enableGroupSync: process.env.AUTH_ENABLE_GROUP_SYNC === 'true',
+            enableOidcLinking: process.env.AUTH_ENABLE_OIDC_LINKING === 'true',
             google: {
                 oauth2ClientId: process.env.AUTH_GOOGLE_OAUTH2_CLIENT_ID,
                 oauth2ClientSecret:
@@ -359,6 +573,41 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
                 oauth2TenantId: process.env.AUTH_AZURE_AD_OAUTH_TENANT_ID,
                 callbackPath: '/oauth/redirect/azuread',
                 loginPath: '/login/azuread',
+                x509PublicKeyCertPath: process.env.AUTH_AZURE_AD_X509_CERT_PATH,
+                x509PublicKeyCert: getPemFileContent(
+                    process.env.AUTH_AZURE_AD_X509_CERT,
+                ),
+                privateKeyFilePath: process.env.AUTH_AZURE_AD_PRIVATE_KEY_PATH,
+                privateKeyFile: getPemFileContent(
+                    process.env.AUTH_AZURE_AD_PRIVATE_KEY,
+                ),
+                openIdConnectMetadataEndpoint:
+                    process.env.AUTH_AZURE_AD_OIDC_METADATA_ENDPOINT ||
+                    process.env.AUTH_AZURE_AD_OAUTH_TENANT_ID
+                        ? `https://login.microsoftonline.com/${process.env.AUTH_AZURE_AD_OAUTH_TENANT_ID}/v2.0/.well-known/openid-configuration`
+                        : undefined,
+            },
+            oidc: {
+                callbackPath: '/oauth/redirect/oidc',
+                loginPath: '/login/oidc',
+                clientId: process.env.AUTH_OIDC_CLIENT_ID,
+                clientSecret: process.env.AUTH_OIDC_CLIENT_SECRET,
+                metadataDocumentEndpoint:
+                    process.env.AUTH_OIDC_METADATA_DOCUMENT_URL,
+                x509PublicKeyCertPath: process.env.AUTH_OIDC_X509_CERT_PATH,
+                x509PublicKeyCert: getPemFileContent(
+                    process.env.AUTH_OIDC_X509_CERT,
+                ),
+                privateKeyFilePath: process.env.AUTH_OIDC_PRIVATE_KEY_PATH,
+                privateKeyFile: getPemFileContent(
+                    process.env.AUTH_OIDC_PRIVATE_KEY,
+                ),
+                authSigningAlg:
+                    process.env.AUTH_OIDC_AUTH_SIGNING_ALG || 'RS256',
+                authMethod:
+                    (process.env.AUTH_OIDC_AUTH_METHOD as ClientAuthMethod) ||
+                    'client_secret_basic',
+                scopes: process.env.AUTH_OIDC_SCOPES,
             },
         },
         intercom: {
@@ -366,8 +615,37 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
             apiBase:
                 process.env.INTERCOM_APP_BASE || 'https://api-iam.intercom.io',
         },
+        pylon: {
+            appId: process.env.PYLON_APP_ID || '',
+            identityVerificationSecret:
+                process.env.PYLON_IDENTITY_VERIFICATION_SECRET,
+        },
         siteUrl,
         staticIp: process.env.STATIC_IP || '',
+        lightdashCloudInstance: process.env.LIGHTDASH_CLOUD_INSTANCE,
+        k8s: {
+            nodeName: process.env.K8S_NODE_NAME,
+            podName: process.env.K8S_POD_NAME,
+            podNamespace: process.env.K8S_POD_NAMESPACE,
+        },
+        prometheus: {
+            enabled: process.env.LIGHTDASH_PROMETHEUS_ENABLED === 'true',
+            port:
+                getIntegerFromEnvironmentVariable(
+                    'LIGHTDASH_PROMETHEUS_PORT',
+                ) ?? 9090,
+            path: process.env.LIGHTDASH_PROMETHEUS_PATH || '/metrics',
+            prefix: process.env.LIGHTDASH_PROMETHEUS_PREFIX,
+            gcDurationBuckets: getFloatArrayFromEnvironmentVariable(
+                'LIGHTDASH_GC_DURATION_BUCKETS',
+            ),
+            eventLoopMonitoringPrecision: getIntegerFromEnvironmentVariable(
+                'LIGHTDASH_EVENT_LOOP_MONITORING_PRECISION',
+            ),
+            labels: getObjectFromEnvironmentVariable(
+                'LIGHTDASH_PROMETHEUS_LABELS',
+            ),
+        },
         allowMultiOrgs: process.env.ALLOW_MULTIPLE_ORGS === 'true',
         maxPayloadSize: process.env.LIGHTDASH_MAX_PAYLOAD || '5mb',
         query: {
@@ -379,6 +657,7 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
                 getIntegerFromEnvironmentVariable(
                     'LIGHTDASH_CSV_CELLS_LIMIT',
                 ) || 100000,
+            timezone: process.env.LIGHTDASH_QUERY_TIMEZONE,
         },
         chart: {
             versionHistory: {
@@ -427,8 +706,6 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
             },
         },
         slack: {
-            appToken: process.env.SLACK_APP_TOKEN,
-            port: parseInt(process.env.SLACK_PORT || '4351', 10),
             signingSecret: process.env.SLACK_SIGNING_SECRET,
             clientId: process.env.SLACK_CLIENT_ID,
             clientSecret: process.env.SLACK_CLIENT_SECRET,

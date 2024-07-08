@@ -1,9 +1,9 @@
 import {
     addFilterRule,
-    Field,
-    fieldId,
-    FilterableField,
+    getItemId,
     getTotalFilterRules,
+    type Field,
+    type FilterableField,
 } from '@lightdash/common';
 import { useCallback, useMemo } from 'react';
 import {
@@ -34,7 +34,7 @@ export const useFilters = () => {
     const isFilteredField = useCallback(
         (field: Field): boolean =>
             !!allFilterRules.find(
-                (rule) => rule.target.fieldId === fieldId(field),
+                (rule) => rule.target.fieldId === getItemId(field),
             ),
         [allFilterRules],
     );

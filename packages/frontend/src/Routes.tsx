@@ -1,5 +1,5 @@
 import { Stack } from '@mantine/core';
-import { FC } from 'react';
+import { type FC } from 'react';
 import { Redirect, Route, Switch } from 'react-router-dom';
 
 import { TrackPage } from './providers/TrackingProvider';
@@ -13,6 +13,7 @@ import PrivateRoute from './components/PrivateRoute';
 import ProjectRoute from './components/ProjectRoute';
 import UserCompletionModal from './components/UserCompletionModal';
 
+import Catalog from './pages/Catalog';
 import ChartHistory from './pages/ChartHistory';
 import CreateProject from './pages/CreateProject';
 import CreateProjectSettings from './pages/CreateProjectSettings';
@@ -37,6 +38,7 @@ import ShareRedirect from './pages/ShareRedirect';
 import Space from './pages/Space';
 import Spaces from './pages/Spaces';
 import SqlRunner from './pages/SqlRunner';
+import SqlRunnerNew from './pages/SqlRunnerNew';
 import UserActivity from './pages/UserActivity';
 import VerifyEmailPage from './pages/VerifyEmail';
 
@@ -171,6 +173,25 @@ const Routes: FC = () => {
                                     </Route>
 
                                     <Route
+                                        path="/projects/:projectUuid/dashboards/:dashboardUuid/:mode?/tabs/:tabUuid?"
+                                        render={(props) => (
+                                            <>
+                                                <NavBar />
+                                                <TrackPage
+                                                    name={PageName.DASHBOARD}
+                                                >
+                                                    <Dashboard
+                                                        key={
+                                                            props.match.params
+                                                                .tabUuid
+                                                        }
+                                                    />
+                                                </TrackPage>
+                                            </>
+                                        )}
+                                    />
+
+                                    <Route
                                         path="/projects/:projectUuid/dashboards/:dashboardUuid/:mode?"
                                         render={(props) => (
                                             <>
@@ -203,6 +224,12 @@ const Routes: FC = () => {
                                         <TrackPage name={PageName.SQL_RUNNER}>
                                             <SqlRunner />
                                         </TrackPage>
+                                    </Route>
+
+                                    <Route path="/projects/:projectUuid/sql-runner-new">
+                                        <NavBar />
+
+                                        <SqlRunnerNew />
                                     </Route>
 
                                     <Route path="/projects/:projectUuid/dbtsemanticlayer">
@@ -261,6 +288,16 @@ const Routes: FC = () => {
                                             name={PageName.USER_ACTIVITY}
                                         >
                                             <UserActivity />
+                                        </TrackPage>
+                                    </Route>
+
+                                    <Route
+                                        path="/projects/:projectUuid/catalog"
+                                        exact
+                                    >
+                                        <NavBar />
+                                        <TrackPage name={PageName.CATALOG}>
+                                            <Catalog />
                                         </TrackPage>
                                     </Route>
 

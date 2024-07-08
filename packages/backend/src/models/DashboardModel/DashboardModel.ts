@@ -2,23 +2,33 @@ import {
     assertUnreachable,
     Comment,
     CreateDashboard,
-    Dashboard,
+    CreateDashboardChartTile,
+    CreateDashboardLoomTile,
+    CreateDashboardMarkdownTile,
     DashboardBasicDetails,
     DashboardChartTile,
+    DashboardDAO,
     DashboardLoomTile,
     DashboardMarkdownTile,
+    DashboardTab,
     DashboardTileTypes,
     DashboardUnversionedFields,
     DashboardVersionedFields,
+    HTML_SANITIZE_MARKDOWN_TILE_RULES,
+    isDashboardChartTileType,
+    isDashboardLoomTileType,
+    isDashboardMarkdownTileType,
     LightdashUser,
     NotFoundError,
+    sanitizeHtml,
     SavedChart,
     SessionUser,
     UnexpectedServerError,
     UpdateMultipleDashboards,
+    type DashboardFilters,
 } from '@lightdash/common';
 import { Knex } from 'knex';
-import { AnalyticsDashboardViewsTableName } from '../../database/entities/analytics';
+import { v4 as uuidv4 } from 'uuid';
 import {
     DashboardTileCommentsTableName,
     DbDashboardTileComments,
@@ -26,6 +36,7 @@ import {
 import {
     DashboardsTableName,
     DashboardTable,
+    DashboardTabsTableName,
     DashboardTileChartTable,
     DashboardTileChartTableName,
     DashboardTileLoomsTableName,
@@ -54,41 +65,42 @@ import {
     SavedChartTable,
 } from '../../database/entities/savedCharts';
 import { SpaceTableName } from '../../database/entities/spaces';
-import {
-    DbUser,
-    UserTable,
-    UserTableName,
-} from '../../database/entities/users';
+import { UserTable, UserTableName } from '../../database/entities/users';
 import { DbValidationTable } from '../../database/entities/validation';
 import { SpaceModel } from '../SpaceModel';
 import Transaction = Knex.Transaction;
 
 export type GetDashboardQuery = Pick<
     DashboardTable['base'],
-    'dashboard_id' | 'dashboard_uuid' | 'name' | 'description'
+    | 'dashboard_id'
+    | 'dashboard_uuid'
+    | 'name'
+    | 'description'
+    | 'slug'
+    | 'views_count'
+    | 'first_viewed_at'
 > &
     Pick<DashboardVersionTable['base'], 'dashboard_version_id' | 'created_at'> &
     Pick<ProjectTable['base'], 'project_uuid'> &
     Pick<UserTable['base'], 'user_uuid' | 'first_name' | 'last_name'> &
     Pick<OrganizationTable['base'], 'organization_uuid'> &
     Pick<PinnedListTable['base'], 'pinned_list_uuid'> &
-    Pick<PinnedDashboardTable['base'], 'order'> & {
-        views: string;
-        first_viewed_at: Date | null;
-    };
+    Pick<PinnedDashboardTable['base'], 'order'>;
 
 export type GetDashboardDetailsQuery = Pick<
     DashboardTable['base'],
-    'dashboard_uuid' | 'name' | 'description'
+    | 'dashboard_uuid'
+    | 'name'
+    | 'description'
+    | 'views_count'
+    | 'first_viewed_at'
 > &
     Pick<DashboardVersionTable['base'], 'created_at'> &
     Pick<ProjectTable['base'], 'project_uuid'> &
     Pick<UserTable['base'], 'user_uuid' | 'first_name' | 'last_name'> &
     Pick<OrganizationTable['base'], 'organization_uuid'> &
     Pick<PinnedListTable['base'], 'pinned_list_uuid'> &
-    Pick<PinnedDashboardTable['base'], 'order'> & {
-        views: string;
-    };
+    Pick<PinnedDashboardTable['base'], 'order'>;
 
 export type GetChartTileQuery = Pick<
     DashboardTileChartTable['base'],
@@ -130,74 +142,109 @@ export class DashboardModel {
             },
         });
 
-        const tilePromises = version.tiles.map(async (tile) => {
-            const { uuid: dashboardTileId, type, w, h, x, y } = tile;
-
-            const [insertedTile] = await trx(DashboardTilesTableName)
-                .insert({
+        if (version.tabs.length > 0) {
+            await trx(DashboardTabsTableName).insert(
+                version.tabs.map((tab) => ({
                     dashboard_version_id: versionId.dashboard_version_id,
-                    dashboard_tile_uuid: dashboardTileId,
+                    name: tab.name,
+                    uuid: tab.uuid,
+                    dashboard_id: dashboardId,
+                    order: tab.order,
+                })),
+            );
+        }
+
+        const tilesWithUuids: Array<
+            | (CreateDashboardChartTile & { uuid: string })
+            | (CreateDashboardMarkdownTile & { uuid: string })
+            | (CreateDashboardLoomTile & { uuid: string })
+        > = version.tiles.map((tile) => ({
+            ...tile,
+            uuid: tile.uuid || uuidv4(),
+        }));
+
+        if (tilesWithUuids.length > 0) {
+            await trx(DashboardTilesTableName).insert(
+                tilesWithUuids.map(({ uuid, type, w, h, x, y, tabUuid }) => ({
+                    dashboard_version_id: versionId.dashboard_version_id,
+                    dashboard_tile_uuid: uuid,
                     type,
                     height: h,
                     width: w,
                     x_offset: x,
                     y_offset: y,
-                })
-                .returning('*');
+                    tab_uuid: tabUuid,
+                })),
+            );
+        }
 
-            switch (tile.type) {
-                case DashboardTileTypes.SAVED_CHART: {
-                    const chartUuid = tile.properties.savedChartUuid;
-                    if (chartUuid) {
-                        const [savedChart] = await trx(SavedChartsTableName)
-                            .select(['saved_query_id'])
-                            .where('saved_query_uuid', chartUuid)
-                            .limit(1);
-                        if (!savedChart) {
-                            throw new NotFoundError('Saved chart not found');
-                        }
-                        await trx(DashboardTileChartTableName).insert({
-                            dashboard_version_id:
-                                versionId.dashboard_version_id,
-                            dashboard_tile_uuid:
-                                insertedTile.dashboard_tile_uuid,
-                            saved_chart_id: savedChart.saved_query_id,
-                            hide_title: tile.properties.hideTitle,
-                            title: tile.properties.title,
-                        });
-                    }
-                    break;
+        const chartTiles = tilesWithUuids.filter(isDashboardChartTileType);
+        if (chartTiles.length > 0) {
+            const chartIds = await trx(SavedChartsTableName)
+                .select(['saved_query_id', 'saved_query_uuid'])
+                .whereIn(
+                    'saved_query_uuid',
+                    chartTiles.map(
+                        ({ properties }) => properties.savedChartUuid,
+                    ),
+                );
+
+            const getChartId = (savedChartUuid: string): number => {
+                const matchingChartId = chartIds.find(
+                    (chart) => chart.saved_query_uuid === savedChartUuid,
+                )?.saved_query_id;
+                if (matchingChartId === undefined) {
+                    throw new NotFoundError('Saved chart not found');
                 }
-                case DashboardTileTypes.MARKDOWN:
-                    await trx(DashboardTileMarkdownsTableName).insert({
-                        dashboard_version_id: versionId.dashboard_version_id,
-                        dashboard_tile_uuid: insertedTile.dashboard_tile_uuid,
-                        title: tile.properties.title,
-                        content: tile.properties.content,
-                    });
-                    break;
-                case DashboardTileTypes.LOOM:
-                    await trx(DashboardTileLoomsTableName).insert({
-                        dashboard_version_id: versionId.dashboard_version_id,
-                        dashboard_tile_uuid: insertedTile.dashboard_tile_uuid,
-                        title: tile.properties.title,
-                        url: tile.properties.url,
-                        hide_title: tile.properties.hideTitle,
-                    });
-                    break;
-                default: {
-                    const never: never = tile;
-                    throw new UnexpectedServerError(
-                        `Dashboard tile type "${type}" not recognised`,
-                    );
-                }
-            }
+                return matchingChartId;
+            };
 
-            return insertedTile;
-        });
+            await trx(DashboardTileChartTableName).insert(
+                tilesWithUuids
+                    .filter(isDashboardChartTileType)
+                    .map(({ uuid, properties }) => ({
+                        dashboard_version_id: versionId.dashboard_version_id,
+                        dashboard_tile_uuid: uuid,
+                        saved_chart_id: properties.savedChartUuid
+                            ? getChartId(properties.savedChartUuid)
+                            : null,
+                        hide_title: properties.hideTitle,
+                        title: properties.title,
+                    })),
+            );
+        }
 
-        const tiles = await Promise.all(tilePromises);
-        const tileUuids = tiles.map((tile) => tile.dashboard_tile_uuid);
+        const loomTiles = tilesWithUuids.filter(isDashboardLoomTileType);
+        if (loomTiles.length > 0) {
+            await trx(DashboardTileLoomsTableName).insert(
+                loomTiles.map(({ uuid, properties }) => ({
+                    dashboard_version_id: versionId.dashboard_version_id,
+                    dashboard_tile_uuid: uuid,
+                    title: properties.title,
+                    url: properties.url,
+                    hide_title: properties.hideTitle,
+                })),
+            );
+        }
+
+        const markdownTiles = tilesWithUuids.filter(
+            isDashboardMarkdownTileType,
+        );
+        if (markdownTiles.length > 0) {
+            await trx(DashboardTileMarkdownsTableName).insert(
+                markdownTiles.map(({ uuid, properties }) => ({
+                    dashboard_version_id: versionId.dashboard_version_id,
+                    dashboard_tile_uuid: uuid,
+                    title: properties.title,
+                    content: sanitizeHtml(
+                        properties.content,
+                        HTML_SANITIZE_MARKDOWN_TILE_RULES,
+                    ),
+                })),
+            );
+        }
+
+        const tileUuids = tilesWithUuids.map((tile) => tile.uuid);
 
         // TODO: remove after resolving a problem with importing lodash-es in the backend
         const pick = <T>(object: Record<string, T>, keys: string[]) =>
@@ -244,7 +291,7 @@ export class DashboardModel {
         const cteTableName = 'cte';
         const dashboardsQuery = this.database
             .with(cteTableName, (queryBuilder) => {
-                queryBuilder
+                void queryBuilder
                     .table(DashboardsTableName)
                     .leftJoin(
                         DashboardVersionsTableName,
@@ -295,17 +342,13 @@ export class DashboardModel {
                         `${SpaceTableName}.space_uuid`,
                         `${PinnedListTableName}.pinned_list_uuid`,
                         `${PinnedDashboardTableName}.order`,
-                        this.database.raw(
-                            `(SELECT COUNT('${AnalyticsDashboardViewsTableName}.dashboard_uuid') FROM ${AnalyticsDashboardViewsTableName} where ${AnalyticsDashboardViewsTableName}.dashboard_uuid = ${DashboardsTableName}.dashboard_uuid) as views`,
-                        ),
-                        this.database.raw(
-                            `(SELECT ${AnalyticsDashboardViewsTableName}.timestamp FROM ${AnalyticsDashboardViewsTableName} where ${AnalyticsDashboardViewsTableName}.dashboard_uuid = ${DashboardsTableName}.dashboard_uuid ORDER BY ${AnalyticsDashboardViewsTableName}.timestamp ASC LIMIT 1) as first_viewed_at`,
-                        ),
+                        `${DashboardsTableName}.views_count`,
+                        `${DashboardsTableName}.first_viewed_at`,
                         this.database.raw(`
                             COALESCE(
                                 (
-                                    SELECT json_agg(validations.*) 
-                                    FROM validations 
+                                    SELECT json_agg(validations.*)
+                                    FROM validations
                                     WHERE validations.dashboard_uuid = ${DashboardsTableName}.dashboard_uuid
                                 ), '[]'
                             ) as validation_errors
@@ -326,7 +369,7 @@ export class DashboardModel {
             .select(`${cteTableName}.*`);
 
         if (chartUuid) {
-            dashboardsQuery
+            void dashboardsQuery
                 .leftJoin(
                     DashboardTilesTableName,
                     `${DashboardTilesTableName}.dashboard_version_id`,
@@ -334,8 +377,18 @@ export class DashboardModel {
                 )
                 .leftJoin(
                     DashboardTileChartTableName,
-                    `${DashboardTileChartTableName}.dashboard_tile_uuid`,
-                    `${DashboardTilesTableName}.dashboard_tile_uuid`,
+                    function joinDashboardTileChartTableName() {
+                        this.on(
+                            `${DashboardTileChartTableName}.dashboard_version_id`,
+                            '=',
+                            `${DashboardTilesTableName}.dashboard_version_id`,
+                        );
+                        this.andOn(
+                            `${DashboardTileChartTableName}.dashboard_tile_uuid`,
+                            '=',
+                            `${DashboardTilesTableName}.dashboard_tile_uuid`,
+                        );
+                    },
                 )
                 .leftJoin(
                     SavedChartsTableName,
@@ -364,7 +417,7 @@ export class DashboardModel {
                 space_uuid,
                 pinned_list_uuid,
                 order,
-                views,
+                views_count,
                 first_viewed_at,
                 validation_errors,
             }) => ({
@@ -382,7 +435,7 @@ export class DashboardModel {
                 spaceUuid: space_uuid,
                 pinnedListUuid: pinned_list_uuid,
                 pinnedListOrder: order,
-                views: parseInt(views, 10) || 0,
+                views: views_count,
                 firstViewedAt: first_viewed_at,
                 validationErrors: validation_errors?.map(
                     (error: DbValidationTable) => ({
@@ -395,7 +448,127 @@ export class DashboardModel {
         );
     }
 
-    async getById(dashboardUuid: string): Promise<Dashboard> {
+    async findDashboardsForValidation(projectUuid: string): Promise<
+        Array<{
+            dashboardUuid: string;
+            name: string;
+            filters: DashboardFilters;
+            chartUuids: string[];
+        }>
+    > {
+        const cteName = 'dashboard_last_version_cte';
+        return (
+            this.database
+                // cte to get the last version of each dashboard in the project
+                .with(cteName, (qb) => {
+                    void qb
+                        .select({
+                            dashboard_uuid: 'dashboards.dashboard_uuid',
+                            name: 'dashboards.name',
+                            dashboard_version_id: this.database.raw(
+                                'MAX(dashboard_versions.dashboard_version_id)',
+                            ),
+                        })
+                        .from(DashboardsTableName)
+                        .leftJoin(
+                            SpaceTableName,
+                            'dashboards.space_id',
+                            'spaces.space_id',
+                        )
+                        .leftJoin(
+                            ProjectTableName,
+                            'spaces.project_id',
+                            'projects.project_id',
+                        )
+                        .leftJoin(
+                            DashboardVersionsTableName,
+                            `${DashboardsTableName}.dashboard_id`,
+                            `${DashboardVersionsTableName}.dashboard_id`,
+                        )
+                        .where('projects.project_uuid', projectUuid)
+                        .groupBy(
+                            'dashboards.dashboard_uuid',
+                            'dashboards.name',
+                        );
+                })
+                .select({
+                    dashboardUuid: `${cteName}.dashboard_uuid`,
+                    name: `${cteName}.name`,
+                    filters: `${DashboardViewsTableName}.filters`,
+                    chartUuids: this.database.raw(
+                        "COALESCE(ARRAY_AGG(DISTINCT saved_queries.saved_query_uuid) FILTER (WHERE saved_queries.saved_query_uuid IS NOT NULL), '{}')",
+                    ),
+                })
+                .from(cteName)
+                .leftJoin(
+                    DashboardViewsTableName,
+                    `${cteName}.dashboard_version_id`,
+                    `${DashboardViewsTableName}.dashboard_version_id`,
+                )
+                .leftJoin(
+                    DashboardTileChartTableName,
+                    `${cteName}.dashboard_version_id`,
+                    `${DashboardTileChartTableName}.dashboard_version_id`,
+                )
+                .leftJoin(
+                    SavedChartsTableName,
+                    `${DashboardTileChartTableName}.saved_chart_id`,
+                    `${SavedChartsTableName}.saved_query_id`,
+                )
+                .groupBy(1, 2, 3)
+        );
+    }
+
+    async find({
+        slug,
+        projectUuid,
+    }: {
+        projectUuid?: string;
+        slug?: string;
+    }): Promise<
+        Pick<DashboardDAO, 'uuid' | 'name' | 'spaceUuid' | 'description'>[]
+    > {
+        const query = this.database(DashboardsTableName).select(
+            `${DashboardsTableName}.name`,
+            `${DashboardsTableName}.dashboard_uuid`,
+            `${SpaceTableName}.space_uuid`,
+            `${DashboardsTableName}.description`,
+        );
+
+        if (projectUuid) {
+            void query
+                .innerJoin(SpaceTableName, function spaceJoin() {
+                    this.on(
+                        `${SpaceTableName}.space_id`,
+                        '=',
+                        `${DashboardsTableName}.space_id`,
+                    );
+                })
+                .leftJoin(
+                    'projects',
+                    'spaces.project_id',
+                    'projects.project_id',
+                )
+                .where('projects.project_uuid', projectUuid);
+        }
+
+        if (slug) {
+            void query.where(`${DashboardsTableName}.slug`, slug);
+        }
+
+        const dashboards = await query;
+
+        return dashboards.map(
+            ({ name, dashboard_uuid, space_uuid, description }) => ({
+                name,
+                description,
+                uuid: dashboard_uuid,
+                spaceUuid: space_uuid,
+            }),
+        );
+    }
+
+    async getById(dashboardUuid: string): Promise<DashboardDAO> {
         const [dashboard] = await this.database(DashboardsTableName)
             .leftJoin(
                 DashboardVersionsTableName,
@@ -443,6 +616,7 @@ export class DashboardModel {
                 `${DashboardsTableName}.dashboard_uuid`,
                 `${DashboardsTableName}.name`,
                 `${DashboardsTableName}.description`,
+                `${DashboardsTableName}.slug`,
                 `${DashboardVersionsTableName}.dashboard_version_id`,
                 `${DashboardVersionsTableName}.created_at`,
                 `${UserTableName}.user_uuid`,
@@ -453,14 +627,8 @@ export class DashboardModel {
                 `${SpaceTableName}.name as space_name`,
                 `${PinnedListTableName}.pinned_list_uuid`,
                 `${PinnedDashboardTableName}.order`,
-                this.database.raw(
-                    `(SELECT COUNT('${AnalyticsDashboardViewsTableName}.dashboard_uuid') FROM ${AnalyticsDashboardViewsTableName} where ${AnalyticsDashboardViewsTableName}.dashboard_uuid = ?) as views`,
-                    dashboardUuid,
-                ),
-                this.database.raw(
-                    `(SELECT ${AnalyticsDashboardViewsTableName}.timestamp FROM ${AnalyticsDashboardViewsTableName} where ${AnalyticsDashboardViewsTableName}.dashboard_uuid = ? ORDER BY ${AnalyticsDashboardViewsTableName}.timestamp ASC LIMIT 1) as first_viewed_at`,
-                    dashboardUuid,
-                ),
+                `${DashboardsTableName}.views_count`,
+                `${DashboardsTableName}.first_viewed_at`,
             ])
             .where(`${DashboardsTableName}.dashboard_uuid`, dashboardUuid)
             .orderBy(`${DashboardVersionsTableName}.created_at`, 'desc')
@@ -489,11 +657,12 @@ export class DashboardModel {
                     content: string | null;
                     hide_title: boolean | null;
                     title: string | null;
-                    views: string;
+                    views_count: string;
                     first_viewed_at: Date | null;
                     belongs_to_dashboard: boolean;
                     name: string | null;
                     last_version_chart_kind: string | null;
+                    tab_uuid: string;
                 }[]
             >(
                 `${DashboardTilesTableName}.x_offset`,
@@ -502,6 +671,7 @@ export class DashboardModel {
                 `${DashboardTilesTableName}.width`,
                 `${DashboardTilesTableName}.height`,
                 `${DashboardTilesTableName}.dashboard_tile_uuid`,
+                `${DashboardTilesTableName}.tab_uuid`,
                 `${SavedChartsTableName}.saved_query_uuid`,
                 `${SavedChartsTableName}.name`,
                 `${SavedChartsTableName}.last_version_chart_kind`,
@@ -570,12 +740,28 @@ export class DashboardModel {
                 dashboard.dashboard_version_id,
             );
 
+        const tabs = await this.database(DashboardTabsTableName)
+            .select<DashboardTab[]>(
+                `${DashboardTabsTableName}.name`,
+                `${DashboardTabsTableName}.uuid`,
+                `${DashboardTabsTableName}.order`,
+            )
+            .where(
+                `${DashboardTabsTableName}.dashboard_version_id`,
+                dashboard.dashboard_version_id,
+            )
+            .andWhere(
+                `${DashboardTabsTableName}.dashboard_id`,
+                dashboard.dashboard_id,
+            );
+
         const tableCalculationFilters = view?.filters?.tableCalculations;
         view.filters.tableCalculations = tableCalculationFilters || [];
 
         return {
             organizationUuid: dashboard.organization_uuid,
             projectUuid: dashboard.project_uuid,
+            dashboardVersionId: dashboard.dashboard_version_id,
             uuid: dashboard.dashboard_uuid,
             name: dashboard.name,
             description: dashboard.description,
@@ -598,9 +784,10 @@ export class DashboardModel {
                     belongs_to_dashboard,
                     name,
                     last_version_chart_kind,
+                    tab_uuid,
                 }) => {
                     const base: Omit<
-                        Dashboard['tiles'][number],
+                        DashboardDAO['tiles'][number],
                         'type' | 'properties'
                     > = {
                         uuid: dashboard_tile_uuid,
@@ -608,6 +795,7 @@ export class DashboardModel {
                         y: y_offset,
                         h: height,
                         w: width,
+                        tabUuid: tab_uuid,
                     };
 
                     const commonProperties = {
@@ -658,6 +846,7 @@ export class DashboardModel {
                     }
                 },
             ),
+            tabs,
             filters: view?.filters || {
                 dimensions: [],
                 metrics: [],
@@ -665,22 +854,23 @@ export class DashboardModel {
             },
             spaceUuid: dashboard.space_uuid,
             spaceName: dashboard.space_name,
-            views: parseInt(dashboard.views, 10) || 0,
+            views: dashboard.views_count,
             firstViewedAt: dashboard.first_viewed_at,
             updatedByUser: {
                 userUuid: dashboard.user_uuid,
                 firstName: dashboard.first_name,
                 lastName: dashboard.last_name,
             },
+            slug: dashboard.slug,
         };
     }
 
     async create(
         spaceUuid: string,
-        dashboard: CreateDashboard,
+        dashboard: CreateDashboard & { slug: string },
         user: Pick<SessionUser, 'userUuid'>,
         projectUuid: string,
-    ): Promise<Dashboard> {
+    ): Promise<DashboardDAO> {
         const dashboardId = await this.database.transaction(async (trx) => {
             const [space] = await trx(SpaceTableName)
                 .where('space_uuid', spaceUuid)
@@ -689,16 +879,19 @@ export class DashboardModel {
             if (!space) {
                 throw new NotFoundError('Space not found');
             }
+
             const [newDashboard] = await trx(DashboardsTableName)
                 .insert({
                     name: dashboard.name,
                     description: dashboard.description,
                     space_id: space.space_id,
+                    slug: dashboard.slug,
                 })
                 .returning(['dashboard_id', 'dashboard_uuid']);
 
             await DashboardModel.createVersion(trx, newDashboard.dashboard_id, {
                 ...dashboard,
+                tabs: dashboard.tabs || [],
                 updatedByUser: user,
             });
 
@@ -710,13 +903,15 @@ export class DashboardModel {
     async update(
         dashboardUuid: string,
         dashboard: DashboardUnversionedFields,
-    ): Promise<Dashboard> {
+    ): Promise<DashboardDAO> {
         const withSpaceId = dashboard.spaceUuid
             ? {
-                  space_id: await SpaceModel.getSpaceId(
-                      this.database,
-                      dashboard.spaceUuid,
-                  ),
+                  space_id: (
+                      await SpaceModel.getSpaceIdAndName(
+                          this.database,
+                          dashboard.spaceUuid,
+                      )
+                  )?.spaceId,
               }
             : {};
         await this.database(DashboardsTableName)
@@ -732,16 +927,18 @@ export class DashboardModel {
     async updateMultiple(
         projectUuid: string,
         dashboards: UpdateMultipleDashboards[],
-    ): Promise<Dashboard[]> {
+    ): Promise<DashboardDAO[]> {
         await this.database.transaction(async (trx) => {
             await Promise.all(
                 dashboards.map(async (dashboard) => {
                     const withSpaceId = dashboard.spaceUuid
                         ? {
-                              space_id: await SpaceModel.getSpaceId(
-                                  this.database,
-                                  dashboard.spaceUuid,
-                              ),
+                              space_id: (
+                                  await SpaceModel.getSpaceIdAndName(
+                                      this.database,
+                                      dashboard.spaceUuid,
+                                  )
+                              )?.spaceId,
                           }
                         : {};
                     await trx(DashboardsTableName)
@@ -760,7 +957,7 @@ export class DashboardModel {
         );
     }
 
-    async delete(dashboardUuid: string): Promise<Dashboard> {
+    async delete(dashboardUuid: string): Promise<DashboardDAO> {
         const dashboard = await this.getById(dashboardUuid);
         await this.database(DashboardsTableName)
             .where('dashboard_uuid', dashboardUuid)
@@ -773,7 +970,7 @@ export class DashboardModel {
         version: DashboardVersionedFields,
         user: Pick<SessionUser, 'userUuid'>,
         projectUuid: string,
-    ): Promise<Dashboard> {
+    ): Promise<DashboardDAO> {
         const [dashboard] = await this.database(DashboardsTableName)
             .select(['dashboard_id'])
             .where('dashboard_uuid', dashboardUuid)
@@ -784,6 +981,7 @@ export class DashboardModel {
         await this.database.transaction(async (trx) => {
             await DashboardModel.createVersion(trx, dashboard.dashboard_id, {
                 ...version,
+                tabs: version.tabs || [],
                 updatedByUser: user,
             });
         });
@@ -822,7 +1020,7 @@ export class DashboardModel {
 
     async findInfoForDbtExposures(projectUuid: string): Promise<
         Array<
-            Pick<Dashboard, 'uuid' | 'name' | 'description'> &
+            Pick<DashboardDAO, 'uuid' | 'name' | 'description'> &
                 Pick<LightdashUser, 'firstName' | 'lastName'> & {
                     chartUuids: string[] | null;
                 }

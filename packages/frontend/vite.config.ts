@@ -46,8 +46,6 @@ export default defineConfig({
                     vega: ['vega', 'vega-lite'],
                     ace: ['ace-builds', 'react-ace/lib'],
                     modules: [
-                        'moment/moment.js',
-                        'moment/dist/moment.js',
                         'pegjs',
                         'jspdf',
                         'ajv',
@@ -59,12 +57,10 @@ export default defineConfig({
                     ],
                     thirdparty: [
                         '@sentry/react',
-                        '@sentry/tracing',
                         'rudder-sdk-js',
                         'posthog-js',
                     ],
                     uiw: [
-                        '@uiw/copy-to-clipboard',
                         '@uiw/react-markdown-preview',
                         '@uiw/react-md-editor',
                     ],
@@ -93,6 +89,10 @@ export default defineConfig({
         },
         proxy: {
             '/api': {
+                target: 'http://localhost:8080',
+                changeOrigin: true,
+            },
+            '/slack/events': {
                 target: 'http://localhost:8080',
                 changeOrigin: true,
             },

@@ -58,7 +58,7 @@ describe('Dashboard', () => {
         );
         cy.findByRole('option', { name: 'credit_card' }).click();
         cy.findAllByRole('tab').eq(0).click();
-        cy.contains('button', 'Apply').click();
+        cy.contains('button', 'Apply').click({ force: true });
 
         cy.contains('bank_transfer').should('have.length', 0);
 
@@ -136,7 +136,7 @@ describe('Dashboard', () => {
             'credit_card',
         );
         cy.findByRole('option', { name: 'credit_card' }).click();
-        cy.contains('button', 'Apply').click();
+        cy.contains('button', 'Apply').click({ force: true });
 
         // Filter should be applied and no other payment methods should be visible in the charts
         cy.contains('bank_transfer').should('have.length', 0);
@@ -175,7 +175,7 @@ describe('Dashboard', () => {
 
         // Remove filter from first chart - saved chart
         cy.get('.mantine-Checkbox-body').eq(1).click();
-        cy.contains('button', 'Apply').click();
+        cy.contains('button', 'Apply').click({ force: true });
 
         // Saved chart should have no filter applied
         cy.get('.react-grid-item').first().should('contain', 'bank_transfer');
@@ -187,6 +187,7 @@ describe('Dashboard', () => {
         cy.findByText('You are creating this chart from within "Title"').should(
             'exist',
         );
+        cy.findByText('staging').click();
         cy.findByText('Stg payments').click();
         cy.findByText('Payment method').click();
         cy.findByText('Amount').click();
@@ -226,7 +227,7 @@ describe('Dashboard', () => {
                     'Stg payments Payment method',
                 );
             });
-        cy.contains('button', 'Apply').click();
+        cy.contains('button', 'Apply').click({ force: true });
 
         // Saved chart should have the filter applied and only see credit_card bar
         cy.get('.react-grid-item')

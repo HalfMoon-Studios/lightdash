@@ -11,12 +11,12 @@ module.exports = {
         'prettier',
         'plugin:json/recommended',
     ],
-    plugins: ['@typescript-eslint'],
     rules: {
         'max-classes-per-file': 'off',
         '@typescript-eslint/no-unused-vars': 'off',
         'no-case-declarations': 'off',
         'import/prefer-default-export': 'off',
         'class-methods-use-this': 'off',
+        'no-console': 'off',
     },
 };

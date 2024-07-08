@@ -1,12 +1,13 @@
 import * as peg from 'pegjs';
 import { v4 as uuidv4 } from 'uuid';
 import { UnexpectedServerError } from './errors';
-import { FilterOperator, MetricFilterRule } from './filter';
+import { FilterOperator, type MetricFilterRule } from './filter';
 
 export type ParsedFilter = {
     type: string;
     values: any[];
     is?: boolean;
+    date_interval?: string;
 };
 
 const filterGrammar = `ROOT
@@ -20,7 +21,7 @@ EMPTY_STRING = '' {
   }
 
 EXPRESSION
-= NUMERICAL / LIST / TERM  
+= NUMERICAL / DATE_RESTRICTION / LIST / TERM  
 
 
 NUMERICAL = SPACE_SYMBOL* operator:OPERATOR SPACE_SYMBOL* value:NUMBER {
@@ -31,6 +32,17 @@ NUMERICAL = SPACE_SYMBOL* operator:OPERATOR SPACE_SYMBOL* value:NUMBER {
    }
 
 OPERATOR = '>=' / '<=' / '>' / '<'
+   
+DATE_RESTRICTION = SPACE_SYMBOL* operator:DATE_OPERATOR SPACE_SYMBOL* value:NUMBER SPACE_SYMBOL* interval:DATE_INTERVAL {
+    return {
+        type: operator,
+        values: [value],
+        date_interval: interval
+    }
+   }
+
+DATE_OPERATOR = 'inThePast' / 'inTheNext'
+DATE_INTERVAL = 'milliseconds' / 'seconds' / 'minutes' / 'hours' / 'days' / 'weeks' / 'months' / 'years'
 
 NUMBER 
   = FLOAT ([Ee] [+-]? INTEGER)?
@@ -189,6 +201,10 @@ export const parseOperator = (
             return FilterOperator.LESS_THAN;
         case '<=':
             return FilterOperator.LESS_THAN_OR_EQUAL;
+        case FilterOperator.IN_THE_PAST:
+            return FilterOperator.IN_THE_PAST;
+        case FilterOperator.IN_THE_NEXT:
+            return FilterOperator.IN_THE_NEXT;
         case 'null':
         case 'NULL':
             return isTrue ? FilterOperator.NULL : FilterOperator.NOT_NULL;
@@ -236,6 +252,13 @@ export const parseFilters = (
                         !!parsedFilter.is,
                     ),
                     values: parsedFilter.values || [1],
+                    ...(parsedFilter.date_interval
+                        ? {
+                              settings: {
+                                  unitOfTime: parsedFilter.date_interval,
+                              },
+                          }
+                        : {}),
                 },
             ];
         }

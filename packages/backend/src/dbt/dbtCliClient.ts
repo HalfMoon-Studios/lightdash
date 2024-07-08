@@ -2,14 +2,10 @@ import {
     assertUnreachable,
     DbtError,
     DbtLog,
-    DbtManifestVersion,
     DbtPackages,
-    DbtRpcDocsGenerateResults,
     DbtRpcGetManifestResults,
-    DefaultSupportedDbtVersion,
     isDbtLog,
     isDbtPackages,
-    isDbtRpcDocsGenerateResults,
     isDbtRpcManifestResults,
     ParseError,
     SupportedDbtVersions,
@@ -77,6 +73,7 @@ enum DbtCommands {
     DBT_1_5 = 'dbt1.5',
     DBT_1_6 = 'dbt1.6',
     DBT_1_7 = 'dbt1.7',
+    DBT_1_8 = 'dbt1.8',
 }
 
 export class DbtCliClient implements DbtClient {
@@ -149,6 +146,8 @@ export class DbtCliClient implements DbtClient {
                 return DbtCommands.DBT_1_6;
             case SupportedDbtVersions.V1_7:
                 return DbtCommands.DBT_1_7;
+            case SupportedDbtVersions.V1_8:
+                return DbtCommands.DBT_1_8;
             default:
                 return assertUnreachable(
                     this.dbtVersion,
@@ -185,6 +184,8 @@ export class DbtCliClient implements DbtClient {
                 all: true,
                 stdio: ['pipe', 'pipe', process.stderr],
                 env: {
+                    DBT_PARTIAL_PARSE: 'false', // Disable dbt from storing manifest and doing partial parses. https://docs.getdbt.com/reference/parsing#partial-parsing
+                    DBT_SEND_ANONYMOUS_USAGE_STATS: 'false', // Disable sending usage stats. https://docs.getdbt.com/reference/global-configs/usage-stats
                     ...this.environment,
                 },
             });
@@ -204,41 +205,41 @@ export class DbtCliClient implements DbtClient {
     }
 
     async installDeps(): Promise<void> {
-        const transaction = Sentry.getCurrentHub()
-            ?.getScope()
-            ?.getTransaction();
-        const span = transaction?.startChild({
-            op: 'dbt',
-            description: 'installDeps',
-        });
-        await this._runDbtCommand('deps');
-        span?.finish();
+        return Sentry.startSpan(
+            {
+                op: 'dbt',
+                name: 'installDeps',
+            },
+            async () => {
+                await this._runDbtCommand('deps');
+            },
+        );
     }
 
     async getDbtManifest(): Promise<DbtRpcGetManifestResults> {
-        const transaction = Sentry.getCurrentHub()
-            ?.getScope()
-            ?.getTransaction();
-        const span = transaction?.startChild({
-            op: 'dbt',
-            description: 'getDbtManifest',
-            data: {
-                useDbtLs: this.useDbtLs,
+        return Sentry.startSpan(
+            {
+                op: 'dbt',
+                name: 'getDbtManifest',
+                attributes: {
+                    useDbtLs: this.useDbtLs,
+                },
             },
-        });
-        const logs = await this._runDbtCommand(
-            this.useDbtLs ? 'ls' : 'compile',
-        );
-        const rawManifest = {
-            manifest: await this.loadDbtTargetArtifact('manifest.json'),
-        };
-        span?.finish();
-        if (isDbtRpcManifestResults(rawManifest)) {
-            return rawManifest;
-        }
-        throw new DbtError(
-            'Cannot read response from dbt, manifest.json not valid',
-            logs,
+            async () => {
+                const logs = await this._runDbtCommand(
+                    this.useDbtLs ? 'ls' : 'compile',
+                );
+                const rawManifest = {
+                    manifest: await this.loadDbtTargetArtifact('manifest.json'),
+                };
+                if (isDbtRpcManifestResults(rawManifest)) {
+                    return rawManifest;
+                }
+                throw new DbtError(
+                    'Cannot read response from dbt, manifest.json not valid',
+                    logs,
+                );
+            },
         );
     }
 
@@ -290,15 +291,15 @@ export class DbtCliClient implements DbtClient {
     }
 
     async test(): Promise<void> {
-        const transaction = Sentry.getCurrentHub()
-            ?.getScope()
-            ?.getTransaction();
-        const span = transaction?.startChild({
-            op: 'dbt',
-            description: 'test',
-        });
-        await this.installDeps();
-        await this._runDbtCommand('parse');
-        span?.finish();
+        return Sentry.startSpan(
+            {
+                op: 'dbt',
+                name: 'test',
+            },
+            async () => {
+                await this.installDeps();
+                await this._runDbtCommand('parse');
+            },
+        );
     }
 }

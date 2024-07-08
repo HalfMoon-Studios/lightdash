@@ -2,6 +2,7 @@ import express from 'express';
 import passport from 'passport';
 import { lightdashConfig } from '../config/lightdashConfig';
 import {
+    getLoginHint,
     getSuccessURLWithReturnTo,
     initiateOktaOpenIdLogin,
     redirectOIDC,
@@ -31,7 +32,7 @@ apiV1Router.get('/livez', async (req, res, next) => {
 apiV1Router.get('/health', async (req, res, next) => {
     req.services
         .getHealthService()
-        .getHealthState(!!req.user?.userUuid)
+        .getHealthState(req.user)
         .then((state) =>
             res.json({
                 status: 'ok',
@@ -79,12 +80,33 @@ apiV1Router.get(
     lightdashConfig.auth.azuread.loginPath,
     storeOIDCRedirect,
     passport.authenticate('azuread', {
-        scope: ['openid', 'profile', 'email'],
+        scope: ['openid', 'profile', 'email'].join(' '),
     }),
 );
 
 apiV1Router.get(lightdashConfig.auth.azuread.callbackPath, (req, res, next) =>
     passport.authenticate('azuread', {
+        failureRedirect: '/api/v1/oauth/failure',
+        successRedirect: getSuccessURLWithReturnTo(req),
+        failureFlash: true,
+    })(req, res, next),
+);
+
+apiV1Router.get(
+    lightdashConfig.auth.oidc.loginPath,
+    storeOIDCRedirect,
+    passport.authenticate(
+        'oidc',
+        lightdashConfig.auth.oidc.scopes
+            ? {
+                  scope: lightdashConfig.auth.oidc.scopes,
+              }
+            : {},
+    ),
+);
+
+apiV1Router.get(lightdashConfig.auth.oidc.callbackPath, (req, res, next) =>
+    passport.authenticate('oidc', {
         failureRedirect: '/api/v1/oauth/failure',
         successRedirect: getSuccessURLWithReturnTo(req),
         failureFlash: true,
@@ -110,9 +132,12 @@ apiV1Router.get(lightdashConfig.auth.oneLogin.callbackPath, (req, res, next) =>
 apiV1Router.get(
     lightdashConfig.auth.google.loginPath,
     storeOIDCRedirect,
-    passport.authenticate('google', {
-        scope: ['profile', 'email'],
-    }),
+    (req, res, next) => {
+        passport.authenticate('google', {
+            scope: ['profile', 'email'],
+            loginHint: getLoginHint(req),
+        })(req, res, next);
+    },
 );
 apiV1Router.get(
     '/login/gdrive',

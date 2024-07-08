@@ -6,6 +6,7 @@ import {
     CreateSchedulerTarget,
     DownloadCsvPayload,
     EmailNotificationPayload,
+    FieldReferenceError,
     friendlyName,
     getCustomLabelsFromTableConfig,
     getHiddenTableFields,
@@ -25,6 +26,7 @@ import {
     isSchedulerImageOptions,
     isTableChartConfig,
     LightdashPage,
+    NotEnoughResults,
     NotificationFrequency,
     NotificationPayloadBase,
     operatorAction,
@@ -34,7 +36,10 @@ import {
     SchedulerFormat,
     SchedulerJobStatus,
     SchedulerLog,
+    SessionUser,
     SlackNotificationPayload,
+    sqlRunnerJob,
+    SqlRunnerPayload,
     ThresholdOperator,
     ThresholdOptions,
     UploadMetricGsheetPayload,
@@ -578,6 +583,7 @@ export default class SchedulerTask {
                     isThresholdAlert: scheduler.thresholds !== undefined,
                 },
             });
+
             await this.schedulerService.logSchedulerJob({
                 task: 'sendSlackNotification',
                 schedulerUuid,
@@ -589,6 +595,21 @@ export default class SchedulerTask {
                 status: SchedulerJobStatus.ERROR,
                 details: { error: e.message },
             });
+
+            if (`${e}`.includes('Could not find slack installation')) {
+                console.warn(
+                    `Disabling scheduler with non-retryable error: ${e}`,
+                );
+                const user = await this.userService.getSessionByUserUuid(
+                    scheduler.createdBy,
+                );
+                await this.schedulerService.setSchedulerEnabled(
+                    user,
+                    schedulerUuid!,
+                    false,
+                );
+                return; // Do not cascade error
+            }
 
             throw e; // Cascade error to it can be retried by graphile
         }
@@ -629,7 +650,7 @@ export default class SchedulerTask {
                 status: SchedulerJobStatus.COMPLETED,
             });
             if (process.env.IS_PULL_REQUEST !== 'true' && !payload.isPreview) {
-                this.schedulerClient.generateValidation({
+                void this.schedulerClient.generateValidation({
                     userUuid: payload.createdByUserUuid,
                     projectUuid: payload.projectUuid,
                     context: 'test_and_compile',
@@ -683,7 +704,7 @@ export default class SchedulerTask {
                 status: SchedulerJobStatus.COMPLETED,
             });
             if (process.env.IS_PULL_REQUEST !== 'true' && !payload.isPreview) {
-                this.schedulerClient.generateValidation({
+                void this.schedulerClient.generateValidation({
                     projectUuid: payload.projectUuid,
                     context: 'dbt_refresh',
                     userUuid: payload.createdByUserUuid,
@@ -725,9 +746,11 @@ export default class SchedulerTask {
             },
         });
         try {
+            const validationTargetsSet = new Set(payload.validationTargets);
             const errors = await this.validationService.generateValidation(
                 payload.projectUuid,
                 payload.explores,
+                validationTargetsSet,
             );
 
             const contentIds = errors.map((validation) => {
@@ -782,6 +805,7 @@ export default class SchedulerTask {
                 status: SchedulerJobStatus.ERROR,
                 details: { error: e.message },
             });
+            throw e;
         }
     }
 
@@ -826,6 +850,61 @@ export default class SchedulerTask {
         }
     }
 
+    private async logWrapper(
+        baseLog: Pick<
+            SchedulerLog,
+            'task' | 'jobId' | 'scheduledTime' | 'details'
+        >,
+        func: () => Promise<Record<string, string> | undefined>, // Returns extra details for the log
+    ) {
+        try {
+            await this.schedulerService.logSchedulerJob({
+                ...baseLog,
+                status: SchedulerJobStatus.STARTED,
+            });
+
+            const details = await func();
+
+            await this.schedulerService.logSchedulerJob({
+                ...baseLog,
+                details: { ...baseLog.details, ...details },
+                status: SchedulerJobStatus.COMPLETED,
+            });
+        } catch (e) {
+            await this.schedulerService.logSchedulerJob({
+                ...baseLog,
+                status: SchedulerJobStatus.ERROR,
+                details: { ...baseLog.details, error: e.message },
+            });
+            Logger.error(`Error in scheduler task: ${e}`);
+            throw e;
+        }
+    }
+
+    protected async sqlRunner(
+        jobId: string,
+        scheduledTime: Date,
+        payload: SqlRunnerPayload,
+    ) {
+        await this.logWrapper(
+            {
+                task: sqlRunnerJob,
+                jobId,
+                scheduledTime,
+                details: { createdByUserUuid: payload.userUuid },
+            },
+            async () => {
+                const fileUrl =
+                    await this.projectService.streamSqlQueryIntoFile(
+                        payload.userUuid,
+                        payload.projectUuid,
+                        payload.sql,
+                    );
+                return { fileUrl };
+            },
+        );
+    }
+
     protected async uploadGsheetFromQuery(
         jobId: string,
         scheduledTime: Date,
@@ -852,7 +931,7 @@ export default class SchedulerTask {
                     'Unable to upload Google Sheet from query, Google Drive is not enabled',
                 );
             }
-            this.schedulerService.logSchedulerJob({
+            await this.schedulerService.logSchedulerJob({
                 ...baseLog,
                 details: { createdByUserUuid: payload.userUuid },
                 status: SchedulerJobStatus.STARTED,
@@ -911,7 +990,7 @@ export default class SchedulerTask {
             );
             const truncated = this.csvService.couldBeTruncated(rows);
 
-            this.schedulerService.logSchedulerJob({
+            await this.schedulerService.logSchedulerJob({
                 ...baseLog,
                 details: {
                     fileUrl: spreadsheetUrl,
@@ -920,17 +999,19 @@ export default class SchedulerTask {
                 },
                 status: SchedulerJobStatus.COMPLETED,
             });
+
             this.analytics.track({
                 event: 'download_results.completed',
                 userId: payload.userUuid,
                 properties: analyticsProperties,
             });
         } catch (e) {
-            this.schedulerService.logSchedulerJob({
+            await this.schedulerService.logSchedulerJob({
                 ...baseLog,
                 status: SchedulerJobStatus.ERROR,
                 details: { createdByUserUuid: payload.userUuid, error: e },
             });
+
             this.analytics.track({
                 event: 'download_results.error',
                 userId: payload.userUuid,
@@ -1157,15 +1238,28 @@ export default class SchedulerTask {
         thresholds: ThresholdOptions[],
         results: Record<string, any>[],
     ): boolean {
+        if (thresholds.length < 1 || results.length < 1) {
+            return false;
+        }
         const { fieldId, operator, value: thresholdValue } = thresholds[0];
 
-        const firstResult = results[0][fieldId];
-        if (firstResult === undefined) {
-            throw new Error(
-                `Threshold alert error: Field ${fieldId} not found in results`,
-            );
-        }
-        const firstValue = parseFloat(firstResult); // This will throw an error if value is not a valid number
+        const getValue = (resultIdx: number) => {
+            if (resultIdx >= results.length) {
+                throw new NotEnoughResults(
+                    `Threshold alert error: Can't find enough results`,
+                );
+            }
+            const result = results[resultIdx];
+
+            if (!(fieldId in result)) {
+                // This error will disable the scheduler
+                throw new FieldReferenceError(
+                    `Threshold alert error: Tried to reference field with unknown id: ${fieldId}`,
+                );
+            }
+            return parseFloat(result[fieldId]);
+        };
+        const firstValue = getValue(0);
         switch (operator) {
             case ThresholdOperator.GREATER_THAN:
                 return firstValue > thresholdValue;
@@ -1173,7 +1267,7 @@ export default class SchedulerTask {
                 return firstValue < thresholdValue;
             case ThresholdOperator.INCREASED_BY:
             case ThresholdOperator.DECREASED_BY:
-                const secondValue = parseFloat(results[1][fieldId]);
+                const secondValue = getValue(1);
                 const increase = firstValue - secondValue;
                 if (operator === ThresholdOperator.INCREASED_BY) {
                     return thresholdValue < increase / (secondValue * 100);
@@ -1206,6 +1300,7 @@ export default class SchedulerTask {
                 sendNow: schedulerUuid === undefined,
             },
         });
+        let user: SessionUser;
 
         try {
             if (!this.googleDriveClient.isEnabled) {
@@ -1238,7 +1333,7 @@ export default class SchedulerTask {
                 targetType: 'gsheets',
                 status: SchedulerJobStatus.STARTED,
             });
-            const user = await this.userService.getSessionByUserUuid(
+            user = await this.userService.getSessionByUserUuid(
                 scheduler.createdBy,
             );
 
@@ -1283,10 +1378,14 @@ export default class SchedulerTask {
                 const refreshToken = await this.userService.getRefreshToken(
                     scheduler.createdBy,
                 );
+
+                const reportUrl = `${this.lightdashConfig.siteUrl}/projects/${chart.projectUuid}/saved/${chart.uuid}/view?scheduler_uuid=${schedulerUuid}&isSync=true`;
                 await this.googleDriveClient.uploadMetadata(
                     refreshToken,
                     gdriveId,
                     getHumanReadableCronExpression(scheduler.cron),
+                    undefined,
+                    reportUrl,
                 );
 
                 await this.googleDriveClient.appendToSheet(
@@ -1355,54 +1454,60 @@ export default class SchedulerTask {
                     `Uploading dashboard with ${chartUuids.length} charts to Google Sheets`,
                 );
                 // We want to process all charts in sequence, so we don't load all chart results in memory
-                chartUuids.reduce(async (promise, chartUuid) => {
-                    await promise;
-                    const chart =
-                        await this.schedulerService.savedChartModel.get(
-                            chartUuid,
-                        );
-                    const { rows } =
-                        await this.projectService.getResultsForChart(
+                chartUuids
+                    .reduce(async (promise, chartUuid) => {
+                        await promise;
+                        const chart =
+                            await this.schedulerService.savedChartModel.get(
+                                chartUuid,
+                            );
+                        const { rows } =
+                            await this.projectService.getResultsForChart(
+                                user,
+                                chartUuid,
+                            );
+                        const explore = await this.projectService.getExplore(
                             user,
-                            chartUuid,
+                            chart.projectUuid,
+                            chart.tableName,
                         );
-                    const explore = await this.projectService.getExplore(
-                        user,
-                        chart.projectUuid,
-                        chart.tableName,
-                    );
-                    const itemMap = getItemMap(
-                        explore,
-                        chart.metricQuery.additionalMetrics,
-                        chart.metricQuery.tableCalculations,
-                    );
-                    const showTableNames = isTableChartConfig(
-                        chart.chartConfig.config,
-                    )
-                        ? chart.chartConfig.config.showTableNames ?? false
-                        : true;
-                    const customLabels = getCustomLabelsFromTableConfig(
-                        chart.chartConfig.config,
-                    );
+                        const itemMap = getItemMap(
+                            explore,
+                            chart.metricQuery.additionalMetrics,
+                            chart.metricQuery.tableCalculations,
+                        );
+                        const showTableNames = isTableChartConfig(
+                            chart.chartConfig.config,
+                        )
+                            ? chart.chartConfig.config.showTableNames ?? false
+                            : true;
+                        const customLabels = getCustomLabelsFromTableConfig(
+                            chart.chartConfig.config,
+                        );
 
-                    const tabName = await this.googleDriveClient.createNewTab(
-                        refreshToken,
-                        gdriveId,
-                        chartNames[chartUuid] || chartUuid,
-                    );
+                        const tabName =
+                            await this.googleDriveClient.createNewTab(
+                                refreshToken,
+                                gdriveId,
+                                chartNames[chartUuid] || chartUuid,
+                            );
 
-                    await this.googleDriveClient.appendToSheet(
-                        refreshToken,
-                        gdriveId,
-                        rows,
-                        itemMap,
-                        showTableNames,
-                        tabName,
-                        chart.tableConfig.columnOrder,
-                        customLabels,
-                        getHiddenTableFields(chart.chartConfig),
-                    );
-                }, Promise.resolve());
+                        await this.googleDriveClient.appendToSheet(
+                            refreshToken,
+                            gdriveId,
+                            rows,
+                            itemMap,
+                            showTableNames,
+                            tabName,
+                            chart.tableConfig.columnOrder,
+                            customLabels,
+                            getHiddenTableFields(chart.chartConfig),
+                        );
+                    }, Promise.resolve())
+                    .catch((error) => {
+                        Logger.debug('Error processing charts:', error);
+                        throw error;
+                    });
             } else {
                 throw new Error('Not implemented');
             }
@@ -1454,6 +1559,20 @@ export default class SchedulerTask {
                 details: { error: e.message },
             });
 
+            if (
+                `${e}`.includes('invalid_grant') ||
+                `${e}`.includes('Requested entity was not found')
+            ) {
+                console.warn(
+                    `Disabling scheduler with non-retryable error: ${e}`,
+                );
+                await this.schedulerService.setSchedulerEnabled(
+                    user!, // This error from gdriveClient happens after user initialized
+                    schedulerUuid,
+                    false,
+                );
+                return; // Do not cascade error
+            }
             throw e; // Cascade error to it can be retried by graphile
         }
     }
@@ -1521,45 +1640,45 @@ export default class SchedulerTask {
     ) {
         const schedulerUuid = getSchedulerUuid(schedulerPayload);
 
-        try {
-            const scheduler: SchedulerAndTargets | CreateSchedulerAndTargets =
-                isCreateScheduler(schedulerPayload)
-                    ? schedulerPayload
-                    : await this.schedulerService.schedulerModel.getSchedulerAndTargets(
-                          schedulerPayload.schedulerUuid,
-                      );
+        const scheduler: SchedulerAndTargets | CreateSchedulerAndTargets =
+            isCreateScheduler(schedulerPayload)
+                ? schedulerPayload
+                : await this.schedulerService.schedulerModel.getSchedulerAndTargets(
+                      schedulerPayload.schedulerUuid,
+                  );
 
-            if (!scheduler.enabled) {
-                // This should not happen, if schedulers are not enabled, we should remove the scheduled jobs from the queue
-                throw new Error('Scheduler is disabled');
-            }
+        if (!scheduler.enabled) {
+            // This should not happen, if schedulers are not enabled, we should remove the scheduled jobs from the queue
+            throw new Error('Scheduler is disabled');
+        }
 
-            this.analytics.track({
-                event: 'scheduler_job.started',
-                anonymousId: LightdashAnalytics.anonymousId,
-                properties: {
-                    jobId,
-                    schedulerId: schedulerUuid,
-                    sendNow: schedulerUuid === undefined,
-                    isThresholdAlert: scheduler.thresholds !== undefined,
-                },
-            });
-            await this.schedulerService.logSchedulerJob({
-                task: 'handleScheduledDelivery',
-                schedulerUuid,
+        this.analytics.track({
+            event: 'scheduler_job.started',
+            anonymousId: LightdashAnalytics.anonymousId,
+            properties: {
                 jobId,
-                jobGroup: jobId,
-                scheduledTime,
-                status: SchedulerJobStatus.STARTED,
-            });
+                schedulerId: schedulerUuid,
+                sendNow: schedulerUuid === undefined,
+                isThresholdAlert: scheduler.thresholds !== undefined,
+            },
+        });
+        await this.schedulerService.logSchedulerJob({
+            task: 'handleScheduledDelivery',
+            schedulerUuid,
+            jobId,
+            jobGroup: jobId,
+            scheduledTime,
+            status: SchedulerJobStatus.STARTED,
+        });
 
-            const {
-                createdBy: userUuid,
-                savedChartUuid,
-                dashboardUuid,
-                thresholds,
-                notificationFrequency,
-            } = scheduler;
+        const {
+            createdBy: userUuid,
+            savedChartUuid,
+            dashboardUuid,
+            thresholds,
+            notificationFrequency,
+        } = scheduler;
+        try {
             if (thresholds !== undefined && thresholds.length > 0) {
                 // TODO add multiple AND conditions
                 if (savedChartUuid) {
@@ -1621,16 +1740,18 @@ export default class SchedulerTask {
                 );
 
             // Create scheduled jobs for targets
-            scheduledJobs.map(async ({ target, jobId: targetJobId }) => {
-                this.logScheduledTarget(
-                    scheduler.format,
-                    target,
-                    targetJobId,
-                    schedulerUuid,
-                    jobId,
-                    scheduledTime,
-                );
-            });
+            await Promise.all(
+                scheduledJobs.map(({ target, jobId: targetJobId }) =>
+                    this.logScheduledTarget(
+                        scheduler.format,
+                        target,
+                        targetJobId,
+                        schedulerUuid,
+                        jobId,
+                        scheduledTime,
+                    ),
+                ),
+            );
 
             await this.schedulerService.logSchedulerJob({
                 task: 'handleScheduledDelivery',
@@ -1669,6 +1790,29 @@ export default class SchedulerTask {
                 details: { error: e.message },
             });
 
+            if (e instanceof NotEnoughResults) {
+                Logger.warn(
+                    `Scheduler ${schedulerUuid} did not return enough results for threshold alert`,
+                );
+                // We don't want to retry the error now, but we are not going to disable the scheduler.
+                return; // Do not cascade error
+            }
+
+            if (e instanceof FieldReferenceError) {
+                // This captures both the error from thresholdAlert and metricQuery
+                Logger.warn(
+                    `Disabling scheduler with non-retryable error: ${e}`,
+                );
+                const user = await this.userService.getSessionByUserUuid(
+                    scheduler.createdBy,
+                );
+                await this.schedulerService.setSchedulerEnabled(
+                    user,
+                    schedulerUuid!,
+                    false,
+                );
+                return; // Do not cascade error
+            }
             throw e; // Cascade error to it can be retried by graphile
         }
     }

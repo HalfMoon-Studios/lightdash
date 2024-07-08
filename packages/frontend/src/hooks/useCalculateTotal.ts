@@ -1,14 +1,14 @@
 import {
-    ApiCalculateTotalResponse,
-    ApiError,
-    CalculateTotalFromQuery,
-    DashboardFilters,
-    fieldId as getFieldId,
+    getItemId,
     isField,
     isMetric,
-    ItemsMap,
-    MetricQuery,
-    MetricQueryRequest,
+    type ApiCalculateTotalResponse,
+    type ApiError,
+    type CalculateTotalFromQuery,
+    type DashboardFilters,
+    type ItemsMap,
+    type MetricQuery,
+    type MetricQueryRequest,
 } from '@lightdash/common';
 import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
@@ -75,7 +75,7 @@ const getCalculationColumnFields = (
         .filter((item) => isField(item) && isMetric(item));
 
     return items?.reduce<string[]>((acc, item) => {
-        if (isField(item)) return [...acc, getFieldId(item)];
+        if (isField(item)) return [...acc, getItemId(item)];
         return acc;
     }, []);
 };

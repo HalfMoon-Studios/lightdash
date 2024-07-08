@@ -1,44 +1,62 @@
 import * as fs from 'fs/promises';
 import moment from 'moment';
 import { analyticsMock } from '../../analytics/LightdashAnalytics.mock';
-import { s3Client } from '../../clients/clients';
+import { S3Client } from '../../clients/Aws/s3';
+import { S3CacheClient } from '../../clients/Aws/S3CacheClient';
+import EmailClient from '../../clients/EmailClient/EmailClient';
 import { lightdashConfig } from '../../config/lightdashConfig';
-import {
-    dashboardModel,
-    downloadFileModel,
-    savedChartModel,
-    userModel,
-} from '../../models/models';
-import { projectService } from '../services';
+import { AnalyticsModel } from '../../models/AnalyticsModel';
+import { DashboardModel } from '../../models/DashboardModel/DashboardModel';
+import { DownloadFileModel } from '../../models/DownloadFileModel';
+import { EmailModel } from '../../models/EmailModel';
+import { JobModel } from '../../models/JobModel/JobModel';
+import { OnboardingModel } from '../../models/OnboardingModel/OnboardingModel';
+import { ProjectModel } from '../../models/ProjectModel/ProjectModel';
+import { SavedChartModel } from '../../models/SavedChartModel';
+import { SpaceModel } from '../../models/SpaceModel';
+import { SshKeyPairModel } from '../../models/SshKeyPairModel';
+import { UserAttributesModel } from '../../models/UserAttributesModel';
+import { UserModel } from '../../models/UserModel';
+import { UserWarehouseCredentialsModel } from '../../models/UserWarehouseCredentials/UserWarehouseCredentialsModel';
+import { SchedulerClient } from '../../scheduler/SchedulerClient';
+import { ProjectService } from '../ProjectService/ProjectService';
 import { CsvService } from './CsvService';
 import { itemMap, metricQuery } from './CsvService.mock';
-
-jest.mock('../../clients/clients', () => ({
-    schedulerClient: {},
-    s3Client: {},
-}));
-
-jest.mock('../../models/models', () => ({
-    savedChartModel: {},
-    dashboardModel: {},
-    userModel: {},
-    downloadFileModel: {},
-}));
-
-jest.mock('../services', () => ({
-    projectService: {},
-}));
 
 describe('Csv service', () => {
     const csvService = new CsvService({
         lightdashConfig,
         analytics: analyticsMock,
-        userModel,
-        projectService,
-        s3Client,
-        savedChartModel,
-        dashboardModel,
-        downloadFileModel,
+        userModel: {} as UserModel,
+        projectService: new ProjectService({
+            lightdashConfig,
+            analytics: analyticsMock,
+            analyticsModel: {} as AnalyticsModel,
+            dashboardModel: {} as DashboardModel,
+            emailClient: {} as EmailClient,
+            jobModel: {} as JobModel,
+            onboardingModel: {} as OnboardingModel,
+            projectModel: {} as ProjectModel,
+            s3CacheClient: {} as S3CacheClient,
+            savedChartModel: {} as SavedChartModel,
+            spaceModel: {} as SpaceModel,
+            sshKeyPairModel: {} as SshKeyPairModel,
+            userAttributesModel: {} as UserAttributesModel,
+            userWarehouseCredentialsModel: {} as UserWarehouseCredentialsModel,
+            emailModel: {
+                getPrimaryEmailStatus: (userUuid: string) => ({
+                    isVerified: true,
+                }),
+            } as unknown as EmailModel,
+            schedulerClient: {} as SchedulerClient,
+            downloadFileModel: {} as DownloadFileModel,
+            s3Client: {} as S3Client,
+        }),
+        s3Client: {} as S3Client,
+        savedChartModel: {} as SavedChartModel,
+        dashboardModel: {} as DashboardModel,
+        downloadFileModel: {} as DownloadFileModel,
+        schedulerClient: {} as SchedulerClient,
     });
 
     it('Should convert rows to CSV with format', async () => {

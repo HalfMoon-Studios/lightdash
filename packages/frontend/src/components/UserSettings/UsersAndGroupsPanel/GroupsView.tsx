@@ -1,17 +1,17 @@
-import { GroupWithMembers } from '@lightdash/common';
+import { type GroupWithMembers } from '@lightdash/common';
 import {
     ActionIcon,
     Badge,
     Button,
     Group,
     Modal,
-    ModalProps,
     Paper,
     Stack,
     Table,
     Text,
     TextInput,
     Title,
+    type ModalProps,
 } from '@mantine/core';
 import {
     IconAlertCircle,
@@ -20,7 +20,7 @@ import {
     IconTrash,
     IconX,
 } from '@tabler/icons-react';
-import { FC, useCallback, useState } from 'react';
+import { useCallback, useState, type FC } from 'react';
 import { useTableStyles } from '../../../hooks/styles/useTableStyles';
 import {
     useGroupDeleteMutation,
@@ -31,6 +31,8 @@ import LoadingState from '../../common/LoadingState';
 import MantineIcon from '../../common/MantineIcon';
 import { SettingsCard } from '../../common/Settings/SettingsCard';
 import CreateGroupModal from './CreateGroupModal';
+
+const GROUP_MEMBERS_PER_PAGE = 2000;
 
 const GroupListItem: FC<{
     disabled?: boolean;
@@ -168,7 +170,10 @@ const GroupsView: FC = () => {
     const [search, setSearch] = useState('');
 
     const { data: groups, isInitialLoading: isLoadingGroups } =
-        useOrganizationGroups({ search, includeMembers: 100 }); // TODO: pagination
+        useOrganizationGroups({
+            search,
+            includeMembers: GROUP_MEMBERS_PER_PAGE, // TODO: pagination
+        });
 
     const handleDelete = useCallback(() => {
         if (groupToDelete) {

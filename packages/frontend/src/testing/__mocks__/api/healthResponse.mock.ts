@@ -1,4 +1,4 @@
-import { HealthState, LightdashMode } from '@lightdash/common';
+import { LightdashMode, type HealthState } from '@lightdash/common';
 
 export default function mockHealthResponse(
     overrides: Partial<HealthState> = {},
@@ -18,13 +18,20 @@ export default function mockHealthResponse(
             writeKey: '',
         },
         sentry: {
-            dsn: '',
+            frontend: {
+                dsn: '',
+            },
+            tracesSampleRate: 0,
+            profilesSampleRate: 0,
             release: '',
             environment: '',
         },
         intercom: {
             appId: '',
             apiBase: '',
+        },
+        pylon: {
+            appId: '',
         },
         siteUrl: 'http://localhost:3000',
         staticIp: '',
@@ -59,6 +66,10 @@ export default function mockHealthResponse(
             },
             azuread: {
                 loginPath: '/login/azuread',
+                enabled: false,
+            },
+            oidc: {
+                loginPath: '/login/oidc',
                 enabled: false,
             },
         },

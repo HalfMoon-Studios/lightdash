@@ -1,8 +1,10 @@
 import { Box, createStyles } from '@mantine/core';
-import { FC } from 'react';
+import { type FC } from 'react';
 import { Helmet } from 'react-helmet';
 
 import { ProjectType } from '@lightdash/common';
+import { useElementSize } from '@mantine/hooks';
+import { ErrorBoundary } from '../../../features/errorBoundary';
 import { useActiveProjectUuid } from '../../../hooks/useActiveProject';
 import { useProjects } from '../../../hooks/useProjects';
 import { TrackSection } from '../../../providers/TrackingProvider';
@@ -10,11 +12,12 @@ import { SectionName } from '../../../types/Events';
 import AboutFooter, { FOOTER_HEIGHT, FOOTER_MARGIN } from '../../AboutFooter';
 import { BANNER_HEIGHT, NAVBAR_HEIGHT } from '../../NavBar';
 import { PAGE_HEADER_HEIGHT } from './PageHeader';
-import Sidebar from './Sidebar';
+import Sidebar, { SidebarPosition, type SidebarWidthProps } from './Sidebar';
 
 type StyleProps = {
     withCenteredContent?: boolean;
     withFitContent?: boolean;
+    withLargeContent?: boolean;
     withFixedContent?: boolean;
     withFooter?: boolean;
     withFullHeight?: boolean;
@@ -23,11 +26,15 @@ type StyleProps = {
     withPaddedContent?: boolean;
     withSidebar?: boolean;
     withSidebarFooter?: boolean;
+    withRightSidebar?: boolean;
+    flexContent?: boolean;
     hasBanner?: boolean;
+    noContentPadding?: boolean;
 };
 
 export const PAGE_CONTENT_WIDTH = 900;
-const PAGE_MIN_CONTENT_WIDTH = 600;
+const PAGE_CONTENT_WIDTH_LARGE = 1200;
+export const PAGE_MIN_CONTENT_WIDTH = 600;
 
 const usePageStyles = createStyles<string, StyleProps>((theme, params) => {
     let containerHeight = '100vh';
@@ -41,7 +48,6 @@ const usePageStyles = createStyles<string, StyleProps>((theme, params) => {
     if (params.hasBanner) {
         containerHeight = `calc(${containerHeight} - ${BANNER_HEIGHT}px)`;
     }
-
     return {
         root: {
             ...(params.withFullHeight
@@ -55,7 +61,7 @@ const usePageStyles = createStyles<string, StyleProps>((theme, params) => {
                       overflowY: 'auto',
                   }),
 
-            ...(params.withSidebar
+            ...(params.withSidebar || params.withRightSidebar
                 ? {
                       display: 'flex',
                       flexDirection: 'row',
@@ -64,13 +70,19 @@ const usePageStyles = createStyles<string, StyleProps>((theme, params) => {
         },
 
         content: {
-            paddingTop: theme.spacing.lg,
-            paddingBottom: theme.spacing.lg,
-
             width: '100%',
             minWidth: PAGE_CONTENT_WIDTH,
+            ...(params.flexContent ? { display: 'flex' } : {}),
+            ...(params.noContentPadding
+                ? {
+                      padding: 0,
+                  }
+                : {
+                      paddingTop: theme.spacing.lg,
+                      paddingBottom: theme.spacing.lg,
+                  }),
 
-            ...(params.withSidebar
+            ...(params.withSidebar || params.withRightSidebar
                 ? {
                       minWidth: PAGE_MIN_CONTENT_WIDTH,
                   }
@@ -112,6 +124,12 @@ const usePageStyles = createStyles<string, StyleProps>((theme, params) => {
                   }
                 : {}),
 
+            ...(params.withLargeContent
+                ? {
+                      width: PAGE_CONTENT_WIDTH_LARGE,
+                  }
+                : {}),
+
             ...(params.withPaddedContent
                 ? {
                       paddingLeft: theme.spacing.lg,
@@ -134,8 +152,10 @@ type Props = {
     title?: string;
     sidebar?: React.ReactNode;
     isSidebarOpen?: boolean;
+    rightSidebar?: React.ReactNode;
+    isRightSidebarOpen?: boolean;
+    rightSidebarWidthProps?: SidebarWidthProps;
     header?: React.ReactNode;
-    hasBanner?: boolean;
 } & Omit<StyleProps, 'withSidebar' | 'withHeader'>;
 
 const Page: FC<React.PropsWithChildren<Props>> = ({
@@ -143,19 +163,25 @@ const Page: FC<React.PropsWithChildren<Props>> = ({
     header,
     sidebar,
     isSidebarOpen = true,
+    rightSidebar,
+    isRightSidebarOpen = false,
+    rightSidebarWidthProps,
 
     withCenteredContent = false,
     withFitContent = false,
     withFixedContent = false,
+    withLargeContent = false,
     withFooter = false,
     withFullHeight = false,
     withNavbar = true,
     withPaddedContent = false,
     withSidebarFooter = false,
-    hasBanner = false,
+    noContentPadding = false,
+    flexContent = false,
 
     children,
 }) => {
+    const { ref: mainRef, width: mainWidth } = useElementSize();
     const { activeProjectUuid } = useActiveProjectUuid({
         refetchOnMount: true,
     });
@@ -166,13 +192,12 @@ const Page: FC<React.PropsWithChildren<Props>> = ({
             project.type === ProjectType.PREVIEW,
     );
 
-    hasBanner = hasBanner || isCurrentProjectPreview;
-
     const { classes } = usePageStyles(
         {
             withCenteredContent,
             withFitContent,
             withFixedContent,
+            withLargeContent,
             withFooter,
             withFullHeight,
             withHeader: !!header,
@@ -180,7 +205,10 @@ const Page: FC<React.PropsWithChildren<Props>> = ({
             withPaddedContent,
             withSidebar: !!sidebar,
             withSidebarFooter,
-            hasBanner,
+            withRightSidebar: !!rightSidebar,
+            hasBanner: isCurrentProjectPreview,
+            noContentPadding,
+            flexContent,
         },
         { name: 'Page' },
     );
@@ -198,16 +226,33 @@ const Page: FC<React.PropsWithChildren<Props>> = ({
             <Box className={classes.root}>
                 {sidebar ? (
                     <Sidebar isOpen={isSidebarOpen}>
-                        {sidebar}
+                        <ErrorBoundary wrapper={{ mt: '4xl' }}>
+                            {sidebar}
+                        </ErrorBoundary>
                         {withSidebarFooter ? <AboutFooter minimal /> : null}
                     </Sidebar>
                 ) : null}
 
-                <Box className={classes.content}>
+                <Box component="main" className={classes.content} ref={mainRef}>
                     <TrackSection name={SectionName.PAGE_CONTENT}>
-                        {children}
+                        <ErrorBoundary wrapper={{ mt: '4xl' }}>
+                            {children}
+                        </ErrorBoundary>
                     </TrackSection>
                 </Box>
+
+                {rightSidebar ? (
+                    <Sidebar
+                        isOpen={isRightSidebarOpen}
+                        position={SidebarPosition.RIGHT}
+                        widthProps={rightSidebarWidthProps}
+                        mainWidth={mainWidth}
+                    >
+                        <ErrorBoundary wrapper={{ mt: '4xl' }}>
+                            {rightSidebar}
+                        </ErrorBoundary>
+                    </Sidebar>
+                ) : null}
 
                 {withFooter && !withSidebarFooter ? <AboutFooter /> : null}
             </Box>

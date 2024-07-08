@@ -4,6 +4,7 @@ import {
     ApiSqlQueryResults,
     applyDimensionOverrides,
     DashboardFilters,
+    DateGranularity,
     DimensionType,
     DownloadCsvPayload,
     DownloadFileType,
@@ -11,25 +12,27 @@ import {
     ForbiddenError,
     formatItemValue,
     friendlyName,
-    getCustomDimensionId,
     getCustomLabelsFromTableConfig,
     getDashboardFiltersForTileAndTables,
     getHiddenTableFields,
     getItemLabel,
     getItemLabelWithoutTableName,
     getItemMap,
+    isCustomSqlDimension,
     isDashboardChartTileType,
+    isDateItem,
     isField,
     isMomentInput,
     isTableChartConfig,
     ItemsMap,
     MetricQuery,
+    MissingConfigError,
     SchedulerCsvOptions,
     SchedulerFilterRule,
     SchedulerFormat,
     SessionUser,
 } from '@lightdash/common';
-
+import archiver from 'archiver';
 import { stringify } from 'csv-stringify';
 import * as fs from 'fs';
 import * as fsPromise from 'fs/promises';
@@ -45,7 +48,6 @@ import {
     QueryExecutionContext,
 } from '../../analytics/LightdashAnalytics';
 import { S3Client } from '../../clients/Aws/s3';
-import { schedulerClient } from '../../clients/clients';
 import { AttachmentUrl } from '../../clients/EmailClient/EmailClient';
 import { LightdashConfig } from '../../config/parseConfig';
 import Logger from '../../logging/logger';
@@ -53,7 +55,9 @@ import { DashboardModel } from '../../models/DashboardModel/DashboardModel';
 import { DownloadFileModel } from '../../models/DownloadFileModel';
 import { SavedChartModel } from '../../models/SavedChartModel';
 import { UserModel } from '../../models/UserModel';
-import { runWorkerThread } from '../../utils';
+import { SchedulerClient } from '../../scheduler/SchedulerClient';
+import { runWorkerThread, sanitizeStringParam } from '../../utils';
+import { BaseService } from '../BaseService';
 import { ProjectService } from '../ProjectService/ProjectService';
 
 type CsvServiceArguments = {
@@ -65,6 +69,7 @@ type CsvServiceArguments = {
     dashboardModel: DashboardModel;
     userModel: UserModel;
     downloadFileModel: DownloadFileModel;
+    schedulerClient: SchedulerClient;
 };
 
 const isRowValueTimestamp = (
@@ -80,7 +85,7 @@ const isRowValueDate = (
     isMomentInput(value) && field.type === DimensionType.DATE;
 
 export const convertSqlToCsv = (
-    results: ApiSqlQueryResults,
+    results: Pick<ApiSqlQueryResults, 'rows' | 'fields'>,
     customLabels: Record<string, string> = {},
 ): Promise<string> => {
     const csvHeader = Object.keys(results.rows[0]).map(
@@ -131,7 +136,7 @@ const getSchedulerCsvLimit = (
     }
 };
 
-export class CsvService {
+export class CsvService extends BaseService {
     lightdashConfig: LightdashConfig;
 
     analytics: LightdashAnalytics;
@@ -148,6 +153,8 @@ export class CsvService {
 
     downloadFileModel: DownloadFileModel;
 
+    schedulerClient: SchedulerClient;
+
     constructor({
         lightdashConfig,
         analytics,
@@ -157,7 +164,9 @@ export class CsvService {
         savedChartModel,
         dashboardModel,
         downloadFileModel,
+        schedulerClient,
     }: CsvServiceArguments) {
+        super();
         this.lightdashConfig = lightdashConfig;
         this.analytics = analytics;
         this.userModel = userModel;
@@ -166,6 +175,7 @@ export class CsvService {
         this.savedChartModel = savedChartModel;
         this.dashboardModel = dashboardModel;
         this.downloadFileModel = downloadFileModel;
+        this.schedulerClient = schedulerClient;
     }
 
     static convertRowToCsv(
@@ -198,16 +208,20 @@ export class CsvService {
         });
     }
 
+    static sanitizeFileName(name: string): string {
+        return name
+            .toLowerCase()
+            .replace(/[^a-z0-9]/gi, '_') // Replace non-alphanumeric characters with underscores
+            .replace(/_{2,}/g, '_'); // Replace multiple underscores with a single one
+    }
+
     static generateFileId(
         fileName: string,
         truncated: boolean = false,
         time: moment.Moment = moment(),
     ): string {
         const timestamp = time.format('YYYY-MM-DD-HH-mm-ss-SSSS');
-        const sanitizedFileName = fileName
-            .toLowerCase()
-            .replace(/[^a-z0-9]/gi, '_') // Replace non-alphanumeric characters with underscores
-            .replace(/_{2,}/g, '_'); // Replace multiple underscores with a single one
+        const sanitizedFileName = CsvService.sanitizeFileName(fileName);
         const fileId = `csv-${
             truncated ? 'incomplete_results-' : ''
         }${sanitizedFileName}-${timestamp}.csv`;
@@ -237,7 +251,6 @@ export class CsvService {
             ...metricQuery.metrics,
             ...metricQuery.dimensions,
             ...metricQuery.tableCalculations.map((tc: any) => tc.name),
-            ...(metricQuery.customDimensions?.map(getCustomDimensionId) || []),
         ].filter((id) => !hiddenFields.includes(id));
 
         Logger.debug(
@@ -352,6 +365,7 @@ export class CsvService {
         jobId?: string,
         tileUuid?: string,
         dashboardFilters?: DashboardFilters,
+        dateZoomGranularity?: DateGranularity,
     ): Promise<AttachmentUrl> {
         const chart = await this.savedChartModel.get(chartUuid);
         const {
@@ -409,13 +423,14 @@ export class CsvService {
               )
             : metricQuery;
 
-        const { rows } = await this.projectService.runMetricQuery({
+        const { rows, fields } = await this.projectService.runMetricQuery({
             user,
             metricQuery: metricQueryWithDashboardFilters,
             projectUuid: chart.projectUuid,
             exploreName: exploreId,
             csvLimit: getSchedulerCsvLimit(options),
             context: QueryExecutionContext.CSV,
+            granularity: dateZoomGranularity,
         });
         const numberRows = rows.length;
 
@@ -424,21 +439,16 @@ export class CsvService {
                 path: '#no-results',
                 filename: `${chart.name} (empty)`,
                 localPath: '',
-                truncated: true,
+                truncated: false,
             };
 
-        const itemMap = getItemMap(
-            explore,
-            metricQueryWithDashboardFilters.additionalMetrics,
-            metricQueryWithDashboardFilters.tableCalculations,
-        );
         const truncated = this.couldBeTruncated(rows);
 
         const fileId = await CsvService.writeRowsToFile(
             rows,
             onlyRaw,
             metricQueryWithDashboardFilters,
-            itemMap,
+            fields,
             isTableChartConfig(config) ? config.showTableNames ?? false : true,
             chart.name,
             truncated,
@@ -498,12 +508,15 @@ export class CsvService {
         dashboardUuid: string,
         options: SchedulerCsvOptions | undefined,
         schedulerFilters?: SchedulerFilterRule[],
+        overrideDashboardFilters?: DashboardFilters,
+        dateZoomGranularity?: DateGranularity,
     ) {
         const dashboard = await this.dashboardModel.getById(dashboardUuid);
 
-        const dashboardFilters = dashboard.filters;
+        const dashboardFilters = overrideDashboardFilters || dashboard.filters;
 
         if (schedulerFilters) {
+            // Scheduler filters can only override existing filters from the dashboard
             dashboardFilters.dimensions = applyDimensionOverrides(
                 dashboard.filters,
                 schedulerFilters,
@@ -527,6 +540,7 @@ export class CsvService {
                     undefined,
                     tileUuid,
                     dashboardFilters,
+                    dateZoomGranularity,
                 ),
         );
 
@@ -630,7 +644,7 @@ export class CsvService {
         }
     }
 
-    static async scheduleDownloadCsv(
+    async scheduleDownloadCsv(
         user: SessionUser,
         csvOptions: DownloadMetricCsv,
     ) {
@@ -644,6 +658,23 @@ export class CsvService {
             )
         ) {
             throw new ForbiddenError();
+        }
+
+        if (
+            csvOptions.metricQuery.customDimensions?.some(
+                isCustomSqlDimension,
+            ) &&
+            user.ability.cannot(
+                'manage',
+                subject('CustomSql', {
+                    organizationUuid: user.organizationUuid,
+                    projectUuid: csvOptions.projectUuid,
+                }),
+            )
+        ) {
+            throw new ForbiddenError(
+                'User cannot run queries with custom SQL dimensions',
+            );
         }
 
         // If the user can't change the csv limit, default csvLimit to undefined
@@ -664,7 +695,7 @@ export class CsvService {
             csvLimit,
             userUuid: user.userUuid,
         };
-        const { jobId } = await schedulerClient.downloadCsvJob(payload);
+        const { jobId } = await this.schedulerClient.downloadCsvJob(payload);
 
         return { jobId };
     }
@@ -682,6 +713,7 @@ export class CsvService {
             customLabels,
             columnOrder,
             hiddenFields,
+            chartName,
         }: DownloadMetricCsv,
     ) {
         const user = await this.userModel.findSessionUserByUUID(userUuid);
@@ -696,6 +728,21 @@ export class CsvService {
             )
         ) {
             throw new ForbiddenError();
+        }
+
+        if (
+            metricQuery.customDimensions?.some(isCustomSqlDimension) &&
+            user.ability.cannot(
+                'manage',
+                subject('CustomSql', {
+                    organizationUuid: user.organizationUuid,
+                    projectUuid,
+                }),
+            )
+        ) {
+            throw new ForbiddenError(
+                'User cannot run queries with custom SQL dimensions',
+            );
         }
 
         const baseAnalyticsProperties: DownloadCsv['properties'] = {
@@ -757,7 +804,7 @@ export class CsvService {
                 metricQuery,
                 itemMap,
                 showTableNames,
-                exploreId,
+                chartName || exploreId, // fileName
                 truncated,
                 customLabels,
                 columnOrder || [],
@@ -809,5 +856,101 @@ export class CsvService {
 
             throw e;
         }
+    }
+
+    async exportCsvDashboard(
+        user: SessionUser,
+        dashboardUuid: string,
+        dashboardFilters: DashboardFilters,
+        dateZoomGranularity?: DateGranularity,
+    ) {
+        if (!this.s3Client.isEnabled()) {
+            throw new MissingConfigError('Cloud storage is not enabled');
+        }
+        const options: SchedulerCsvOptions = {
+            formatted: true,
+            limit: 'table',
+        };
+
+        const dashboard = await this.dashboardModel.getById(dashboardUuid);
+        if (
+            user.ability.cannot(
+                'manage',
+                subject('ExportCsv', {
+                    organizationUuid: user.organizationUuid,
+                    projectUuid: dashboard.projectUuid,
+                }),
+            )
+        ) {
+            throw new ForbiddenError();
+        }
+        const analyticProperties: DownloadCsv['properties'] = {
+            jobId: '', // not a job
+            userId: user.userUuid,
+            organizationId: user.organizationUuid,
+            projectId: dashboard.projectUuid,
+            fileType: SchedulerFormat.CSV,
+            values: options.formatted ? 'formatted' : 'raw',
+            limit: options.limit === 'table' ? 'results' : 'all',
+            context: 'dashboard csv zip',
+        };
+        this.analytics.track({
+            event: 'download_results.started',
+            userId: user.userUuid,
+            properties: {
+                ...analyticProperties,
+            },
+        });
+
+        const writeZipFile = async (files: AttachmentUrl[]) =>
+            new Promise<string>((resolve, reject) => {
+                const zipName = `/tmp/${nanoid()}.zip`;
+                const output = fs.createWriteStream(zipName);
+                const archive = archiver('zip', {
+                    zlib: { level: 9 }, // Sets the compression level.
+                });
+                output.on('close', () => {
+                    this.logger.info(
+                        `Generated .zip file of ${archive.pointer()} bytes`,
+                    );
+                    resolve(zipName);
+                });
+                archive.on('error', (err) => {
+                    reject(err);
+                });
+                files.forEach((file) => {
+                    archive.file(file.localPath, {
+                        name: `${file.filename}.csv`,
+                    });
+                });
+                archive.pipe(output);
+                void archive.finalize(); // This finalize doesn't wait for the files to be written
+            });
+
+        const csvFiles = await this.getCsvsForDashboard(
+            user,
+            dashboardUuid,
+            options,
+            undefined,
+            dashboardFilters,
+            dateZoomGranularity,
+        );
+        const zipFile = await writeZipFile(csvFiles);
+
+        this.analytics.track({
+            event: 'download_results.completed',
+            userId: user.userUuid,
+            properties: {
+                ...analyticProperties,
+                numCharts: csvFiles.length,
+            },
+        });
+
+        const zipFileName = CsvService.sanitizeFileName(dashboard.name);
+        const timestamp = moment().format('YYYY-MM-DD-HH-mm-ss-SSSS');
+        return this.s3Client.uploadZip(
+            fs.createReadStream(zipFile),
+            `${zipFileName}-${timestamp}.zip`,
+        );
     }
 }

@@ -1,8 +1,8 @@
 import {
-    ApiError,
-    CreateUserArgs,
-    LightdashUser,
     OpenIdIdentityIssuerType,
+    type ApiError,
+    type CreateUserArgs,
+    type LightdashUser,
 } from '@lightdash/common';
 import {
     Anchor,
@@ -14,7 +14,7 @@ import {
     Title,
 } from '@mantine/core';
 import { useMutation } from '@tanstack/react-query';
-import { FC, useEffect } from 'react';
+import { useEffect, type FC } from 'react';
 import { useLocation } from 'react-router-dom';
 import { lightdashApi } from '../api';
 import Page from '../components/common/Page/Page';
@@ -37,7 +37,7 @@ const registerQuery = async (data: CreateUserArgs) =>
 const Register: FC = () => {
     const location = useLocation<{ from?: Location } | undefined>();
     const { health } = useApp();
-    const { showToastError } = useToaster();
+    const { showToastError, showToastApiError } = useToaster();
     const flashMessages = useFlashMessages();
 
     useEffect(() => {
@@ -64,10 +64,10 @@ const Register: FC = () => {
             identify({ id: data.userUuid });
             window.location.href = redirectUrl;
         },
-        onError: (error) => {
-            showToastError({
+        onError: ({ error }) => {
+            showToastApiError({
                 title: `Failed to create user`,
-                subtitle: error.error.message,
+                apiError: error,
             });
         },
     });

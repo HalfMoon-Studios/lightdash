@@ -609,7 +609,7 @@ export class SchedulerModel {
         const jobs = await this.database(SchedulerLogTableName)
             .where(`job_id`, jobId)
             .andWhere((query) => {
-                query
+                void query
                     .where('task', 'downloadCsv')
                     .orWhere('task', 'uploadGsheetFromQuery');
             })
@@ -631,6 +631,8 @@ export class SchedulerModel {
             .where(`job_id`, jobId)
             .orderBy('scheduled_time', 'desc')
             .returning('*');
+
+        if (jobs.length === 0) throw new NotFoundError('Job not found');
 
         const job = jobs.sort(
             (a, b) =>

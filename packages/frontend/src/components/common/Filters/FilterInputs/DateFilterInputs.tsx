@@ -1,20 +1,18 @@
 import {
-    ConditionalRule,
-    DateFilterRule,
     DimensionType,
     FilterOperator,
     formatDate,
-    formatTimestamp,
+    isCustomSqlDimension,
     isDimension,
-    isField,
     isFilterRule,
     parseDate,
-    parseTimestamp,
     TimeFrames,
+    type ConditionalRule,
+    type DateFilterRule,
 } from '@lightdash/common';
 import { Flex, NumberInput, Text } from '@mantine/core';
-import moment from 'moment';
-import { FilterInputsProps } from '.';
+import dayjs from 'dayjs';
+import { type FilterInputsProps } from '.';
 import { useFiltersContext } from '../FiltersProvider';
 import { getFirstDayOfWeek } from '../utils/filterDateUtils';
 import { getPlaceholderByFilterTypeAndOperator } from '../utils/getPlaceholderByFilterTypeAndOperator';
@@ -34,7 +32,8 @@ const DateFilterInputs = <T extends ConditionalRule = DateFilterRule>(
     const { field, rule, onChange, popoverProps, disabled, filterType } = props;
     const { startOfWeek } = useFiltersContext();
     const isTimestamp =
-        isField(field) && field.type === DimensionType.TIMESTAMP;
+        (isCustomSqlDimension(field) ? field.dimensionType : field.type) ===
+        DimensionType.TIMESTAMP;
 
     if (!isFilterRule(rule)) {
         throw new Error('DateFilterInputs expects a FilterRule');
@@ -170,6 +169,13 @@ const DateFilterInputs = <T extends ConditionalRule = DateFilterRule>(
             }
 
             if (isTimestamp) {
+                // For display only
+
+                let value =
+                    rule.values && rule.values[0]
+                        ? dayjs(rule?.values?.[0]).toDate()
+                        : dayjs().toDate(); // Create
+
                 return (
                     <FilterDateTimePicker
                         disabled={disabled}
@@ -177,40 +183,17 @@ const DateFilterInputs = <T extends ConditionalRule = DateFilterRule>(
                         // @ts-ignore
                         placeholder={placeholder}
                         withSeconds
-                        valueFormat={
-                            rule.values &&
-                            moment(rule.values[0])
-                                .utc()
-                                .format('DD/MM/YYYY HH:mm:ss')
-                        }
                         // FIXME: mantine v7
                         // mantine does not set the first day of the week based on the locale
                         // so we need to do it manually and always pass it as a prop
                         firstDayOfWeek={getFirstDayOfWeek(startOfWeek)}
                         popoverProps={popoverProps}
-                        value={
-                            rule.values
-                                ? parseTimestamp(
-                                      formatTimestamp(
-                                          rule.values[0],
-                                          TimeFrames.MILLISECOND,
-                                      ),
-                                      TimeFrames.MILLISECOND,
-                                  )
-                                : null
-                        }
-                        onChange={(value: Date | null) => {
+                        value={value}
+                        onChange={(v: Date | null) => {
                             onChange({
                                 ...rule,
-                                values:
-                                    value === null
-                                        ? []
-                                        : [
-                                              formatTimestamp(
-                                                  value,
-                                                  TimeFrames.SECOND,
-                                              ),
-                                          ],
+                                // format as an ISO string, not for display
+                                values: v === null ? [] : [dayjs(v).format()],
                             });
                         }}
                     />
@@ -287,6 +270,7 @@ const DateFilterInputs = <T extends ConditionalRule = DateFilterRule>(
                 </Flex>
             );
         case FilterOperator.IN_THE_CURRENT:
+        case FilterOperator.NOT_IN_THE_CURRENT:
             return (
                 <FilterUnitOfTimeAutoComplete
                     w="100%"
@@ -319,20 +303,8 @@ const DateFilterInputs = <T extends ConditionalRule = DateFilterRule>(
                         value={
                             rule.values && rule.values[0] && rule.values[1]
                                 ? [
-                                      parseTimestamp(
-                                          formatTimestamp(
-                                              rule.values[0],
-                                              TimeFrames.SECOND,
-                                          ),
-                                          TimeFrames.SECOND,
-                                      ),
-                                      parseTimestamp(
-                                          formatTimestamp(
-                                              rule.values[1],
-                                              TimeFrames.SECOND,
-                                          ),
-                                          TimeFrames.SECOND,
-                                      ),
+                                      dayjs(rule.values[0]).toDate(),
+                                      dayjs(rule.values[1]).toDate(),
                                   ]
                                 : null
                         }
@@ -342,14 +314,8 @@ const DateFilterInputs = <T extends ConditionalRule = DateFilterRule>(
                                 ...rule,
                                 values: value
                                     ? [
-                                          formatTimestamp(
-                                              value[0],
-                                              TimeFrames.SECOND,
-                                          ),
-                                          formatTimestamp(
-                                              value[1],
-                                              TimeFrames.SECOND,
-                                          ),
+                                          dayjs(value[0]).format(),
+                                          dayjs(value[1]).format(),
                                       ]
                                     : [],
                             });

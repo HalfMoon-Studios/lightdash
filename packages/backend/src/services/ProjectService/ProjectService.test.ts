@@ -6,28 +6,30 @@ import {
     SessionUser,
 } from '@lightdash/common';
 import { analyticsMock } from '../../analytics/LightdashAnalytics.mock';
-import { s3CacheClient } from '../../clients/clients';
+import { S3Client } from '../../clients/Aws/s3';
+import { S3CacheClient } from '../../clients/Aws/S3CacheClient';
 import EmailClient from '../../clients/EmailClient/EmailClient';
 import { lightdashConfigMock } from '../../config/lightdashConfig.mock';
-import {
-    analyticsModel,
-    dashboardModel,
-    jobModel,
-    onboardingModel,
-    projectModel,
-    savedChartModel,
-    spaceModel,
-    sshKeyPairModel,
-    userAttributesModel,
-    userWarehouseCredentialsModel,
-} from '../../models/models';
+import { AnalyticsModel } from '../../models/AnalyticsModel';
+import { DashboardModel } from '../../models/DashboardModel/DashboardModel';
+import { DownloadFileModel } from '../../models/DownloadFileModel';
+import { EmailModel } from '../../models/EmailModel';
+import { JobModel } from '../../models/JobModel/JobModel';
+import { OnboardingModel } from '../../models/OnboardingModel/OnboardingModel';
+import { ProjectModel } from '../../models/ProjectModel/ProjectModel';
+import { SavedChartModel } from '../../models/SavedChartModel';
+import { SpaceModel } from '../../models/SpaceModel';
+import { SshKeyPairModel } from '../../models/SshKeyPairModel';
+import { UserAttributesModel } from '../../models/UserAttributesModel';
+import { UserWarehouseCredentialsModel } from '../../models/UserWarehouseCredentials/UserWarehouseCredentialsModel';
 import { METRIC_QUERY, warehouseClientMock } from '../../queryBuilder.mock';
-import { projectService } from '../services';
+import { SchedulerClient } from '../../scheduler/SchedulerClient';
 import { ProjectService } from './ProjectService';
 import {
     allExplores,
     defaultProject,
     expectedAllExploreSummary,
+    expectedAllExploreSummaryWithoutErrors,
     expectedApiQueryResultsWith1Row,
     expectedApiQueryResultsWith501Rows,
     expectedCatalog,
@@ -48,69 +50,74 @@ import {
     validExplore,
 } from './ProjectService.mock';
 
-jest.mock('../../clients/clients', () => ({}));
+const projectModel = {
+    getWithSensitiveFields: jest.fn(async () => projectWithSensitiveFields),
+    get: jest.fn(async () => projectWithSensitiveFields),
+    getSummary: jest.fn(async () => projectSummary),
+    getTablesConfiguration: jest.fn(async () => tablesConfiguration),
+    updateTablesConfiguration: jest.fn(),
+    getExploresFromCache: jest.fn(async () => allExplores),
+    getExploreFromCache: jest.fn(async () => validExplore),
+    findExploresFromCache: jest.fn(async () => ({
+        [validExplore.name]: validExplore,
+    })),
+    lockProcess: jest.fn((projectUuid, fun) => fun()),
+    getWarehouseCredentialsForProject: jest.fn(
+        async () => warehouseClientMock.credentials,
+    ),
+    getWarehouseClientFromCredentials: jest.fn(() => ({
+        ...warehouseClientMock,
+        runQuery: jest.fn(async () => resultsWith1Row),
+    })),
+};
+const onboardingModel = {
+    getByOrganizationUuid: jest.fn(async () => ({
+        ranQueryAt: new Date(),
+        shownSuccessAt: new Date(),
+    })),
+};
+const savedChartModel = {
+    getAllSpaces: jest.fn(async () => spacesWithSavedCharts),
+};
+const jobModel = {
+    get: jest.fn(async () => job),
+};
+const spaceModel = {
+    getAllSpaces: jest.fn(async () => spacesWithSavedCharts),
+};
 
-jest.mock('../../models/models', () => ({
-    projectModel: {
-        getWithSensitiveFields: jest.fn(async () => projectWithSensitiveFields),
-        get: jest.fn(async () => projectWithSensitiveFields),
-        getSummary: jest.fn(async () => projectSummary),
-        getTablesConfiguration: jest.fn(async () => tablesConfiguration),
-        updateTablesConfiguration: jest.fn(),
-        getExploresFromCache: jest.fn(async () => allExplores),
-        getExploreFromCache: jest.fn(async () => validExplore),
-        lockProcess: jest.fn((projectUuid, fun) => fun()),
-        getWarehouseCredentialsForProject: jest.fn(
-            async () => warehouseClientMock.credentials,
-        ),
-        getWarehouseClientFromCredentials: jest.fn(() => ({
-            ...warehouseClientMock,
-            runQuery: jest.fn(async () => resultsWith1Row),
-        })),
-    },
-    onboardingModel: {
-        getByOrganizationUuid: jest.fn(async () => ({
-            ranQueryAt: new Date(),
-            shownSuccessAt: new Date(),
-        })),
-    },
-    savedChartModel: {
-        getAllSpaces: jest.fn(async () => spacesWithSavedCharts),
-    },
-    jobModel: {
-        get: jest.fn(async () => job),
-    },
-    spaceModel: {
-        getAllSpaces: jest.fn(async () => spacesWithSavedCharts),
-    },
-    sshKeyPairModel: {},
-    userAttributesModel: {
-        getAttributeValuesForOrgMember: jest.fn(async () => ({})),
-    },
-    analyticsModel: {},
-    dashboardModel: {},
-    userWarehouseCredentialsModel: {},
-}));
+const userAttributesModel = {
+    getAttributeValuesForOrgMember: jest.fn(async () => ({})),
+};
 
 describe('ProjectService', () => {
     const { projectUuid } = defaultProject;
     const service = new ProjectService({
         lightdashConfig: lightdashConfigMock,
         analytics: analyticsMock,
-        projectModel,
-        onboardingModel,
-        savedChartModel,
-        jobModel,
+        projectModel: projectModel as unknown as ProjectModel,
+        onboardingModel: onboardingModel as unknown as OnboardingModel,
+        savedChartModel: savedChartModel as unknown as SavedChartModel,
+        jobModel: jobModel as unknown as JobModel,
         emailClient: new EmailClient({
             lightdashConfig: lightdashConfigWithNoSMTP,
         }),
-        spaceModel,
-        sshKeyPairModel,
-        userAttributesModel,
-        s3CacheClient,
-        analyticsModel,
-        dashboardModel,
-        userWarehouseCredentialsModel,
+        spaceModel: spaceModel as unknown as SpaceModel,
+        sshKeyPairModel: {} as SshKeyPairModel,
+        userAttributesModel:
+            userAttributesModel as unknown as UserAttributesModel,
+        s3CacheClient: {} as S3CacheClient,
+        analyticsModel: {} as AnalyticsModel,
+        dashboardModel: {} as DashboardModel,
+        userWarehouseCredentialsModel: {} as UserWarehouseCredentialsModel,
+        emailModel: {
+            getPrimaryEmailStatus: (userUuid: string) => ({
+                isVerified: true,
+            }),
+        } as unknown as EmailModel,
+        schedulerClient: {} as SchedulerClient,
+        downloadFileModel: {} as unknown as DownloadFileModel,
+        s3Client: {} as S3Client,
     });
     afterEach(() => {
         jest.clearAllMocks();
@@ -157,7 +164,7 @@ describe('ProjectService', () => {
                 user,
                 metricQueryMock,
                 projectUuid,
-                'table1',
+                'valid_explore',
                 null,
             );
             expect(result).toEqual(expectedApiQueryResultsWith1Row);
@@ -176,7 +183,7 @@ describe('ProjectService', () => {
                 user,
                 metricQueryMock,
                 projectUuid,
-                'table1',
+                'valid_explore',
                 null,
             );
             expect(result).toEqual(expectedApiQueryResultsWith501Rows);
@@ -221,10 +228,19 @@ describe('ProjectService', () => {
             );
             expect(result).toEqual(expectedExploreSummaryFilteredByName);
         });
+        test('should get all explores summary that do not have errors', async () => {
+            const result = await service.getAllExploresSummary(
+                user,
+                projectUuid,
+                false,
+                false,
+            );
+            expect(result).toEqual(expectedAllExploreSummaryWithoutErrors);
+        });
     });
     describe('getJobStatus', () => {
         test('should get job with projectUuid if user belongs to org ', async () => {
-            const result = await projectService.getJobStatus('jobUuid', user);
+            const result = await service.getJobStatus('jobUuid', user);
             expect(result).toEqual(job);
         });
         test('should get job without projectUuid if user created the job ', async () => {
@@ -233,7 +249,7 @@ describe('ProjectService', () => {
                 async () => jobWithoutProjectUuid,
             );
 
-            const result = await projectService.getJobStatus('jobUuid', user);
+            const result = await service.getJobStatus('jobUuid', user);
             expect(result).toEqual(jobWithoutProjectUuid);
         });
 
@@ -257,32 +273,31 @@ describe('ProjectService', () => {
                 ),
             };
             await expect(
-                projectService.getJobStatus('jobUuid', anotherUser),
+                service.getJobStatus('jobUuid', anotherUser),
             ).rejects.toThrowError(NotFoundError);
         });
 
         test('should limit CSV results', async () => {
             expect(
                 // @ts-ignore
-                projectService.metricQueryWithLimit(METRIC_QUERY, undefined),
+                service.metricQueryWithLimit(METRIC_QUERY, undefined),
             ).toEqual(METRIC_QUERY); // Returns same metricquery
 
             expect(
                 // @ts-ignore
-                projectService.metricQueryWithLimit(METRIC_QUERY, 5).limit,
+                service.metricQueryWithLimit(METRIC_QUERY, 5).limit,
             ).toEqual(5);
             expect(
                 // @ts-ignore
-                projectService.metricQueryWithLimit(METRIC_QUERY, null).limit,
+                service.metricQueryWithLimit(METRIC_QUERY, null).limit,
             ).toEqual(33333);
             expect(
                 // @ts-ignore
-                projectService.metricQueryWithLimit(METRIC_QUERY, 9999).limit,
+                service.metricQueryWithLimit(METRIC_QUERY, 9999).limit,
             ).toEqual(9999);
             expect(
                 // @ts-ignore
-                projectService.metricQueryWithLimit(METRIC_QUERY, 9999999)
-                    .limit,
+                service.metricQueryWithLimit(METRIC_QUERY, 9999999).limit,
             ).toEqual(33333);
 
             const metricWithoutRows = {
@@ -293,14 +308,13 @@ describe('ProjectService', () => {
             };
             expect(() =>
                 // @ts-ignore
-                projectService.metricQueryWithLimit(metricWithoutRows, null),
+                service.metricQueryWithLimit(metricWithoutRows, null),
             ).toThrowError(ParameterError);
 
             const metricWithDimension = { ...METRIC_QUERY, metrics: [] };
             expect(
                 // @ts-ignore
-                projectService.metricQueryWithLimit(metricWithDimension, null)
-                    .limit,
+                service.metricQueryWithLimit(metricWithDimension, null).limit,
             ).toEqual(50000);
         });
     });

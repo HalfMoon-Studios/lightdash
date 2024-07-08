@@ -6,12 +6,12 @@ import {
     SupportedDbtAdapter,
     WarehouseConnectionError,
     WarehouseQueryError,
+    WarehouseResults,
 } from '@lightdash/common';
 import {
     BasicAuth,
     ConnectionOptions,
     Iterator,
-    QueryData,
     QueryResult,
     Trino,
 } from 'trino-client';
@@ -169,17 +169,30 @@ export class TrinoWarehouseClient extends WarehouseBaseClient<CreateTrinoCredent
         };
     }
 
-    async runQuery(sql: string, tags?: Record<string, string>) {
+    async streamQuery(
+        sql: string,
+        streamCallback: (data: WarehouseResults) => void,
+        options: {
+            tags?: Record<string, string>;
+            timezone?: string;
+        },
+    ): Promise<void> {
         const { session, close } = await this.getSession();
         let query: Iterator<QueryResult>;
         try {
             let alteredQuery = sql;
-            if (tags) {
-                alteredQuery = `${alteredQuery}\n-- ${JSON.stringify(tags)}`;
+            if (options?.tags) {
+                alteredQuery = `${alteredQuery}\n-- ${JSON.stringify(
+                    options?.tags,
+                )}`;
             }
-            query = await session.query(sql);
+            if (options?.timezone) {
+                console.debug(`Setting Trino timezone to ${options?.timezone}`);
+                await session.query(`SET TIME ZONE '${options?.timezone}'`);
+            }
+            query = await session.query(alteredQuery);
 
-            const queryResult = await query.next();
+            let queryResult = await query.next();
 
             if (queryResult.value.error) {
                 throw new WarehouseQueryError(
@@ -188,14 +201,11 @@ export class TrinoWarehouseClient extends WarehouseBaseClient<CreateTrinoCredent
                 );
             }
 
-            const result: QueryData = queryResult.value.data ?? [];
-
             const schema: {
                 name: string;
                 type: string;
                 typeSignature: { rawType: string };
             }[] = queryResult.value.columns ?? [];
-
             const fields = schema.reduce(
                 (acc, column) => ({
                     ...acc,
@@ -208,7 +218,22 @@ export class TrinoWarehouseClient extends WarehouseBaseClient<CreateTrinoCredent
                 {},
             );
 
-            return { fields, rows: resultHandler(schema, result) };
+            // stream initial data
+            streamCallback({
+                fields,
+                rows: resultHandler(schema, queryResult.value.data),
+            });
+            // Using `await` in this loop ensures data chunks are fetched and processed sequentially.
+            // This maintains order and data integrity.
+            while (!queryResult.done) {
+                // eslint-disable-next-line no-await-in-loop
+                queryResult = await query.next();
+                // stream next chunk of data
+                streamCallback({
+                    fields,
+                    rows: resultHandler(schema, queryResult.value.data),
+                });
+            }
         } catch (e: any) {
             throw new WarehouseQueryError(e.message);
         } finally {
@@ -231,7 +256,7 @@ export class TrinoWarehouseClient extends WarehouseBaseClient<CreateTrinoCredent
                 } catch (e: any) {
                     throw new WarehouseQueryError(e.message);
                 } finally {
-                    if (query) close();
+                    if (query) void close();
                 }
             });
 
@@ -240,10 +265,6 @@ export class TrinoWarehouseClient extends WarehouseBaseClient<CreateTrinoCredent
             await close();
         }
         return catalogToSchema(results);
-    }
-
-    getFieldQuoteChar() {
-        return '"';
     }
 
     getStringQuoteChar() {
@@ -269,5 +290,54 @@ export class TrinoWarehouseClient extends WarehouseBaseClient<CreateTrinoCredent
             default:
                 return super.getMetricSql(sql, metric);
         }
+    }
+
+    private sanitizeInput(sql: string) {
+        return sql.replaceAll(
+            this.getStringQuoteChar(),
+            this.getEscapeStringQuoteChar() + this.getStringQuoteChar(),
+        );
+    }
+
+    async getTables(
+        schema?: string,
+        tags?: Record<string, string>,
+    ): Promise<WarehouseCatalog> {
+        const schemaFilter = schema
+            ? `AND table_schema = '${this.sanitizeInput(schema)}'`
+            : '';
+        const query = `
+            SELECT table_catalog, table_schema, table_name
+            FROM information_schema.tables
+            WHERE table_type = 'BASE TABLE' 
+            ${schemaFilter}
+            ORDER BY 1,2,3
+        `;
+        const { rows } = await this.runQuery(query, tags);
+        return this.parseWarehouseCatalog(rows, convertDataTypeToDimensionType);
+    }
+
+    async getFields(
+        tableName: string,
+        schema?: string,
+        tags?: Record<string, string>,
+    ): Promise<WarehouseCatalog> {
+        const schemaFilter = schema
+            ? `AND table_schema = '${this.sanitizeInput(schema)}'`
+            : '';
+
+        const query = `
+            SELECT table_catalog,
+                   table_schema,
+                   table_name,
+                   column_name, 
+                   data_type
+            FROM information_schema.columns
+            WHERE table_name = '${this.sanitizeInput(tableName)}'
+            ${schemaFilter};
+        `;
+        const { rows } = await this.runQuery(query, tags);
+
+        return this.parseWarehouseCatalog(rows, convertDataTypeToDimensionType);
     }
 }

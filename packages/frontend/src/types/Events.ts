@@ -46,6 +46,7 @@ export enum PageName {
     USER_ACTIVITY = 'user_activity',
     VERIFY_EMAIL = 'verify_email',
     JOIN_ORGANIZATION = 'join_organization',
+    CATALOG = 'catalog',
 }
 
 export enum CategoryName {
@@ -68,6 +69,7 @@ export enum EventName {
     RUN_QUERY_BUTTON_CLICKED = 'run_query_button.clicked',
     ADD_COLUMN_BUTTON_CLICKED = 'add_column_button.click',
     CREATE_TABLE_CALCULATION_BUTTON_CLICKED = 'create_table_calculation_button.click',
+    CREATE_QUICK_TABLE_CALCULATION_BUTTON_CLICKED = 'create_quick_table_calculation_button.click',
     EDIT_TABLE_CALCULATION_BUTTON_CLICKED = 'edit_table_calculation_button.click',
     UPDATE_TABLE_CALCULATION_BUTTON_CLICKED = 'update_table_calculation_button.click',
     DELETE_TABLE_CALCULATION_BUTTON_CLICKED = 'delete_table_calculation_button.click',
@@ -108,4 +110,5 @@ export enum EventName {
     DATE_ZOOM_CLICKED = 'date_zoom.clicked',
     COMMENTS_CLICKED = 'comments.clicked',
     NOTIFICATIONS_COMMENTS_ITEM_CLICKED = 'notifications_comments_item.clicked',
+    DASHBOARD_AUTO_REFRESH_UPDATED = 'dashboard_auto_refresh.updated',
 }

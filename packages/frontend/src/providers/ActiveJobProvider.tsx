@@ -1,16 +1,21 @@
-import { ApiError, Job, JobStatusType, JobType } from '@lightdash/common';
+import {
+    JobStatusType,
+    JobType,
+    type ApiError,
+    type Job,
+} from '@lightdash/common';
 import { notifications } from '@mantine/notifications';
 import { IconArrowRight } from '@tabler/icons-react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
     createContext,
-    Dispatch,
-    FC,
-    SetStateAction,
     useCallback,
     useContext,
     useEffect,
     useState,
+    type Dispatch,
+    type FC,
+    type SetStateAction,
 } from 'react';
 import useToaster from '../hooks/toaster/useToaster';
 import {
@@ -37,10 +42,10 @@ export const ActiveJobProvider: FC<React.PropsWithChildren<{}>> = ({
     const [isJobsDrawerOpen, setIsJobsDrawerOpen] = useState(false);
     const [activeJobId, setActiveJobId] = useState();
     const queryClient = useQueryClient();
-    const { showToastSuccess, showToastError, showToastInfo } = useToaster();
+    const { showToastSuccess, showToastApiError, showToastInfo } = useToaster();
 
     const toastJobStatus = useCallback(
-        (job: Job | undefined) => {
+        async (job: Job | undefined) => {
             if (!job || isJobsDrawerOpen) return;
 
             const toastTitle = jobStatusLabel(job?.jobStatus);
@@ -48,8 +53,8 @@ export const ActiveJobProvider: FC<React.PropsWithChildren<{}>> = ({
             switch (job.jobStatus) {
                 case 'DONE':
                     if (job.jobType === JobType.CREATE_PROJECT) {
-                        queryClient.invalidateQueries(['projects']);
-                        queryClient.invalidateQueries([
+                        await queryClient.invalidateQueries(['projects']);
+                        await queryClient.invalidateQueries([
                             'projects',
                             'defaultProject',
                         ]);
@@ -85,11 +90,11 @@ export const ActiveJobProvider: FC<React.PropsWithChildren<{}>> = ({
         [showToastInfo, showToastSuccess, queryClient, isJobsDrawerOpen],
     );
 
-    const toastJobError = (error: ApiError) => {
-        showToastError({
+    const toastJobError = ({ error }: ApiError) => {
+        showToastApiError({
             key: TOAST_KEY_FOR_REFRESH_JOB,
             title: 'Failed to refresh server',
-            subtitle: error.error.message,
+            apiError: error,
         });
     };
     const { data: activeJob } = useJob(
@@ -104,7 +109,7 @@ export const ActiveJobProvider: FC<React.PropsWithChildren<{}>> = ({
             if (isJobsDrawerOpen) {
                 notifications.hide(TOAST_KEY_FOR_REFRESH_JOB);
             } else {
-                toastJobStatus(activeJob);
+                void toastJobStatus(activeJob);
             }
         }
         if (
@@ -112,7 +117,7 @@ export const ActiveJobProvider: FC<React.PropsWithChildren<{}>> = ({
             activeJob &&
             activeJob.jobStatus === JobStatusType.DONE
         ) {
-            queryClient.refetchQueries(['user']); // a new project level permission might be added to the user
+            void queryClient.refetchQueries(['user']); // a new project level permission might be added to the user
         }
     }, [activeJob, activeJobId, toastJobStatus, isJobsDrawerOpen, queryClient]);
 

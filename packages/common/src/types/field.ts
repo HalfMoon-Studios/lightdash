@@ -1,7 +1,7 @@
 import type { AdditionalMetric, currencies } from '..';
 import { CompileError } from './errors';
-import { MetricFilterRule } from './filter';
-import { TimeFrames } from './timeFrames';
+import { type MetricFilterRule } from './filter';
+import { type TimeFrames } from './timeFrames';
 
 export enum Compact {
     THOUSANDS = 'thousands',
@@ -88,16 +88,63 @@ export type BinRange = {
     from: number | undefined; // first range has from undefined
     to: number | undefined; // last range has to undefined
 };
-export interface CustomDimension {
+
+export enum CustomDimensionType {
+    BIN = 'bin',
+    SQL = 'sql',
+}
+
+export interface BaseCustomDimension {
     id: string;
     name: string;
+    table: string;
+    type: CustomDimensionType;
+}
+
+export interface CustomBinDimension extends BaseCustomDimension {
+    type: CustomDimensionType.BIN;
     dimensionId: FieldId; // Parent dimension id
-    table: string; // Table of parent dimension
     binType: BinType;
     binNumber?: number;
     binWidth?: number;
     customRange?: BinRange[];
 }
+
+export interface CustomSqlDimension extends BaseCustomDimension {
+    type: CustomDimensionType.SQL;
+    sql: string;
+    dimensionType: DimensionType;
+}
+
+export type CustomDimension = CustomBinDimension | CustomSqlDimension;
+
+export const isCustomDimension = (value: any): value is CustomDimension =>
+    value !== undefined &&
+    Object.values(CustomDimensionType).includes(value.type);
+
+export const isCustomBinDimension = (value: any): value is CustomBinDimension =>
+    value !== undefined &&
+    isCustomDimension(value) &&
+    value.type === CustomDimensionType.BIN;
+
+export const isCustomSqlDimension = (value: any): value is CustomSqlDimension =>
+    value !== undefined &&
+    isCustomDimension(value) &&
+    value.type === CustomDimensionType.SQL;
+
+export type CompiledCustomSqlDimension = CustomSqlDimension & {
+    compiledSql: string;
+    tablesReferences: Array<string>;
+};
+
+export type CompiledCustomDimension =
+    | CustomBinDimension
+    | CompiledCustomSqlDimension;
+
+export const isCompiledCustomSqlDimension = (
+    value: any,
+): value is CompiledCustomSqlDimension =>
+    isCustomSqlDimension(value) && 'compiledSql' in value;
 
 export type ItemsMap = Record<
     string,
@@ -113,6 +160,7 @@ export interface CustomFormat {
     compact?: CompactOrAlias | undefined;
     prefix?: string | undefined;
     suffix?: string | undefined;
+    timeInterval?: TimeFrames;
 }
 
 export enum CustomFormatType {
@@ -121,44 +169,53 @@ export enum CustomFormatType {
     CURRENCY = 'currency',
     NUMBER = 'number',
     ID = 'id',
+    DATE = 'date',
+    TIMESTAMP = 'timestamp',
+}
+
+export enum TableCalculationType {
+    NUMBER = 'number',
+    STRING = 'string',
+    DATE = 'date',
+    TIMESTAMP = 'timestamp',
+    BOOLEAN = 'boolean',
 }
 
 export type TableCalculation = {
     index?: number;
     name: string;
-    displayName: string;
+    displayName: string; // This is a unique property of the table calculation
     sql: string;
     format?: CustomFormat;
+    type?: TableCalculationType;
 };
 
-export interface TableCalculationField extends Field {
-    fieldType: FieldType.TABLE_CALCULATION;
-    type: CustomFormatType;
-    index?: number;
+export type TableCalculationMetadata = {
+    oldName: string;
     name: string;
-    displayName: string;
-    sql: string;
-}
-
-export const isTableCalculation = (
-    item: Item | AdditionalMetric,
-): item is TableCalculation =>
-    item
-        ? !('binType' in item) &&
-          !!item.sql &&
-          !('type' in item) &&
-          !('tableName' in item)
-        : false;
-
-export type CompiledTableCalculation = TableCalculation & {
-    compiledSql: string;
 };
 
 export enum FieldType {
     METRIC = 'metric',
     DIMENSION = 'dimension',
-    TABLE_CALCULATION = 'table_calculation',
 }
+
+// This type check is a little fragile because it's based on
+// 'displayName'. Ideally these would all have fieldTypes.
+export const isTableCalculation = (
+    item: ItemsMap[string] | AdditionalMetric | Pick<Field, 'table' | 'name'>,
+): item is TableCalculation =>
+    item
+        ? !isCustomDimension(item) &&
+          !!('sql' in item && item.sql) &&
+          !('description' in item) &&
+          !('tableName' in item) &&
+          'displayName' in item
+        : false;
+
+export type CompiledTableCalculation = TableCalculation & {
+    compiledSql: string;
+};
 
 export type FieldUrl = {
     url: string;
@@ -180,7 +237,11 @@ export interface Field {
     compact?: CompactOrAlias;
     round?: number;
     format?: Format;
+    /**
+     * @deprecated Use groups property instead.
+     */
     groupLabel?: string;
+    groups?: string[];
     urls?: FieldUrl[];
     index?: number;
 }
@@ -190,8 +251,6 @@ export const isField = (field: any): field is Field =>
 
 // Field ids are unique across the project
 export type FieldId = string;
-export const fieldId = (field: Pick<Field, 'table' | 'name'>): FieldId =>
-    `${field.table}_${field.name.replaceAll('.', '__')}`;
 
 export const convertFieldRefToFieldId = (
     fieldRef: string,
@@ -240,16 +299,17 @@ export enum DimensionType {
 export interface Dimension extends Field {
     fieldType: FieldType.DIMENSION;
     type: DimensionType;
+    /**
+     * @deprecated Use groups property instead.
+     */
     group?: string;
     requiredAttributes?: Record<string, string | string[]>;
     timeInterval?: TimeFrames;
+    timeIntervalBaseDimensionName?: string;
     isAdditionalDimension?: boolean;
+    colors?: Record<string, string>;
+    isIntervalBase?: boolean;
 }
-
-export const isTableCalculationField = (
-    field: any,
-): field is TableCalculationField =>
-    isField(field) && field.fieldType === FieldType.TABLE_CALCULATION;
 
 export interface CompiledDimension extends Dimension {
     compiledSql: string; // sql string with resolved template variables
@@ -284,34 +344,6 @@ export interface FilterableDimension extends Dimension {
         | DimensionType.TIMESTAMP
         | DimensionType.BOOLEAN;
 }
-
-export const isFilterableDimension = (
-    dimension: Dimension,
-): dimension is FilterableDimension =>
-    [
-        DimensionType.STRING,
-        DimensionType.NUMBER,
-        DimensionType.DATE,
-        DimensionType.TIMESTAMP,
-        DimensionType.BOOLEAN,
-    ].includes(dimension.type);
-export type FilterableField =
-    | FilterableDimension
-    | Metric
-    | TableCalculationField;
-export const isFilterableField = (
-    field: Field | Dimension | Metric | TableCalculationField,
-): field is FilterableField =>
-    isDimension(field) ? isFilterableDimension(field) : true;
-
-export type FilterableItem =
-    | FilterableField
-    | TableCalculationField
-    | TableCalculation;
-export const isFilterableItem = (
-    item: ItemsMap[string] | TableCalculationField,
-): item is FilterableItem =>
-    isDimension(item) ? isFilterableDimension(item) : true;
 
 export type FieldRef = string;
 export const getFieldRef = (field: Pick<Field, 'table' | 'name'>): FieldRef =>
@@ -392,8 +424,12 @@ const NonAggregateMetricTypes = [
     MetricType.BOOLEAN,
 ];
 
-export const isMetric = (field: Field | undefined): field is Metric =>
-    field ? field.fieldType === FieldType.METRIC : false;
+export const isMetric = (
+    field: ItemsMap[string] | AdditionalMetric | undefined,
+): field is Metric =>
+    field
+        ? 'fieldType' in field && field.fieldType === FieldType.METRIC
+        : false;
 
 export const isNonAggregateMetric = (field: Field): boolean =>
     isMetric(field) && NonAggregateMetricTypes.includes(field.type);
@@ -410,6 +446,37 @@ export interface Metric extends Field {
     requiredAttributes?: Record<string, string | string[]>; // Required attributes for the dimension this metric is based on
 }
 
+export const isFilterableDimension = (
+    dimension: Dimension,
+): dimension is FilterableDimension =>
+    [
+        DimensionType.STRING,
+        DimensionType.NUMBER,
+        DimensionType.DATE,
+        DimensionType.TIMESTAMP,
+        DimensionType.BOOLEAN,
+    ].includes(dimension.type);
+
+// TODO: FilterableField === FilterableItem, we should remove one of them, as well as one of the type guards
+export type FilterableField =
+    | TableCalculation
+    | Metric
+    | FilterableDimension
+    | CustomSqlDimension;
+export const isFilterableField = (
+    field: Dimension | ItemsMap[string],
+): field is FilterableField =>
+    (isDimension(field) && isFilterableDimension(field)) ||
+    isCustomSqlDimension(field) ||
+    isMetric(field) ||
+    isTableCalculation(field);
+
+export type FilterableItem = FilterableField;
+export const isFilterableItem = (
+    item: ItemsMap[string] | TableCalculation,
+): item is FilterableItem =>
+    isDimension(item) ? isFilterableDimension(item) : true;
+
 export const defaultSql = (columnName: string): string =>
     // eslint-disable-next-line no-useless-escape
     `\$\{TABLE\}.${columnName}`;
@@ -419,15 +486,34 @@ export const friendlyName = (text: string): string => {
     if (text === '') {
         return '';
     }
-    const normalisedText =
-        text === text.toUpperCase() ? text.toLowerCase() : text; // force all uppercase to all lowercase
-    const [first, ...rest] =
-        normalisedText.match(/[0-9]*[A-Za-z][a-z]*|[0-9]+/g) || [];
-    if (!first) {
-        return text;
-    }
-    return [
-        capitalize(first.toLowerCase()),
-        ...rest.map((word) => word.toLowerCase()),
-    ].join(' ');
+
+    // Split the text on underscores, filter out empty parts resulting from leading/trailing underscores
+    const parts = text.split('_').filter((part) => part !== '');
+
+    // Normalize and capitalize each part of the split text
+    const normalizedParts = parts.map((part) => {
+        // Convert part to lowercase if it is entirely uppercase, otherwise leave it as is
+        const normalisedText =
+            part === part.toUpperCase() ? part.toLowerCase() : part;
+
+        // Use a regex to separate numeric and alphabetic sequences
+        // The match array will contain the first matched part and any subsequent ones
+        const [first, ...rest] =
+            normalisedText.match(/[0-9]*[A-Za-z][a-z]*|[0-9]+/g) || [];
+
+        // If no match was found, return the part as is
+        if (!first) {
+            return part;
+        }
+
+        // Capitalize the first matched part, convert the rest to lowercase, and join them with spaces
+        return [
+            capitalize(first.toLowerCase()),
+            ...rest.map((word) => word.toLowerCase()),
+        ].join(' ');
+    });
+
+    // Join the normalized parts with spaces and capitalize the first letter of the resulting string
+    const result = normalizedParts.join(' ');
+    return capitalize(result);
 };

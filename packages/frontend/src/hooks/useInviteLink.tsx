@@ -1,4 +1,8 @@
-import { ApiError, CreateInviteLink, InviteLink } from '@lightdash/common';
+import {
+    type ApiError,
+    type CreateInviteLink,
+    type InviteLink,
+} from '@lightdash/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { lightdashApi } from '../api';
 import useToaster from './toaster/useToaster';
@@ -43,18 +47,17 @@ export const useInviteLink = (inviteCode: string) =>
 
 export const useCreateInviteLinkMutation = () => {
     const queryClient = useQueryClient();
-    const { showToastError, showToastSuccess } = useToaster();
+    const { showToastApiError, showToastSuccess } = useToaster();
     return useMutation<
         InviteLink,
         ApiError,
         Omit<CreateInviteLink, 'expiresAt'>
     >(createInviteWith3DayExpiryQuery, {
         mutationKey: ['invite_link'],
-        onError: (error1) => {
-            const [title, ...rest] = error1.error.message.split('\n');
-            showToastError({
-                title,
-                subtitle: rest.join('\n'),
+        onError: ({ error }) => {
+            showToastApiError({
+                title: 'Failed to create invite link',
+                apiError: error,
             });
         },
         onSuccess: async () => {

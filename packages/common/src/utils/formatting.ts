@@ -1,22 +1,30 @@
-import moment, { MomentInput } from 'moment';
+import dayjs from 'dayjs';
+import timezone from 'dayjs/plugin/timezone';
+import moment, { type MomentInput } from 'moment';
 import {
-    CompactOrAlias,
-    CustomDimension,
-    CustomFormat,
     CustomFormatType,
     DimensionType,
-    Field,
     findCompactConfig,
     Format,
+    isCustomSqlDimension,
     isDimension,
     isTableCalculation,
     MetricType,
     NumberSeparator,
-    TableCalculation,
+    TableCalculationType,
+    type CompactOrAlias,
+    type CustomDimension,
+    type CustomFormat,
+    type Dimension,
+    type Field,
+    type TableCalculation,
 } from '../types/field';
-import { AdditionalMetric, hasFormatOptions } from '../types/metricQuery';
+import { hasFormatOptions, type AdditionalMetric } from '../types/metricQuery';
 import { TimeFrames } from '../types/timeFrames';
 import assertUnreachable from './assertUnreachable';
+import { getItemType } from './item';
+
+dayjs.extend(timezone);
 
 export const currencies = [
     'USD',
@@ -97,11 +105,13 @@ const getTimeFormat = (
     return `YYYY-MM-DD, ${timeFormat} (Z)`;
 };
 
+// TODO: To rename to isDayJsInput once we remove moment usage
 export const isMomentInput = (value: unknown): value is MomentInput =>
     typeof value === 'string' ||
     typeof value === 'number' ||
     value instanceof Date ||
-    value instanceof moment;
+    value instanceof moment ||
+    value instanceof dayjs;
 
 export function formatDate(
     date: MomentInput,
@@ -119,6 +129,19 @@ export function formatTimestamp(
 ): string {
     const momentDate = convertToUTC ? moment(value).utc() : moment(value);
     return momentDate.format(getTimeFormat(timeInterval));
+}
+
+export function getLocalTimeDisplay(
+    value: MomentInput,
+    showTimezone: boolean = true,
+): string {
+    // NOTE: Mixing dayjs and moment here is not great, but we're doing it here
+    // because we are using moment types in this file and the
+    // plumbing expects them. It should be ok here because we are not moment and dayjs
+    // together to operate on the date. Dayjs is only used for the
+    // Timezone string, which moment doesn't support.
+    const tzString = showTimezone ? `(${dayjs.tz.guess()})` : '';
+    return `${moment(value).format(`YYYY-MM-DD HH:mm`)} ${tzString}`;
 }
 
 export const parseDate = (
@@ -180,7 +203,6 @@ export function formatNumberValue(
 ): string {
     const options = getFormatNumberOptions(value, format);
     const separator = format?.separator || NumberSeparator.DEFAULT;
-
     switch (separator) {
         case NumberSeparator.COMMA_PERIOD:
             return value.toLocaleString('en-US', options);
@@ -314,7 +336,12 @@ export function applyCustomFormat(
 
     if (value === '') return '';
 
-    if (value instanceof Date) {
+    if (
+        value instanceof Date &&
+        ![CustomFormatType.DATE, CustomFormatType.TIMESTAMP].includes(
+            format.type,
+        )
+    ) {
         return formatTimestamp(value, undefined, false);
     }
 
@@ -340,6 +367,10 @@ export function applyCustomFormat(
             ).replace(/\u00A0/, ' ');
 
             return `${currencyFormatted}${compactSuffix}`;
+        case CustomFormatType.DATE:
+            return formatDate(value, format?.timeInterval, false);
+        case CustomFormatType.TIMESTAMP:
+            return formatTimestamp(value, format?.timeInterval, false);
         case CustomFormatType.NUMBER:
             const prefix = format.prefix || '';
             const suffix = format.suffix || '';
@@ -362,6 +393,7 @@ export function applyCustomFormat(
 export function formatItemValue(
     item:
         | Field
+        | Dimension
         | AdditionalMetric
         | TableCalculation
         | CustomDimension
@@ -373,16 +405,22 @@ export function formatItemValue(
     if (value === undefined) return '-';
 
     if (item) {
-        if ('type' in item) {
-            switch (item.type) {
+        const customFormat = getCustomFormat(item);
+
+        if (isCustomSqlDimension(item) || 'type' in item) {
+            const type = getItemType(item);
+            switch (type) {
+                case TableCalculationType.STRING:
                 case DimensionType.STRING:
                 case MetricType.STRING:
                     return `${value}`;
                 case DimensionType.BOOLEAN:
                 case MetricType.BOOLEAN:
+                case TableCalculationType.BOOLEAN:
                     return formatBoolean(value);
                 case DimensionType.DATE:
                 case MetricType.DATE:
+                case TableCalculationType.DATE:
                     return isMomentInput(value)
                         ? formatDate(
                               value,
@@ -392,6 +430,7 @@ export function formatItemValue(
                         : 'NaT';
                 case DimensionType.TIMESTAMP:
                 case MetricType.TIMESTAMP:
+                case TableCalculationType.TIMESTAMP:
                     return isMomentInput(value)
                         ? formatTimestamp(
                               value,
@@ -401,7 +440,7 @@ export function formatItemValue(
                         : 'NaT';
                 case MetricType.MAX:
                 case MetricType.MIN:
-                    if (value instanceof Date) {
+                    if (value instanceof Date && customFormat === undefined) {
                         return formatTimestamp(
                             value,
                             isDimension(item) ? item.timeInterval : undefined,
@@ -409,11 +448,19 @@ export function formatItemValue(
                         );
                     }
                     break;
+                case DimensionType.NUMBER:
+                    if (
+                        isDimension(item) &&
+                        item.timeInterval &&
+                        item.timeInterval === TimeFrames.YEAR_NUM // Year number (e.g. 2021) is a number, but should be formatted as a string so there's no separator applied
+                    ) {
+                        return `${value}`;
+                    }
+                    break;
                 default:
             }
         }
 
-        const customFormat = getCustomFormat(item);
         return applyCustomFormat(value, customFormat);
     }
 

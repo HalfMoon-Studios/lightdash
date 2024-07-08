@@ -6,12 +6,12 @@ import {
     useMantineTheme,
 } from '@mantine/core';
 import { IconSparkles } from '@tabler/icons-react';
-import { FC } from 'react';
-import AceEditor, { IAceEditorProps } from 'react-ace';
+import { type FC } from 'react';
+import AceEditor, { type IAceEditorProps } from 'react-ace';
 import styled, { css } from 'styled-components';
 import MantineIcon from '../../../components/common/MantineIcon';
-import { useExplorerAceEditorCompleter } from '../../../hooks/useExplorerAceEditorCompleter';
-import { TableCalculationForm } from '../types';
+import { useTableCalculationAceEditorCompleter } from '../../../hooks/useExplorerAceEditorCompleter';
+import { type TableCalculationForm } from '../types';
 
 import { useLocalStorage } from '@mantine/hooks';
 import 'ace-builds/src-noconflict/mode-sql';
@@ -26,7 +26,7 @@ type Props = {
     isFullScreen: boolean;
 };
 
-const SqlEditor = styled(AceEditor)<
+export const SqlEditor = styled(AceEditor)<
     IAceEditorProps & { isFullScreen: boolean; gutterBackgroundColor: string }
 >`
     width: 100%;
@@ -51,7 +51,7 @@ export const SqlForm: FC<Props> = ({ form, isFullScreen }) => {
         defaultValue: true,
     });
 
-    const { setAceEditor } = useExplorerAceEditorCompleter();
+    const { setAceEditor } = useTableCalculationAceEditorCompleter();
 
     return (
         <>

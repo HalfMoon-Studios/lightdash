@@ -1,12 +1,11 @@
 import {
-    ApiChartAndResults,
-    ApiError,
-    ApiQueryResults,
-    DashboardFilters,
-    DateGranularity,
-    getCustomDimensionId,
-    MetricQuery,
-    SortField,
+    type ApiChartAndResults,
+    type ApiError,
+    type ApiQueryResults,
+    type DashboardFilters,
+    type DateGranularity,
+    type MetricQuery,
+    type SortField,
 } from '@lightdash/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo } from 'react';
@@ -82,6 +81,7 @@ const getQueryResults = async ({
     const timezoneFixQuery = query && {
         ...query,
         filters: convertDateFilters(query.filters),
+        timezone: query.timezone ?? undefined,
     };
 
     return lightdashApi<ApiQueryResults>({
@@ -101,7 +101,11 @@ export const useQueryResults = (props?: {
     dateZoomGranularity?: DateGranularity;
 }) => {
     const { projectUuid } = useParams<{ projectUuid: string }>();
-    const { showToastError } = useToaster();
+    const setErrorResponse = useQueryError({
+        forceToastOnForbidden: true,
+        forbiddenToastTitle: 'Error running query',
+    });
+
     const fetchQuery =
         props?.isViewOnly === true ? getChartResults : getQueryResults;
     const mutation = useMutation<ApiQueryResults, ApiError, QueryResultsProps>(
@@ -109,10 +113,7 @@ export const useQueryResults = (props?: {
         {
             mutationKey: ['queryResults'],
             onError: (error) => {
-                showToastError({
-                    title: 'Error running query',
-                    subtitle: error.error.message,
-                });
+                setErrorResponse(error);
             },
         },
     );
@@ -125,8 +126,6 @@ export const useQueryResults = (props?: {
                 ...metricQuery.dimensions,
                 ...metricQuery.metrics,
                 ...metricQuery.tableCalculations.map(({ name }) => name),
-                ...(metricQuery.customDimensions?.map(getCustomDimensionId) ||
-                    []),
             ]);
             const isValidQuery = fields.size > 0;
             if (!!tableName && isValidQuery) {
@@ -298,15 +297,15 @@ export const useChartVersionResultsMutation = (
     chartUuid: string,
     versionUuid?: string,
 ) => {
-    const { showToastError } = useToaster();
+    const { showToastApiError } = useToaster();
     const mutation = useMutation<ApiQueryResults, ApiError>(
         () => getChartVersionResults(chartUuid, versionUuid!),
         {
             mutationKey: ['chartVersionResults', chartUuid, versionUuid],
-            onError: (result) => {
-                showToastError({
+            onError: ({ error }) => {
+                showToastApiError({
                     title: 'Error running query',
-                    subtitle: result.error.message,
+                    apiError: error,
                 });
             },
         },

@@ -4,8 +4,10 @@ import { LightdashConfig } from './parseConfig';
 export const lightdashConfigMock: LightdashConfig = {
     allowMultiOrgs: false,
     auth: {
+        disablePat: false,
         enableGroupSync: false,
         disablePasswordAuthentication: false,
+        enableOidcLinking: false,
         google: {
             loginPath: '',
             oauth2ClientId: undefined,
@@ -37,7 +39,37 @@ export const lightdashConfigMock: LightdashConfig = {
             oauth2TenantId: undefined,
             loginPath: '',
             callbackPath: '',
+            x509PublicKeyCertPath: undefined,
+            x509PublicKeyCert: undefined,
+            privateKeyFilePath: undefined,
+            privateKeyFile: undefined,
+            openIdConnectMetadataEndpoint: undefined,
         },
+        oidc: {
+            authMethod: undefined,
+            authSigningAlg: undefined,
+            callbackPath: '',
+            loginPath: '',
+            clientId: undefined,
+            clientSecret: undefined,
+            metadataDocumentEndpoint: undefined,
+            privateKeyFile: undefined,
+            privateKeyFilePath: undefined,
+            scopes: undefined,
+            x509PublicKeyCert: undefined,
+            x509PublicKeyCertPath: undefined,
+        },
+    },
+    lightdashCloudInstance: 'test-instance',
+    k8s: {
+        podNamespace: undefined,
+        podName: undefined,
+        nodeName: undefined,
+    },
+    prometheus: {
+        enabled: false,
+        port: 9090,
+        path: '/metrics',
     },
     chart: { versionHistory: { daysLimit: 0 } },
     customVisualizations: { enabled: false },
@@ -49,6 +81,9 @@ export const lightdashConfigMock: LightdashConfig = {
     intercom: {
         appId: '',
         apiBase: '',
+    },
+    pylon: {
+        appId: '',
     },
     lightdashSecret: '',
     logging: {
@@ -75,9 +110,21 @@ export const lightdashConfigMock: LightdashConfig = {
     scheduler: { concurrency: 0, enabled: false, jobTimeout: 0 },
     secureCookies: false,
     sentry: {
-        dsn: '',
+        backend: {
+            dsn: '',
+            securityReportUri: '',
+        },
+        frontend: {
+            dsn: '',
+        },
         release: '',
         environment: '',
+        tracesSampleRate: 0,
+        profilesSampleRate: 0,
+        anr: {
+            enabled: false,
+            captureStacktrace: false,
+        },
     },
     staticIp: '',
     trustProxy: false,
@@ -94,5 +141,12 @@ export const lightdashConfigMock: LightdashConfig = {
     query: {
         maxLimit: 5000,
         csvCellsLimit: 100000,
+        timezone: undefined,
+    },
+    security: {
+        contentSecurityPolicy: {
+            reportOnly: false,
+            allowedDomains: [],
+        },
     },
 };

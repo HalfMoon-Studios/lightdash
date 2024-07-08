@@ -1,6 +1,6 @@
 {
     "name": "@lightdash/common",
-    "version": "0.1027.0",
+    "version": "0.1161.0",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
     "files": [
@@ -9,6 +9,7 @@
     "license": "MIT",
     "devDependencies": {
         "@types/pegjs": "^0.10.3",
+        "@types/sanitize-html": "^2.11.0",
         "typescript-json-schema": "^0.54.0"
     },
     "dependencies": {
@@ -22,12 +23,14 @@
         "liquidjs": "^10.0.0",
         "lodash": "^4.17.21",
         "moment": "^2.29.4",
+        "moment-timezone": "^0.5.45",
         "pegjs": "^0.10.0",
+        "sanitize-html": "^2.12.1",
         "uuid": "^8.3.2",
-        "zod": "^3.22.3"
+        "zod": "^3.23.3"
     },
     "scripts": {
-        "dev": "tsc --build --watch --preserveWatchOutput tsconfig.json",
+        "dev": "tsx watch --clear-screen=false src/index.ts",
         "build": "tsc --build tsconfig.json",
         "linter": "eslint -c .eslintrc.js --ignore-path ./../../.gitignore",
         "formatter": "prettier --config .prettierrc.js --ignore-unknown --ignore-path ./../../.gitignore",

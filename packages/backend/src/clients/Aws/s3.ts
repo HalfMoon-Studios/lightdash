@@ -5,7 +5,10 @@ import {
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { MissingConfigError } from '@lightdash/common';
 import * as Sentry from '@sentry/node';
+import { ReadStream } from 'fs';
+import { PassThrough } from 'stream';
 import { LightdashConfig } from '../../config/parseConfig';
 import Logger from '../../logging/logger';
 
@@ -53,8 +56,8 @@ export class S3Client {
         urlOptions?: { expiresIn: number },
     ): Promise<string> {
         if (!this.lightdashConfig.s3?.bucket || this.s3 === undefined) {
-            throw new Error(
-                "Missing S3 bucket configuration, can't upload image",
+            throw new MissingConfigError(
+                "Missing S3 bucket configuration, can't upload files",
             );
         }
         const upload = new Upload({
@@ -103,6 +106,64 @@ export class S3Client {
         csvName: string,
     ): Promise<string> {
         return this.uploadFile(csvName, csv, 'text/csv');
+    }
+
+    async uploadZip(zip: ReadStream, zipName: string): Promise<string> {
+        return this.uploadFile(zipName, zip, 'application/zip');
+    }
+
+    /*
+    This method streams the results into an s3 object
+    It returns a function to call when the streaming ends,then it returns the signed url of the object uploaded
+    */
+    async streamResults(
+        buffer: PassThrough,
+        fileId: string,
+    ): Promise<() => Promise<string>> {
+        if (!this.lightdashConfig.s3?.bucket || this.s3 === undefined) {
+            throw new MissingConfigError(
+                "Missing S3 bucket configuration, can't upload files",
+            );
+        }
+        const upload = new Upload({
+            client: this.s3,
+            params: {
+                Bucket: this.lightdashConfig.s3.bucket,
+                Key: fileId,
+                Body: buffer,
+                ContentType: `application/jsonl`,
+                ACL: 'private',
+                ContentDisposition: `attachment; filename="${fileId}"`,
+            },
+        });
+
+        const onEnd = async () => {
+            try {
+                await upload.done();
+                const url = await getSignedUrl(
+                    this.s3!,
+                    new GetObjectCommand({
+                        Bucket: this.lightdashConfig.s3!.bucket,
+                        Key: fileId,
+                    }),
+                    {
+                        expiresIn: this.lightdashConfig.s3!.expirationTime,
+                    },
+                );
+                return url;
+            } catch (error) {
+                Logger.error(
+                    `Failed to upload file to s3 with endpoint: ${
+                        this.lightdashConfig.s3!.endpoint ?? 'no endpoint'
+                    }. ${error}`,
+                );
+                Sentry.captureException(error);
+
+                throw error;
+            }
+        };
+
+        return onEnd;
     }
 
     isEnabled(): boolean {

@@ -1,5 +1,9 @@
-import { formatItemValue, ResultRow, ResultValue } from '@lightdash/common';
-import { EChartsOption, PieSeriesOption } from 'echarts';
+import {
+    formatItemValue,
+    type ResultRow,
+    type ResultValue,
+} from '@lightdash/common';
+import { type EChartsOption, type PieSeriesOption } from 'echarts';
 import { useMemo } from 'react';
 import { isPieVisualizationConfig } from '../../components/LightdashVisualization/VisualizationConfigPie';
 import { useVisualizationContext } from '../../components/LightdashVisualization/VisualizationProvider';
@@ -14,7 +18,7 @@ export type PieSeriesDataPoint = NonNullable<
 };
 
 const useEchartsPieConfig = (isInDashboard: boolean) => {
-    const { visualizationConfig, itemsMap, getGroupColor } =
+    const { visualizationConfig, itemsMap, getGroupColor, minimal } =
         useVisualizationContext();
 
     const chartConfig = useMemo(() => {
@@ -29,6 +33,7 @@ const useEchartsPieConfig = (isInDashboard: boolean) => {
             selectedMetric,
             data,
             sortedGroupLabels,
+            groupFieldIds,
             validConfig: {
                 valueLabel: valueLabelDefault,
                 showValue: showValueDefault,
@@ -58,8 +63,11 @@ const useEchartsPieConfig = (isInDashboard: boolean) => {
                     groupValueOptionOverrides?.[name]?.showPercentage ??
                     showPercentageDefault;
 
+                // Use all group field IDs as the group prefix for color assignment:
+                const groupPrefix = groupFieldIds.join('_');
                 const itemColor =
-                    groupColorOverrides?.[name] ?? getGroupColor(name);
+                    groupColorOverrides?.[name] ??
+                    getGroupColor(groupPrefix, name);
 
                 const config: PieSeriesDataPoint = {
                     id: name,
@@ -163,9 +171,9 @@ const useEchartsPieConfig = (isInDashboard: boolean) => {
                 trigger: 'item',
             },
             series: [pieSeriesOption],
-            animation: !isInDashboard,
+            animation: !(isInDashboard || minimal),
         };
-    }, [chartConfig, isInDashboard, pieSeriesOption]);
+    }, [chartConfig, isInDashboard, minimal, pieSeriesOption]);
 
     if (!itemsMap) return;
     if (!eChartsOption || !pieSeriesOption) return;

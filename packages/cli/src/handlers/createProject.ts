@@ -2,9 +2,9 @@ import {
     CreateProject,
     DbtProjectType,
     isWeekDay,
-    Project,
     ProjectType,
     WarehouseTypes,
+    type ApiCreateProjectResults,
 } from '@lightdash/common';
 import inquirer from 'inquirer';
 import path from 'path';
@@ -73,11 +73,11 @@ type CreateProjectOptions = {
     profile: string | undefined;
     type: ProjectType;
     startOfWeek?: number;
-    copiedFromProjectUuid?: string;
+    upstreamProjectUuid?: string;
 };
 export const createProject = async (
     options: CreateProjectOptions,
-): Promise<Project | undefined> => {
+): Promise<ApiCreateProjectResults | undefined> => {
     const dbtVersion = await getSupportedDbtVersion();
 
     const absoluteProjectPath = path.resolve(options.projectDir);
@@ -135,13 +135,13 @@ export const createProject = async (
             type: DbtProjectType.NONE,
             target: targetName,
         },
-        copiedFromProjectUuid: options.copiedFromProjectUuid,
+        upstreamProjectUuid: options.upstreamProjectUuid,
         dbtVersion,
     };
-    const createdProject = await lightdashApi<Project>({
+
+    return lightdashApi<ApiCreateProjectResults>({
         method: 'POST',
         url: `/api/v1/org/projects`,
         body: JSON.stringify(project),
     });
-    return createdProject;
 };

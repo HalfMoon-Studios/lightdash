@@ -1,17 +1,23 @@
 import {
-    Explore,
     formatItemValue,
     getItemId,
     hashFieldReference,
     isDimension,
-    ItemsMap,
-    MetricQuery,
-    PivotReference,
-    ResultValue,
+    type Explore,
+    type ItemsMap,
+    type MetricQuery,
+    type PivotReference,
+    type ResultValue,
 } from '@lightdash/common';
-import { createContext, FC, useCallback, useContext, useState } from 'react';
-import { EChartSeries } from '../../hooks/echarts/useEchartsCartesianConfig';
-import { EchartSeriesClickEvent } from '../SimpleChart';
+import {
+    createContext,
+    useCallback,
+    useContext,
+    useState,
+    type FC,
+} from 'react';
+import { type EChartSeries } from '../../hooks/echarts/useEchartsCartesianConfig';
+import { type EchartSeriesClickEvent } from '../SimpleChart';
 
 export type UnderlyingDataConfig = {
     item: ItemsMap[string] | undefined;
@@ -78,7 +84,8 @@ export const getDataFromChartClick = (
         e.data,
     ).reduce((acc, entry) => {
         const [key, val] = entry;
-        return { ...acc, [key]: { raw: val, formatted: val } };
+        const raw = val === '∅' ? null : val; // convert ∅ values back to null. Echarts doesn't support null formatting https://github.com/apache/echarts/issues/15821
+        return { ...acc, [key]: { raw, formatted: val } };
     }, {});
 
     return {

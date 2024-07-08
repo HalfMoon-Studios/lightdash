@@ -1,8 +1,9 @@
 import { subject } from '@casl/ability';
 import {
-    ApiError,
-    GitIntegrationConfiguration,
-    PullRequestCreated,
+    FeatureFlags,
+    type ApiError,
+    type GitIntegrationConfiguration,
+    type PullRequestCreated,
 } from '@lightdash/common';
 import {
     ActionIcon,
@@ -13,9 +14,11 @@ import {
     Group,
     Menu,
     Modal,
+    Text,
     Title,
     Tooltip,
 } from '@mantine/core';
+import { useDisclosure } from '@mantine/hooks';
 import {
     IconAlertTriangle,
     IconArrowBack,
@@ -23,25 +26,31 @@ import {
     IconBell,
     IconCheck,
     IconChevronRight,
-    IconCircleFilled,
     IconCirclePlus,
     IconCirclesRelation,
     IconCodePlus,
     IconCopy,
+    IconDatabaseExport,
     IconDots,
     IconFolder,
     IconFolders,
     IconHistory,
     IconLayoutGridAdd,
     IconPencil,
+    IconPin,
+    IconPinnedOff,
     IconSend,
     IconTrash,
 } from '@tabler/icons-react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { FC, Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState, type FC } from 'react';
 import { useHistory, useLocation, useParams } from 'react-router-dom';
-import { useToggle } from 'react-use';
 import { lightdashApi } from '../../../api';
+import { PromotionConfirmDialog } from '../../../features/promotion/components/PromotionConfirmDialog';
+import {
+    usePromoteChartDiffMutation,
+    usePromoteMutation,
+} from '../../../features/promotion/hooks/usePromoteChart';
 import { ChartSchedulersModal } from '../../../features/scheduler';
 import {
     getSchedulerUuidFromUrlParams,
@@ -51,8 +60,9 @@ import { SyncModal as GoogleSheetsSyncModal } from '../../../features/sync/compo
 import { useChartViewStats } from '../../../hooks/chart/useChartViewStats';
 import useDashboardStorage from '../../../hooks/dashboard/useDashboardStorage';
 import useToaster from '../../../hooks/toaster/useToaster';
+import { useFeatureFlagEnabled } from '../../../hooks/useFeatureFlagEnabled';
+import { useProject } from '../../../hooks/useProject';
 import {
-    useDuplicateChartMutation,
     useMoveChartMutation,
     useUpdateMutation,
 } from '../../../hooks/useSavedQuery';
@@ -65,20 +75,21 @@ import { SectionName } from '../../../types/Events';
 import MantineIcon from '../../common/MantineIcon';
 import ChartCreateModal from '../../common/modal/ChartCreateModal';
 import ChartDeleteModal from '../../common/modal/ChartDeleteModal';
+import ChartDuplicateModal from '../../common/modal/ChartDuplicateModal';
 import ChartUpdateModal from '../../common/modal/ChartUpdateModal';
 import MoveChartThatBelongsToDashboardModal from '../../common/modal/MoveChartThatBelongsToDashboardModal';
 import PageHeader from '../../common/Page/PageHeader';
 import {
     PageActionsContainer,
-    PageDetailsContainer,
     PageTitleAndDetailsContainer,
 } from '../../common/PageHeader';
-import SpaceAndDashboardInfo from '../../common/PageHeader/SpaceAndDashboardInfo';
 import { UpdatedInfo } from '../../common/PageHeader/UpdatedInfo';
-import ViewInfo from '../../common/PageHeader/ViewInfo';
 import { ResourceInfoPopup } from '../../common/ResourceInfoPopup/ResourceInfoPopup';
+import ShareShortLinkButton from '../../common/ShareShortLinkButton';
+import ExploreFromHereButton from '../../ExploreFromHereButton';
 import AddTilesToDashboardModal from '../../SavedDashboards/AddTilesToDashboardModal';
 import SaveChartButton from '../SaveChartButton';
+import { TitleBreadCrumbs } from './TitleBreadcrumbs';
 
 enum SpaceType {
     SharedWithMe,
@@ -87,7 +98,7 @@ enum SpaceType {
 
 const SpaceTypeLabels = {
     [SpaceType.SharedWithMe]: 'Shared with me',
-    [SpaceType.AdminContentView]: 'Admin content view',
+    [SpaceType.AdminContentView]: 'Public content view',
 };
 
 const getGitIntegration = async (projectUuid: string) =>
@@ -121,9 +132,9 @@ const useCreatePullRequestForChartFieldsMutation = (
     /* useMutation<GitIntegrationConfiguration, ApiError>(
         ['git-integration', 'pull-request'],
         () => createPullRequestForChartFields(projectUuid, chartUuid!),
-        
+
     );*/
-    const { showToastSuccess, showToastError } = useToaster();
+    const { showToastSuccess, showToastApiError } = useToaster();
 
     return useMutation<PullRequestCreated, ApiError>(
         () => createPullRequestForChartFields(projectUuid, chartUuid!),
@@ -142,17 +153,25 @@ const useCreatePullRequestForChartFieldsMutation = (
                     },
                 });
             },
-            onError: (error) => {
-                showToastError({
+            onError: ({ error }) => {
+                showToastApiError({
                     title: `Failed to create pull request`,
-                    subtitle: error.error.message,
+                    apiError: error,
                 });
             },
         },
     );
 };
 
-const SavedChartsHeader: FC = () => {
+type SavedChartsHeaderProps = {
+    isPinned: boolean;
+    onTogglePin: () => void;
+};
+
+const SavedChartsHeader: FC<SavedChartsHeaderProps> = ({
+    isPinned,
+    onTogglePin,
+}) => {
     const { search } = useLocation();
     const { projectUuid } = useParams<{
         projectUuid: string;
@@ -161,6 +180,18 @@ const SavedChartsHeader: FC = () => {
     const isFromDashboard = !!dashboardUuid;
     const spaceUuid = useSearchParams('fromSpace');
 
+    const userTimeZonesEnabled = useFeatureFlagEnabled(
+        FeatureFlags.EnableUserTimezones,
+    );
+    const { data: project } = useProject(projectUuid);
+
+    const { mutate: promoteChart } = usePromoteMutation();
+    const {
+        mutate: getPromoteChartDiff,
+        data: promoteChartDiff,
+        reset: resetPromoteChartDiff,
+        isLoading: promoteChartDiffLoading,
+    } = usePromoteChartDiffMutation();
     const history = useHistory();
     const isEditMode = useExplorerContext(
         (context) => context.state.isEditMode,
@@ -179,6 +210,9 @@ const SavedChartsHeader: FC = () => {
     const resultsData = useExplorerContext(
         (context) => context.queryResults.data,
     );
+    const isValidQuery = useExplorerContext(
+        (context) => context.state.isValidQuery,
+    );
 
     const itemsMap = useMemo(() => {
         return resultsData?.fields;
@@ -189,23 +223,23 @@ const SavedChartsHeader: FC = () => {
 
     const [blockedNavigationLocation, setBlockedNavigationLocation] =
         useState<string>();
-    const [isSaveWarningModalOpen, setIsSaveWarningModalOpen] =
-        useState<boolean>(false);
     const [isRenamingChart, setIsRenamingChart] = useState(false);
-    const [isQueryModalOpen, setIsQueryModalOpen] = useState<boolean>(false);
     const [isMovingChart, setIsMovingChart] = useState(false);
-    const [isScheduledDeliveriesModalOpen, toggleScheduledDeliveriesModal] =
-        useToggle(false);
-    const [isThresholdAlertsModalOpen, toggleThresholdAlertsModal] =
-        useToggle(false);
-    const [
-        isSyncWithGoogleSheetsModalOpen,
-        toggleSyncWithGoogleSheetsModalOpen,
-    ] = useToggle(false);
-    const [isAddToDashboardModalOpen, setIsAddToDashboardModalOpen] =
-        useState<boolean>(false);
-    const [isDeleteDialogOpen, setIsDeleteDialogOpen] =
-        useState<boolean>(false);
+
+    const [isSaveWarningModalOpen, saveWarningModalHandlers] = useDisclosure();
+    const [isQueryModalOpen, queryModalHandlers] = useDisclosure();
+    const [isDeleteModalOpen, deleteModalHandlers] = useDisclosure();
+    const [isScheduledDeliveriesModalOpen, scheduledDeliveriesModalHandlers] =
+        useDisclosure();
+    const [isThresholdAlertsModalOpen, thresholdAlertsModalHandlers] =
+        useDisclosure();
+    const [isSyncWithGoogleSheetsModalOpen, syncWithGoogleSheetsModalHandlers] =
+        useDisclosure();
+    const [isAddToDashboardModalOpen, addToDashboardModalHandlers] =
+        useDisclosure();
+    const [isChartDuplicateModalOpen, chartDuplicateModalHandlers] =
+        useDisclosure();
+
     const { user, health } = useApp();
     const { data: spaces = [] } = useSpaceSummaries(projectUuid, true);
     const { mutate: moveChartToSpace } = useMoveChartMutation();
@@ -219,8 +253,6 @@ const SavedChartsHeader: FC = () => {
         projectUuid,
         savedChart?.uuid,
     );
-    const { mutate: duplicateChart } = useDuplicateChartMutation();
-    const chartId = savedChart?.uuid || '';
     const chartBelongsToDashboard: boolean = !!savedChart?.dashboardUuid;
 
     const hasGoogleDriveEnabled =
@@ -234,13 +266,15 @@ const SavedChartsHeader: FC = () => {
 
         if (schedulerUuidFromUrlParams) {
             if (isSync) {
-                toggleSyncWithGoogleSheetsModalOpen(true);
-            } else toggleScheduledDeliveriesModal(true);
+                syncWithGoogleSheetsModalHandlers.open();
+            } else {
+                scheduledDeliveriesModalHandlers.open();
+            }
         }
     }, [
         search,
-        toggleScheduledDeliveriesModal,
-        toggleSyncWithGoogleSheetsModalOpen,
+        syncWithGoogleSheetsModalHandlers,
+        scheduledDeliveriesModalHandlers,
     ]);
 
     useEffect(() => {
@@ -270,7 +304,7 @@ const SavedChartsHeader: FC = () => {
                 )
             ) {
                 setBlockedNavigationLocation(prompt.pathname);
-                setIsSaveWarningModalOpen(true);
+                saveWarningModalHandlers.open();
                 return false; //blocks history
             }
             return undefined; // allow history
@@ -285,36 +319,64 @@ const SavedChartsHeader: FC = () => {
         projectUuid,
         savedChart,
         hasUnsavedChanges,
-        setIsSaveWarningModalOpen,
+        saveWarningModalHandlers,
         isEditMode,
         isQueryModalOpen,
     ]);
 
-    const spacesSharedWithMe = useMemo(() => {
-        return spaces.filter((space) => {
+    const spacesByType = useMemo(() => {
+        const spacesUserCanCreateIn = spaces.filter((space) => {
+            return user.data?.ability?.can(
+                'create',
+                subject('SavedChart', {
+                    ...space,
+                    access: space.userAccess ? [space.userAccess] : [],
+                }),
+            );
+        });
+        const spacesSharedWithMe = spacesUserCanCreateIn.filter((space) => {
             return user.data && space.access.includes(user.data.userUuid);
         });
-    }, [spaces, user.data]);
-
-    const spacesAdminsCanSee = useMemo(() => {
-        return spaces.filter((space) => {
+        const spacesAdminsCanSee = spacesUserCanCreateIn.filter((space) => {
             return (
                 spacesSharedWithMe.find((s) => s.uuid === space.uuid) ===
                 undefined
             );
         });
-    }, [spaces, spacesSharedWithMe]);
-
-    const spacesByType = useMemo(() => {
         return {
             [SpaceType.SharedWithMe]: spacesSharedWithMe,
             [SpaceType.AdminContentView]: spacesAdminsCanSee,
         };
-    }, [spacesSharedWithMe, spacesAdminsCanSee]);
+    }, [spaces, user.data]);
 
-    const userCanManageCharts = user.data?.ability?.can(
+    const userCanManageChart =
+        savedChart &&
+        user.data?.ability?.can('manage', subject('SavedChart', savedChart));
+
+    const userCanPromoteChart =
+        savedChart &&
+        !savedChart?.dashboardUuid &&
+        user.data?.ability?.can('promote', subject('SavedChart', savedChart));
+
+    const userCanManageExplore = user.data?.ability.can(
         'manage',
-        subject('SavedChart', {
+        subject('Explore', {
+            organizationUuid: user.data?.organizationUuid,
+            projectUuid: savedChart?.projectUuid,
+        }),
+    );
+
+    const userCanCreateDeliveriesAndAlerts = user.data?.ability?.can(
+        'create',
+        subject('ScheduledDeliveries', {
+            organizationUuid: user.data?.organizationUuid,
+            projectUuid,
+        }),
+    );
+
+    const userCanPinChart = user.data?.ability.can(
+        'manage',
+        subject('PinnedItems', {
             organizationUuid: user.data?.organizationUuid,
             projectUuid,
         }),
@@ -332,7 +394,7 @@ const SavedChartsHeader: FC = () => {
         if (hasUnsavedChanges && isEditMode) {
             history.block((prompt) => {
                 setBlockedNavigationLocation(prompt.pathname);
-                setIsSaveWarningModalOpen(true);
+                saveWarningModalHandlers.open();
                 return false; //blocks history
             });
         }
@@ -357,7 +419,7 @@ const SavedChartsHeader: FC = () => {
                 opened={isSaveWarningModalOpen}
                 withCloseButton={false}
                 closeOnClickOutside={false}
-                onClose={() => setIsSaveWarningModalOpen(false)}
+                onClose={saveWarningModalHandlers.close}
             >
                 <Alert
                     icon={<MantineIcon size="xl" icon={IconAlertTriangle} />}
@@ -370,7 +432,7 @@ const SavedChartsHeader: FC = () => {
                     <Button
                         color="dark"
                         variant="outline"
-                        onClick={() => setIsSaveWarningModalOpen(false)}
+                        onClick={saveWarningModalHandlers.close}
                     >
                         Stay
                     </Button>
@@ -387,94 +449,81 @@ const SavedChartsHeader: FC = () => {
                 </Group>
             </Modal>
 
-            <PageHeader>
+            <PageHeader
+                cardProps={{
+                    py: 'xs',
+                }}
+            >
                 <PageTitleAndDetailsContainer>
                     {savedChart && (
                         <>
-                            <Group spacing="xs">
-                                <Title order={4} fw={600}>
+                            <Group spacing={4}>
+                                <TitleBreadCrumbs
+                                    projectUuid={projectUuid}
+                                    spaceUuid={savedChart.spaceUuid}
+                                    spaceName={savedChart.spaceName}
+                                    dashboardUuid={savedChart.dashboardUuid}
+                                    dashboardName={savedChart.dashboardName}
+                                />
+                                <Title c="dark.6" order={5} fw={600}>
                                     {savedChart.name}
                                 </Title>
+                                {isEditMode && userCanManageChart && (
+                                    <ActionIcon
+                                        size="xs"
+                                        color="gray.6"
+                                        disabled={updateSavedChart.isLoading}
+                                        onClick={() => setIsRenamingChart(true)}
+                                    >
+                                        <MantineIcon icon={IconPencil} />
+                                    </ActionIcon>
+                                )}
+                            </Group>
 
+                            <ChartUpdateModal
+                                opened={isRenamingChart}
+                                uuid={savedChart.uuid}
+                                onClose={() => setIsRenamingChart(false)}
+                                onConfirm={() => setIsRenamingChart(false)}
+                            />
+
+                            <Group spacing="xs">
+                                <UpdatedInfo
+                                    updatedAt={savedChart.updatedAt}
+                                    user={savedChart.updatedByUser}
+                                    partiallyBold={false}
+                                />
                                 <ResourceInfoPopup
                                     resourceUuid={savedChart.uuid}
                                     projectUuid={projectUuid}
                                     description={savedChart.description}
-                                    withChartData={true}
-                                />
-
-                                {isEditMode &&
-                                    user.data?.ability?.can(
-                                        'manage',
-                                        'SavedChart',
-                                    ) && (
-                                        <ActionIcon
-                                            color="gray.7"
-                                            disabled={
-                                                updateSavedChart.isLoading
-                                            }
-                                            onClick={() =>
-                                                setIsRenamingChart(true)
-                                            }
-                                        >
-                                            <MantineIcon icon={IconPencil} />
-                                        </ActionIcon>
-                                    )}
-                                <ChartUpdateModal
-                                    opened={isRenamingChart}
-                                    uuid={savedChart.uuid}
-                                    onClose={() => setIsRenamingChart(false)}
-                                    onConfirm={() => setIsRenamingChart(false)}
-                                />
-                            </Group>
-
-                            <PageDetailsContainer>
-                                <UpdatedInfo
-                                    updatedAt={savedChart.updatedAt}
-                                    user={savedChart.updatedByUser}
-                                />
-
-                                <MantineIcon
-                                    icon={IconCircleFilled}
-                                    size={3}
-                                    style={{ margin: '0 11px' }}
-                                />
-                                <ViewInfo
-                                    views={chartViewStats.data?.views}
+                                    viewStats={chartViewStats.data?.views}
                                     firstViewedAt={
                                         chartViewStats.data?.firstViewedAt
                                     }
+                                    withChartData={true}
                                 />
-
-                                <MantineIcon
-                                    icon={IconCircleFilled}
-                                    size={3}
-                                    style={{ margin: '0 11px' }}
-                                />
-                                <SpaceAndDashboardInfo
-                                    space={{
-                                        link: `/projects/${projectUuid}/spaces/${savedChart.spaceUuid}`,
-                                        name: savedChart.spaceName,
-                                    }}
-                                    dashboard={
-                                        savedChart.dashboardUuid &&
-                                        savedChart.dashboardName
-                                            ? {
-                                                  link: `/projects/${projectUuid}/dashboards/${savedChart.dashboardUuid}`,
-                                                  name: savedChart.dashboardName,
-                                              }
-                                            : undefined
-                                    }
-                                />
-                            </PageDetailsContainer>
+                            </Group>
                         </>
                     )}
                 </PageTitleAndDetailsContainer>
-
-                {(userCanManageCharts || userCanCreateDeliveriesAndAlerts) && (
+                {userTimeZonesEnabled &&
+                    savedChart?.metricQuery.timezone &&
+                    !isEditMode && (
+                        <Text color="gray" mr="sm" fz="xs">
+                            {savedChart?.metricQuery.timezone}
+                        </Text>
+                    )}
+                {(userCanManageChart ||
+                    userCanCreateDeliveriesAndAlerts ||
+                    userCanManageExplore) && (
                     <PageActionsContainer>
-                        {userCanManageCharts && (
+                        {userCanManageExplore && !isEditMode && (
+                            <ExploreFromHereButton />
+                        )}
+                        {userCanManageChart && (
                             <>
+                                {/* TODO: Extract this into a separate component, depending on the mode: viewing or editing */}
                                 {!isEditMode ? (
                                     <>
                                         <Button
@@ -493,6 +542,9 @@ const SavedChartsHeader: FC = () => {
                                         >
                                             Edit chart
                                         </Button>
+                                        <ShareShortLinkButton
+                                            disabled={!isValidQuery}
+                                        />
                                     </>
                                 ) : (
                                     <>
@@ -514,6 +566,8 @@ const SavedChartsHeader: FC = () => {
                                             <Tooltip
                                                 offset={-1}
                                                 label="Return to dashboard"
+                                                withinPortal
+                                                position="bottom"
                                             >
                                                 <ActionIcon
                                                     variant="default"
@@ -529,6 +583,7 @@ const SavedChartsHeader: FC = () => {
                                 )}
                             </>
                         )}
+                        {/* TODO: Refactor this into its own component */}
                         <Menu
                             position="bottom"
                             withArrow
@@ -539,35 +594,33 @@ const SavedChartsHeader: FC = () => {
                         >
                             <Menu.Dropdown>
                                 <Menu.Label>Manage</Menu.Label>
-                                {userCanManageCharts && hasUnsavedChanges && (
+                                {userCanManageChart && hasUnsavedChanges && (
                                     <Menu.Item
                                         icon={
                                             <MantineIcon
                                                 icon={IconCirclePlus}
                                             />
                                         }
-                                        onClick={() => {
-                                            setIsQueryModalOpen(true);
-                                        }}
+                                        onClick={queryModalHandlers.open}
                                     >
                                         Save chart as
                                     </Menu.Item>
                                 )}
-                                {userCanManageCharts &&
+                                {userCanManageChart &&
                                     !hasUnsavedChanges &&
                                     !chartBelongsToDashboard && (
                                         <Menu.Item
                                             icon={
                                                 <MantineIcon icon={IconCopy} />
                                             }
-                                            onClick={() => {
-                                                duplicateChart(chartId);
-                                            }}
+                                            onClick={
+                                                chartDuplicateModalHandlers.open
+                                            }
                                         >
                                             Duplicate
                                         </Menu.Item>
                                     )}
-                                {userCanManageCharts &&
+                                {userCanManageChart &&
                                     !chartBelongsToDashboard && (
                                         <Menu.Item
                                             icon={
@@ -575,16 +628,14 @@ const SavedChartsHeader: FC = () => {
                                                     icon={IconLayoutGridAdd}
                                                 />
                                             }
-                                            onClick={() =>
-                                                setIsAddToDashboardModalOpen(
-                                                    true,
-                                                )
+                                            onClick={
+                                                addToDashboardModalHandlers.open
                                             }
                                         >
                                             Add to dashboard
                                         </Menu.Item>
                                     )}
-                                {userCanManageCharts &&
+                                {userCanManageChart &&
                                     savedChart?.dashboardUuid && (
                                         <Menu.Item
                                             icon={
@@ -600,7 +651,28 @@ const SavedChartsHeader: FC = () => {
                                         </Menu.Item>
                                     )}
 
-                                {userCanManageCharts &&
+                                {!chartBelongsToDashboard && userCanPinChart && (
+                                    <Menu.Item
+                                        component="button"
+                                        role="menuitem"
+                                        icon={
+                                            isPinned ? (
+                                                <MantineIcon
+                                                    icon={IconPinnedOff}
+                                                />
+                                            ) : (
+                                                <MantineIcon icon={IconPin} />
+                                            )
+                                        }
+                                        onClick={onTogglePin}
+                                    >
+                                        {isPinned
+                                            ? 'Unpin from homepage'
+                                            : 'Pin to homepage'}
+                                    </Menu.Item>
+                                )}
+
+                                {userCanManageChart &&
                                     !chartBelongsToDashboard && (
                                         <Menu.Item
                                             icon={
@@ -651,12 +723,16 @@ const SavedChartsHeader: FC = () => {
                                                             key={spaceType}
                                                         >
                                                             {spacesByType[
-                                                                SpaceType
-                                                                    .AdminContentView
+                                                                spaceType
                                                             ].length > 0 ? (
                                                                 <>
                                                                     {spaceType ===
-                                                                    SpaceType.AdminContentView ? (
+                                                                        SpaceType.AdminContentView &&
+                                                                    spacesByType[
+                                                                        SpaceType
+                                                                            .SharedWithMe
+                                                                    ].length >
+                                                                        0 ? (
                                                                         <Menu.Divider />
                                                                     ) : null}
 
@@ -734,27 +810,59 @@ const SavedChartsHeader: FC = () => {
                                             </Menu>
                                         </Menu.Item>
                                     )}
-                                {userCanManageCharts && (
+                                {userCanManageChart && (
                                     <Menu.Item
                                         icon={
-                                            <MantineIcon icon={IconHistory} />
+                                            <MantineIcon icon={IconCodePlus} />
                                         }
                                         onClick={() =>
-                                            history.push({
-                                                pathname: `/projects/${savedChart?.projectUuid}/saved/${savedChart?.uuid}/history`,
-                                            })
+                                            createPullRequest.mutate()
                                         }
                                     >
-                                        Version history
+                                        Add custom metrics to dbt project
                                     </Menu.Item>
                                 )}
+                                {userCanPromoteChart && (
+                                    <Tooltip
+                                        label="You must enable first an upstram project in settings > Data ops"
+                                        disabled={
+                                            project?.upstreamProjectUuid !==
+                                            undefined
+                                        }
+                                        withinPortal
+                                    >
+                                        <div>
+                                            <Menu.Item
+                                                disabled={
+                                                    project?.upstreamProjectUuid ===
+                                                    undefined
+                                                }
+                                                icon={
+                                                    <MantineIcon
+                                                        icon={
+                                                            IconDatabaseExport
+                                                        }
+                                                    />
+                                                }
+                                                onClick={() => {
+                                                    getPromoteChartDiff(
+                                                        savedChart?.uuid,
+                                                    );
+                                                }}
+                                            >
+                                                Promote chart
+                                            </Menu.Item>
+                                        </div>
+                                    </Tooltip>
+                                )}
+
                                 <Menu.Divider />
                                 <Menu.Label>Integrations</Menu.Label>
                                 {userCanCreateDeliveriesAndAlerts && (
                                     <Menu.Item
                                         icon={<MantineIcon icon={IconSend} />}
-                                        onClick={() =>
-                                            toggleScheduledDeliveriesModal(true)
+                                        onClick={
+                                            scheduledDeliveriesModalHandlers.open
                                         }
                                     >
                                         Scheduled deliveries
@@ -763,25 +871,22 @@ const SavedChartsHeader: FC = () => {
                                 {userCanCreateDeliveriesAndAlerts && (
                                     <Menu.Item
                                         icon={<MantineIcon icon={IconBell} />}
-                                        onClick={() =>
-                                            toggleThresholdAlertsModal(true)
+                                        onClick={
+                                            thresholdAlertsModalHandlers.open
                                         }
                                     >
                                         Alerts
                                     </Menu.Item>
                                 )}
-                                {userCanManageCharts &&
-                                hasGoogleDriveEnabled ? (
+                                {userCanManageChart && hasGoogleDriveEnabled ? (
                                     <Menu.Item
                                         icon={
                                             <MantineIcon
                                                 icon={IconCirclesRelation}
                                             />
                                         }
-                                        onClick={() =>
-                                            toggleSyncWithGoogleSheetsModalOpen(
-                                                true,
-                                            )
+                                        onClick={
+                                            syncWithGoogleSheetsModalHandlers.open
                                         }
                                     >
                                         Google Sheets Sync
@@ -799,7 +904,7 @@ const SavedChartsHeader: FC = () => {
                                         Add custom metrics to dbt project
                                     </Menu.Item>
                                 )}
-                                {userCanManageCharts && (
+                                {userCanManageChart && (
                                     <>
                                         <Menu.Divider />
 
@@ -820,10 +925,8 @@ const SavedChartsHeader: FC = () => {
                                                     }
                                                     color="red"
                                                     disabled={getIsEditingDashboardChart()}
-                                                    onClick={() =>
-                                                        setIsDeleteDialogOpen(
-                                                            true,
-                                                        )
+                                                    onClick={
+                                                        deleteModalHandlers.open
                                                     }
                                                 >
                                                     Delete
@@ -850,8 +953,8 @@ const SavedChartsHeader: FC = () => {
                 <ChartCreateModal
                     isOpen={isQueryModalOpen}
                     savedData={unsavedChartVersion}
-                    onClose={() => setIsQueryModalOpen(false)}
-                    onConfirm={() => setIsQueryModalOpen(false)}
+                    onClose={queryModalHandlers.close}
+                    onConfirm={queryModalHandlers.close}
                     defaultSpaceUuid={spaceUuid ?? undefined}
                 />
             )}
@@ -860,14 +963,14 @@ const SavedChartsHeader: FC = () => {
                     isOpen={isAddToDashboardModalOpen}
                     projectUuid={projectUuid}
                     savedChartUuid={savedChart.uuid}
-                    onClose={() => setIsAddToDashboardModalOpen(false)}
+                    onClose={addToDashboardModalHandlers.close}
                 />
             )}
-            {isDeleteDialogOpen && savedChart?.uuid && (
+            {isDeleteModalOpen && savedChart?.uuid && (
                 <ChartDeleteModal
                     uuid={savedChart.uuid}
-                    opened={isDeleteDialogOpen}
-                    onClose={() => setIsDeleteDialogOpen(false)}
+                    opened={isDeleteModalOpen}
+                    onClose={deleteModalHandlers.close}
                     onConfirm={() => {
                         history.listen((location, action) => {
                             if (action === 'POP') {
@@ -881,7 +984,7 @@ const SavedChartsHeader: FC = () => {
 
                         history.push('/');
 
-                        setIsDeleteDialogOpen(false);
+                        deleteModalHandlers.close();
                     }}
                 />
             )}
@@ -889,7 +992,7 @@ const SavedChartsHeader: FC = () => {
                 <GoogleSheetsSyncModal
                     chartUuid={savedChart.uuid}
                     opened={isSyncWithGoogleSheetsModalOpen}
-                    onClose={() => toggleSyncWithGoogleSheetsModalOpen(false)}
+                    onClose={syncWithGoogleSheetsModalHandlers.close}
                 />
             )}
             {isScheduledDeliveriesModalOpen && savedChart?.uuid && (
@@ -897,7 +1000,17 @@ const SavedChartsHeader: FC = () => {
                     chartUuid={savedChart.uuid}
                     name={savedChart.name}
                     isOpen={isScheduledDeliveriesModalOpen}
-                    onClose={() => toggleScheduledDeliveriesModal(false)}
+                    onClose={scheduledDeliveriesModalHandlers.close}
+                />
+            )}
+            {isThresholdAlertsModalOpen && savedChart?.uuid && (
+                <ChartSchedulersModal
+                    chartUuid={savedChart.uuid}
+                    name={savedChart.name}
+                    isThresholdAlert
+                    itemsMap={itemsMap}
+                    isOpen={isThresholdAlertsModalOpen}
+                    onClose={thresholdAlertsModalHandlers.close}
                 />
             )}
             {isThresholdAlertsModalOpen && savedChart?.uuid && (
@@ -926,6 +1039,29 @@ const SavedChartsHeader: FC = () => {
                         );
                     }}
                 />
+            )}
+
+            {isChartDuplicateModalOpen && savedChart?.uuid && (
+                <ChartDuplicateModal
+                    opened={isChartDuplicateModalOpen}
+                    uuid={savedChart.uuid}
+                    onClose={chartDuplicateModalHandlers.close}
+                    onConfirm={chartDuplicateModalHandlers.close}
+                />
+            )}
+
+            {(promoteChartDiff || promoteChartDiffLoading) && (
+                <PromotionConfirmDialog
+                    type={'chart'}
+                    resourceName={savedChart?.name ?? ''}
+                    promotionChanges={promoteChartDiff}
+                    onClose={() => {
+                        resetPromoteChartDiff();
+                    }}
+                    onConfirm={() => {
+                        if (savedChart?.uuid) promoteChart(savedChart.uuid);
+                    }}
+                ></PromotionConfirmDialog>
             )}
         </TrackSection>
     );

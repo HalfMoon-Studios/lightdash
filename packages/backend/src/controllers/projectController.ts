@@ -1,5 +1,6 @@
 import {
     ApiCalculateTotalResponse,
+    ApiChartListResponse,
     ApiChartSummaryListResponse,
     ApiErrorPayload,
     ApiGetProjectGroupAccesses,
@@ -12,6 +13,7 @@ import {
     CalculateTotalFromQuery,
     CreateProjectMember,
     DbtExposure,
+    UpdateMetadata,
     UpdateProjectMember,
     UserWarehouseCredentials,
 } from '@lightdash/common';
@@ -75,13 +77,35 @@ export class ProjectController extends BaseController {
     async getChartsInProject(
         @Path() projectUuid: string,
         @Request() req: express.Request,
-    ): Promise<ApiChartSummaryListResponse> {
+    ): Promise<ApiChartListResponse> {
         this.setStatus(200);
         return {
             status: 'ok',
             results: await this.services
                 .getProjectService()
                 .getCharts(req.user!, projectUuid),
+        };
+    }
+
+    /**
+     * List all charts summaries in a project
+     * @param projectUuid The uuid of the project to get charts for
+     * @param req express request
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @SuccessResponse('200', 'Success')
+    @Get('{projectUuid}/chart-summaries')
+    @OperationId('ListChartSummariesInProject')
+    async getChartSummariesInProject(
+        @Path() projectUuid: string,
+        @Request() req: express.Request,
+    ): Promise<ApiChartSummaryListResponse> {
+        this.setStatus(200);
+        return {
+            status: 'ok',
+            results: await this.services
+                .getProjectService()
+                .getChartSummaries(req.user!, projectUuid),
         };
     }
 
@@ -401,6 +425,33 @@ export class ProjectController extends BaseController {
             results: await this.services
                 .getProjectService()
                 .getCustomMetrics(req.user!, projectUuid),
+        };
+    }
+
+    /**
+     * Update project metadata like upstreamProjectUuid
+     * we don't trigger a compile, so not for updating warehouse or credentials
+     */
+    @Middlewares([
+        allowApiKeyAuthentication,
+        isAuthenticated,
+        unauthorisedInDemo,
+    ])
+    @SuccessResponse('200', 'Success')
+    @Patch('{projectUuid}/metadata')
+    @OperationId('updateProjectMetadata')
+    async updateProjectMetadata(
+        @Path() projectUuid: string,
+        @Body() body: UpdateMetadata,
+        @Request() req: express.Request,
+    ): Promise<ApiSuccessEmpty> {
+        this.setStatus(200);
+        await this.services
+            .getProjectService()
+            .updateMetadata(req.user!, projectUuid, body);
+        return {
+            status: 'ok',
+            results: undefined,
         };
     }
 }

@@ -1,18 +1,18 @@
-import { ApiError, PullRequestCreated } from '@lightdash/common';
+import { type ApiError, type PullRequestCreated } from '@lightdash/common';
 import {
     Button,
     Group,
     Modal,
-    ModalProps,
     Select,
     Stack,
     Text,
     Title,
+    type ModalProps,
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { IconArrowRight } from '@tabler/icons-react';
 import { useMutation } from '@tanstack/react-query';
-import React, { FC } from 'react';
+import React, { type FC } from 'react';
 import { lightdashApi } from '../../api';
 import useToaster from '../../hooks/toaster/useToaster';
 
@@ -30,7 +30,7 @@ const createCustomMetricsPullRequest = async (
     });
 
 const useCreateCustomMetricsPullRequest = (projectUuid: string) => {
-    const { showToastSuccess, showToastError } = useToaster();
+    const { showToastSuccess, showToastApiError } = useToaster();
 
     return useMutation<
         PullRequestCreated,
@@ -54,10 +54,10 @@ const useCreateCustomMetricsPullRequest = (projectUuid: string) => {
                 },
             });
         },
-        onError: (error) => {
-            showToastError({
+        onError: ({ error }) => {
+            showToastApiError({
                 title: `Failed to create pull request`,
-                subtitle: error.error.message,
+                apiError: error,
             });
         },
     });

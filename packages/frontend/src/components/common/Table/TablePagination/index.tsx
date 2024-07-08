@@ -1,6 +1,6 @@
 import { Button, Group, SegmentedControl, Text } from '@mantine/core';
 import { IconChevronLeft, IconChevronRight } from '@tabler/icons-react';
-import { FC } from 'react';
+import { type FC } from 'react';
 import MantineIcon from '../../MantineIcon';
 import { TableFooter } from '../Table.styles';
 import { useTableContext } from '../TableProvider';
@@ -79,7 +79,9 @@ const TablePagination: FC = () => {
                     </Button.Group>
                 </Group>
             ) : pagination?.showResultsTotal ? (
-                <ResultCount count={table.getRowModel().rows.length} />
+                <ResultCount
+                    count={table.getPreGroupedRowModel().rows.length}
+                />
             ) : null}
         </TableFooter>
     );

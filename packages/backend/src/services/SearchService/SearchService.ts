@@ -17,7 +17,8 @@ import { ProjectModel } from '../../models/ProjectModel/ProjectModel';
 import { SearchModel } from '../../models/SearchModel';
 import { SpaceModel } from '../../models/SpaceModel';
 import { UserAttributesModel } from '../../models/UserAttributesModel';
-import { hasSpaceAccess } from '../SpaceService/SpaceService';
+import { BaseService } from '../BaseService';
+import { hasViewAccessToSpace } from '../SpaceService/SpaceService';
 import { hasUserAttributes } from '../UserAttributesService/UserAttributeUtils';
 
 type SearchServiceArguments = {
@@ -28,7 +29,7 @@ type SearchServiceArguments = {
     userAttributesModel: UserAttributesModel;
 };
 
-export class SearchService {
+export class SearchService extends BaseService {
     private readonly searchModel: SearchModel;
 
     private readonly analytics: LightdashAnalytics;
@@ -40,6 +41,7 @@ export class SearchService {
     private readonly userAttributesModel: UserAttributesModel;
 
     constructor(args: SearchServiceArguments) {
+        super();
         this.analytics = args.analytics;
         this.searchModel = args.searchModel;
         this.projectModel = args.projectModel;
@@ -89,7 +91,12 @@ export class SearchService {
                 this.spaceModel.getSpaceSummary(spaceUuid),
             ),
         );
-        const filterItem = (
+        const spacesAccess = await this.spaceModel.getUserSpacesAccess(
+            user.userUuid,
+            spaces.map((s) => s.uuid),
+        );
+
+        const filterItem = async (
             item:
                 | DashboardSearchResult
                 | SpaceSearchResult
@@ -98,7 +105,14 @@ export class SearchService {
             const spaceUuid: string =
                 'spaceUuid' in item ? item.spaceUuid : item.uuid;
             const itemSpace = spaces.find((s) => s.uuid === spaceUuid);
-            return itemSpace && hasSpaceAccess(user, itemSpace, true);
+            return (
+                itemSpace &&
+                hasViewAccessToSpace(
+                    user,
+                    itemSpace,
+                    spacesAccess[spaceUuid] ?? [],
+                )
+            );
         };
 
         const hasExploreAccess = user.ability.can(
@@ -162,13 +176,27 @@ export class SearchService {
             }
         }
 
+        const hasDashboardAccess = await Promise.all(
+            results.dashboards.map(filterItem),
+        );
+        const hasSavedChartAccess = await Promise.all(
+            results.savedCharts.map(filterItem),
+        );
+        const hasSpaceAccess = await Promise.all(
+            results.spaces.map(filterItem),
+        );
+
         const filteredResults = {
             ...results,
             tables: filteredTables,
             fields: filteredFields,
-            dashboards: results.dashboards.filter(filterItem),
-            savedCharts: results.savedCharts.filter(filterItem),
-            spaces: results.spaces.filter(filterItem),
+            dashboards: results.dashboards.filter(
+                (_, index) => hasDashboardAccess[index],
+            ),
+            savedCharts: results.savedCharts.filter(
+                (_, index) => hasSavedChartAccess[index],
+            ),
+            spaces: results.spaces.filter((_, index) => hasSpaceAccess[index]),
             pages: user.ability.can(
                 'view',
                 subject('Analytics', {

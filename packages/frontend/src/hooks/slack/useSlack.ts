@@ -1,9 +1,14 @@
-import { ApiError, SlackChannel, SlackSettings } from '@lightdash/common';
+import {
+    type ApiError,
+    type SlackAppCustomSettings,
+    type SlackChannel,
+    type SlackSettings,
+} from '@lightdash/common';
 import {
     useMutation,
     useQuery,
     useQueryClient,
-    UseQueryOptions,
+    type UseQueryOptions,
 } from '@tanstack/react-query';
 import { lightdashApi } from '../../api';
 import useToaster from '../toaster/useToaster';
@@ -31,7 +36,7 @@ const deleteSlack = async () =>
 
 export const useDeleteSlack = () => {
     const queryClient = useQueryClient();
-    const { showToastSuccess, showToastError } = useToaster();
+    const { showToastSuccess, showToastApiError } = useToaster();
     return useMutation<null, ApiError, undefined>(deleteSlack, {
         onSuccess: async () => {
             await queryClient.invalidateQueries(['slack']);
@@ -40,10 +45,10 @@ export const useDeleteSlack = () => {
                 title: `Deleted! Slack integration was deleted`,
             });
         },
-        onError: (error) => {
-            showToastError({
+        onError: ({ error }) => {
+            showToastApiError({
                 title: `Failed to delete Slack integration`,
-                subtitle: error.error.message,
+                apiError: error,
             });
         },
     });
@@ -65,30 +70,33 @@ export const useSlackChannels = (
         ...useQueryOptions,
     });
 
-const updateSlackNotificationChannel = async (channelId: string | null) =>
+const updateSlackCustomSettings = async (opts: SlackAppCustomSettings) =>
     lightdashApi<null>({
-        url: `/slack/notification-channel`,
+        url: `/slack/custom-settings`,
         method: 'PUT',
-        body: JSON.stringify({ channelId }),
+        body: JSON.stringify({
+            ...opts,
+            appProfilePhotoUrl: opts.appProfilePhotoUrl || null,
+        }),
     });
 
-export const useUpdateSlackNotificationChannelMutation = () => {
+export const useUpdateSlackAppCustomSettingsMutation = () => {
     const queryClient = useQueryClient();
-    const { showToastSuccess, showToastError } = useToaster();
-    return useMutation<null, ApiError, { channelId: string | null }>(
-        ({ channelId }) => updateSlackNotificationChannel(channelId),
+    const { showToastSuccess, showToastApiError } = useToaster();
+    return useMutation<null, ApiError, SlackAppCustomSettings>(
+        updateSlackCustomSettings,
         {
             onSuccess: async () => {
                 await queryClient.invalidateQueries(['slack']);
 
                 showToastSuccess({
-                    title: `Success! Slack notification channel updated`,
+                    title: `Success! Slack app settings updated`,
                 });
             },
-            onError: (error) => {
-                showToastError({
-                    title: `Failed to update Slack notification channel`,
-                    subtitle: error.error.message,
+            onError: ({ error }) => {
+                showToastApiError({
+                    title: `Failed to update Slack app settings`,
+                    apiError: error,
                 });
             },
         },

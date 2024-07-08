@@ -1,5 +1,4 @@
 import {
-    AdditionalMetric,
     isAdditionalMetric,
     isCustomDimension,
     isDimension,
@@ -7,20 +6,21 @@ import {
     isMetric,
     isTableCalculation,
     isTimeInterval,
-    Item,
     timeFrameConfigs,
+    type AdditionalMetric,
+    type Item,
 } from '@lightdash/common';
 import {
     Group,
     Highlight,
+    HoverCard,
     NavLink,
-    Popover,
     Text,
     Tooltip,
 } from '@mantine/core';
 import { IconAlertTriangle, IconFilter } from '@tabler/icons-react';
 import { darken, lighten } from 'polished';
-import { FC } from 'react';
+import { type FC } from 'react';
 import { useToggle } from 'react-use';
 import { getItemBgColor } from '../../../../../hooks/useColumns';
 import { useFilters } from '../../../../../hooks/useFilters';
@@ -28,7 +28,7 @@ import FieldIcon from '../../../../common/Filters/FieldIcon';
 import MantineIcon from '../../../../common/MantineIcon';
 import { useItemDetail } from '../ItemDetailContext';
 import { ItemDetailMarkdown, ItemDetailPreview } from '../ItemDetailPreview';
-import { Node, useTableTreeContext } from './TreeProvider';
+import { useTableTreeContext, type Node } from './TreeProvider';
 import TreeSingleNodeActions from './TreeSingleNodeActions';
 
 type Props = {
@@ -43,6 +43,7 @@ const TreeSingleNode: FC<Props> = ({ node }) => {
         searchResults,
         searchQuery,
         missingCustomMetrics,
+        missingCustomDimensions,
         onItemClick,
     } = useTableTreeContext();
     const { isFilteredField } = useFilters();
@@ -73,14 +74,18 @@ const TreeSingleNode: FC<Props> = ({ node }) => {
             : item.name;
 
     const isMissing =
-        isAdditionalMetric(item) &&
-        missingCustomMetrics &&
-        missingCustomMetrics.includes(item);
+        (isAdditionalMetric(item) &&
+            missingCustomMetrics &&
+            missingCustomMetrics.includes(item)) ||
+        (isCustomDimension(item) &&
+            missingCustomDimensions &&
+            missingCustomDimensions.includes(item));
+
     const description = isField(item) ? item.description : undefined;
 
     const bgColor = getItemBgColor(item);
 
-    // TODO: Add getFieldType function to common which should return FieldType enum (which should also have CUSTOM_METRIC, CUSTOM_DIMENSION, and TABLE_CALCULATION)
+    // TODO: Add getFieldType function to common which should return FieldType enum (which should also have CUSTOM_METRIC, CUSTOM_DIMENSION)
     const getFieldIconColor = (field: Item | AdditionalMetric) => {
         if (isCustomDimension(field) || isDimension(field)) return 'blue.9';
         if (isAdditionalMetric(field)) return 'yellow.9';
@@ -149,8 +154,8 @@ const TreeSingleNode: FC<Props> = ({ node }) => {
             onMouseLeave={() => toggleHover(false)}
             label={
                 <Group noWrap>
-                    <Popover
-                        opened={isHover}
+                    <HoverCard
+                        openDelay={300}
                         keepMounted={false}
                         shadow="sm"
                         withinPortal
@@ -160,7 +165,7 @@ const TreeSingleNode: FC<Props> = ({ node }) => {
                         /** Ensures the hover card does not overlap with the right-hand menu. */
                         offset={isFiltered ? 80 : 40}
                     >
-                        <Popover.Target>
+                        <HoverCard.Target>
                             <Highlight
                                 component={Text}
                                 truncate
@@ -169,8 +174,9 @@ const TreeSingleNode: FC<Props> = ({ node }) => {
                             >
                                 {label}
                             </Highlight>
-                        </Popover.Target>
-                        <Popover.Dropdown
+                        </HoverCard.Target>
+                        <HoverCard.Dropdown
+                            hidden={!isHover}
                             p="xs"
                             /**
                              * Takes up space to the right, so it's OK to go fairly wide in the interest
@@ -191,8 +197,8 @@ const TreeSingleNode: FC<Props> = ({ node }) => {
                                     description={description}
                                 />
                             )}
-                        </Popover.Dropdown>
-                    </Popover>
+                        </HoverCard.Dropdown>
+                    </HoverCard>
 
                     {isFiltered ? (
                         <Tooltip withinPortal label="This field is filtered">

@@ -1,20 +1,20 @@
 import {
-    ApiError,
-    ChartHistory,
-    ChartVersion,
-    CreateSavedChart,
-    CreateSavedChartVersion,
-    SavedChart,
-    UpdateMultipleSavedChart,
-    UpdateSavedChart,
+    type ApiError,
+    type ChartHistory,
+    type ChartVersion,
+    type CreateSavedChart,
+    type CreateSavedChartVersion,
+    type SavedChart,
+    type UpdateMultipleSavedChart,
+    type UpdateSavedChart,
 } from '@lightdash/common';
 import { IconArrowRight } from '@tabler/icons-react';
 import {
     useMutation,
-    UseMutationOptions,
     useQuery,
     useQueryClient,
-    UseQueryOptions,
+    type UseMutationOptions,
+    type UseQueryOptions,
 } from '@tanstack/react-query';
 import { useHistory, useParams } from 'react-router-dom';
 import { lightdashApi } from '../api';
@@ -43,11 +43,12 @@ const createSavedQuery = async (
 const duplicateSavedQuery = async (
     projectUuid: string,
     chartUuid: string,
+    data: { chartName: string; chartDesc: string },
 ): Promise<SavedChart> =>
     lightdashApi<SavedChart>({
         url: `/projects/${projectUuid}/saved?duplicateFrom=${chartUuid}`,
         method: 'POST',
-        body: undefined,
+        body: JSON.stringify(data),
     });
 
 export const deleteSavedQuery = async (id: string) =>
@@ -91,6 +92,7 @@ const addVersionSavedQuery = async ({
         metricQuery: {
             ...payload.metricQuery,
             filters: convertDateFilters(payload.metricQuery.filters),
+            timezone: payload.metricQuery.timezone ?? undefined,
         },
     };
     return lightdashApi<SavedChart>({
@@ -161,7 +163,7 @@ export const useChartVersionRollbackMutation = (
         'mutationFn'
     >,
 ) => {
-    const { showToastSuccess, showToastError } = useToaster();
+    const { showToastSuccess, showToastApiError } = useToaster();
     return useMutation<null, ApiError, string>(
         (versionUuid: string) => rollbackChartQuery(chartUuid, versionUuid),
         {
@@ -173,10 +175,10 @@ export const useChartVersionRollbackMutation = (
                 });
                 useMutationOptions?.onSuccess?.(...args);
             },
-            onError: (error) => {
-                showToastError({
+            onError: ({ error }) => {
+                showToastApiError({
                     title: `Failed to revert chart`,
-                    subtitle: error.error.message,
+                    apiError: error,
                 });
             },
         },
@@ -185,7 +187,7 @@ export const useChartVersionRollbackMutation = (
 
 export const useSavedQueryDeleteMutation = () => {
     const queryClient = useQueryClient();
-    const { showToastSuccess, showToastError } = useToaster();
+    const { showToastSuccess, showToastApiError } = useToaster();
     return useMutation<null, ApiError, string>(
         async (data) => {
             queryClient.removeQueries(['savedChartResults', data]);
@@ -205,10 +207,10 @@ export const useSavedQueryDeleteMutation = () => {
                     title: `Success! Chart was deleted.`,
                 });
             },
-            onError: (error) => {
-                showToastError({
+            onError: ({ error }) => {
+                showToastApiError({
                     title: `Failed to delete chart`,
-                    subtitle: error.error.message,
+                    apiError: error,
                 });
             },
         },
@@ -228,7 +230,7 @@ const updateMultipleSavedQuery = async (
 
 export const useUpdateMultipleMutation = (projectUuid: string) => {
     const queryClient = useQueryClient();
-    const { showToastSuccess, showToastError } = useToaster();
+    const { showToastSuccess, showToastApiError } = useToaster();
 
     return useMutation<SavedChart[], ApiError, UpdateMultipleSavedChart[]>(
         (data) => {
@@ -252,10 +254,10 @@ export const useUpdateMultipleMutation = (projectUuid: string) => {
                     title: `Success! Charts were updated.`,
                 });
             },
-            onError: (error) => {
-                showToastError({
+            onError: ({ error }) => {
+                showToastApiError({
                     title: `Failed to save chart`,
-                    subtitle: error.error.message,
+                    apiError: error,
                 });
             },
         },
@@ -268,7 +270,7 @@ export const useUpdateMutation = (
 ) => {
     const history = useHistory();
     const queryClient = useQueryClient();
-    const { showToastSuccess, showToastError } = useToaster();
+    const { showToastSuccess, showToastApiError } = useToaster();
 
     return useMutation<
         SavedChart,
@@ -309,10 +311,10 @@ export const useUpdateMutation = (
                         : undefined,
                 });
             },
-            onError: (error) => {
-                showToastError({
+            onError: ({ error }) => {
+                showToastApiError({
                     title: `Failed to save chart`,
-                    subtitle: error.error.message,
+                    apiError: error,
                 });
             },
         },
@@ -329,7 +331,7 @@ export const useMoveChartMutation = (
     const history = useHistory();
     const queryClient = useQueryClient();
     const { projectUuid } = useParams<{ projectUuid: string }>();
-    const { showToastSuccess, showToastError } = useToaster();
+    const { showToastSuccess, showToastApiError } = useToaster();
 
     return useMutation<
         SavedChart,
@@ -359,10 +361,10 @@ export const useMoveChartMutation = (
             });
             options?.onSuccess?.(data, _, __);
         },
-        onError: (error) => {
-            showToastError({
+        onError: ({ error }) => {
+            showToastApiError({
                 title: `Failed to move chart`,
-                subtitle: error.error.message,
+                apiError: error,
             });
         },
     });
@@ -372,7 +374,7 @@ export const useCreateMutation = () => {
     const history = useHistory();
     const { projectUuid } = useParams<{ projectUuid: string }>();
     const queryClient = useQueryClient();
-    const { showToastSuccess, showToastError } = useToaster();
+    const { showToastSuccess, showToastApiError } = useToaster();
     return useMutation<SavedChart, ApiError, CreateSavedChart>(
         (data) => createSavedQuery(projectUuid, data),
         {
@@ -386,10 +388,10 @@ export const useCreateMutation = () => {
                     pathname: `/projects/${projectUuid}/saved/${data.uuid}/view`,
                 });
             },
-            onError: (error) => {
-                showToastError({
+            onError: ({ error }) => {
+                showToastApiError({
                     title: `Failed to save chart`,
-                    subtitle: error.error.message,
+                    apiError: error,
                 });
             },
         },
@@ -398,6 +400,8 @@ export const useCreateMutation = () => {
 
 type DuplicateChartMutationOptions = {
     showRedirectButton?: boolean;
+    successMessage?: string;
+    autoRedirect?: boolean;
 };
 
 export const useDuplicateChartMutation = (
@@ -406,9 +410,17 @@ export const useDuplicateChartMutation = (
     const history = useHistory();
     const { projectUuid } = useParams<{ projectUuid: string }>();
     const queryClient = useQueryClient();
-    const { showToastSuccess, showToastError } = useToaster();
-    return useMutation<SavedChart, ApiError, SavedChart['uuid']>(
-        (chartUuid) => duplicateSavedQuery(projectUuid, chartUuid),
+    const { showToastSuccess, showToastApiError } = useToaster();
+    return useMutation<
+        SavedChart,
+        ApiError,
+        Pick<SavedChart, 'uuid' | 'name' | 'description'>
+    >(
+        ({ uuid, name, description }) =>
+            duplicateSavedQuery(projectUuid, uuid, {
+                chartName: name,
+                chartDesc: description ?? '',
+            }),
         {
             mutationKey: ['saved_query_create', projectUuid],
             onSuccess: async (data) => {
@@ -418,14 +430,19 @@ export const useDuplicateChartMutation = (
                     'most-popular-and-recently-updated',
                 ]);
 
-                if (!options?.showRedirectButton) {
+                if (
+                    !options?.showRedirectButton &&
+                    options?.autoRedirect !== false
+                ) {
                     history.push({
                         pathname: `/projects/${projectUuid}/saved/${data.uuid}`,
                     });
                 }
 
                 showToastSuccess({
-                    title: `Chart successfully duplicated!`,
+                    title:
+                        options?.successMessage ||
+                        `Chart successfully duplicated!`,
                     action: options?.showRedirectButton
                         ? {
                               children: 'Open chart',
@@ -438,10 +455,10 @@ export const useDuplicateChartMutation = (
                         : undefined,
                 });
             },
-            onError: (error) => {
-                showToastError({
+            onError: ({ error }) => {
+                showToastApiError({
                     title: `Failed to duplicate chart`,
-                    subtitle: error.error.message,
+                    apiError: error,
                 });
             },
         },
@@ -453,7 +470,7 @@ export const useAddVersionMutation = () => {
     const queryClient = useQueryClient();
     const dashboardUuid = useSearchParams('fromDashboard');
 
-    const { showToastSuccess, showToastError } = useToaster();
+    const { showToastSuccess, showToastApiError } = useToaster();
     return useMutation<
         SavedChart,
         ApiError,
@@ -490,10 +507,10 @@ export const useAddVersionMutation = () => {
                 });
             }
         },
-        onError: (error) => {
-            showToastError({
+        onError: ({ error }) => {
+            showToastApiError({
                 title: `Failed to update chart`,
-                subtitle: error.error.message,
+                apiError: error,
             });
         },
     });

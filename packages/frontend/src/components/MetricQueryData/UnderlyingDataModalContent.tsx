@@ -2,23 +2,24 @@ import { subject } from '@casl/ability';
 import {
     ChartType,
     convertFieldRefToFieldId,
-    CreateSavedChartVersion,
-    Field,
-    fieldId as getFieldId,
     FilterOperator,
-    FilterRule,
     getDimensions,
     getFields,
+    getFiltersFromGroup,
+    getItemId,
     isDimension,
     isField,
     isMetric,
-    Metric,
-    MetricQuery,
+    type CreateSavedChartVersion,
+    type Field,
+    type FilterRule,
+    type Metric,
+    type MetricQuery,
 } from '@lightdash/common';
 import { Box, Button, Group, Modal, Title } from '@mantine/core';
 import { useElementSize } from '@mantine/hooks';
 import { IconShare2 } from '@tabler/icons-react';
-import { FC, useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState, type FC } from 'react';
 import { useParams } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
 import { downloadCsv } from '../../api/csv';
@@ -30,7 +31,7 @@ import { Can } from '../common/Authorization';
 import ErrorState from '../common/ErrorState';
 import LinkButton from '../common/LinkButton';
 import MantineIcon from '../common/MantineIcon';
-import { TableColumn } from '../common/Table/types';
+import { type TableColumn } from '../common/Table/types';
 import ExportCSVModal from '../ExportCSV/ExportCSVModal';
 import { useMetricQueryDataContext } from './MetricQueryDataProvider';
 import UnderlyingDataResultsTable from './UnderlyingDataResultsTable';
@@ -91,7 +92,7 @@ const UnderlyingDataModalContent: FC<Props> = () => {
 
             const indexOfUnderlyingValue = (column: TableColumn): number => {
                 const columnDimension = allDimensions.find(
-                    (dimension) => getFieldId(dimension) === column.id,
+                    (dimension) => getItemId(dimension) === column.id,
                 );
                 if (columnDimension === undefined) return -1;
                 return showUnderlyingValues?.indexOf(columnDimension.name) !==
@@ -128,7 +129,7 @@ const UnderlyingDataModalContent: FC<Props> = () => {
         // On charts, we might want to include the dimensions from SQLquery and not from rowdata, so we include those instead
         const dimensionFieldIds = dimensions ? dimensions : rowFieldIds;
         const fieldsInQuery = allFields.filter((field) =>
-            dimensionFieldIds.includes(getFieldId(field)),
+            dimensionFieldIds.includes(getItemId(field)),
         );
         const availableTables = new Set([
             ...joinedTables,
@@ -153,7 +154,7 @@ const UnderlyingDataModalContent: FC<Props> = () => {
                       values: raw === null ? undefined : [raw],
                   };
                   const isValidDimension = allDimensions.find(
-                      (dimension) => getFieldId(dimension) === key,
+                      (dimension) => getItemId(dimension) === key,
                   );
 
                   if (isValidDimension) {
@@ -165,7 +166,7 @@ const UnderlyingDataModalContent: FC<Props> = () => {
                   {
                       id: uuidv4(),
                       target: {
-                          fieldId: getFieldId(item),
+                          fieldId: getItemId(item),
                       },
                       operator:
                           value.raw === null
@@ -215,12 +216,14 @@ const UnderlyingDataModalContent: FC<Props> = () => {
             ...metricFilters,
         ];
 
-        const allFilters = {
-            dimensions: {
+        const allFilters = getFiltersFromGroup(
+            {
                 id: uuidv4(),
                 and: combinedFilters,
             },
-        };
+            allFields,
+        );
+
         const showUnderlyingTable: string | undefined = isField(item)
             ? item.table
             : undefined;
@@ -237,7 +240,7 @@ const UnderlyingDataModalContent: FC<Props> = () => {
                       )
                     : true),
         );
-        const dimensionFields = availableDimensions.map(getFieldId);
+        const dimensionFields = availableDimensions.map(getItemId);
         return {
             ...defaultMetricQuery,
             dimensions: dimensionFields,
@@ -257,7 +260,7 @@ const UnderlyingDataModalContent: FC<Props> = () => {
         const selectedDimensions = underlyingDataMetricQuery.dimensions;
         const dimensions = explore ? getDimensions(explore) : [];
         return dimensions.reduce((acc, dimension) => {
-            const fieldId = isField(dimension) ? getFieldId(dimension) : '';
+            const fieldId = isField(dimension) ? getItemId(dimension) : '';
             if (selectedDimensions.includes(fieldId))
                 return {
                     ...acc,

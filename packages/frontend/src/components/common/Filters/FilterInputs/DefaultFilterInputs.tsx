@@ -1,13 +1,13 @@
 import {
     assertUnreachable,
-    ConditionalRule,
     FilterOperator,
     FilterType,
     isFilterRule,
-    isTableCalculationField,
+    isTableCalculation,
+    type ConditionalRule,
 } from '@lightdash/common';
 import isString from 'lodash/isString';
-import { FilterInputsProps } from '.';
+import { type FilterInputsProps } from '.';
 import { TagInput } from '../../TagInput/TagInput';
 import { useFiltersContext } from '../FiltersProvider';
 import { getPlaceholderByFilterTypeAndOperator } from '../utils/getPlaceholderByFilterTypeAndOperator';
@@ -48,7 +48,7 @@ const DefaultFilterInputs = <T extends ConditionalRule>({
         case FilterOperator.NOT_EQUALS: {
             switch (filterType) {
                 case FilterType.STRING:
-                    return isTableCalculationField(field) ? (
+                    return isTableCalculation(field) ? (
                         <FilterMultiStringInput
                             disabled={disabled}
                             field={field}
@@ -119,6 +119,7 @@ const DefaultFilterInputs = <T extends ConditionalRule>({
         case FilterOperator.NOT_IN_THE_PAST:
         case FilterOperator.IN_THE_NEXT:
         case FilterOperator.IN_THE_CURRENT:
+        case FilterOperator.NOT_IN_THE_CURRENT:
         case FilterOperator.IN_BETWEEN:
             return (
                 <FilterNumberInput

@@ -1,9 +1,13 @@
-import { ApiError, OrganizationProject, ProjectType } from '@lightdash/common';
+import {
+    ProjectType,
+    type ApiError,
+    type OrganizationProject,
+} from '@lightdash/common';
 import {
     useMutation,
     useQuery,
     useQueryClient,
-    UseQueryOptions,
+    type UseQueryOptions,
 } from '@tanstack/react-query';
 import { lightdashApi } from '../api';
 import { useOrganization } from './organization/useOrganization';
@@ -60,7 +64,7 @@ const deleteProjectQuery = async (id: string) =>
 
 export const useDeleteProjectMutation = () => {
     const queryClient = useQueryClient();
-    const { showToastSuccess, showToastError } = useToaster();
+    const { showToastSuccess, showToastApiError } = useToaster();
     return useMutation<null, ApiError, string>(deleteProjectQuery, {
         mutationKey: ['organization_project_delete'],
         onSuccess: async () => {
@@ -69,10 +73,10 @@ export const useDeleteProjectMutation = () => {
                 title: `Deleted! Project was deleted.`,
             });
         },
-        onError: (error) => {
-            showToastError({
+        onError: ({ error }) => {
+            showToastApiError({
                 title: `Failed to delete project`,
-                subtitle: error.error.message,
+                apiError: error,
             });
         },
     });

@@ -109,6 +109,10 @@ type UpdateUserEvent = BaseTrack & {
     properties: LightdashUser & { jobTitle?: string };
 };
 
+function isUserUpdatedEvent(event: BaseTrack): event is UpdateUserEvent {
+    return event.event === 'user.updated';
+}
+
 type VerifiedUserEvent = BaseTrack & {
     event: 'user.verified';
     properties: {
@@ -117,6 +121,10 @@ type VerifiedUserEvent = BaseTrack & {
         location: 'onboarding' | 'settings';
     };
 };
+
+function isUserVerifiedEvent(event: BaseTrack): event is VerifiedUserEvent {
+    return event.event === 'user.verified';
+}
 
 type UserWarehouseCredentialsEvent = BaseTrack & {
     event:
@@ -176,7 +184,9 @@ type QueryExecutionEvent = BaseTrack & {
         numFixedWidthBinCustomDimensions: number;
         numFixedBinsBinCustomDimensions: number;
         numCustomRangeBinCustomDimensions: number;
+        numCustomSqlDimensions: number;
         dateZoomGranularity: string | null;
+        timezone?: string;
     };
 };
 
@@ -325,6 +335,7 @@ export type CreateSavedChartVersionEvent = BaseTrack & {
         numFixedWidthBinCustomDimensions: number;
         numFixedBinsBinCustomDimensions: number;
         numCustomRangeBinCustomDimensions: number;
+        numCustomSqlDimensions: number;
     };
 };
 
@@ -630,6 +641,23 @@ type DashboardView = BaseTrack & {
     };
 };
 
+type PromoteContent = BaseTrack & {
+    event: 'promote.executed' | 'promote.error';
+    userId: string;
+    properties: {
+        chartId?: string;
+        dashboardId?: string;
+        fromProjectId: string;
+        toProjectId?: string;
+        organizationId: string;
+        slug?: string;
+        withNewSpace?: boolean;
+        hasExistingContent?: boolean;
+        chartsCount?: number;
+        error?: string;
+    };
+};
+
 type AnalyticsDashboardView = BaseTrack & {
     event: 'usage_analytics.dashboard_viewed';
     userId: string;
@@ -779,7 +807,8 @@ export type DownloadCsv = BaseTrack & {
             | 'chart'
             | 'scheduled delivery chart'
             | 'scheduled delivery dashboard'
-            | 'sql runner';
+            | 'sql runner'
+            | 'dashboard csv zip';
         storage?: 'local' | 's3';
         numCharts?: number;
         numRows?: number;
@@ -873,7 +902,7 @@ export type GroupDeleteEvent = BaseTrack & {
     };
 };
 
-type Track =
+type TypedEvent =
     | TrackSimpleEvent
     | CreateUserEvent
     | UpdateUserEvent
@@ -923,6 +952,7 @@ type Track =
     | ShareSlack
     | SavedChartView
     | DashboardView
+    | PromoteContent
     | AnalyticsDashboardView
     | SchedulerUpsertEvent
     | SchedulerDeleteEvent
@@ -941,6 +971,11 @@ type Track =
     | GroupDeleteEvent
     | ConditionalFormattingRuleSavedEvent
     | CommentsEvent;
+
+type UntypedEvent<T extends BaseTrack> = Omit<BaseTrack, 'event'> &
+    T & {
+        event: Exclude<T['event'], TypedEvent['event']>;
+    };
 
 type LightdashAnalyticsArguments = {
     lightdashConfig: LightdashConfig;
@@ -988,8 +1023,8 @@ export class LightdashAnalytics extends Analytics {
         });
     }
 
-    track(payload: Track) {
-        if (payload.event === 'user.updated') {
+    track<T extends BaseTrack>(payload: TypedEvent | UntypedEvent<T>) {
+        if (isUserUpdatedEvent(payload)) {
             const basicEventProperties = {
                 is_tracking_anonymized: payload.properties.isTrackingAnonymized,
                 is_marketing_opted_in: payload.properties.isMarketingOptedIn,
@@ -1012,7 +1047,7 @@ export class LightdashAnalytics extends Analytics {
             });
             return;
         }
-        if (payload.event === 'user.verified') {
+        if (isUserVerifiedEvent(payload)) {
             super.track({
                 ...payload,
                 event: `${this.lightdashContext.app.name}.${payload.event}`,

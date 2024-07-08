@@ -1,8 +1,8 @@
 import {
-    ConditionalFormattingWithConditionalOperator,
-    ConditionalOperator,
-    FilterableItem,
     FilterType,
+    type ConditionalFormattingWithConditionalOperator,
+    type ConditionalOperator,
+    type FilterableItem,
 } from '@lightdash/common';
 import {
     ActionIcon,
@@ -13,8 +13,9 @@ import {
     Text,
     Tooltip,
 } from '@mantine/core';
-import { IconChevronDown, IconChevronUp, IconX } from '@tabler/icons-react';
-import { FC, useState } from 'react';
+import { useHover } from '@mantine/hooks';
+import { IconChevronDown, IconChevronUp, IconTrash } from '@tabler/icons-react';
+import { useState, type FC } from 'react';
 import {
     FilterInputComponent,
     getFilterOperatorOptions,
@@ -48,32 +49,40 @@ const ConditionalFormattingRule: FC<ConditionalFormattingRuleProps> = ({
     onRemoveRule,
     hasRemove,
 }) => {
+    const { ref, hovered } = useHover();
     const [isOpen, setIsOpen] = useState(isDefaultOpen);
 
     return (
-        <Stack spacing="xs">
+        <Stack spacing="xs" ref={ref}>
             <Group noWrap position="apart">
                 <Group spacing="xs">
-                    <ActionIcon onClick={() => setIsOpen(!isOpen)} size="sm">
-                        <MantineIcon
-                            icon={isOpen ? IconChevronUp : IconChevronDown}
-                        />
-                    </ActionIcon>
+                    <Text fw={500} fz="xs">
+                        Condition {ruleIndex + 1}
+                    </Text>
 
-                    <Text fw={500}>Condition {ruleIndex + 1}</Text>
+                    {hasRemove && hovered && (
+                        <Tooltip
+                            variant="xs"
+                            label="Remove condition"
+                            position="left"
+                            withinPortal
+                        >
+                            <ActionIcon onClick={onRemoveRule}>
+                                <MantineIcon icon={IconTrash} />
+                            </ActionIcon>
+                        </Tooltip>
+                    )}
                 </Group>
 
-                {hasRemove && (
-                    <Tooltip label="Remove rule" position="left" withinPortal>
-                        <ActionIcon onClick={onRemoveRule} size="sm">
-                            <MantineIcon icon={IconX} />
-                        </ActionIcon>
-                    </Tooltip>
-                )}
+                <ActionIcon onClick={() => setIsOpen(!isOpen)} size="sm">
+                    <MantineIcon
+                        icon={isOpen ? IconChevronUp : IconChevronDown}
+                    />
+                </ActionIcon>
             </Group>
 
             <Collapse in={isOpen}>
-                <Stack spacing="xs">
+                <Group noWrap spacing="xs">
                     <Select
                         value={rule.operator}
                         data={filterOperatorOptions}
@@ -89,7 +98,7 @@ const ConditionalFormattingRule: FC<ConditionalFormattingRuleProps> = ({
                         rule={rule}
                         onChange={onChangeRule}
                     />
-                </Stack>
+                </Group>
             </Collapse>
         </Stack>
     );

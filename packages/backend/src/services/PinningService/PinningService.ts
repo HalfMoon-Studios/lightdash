@@ -11,7 +11,8 @@ import { ProjectModel } from '../../models/ProjectModel/ProjectModel';
 import { ResourceViewItemModel } from '../../models/ResourceViewItemModel';
 import { SavedChartModel } from '../../models/SavedChartModel';
 import { SpaceModel } from '../../models/SpaceModel';
-import { hasSpaceAccess } from '../SpaceService/SpaceService';
+import { BaseService } from '../BaseService';
+import { hasViewAccessToSpace } from '../SpaceService/SpaceService';
 
 type PinningServiceArguments = {
     dashboardModel: DashboardModel;
@@ -25,7 +26,7 @@ type PinningServiceArguments = {
     projectModel: ProjectModel;
 };
 
-export class PinningService {
+export class PinningService extends BaseService {
     dashboardModel: DashboardModel;
 
     savedChartModel: SavedChartModel;
@@ -46,6 +47,7 @@ export class PinningService {
         resourceViewItemModel,
         projectModel,
     }: PinningServiceArguments) {
+        super();
         this.dashboardModel = dashboardModel;
         this.savedChartModel = savedChartModel;
         this.spaceModel = spaceModel;
@@ -65,9 +67,19 @@ export class PinningService {
         }
 
         const spaces = await this.spaceModel.find({ projectUuid });
+        const spacesAccess = await this.spaceModel.getUserSpacesAccess(
+            user.userUuid,
+            spaces.map((s) => s.uuid),
+        );
         const allowedSpaceUuids = spaces
-            .filter((space) => hasSpaceAccess(user, space))
-            .map((space) => space.uuid);
+            .filter((space, index) =>
+                hasViewAccessToSpace(
+                    user,
+                    space,
+                    spacesAccess[space.uuid] ?? [],
+                ),
+            )
+            .map((s) => s.uuid);
 
         if (allowedSpaceUuids.length === 0) {
             return [];

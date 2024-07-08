@@ -1,19 +1,20 @@
 import { subject } from '@casl/ability';
 import {
-    Field,
     hasCustomDimension,
     isCustomDimension,
     isDimension,
+    isDimensionValueInvalidDate,
     isField,
     isFilterableField,
-    ResultValue,
-    TableCalculation,
+    type Field,
+    type ResultValue,
+    type TableCalculation,
 } from '@lightdash/common';
 import { Menu, Text } from '@mantine/core';
 import { useClipboard } from '@mantine/hooks';
 import { IconCopy, IconEye, IconFilter, IconStack } from '@tabler/icons-react';
 import mapValues from 'lodash/mapValues';
-import { FC, useCallback, useMemo } from 'react';
+import { useCallback, useMemo, type FC } from 'react';
 import { useParams } from 'react-router-dom';
 import useToaster from '../../../hooks/toaster/useToaster';
 import { useFilters } from '../../../hooks/useFilters';
@@ -22,7 +23,7 @@ import { useTracking } from '../../../providers/TrackingProvider';
 import { EventName } from '../../../types/Events';
 import { Can } from '../../common/Authorization';
 import MantineIcon from '../../common/MantineIcon';
-import { CellContextMenuProps } from '../../common/Table/types';
+import { type CellContextMenuProps } from '../../common/Table/types';
 import DrillDownMenuItem from '../../MetricQueryData/DrillDownMenuItem';
 import { useMetricQueryDataContext } from '../../MetricQueryData/MetricQueryDataProvider';
 import UrlMenuItems from './UrlMenuItems';
@@ -86,12 +87,18 @@ const CellContextMenu: FC<
     ]);
 
     const handleFilterByValue = useCallback(() => {
-        if (!isField(item) || !isFilterableField(item)) return;
+        if (!item || !isFilterableField(item)) return;
 
         track({
             name: EventName.ADD_FILTER_CLICKED,
         });
-        addFilter(item, value.raw === undefined ? null : value.raw, true);
+
+        const filterValue =
+            value.raw === undefined || isDimensionValueInvalidDate(item, value)
+                ? null // Set as null if value is invalid date or undefined
+                : value.raw;
+
+        addFilter(item, filterValue, true);
     }, [track, addFilter, item, value]);
 
     let parseResult: null | object = null;
@@ -164,7 +171,7 @@ const CellContextMenu: FC<
                     projectUuid: projectUuid,
                 })}
             >
-                {isEditMode && isField(item) && isFilterableField(item) && (
+                {isEditMode && item && isFilterableField(item) && (
                     <Menu.Item
                         icon={<MantineIcon icon={IconFilter} />}
                         onClick={handleFilterByValue}

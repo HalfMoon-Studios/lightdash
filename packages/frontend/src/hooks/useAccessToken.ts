@@ -1,14 +1,14 @@
 import {
-    ApiCreateUserTokenResults,
-    ApiError,
-    ApiPersonalAccessTokenResponse,
-    CreatePersonalAccessToken,
+    type ApiCreateUserTokenResults,
+    type ApiError,
+    type ApiPersonalAccessTokenResponse,
+    type CreatePersonalAccessToken,
 } from '@lightdash/common';
 import {
     useMutation,
     useQuery,
     useQueryClient,
-    UseQueryOptions,
+    type UseQueryOptions,
 } from '@tanstack/react-query';
 import { lightdashApi } from '../api';
 import useToaster from './toaster/useToaster';
@@ -54,7 +54,7 @@ export const useAccessToken = (
 
 export const useCreateAccessToken = () => {
     const queryClient = useQueryClient();
-    const { showToastError } = useToaster();
+    const { showToastApiError } = useToaster();
     return useMutation<
         ApiCreateUserTokenResults,
         ApiError,
@@ -65,10 +65,10 @@ export const useCreateAccessToken = () => {
         onSuccess: async () => {
             await queryClient.invalidateQueries(['personal_access_tokens']);
         },
-        onError: (error) => {
-            showToastError({
+        onError: ({ error }) => {
+            showToastApiError({
                 title: `Failed to create token`,
-                subtitle: error.error.message,
+                apiError: error,
             });
         },
     });
@@ -76,7 +76,7 @@ export const useCreateAccessToken = () => {
 
 export const useDeleteAccessToken = () => {
     const queryClient = useQueryClient();
-    const { showToastSuccess, showToastError } = useToaster();
+    const { showToastSuccess, showToastApiError } = useToaster();
     return useMutation<null, ApiError, string>(deleteAccessToken, {
         mutationKey: ['personal_access_tokens'],
         onSuccess: async () => {
@@ -85,10 +85,10 @@ export const useDeleteAccessToken = () => {
                 title: `Success! Your token was deleted.`,
             });
         },
-        onError: (error) => {
-            showToastError({
+        onError: ({ error }) => {
+            showToastApiError({
                 title: `Failed to delete token`,
-                subtitle: error.error.message,
+                apiError: error,
             });
         },
     });

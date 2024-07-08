@@ -10,6 +10,8 @@ import {
     AnalyticsChartViewsTableName,
     AnalyticsDashboardViewsTableName,
 } from '../database/entities/analytics';
+import { DashboardsTableName } from '../database/entities/dashboards';
+import { SavedChartsTableName } from '../database/entities/savedCharts';
 import {
     chartViewsSql,
     chartWeeklyAverageQueriesSql,
@@ -19,6 +21,7 @@ import {
     tableMostCreatedChartsSql,
     tableMostQueriesSql,
     tableNoQueriesSql,
+    userMostViewedDashboardSql,
     usersInProjectSql,
 } from './AnalyticsModelSql';
 
@@ -32,6 +35,7 @@ type DbUserWithCount = {
     last_name: string;
     count: number | null;
 };
+
 export class AnalyticsModel {
     private database: Knex;
 
@@ -40,42 +44,50 @@ export class AnalyticsModel {
     }
 
     async getChartViewStats(chartUuid: string): Promise<ViewStatistics> {
-        const transaction = Sentry.getCurrentHub()
-            ?.getScope()
-            ?.getTransaction();
-        const span = transaction?.startChild({
-            op: 'AnalyticsModel.getChartStats',
-            description: 'Gets a single chart statistics',
-        });
+        return Sentry.startSpan(
+            {
+                op: 'AnalyticsModel.getChartStats',
+                name: 'AnalyticsModel.getChartStats',
+            },
+            async () => {
+                const stats = await this.database(AnalyticsChartViewsTableName)
+                    .count({ views: '*' })
+                    .min({
+                        first_viewed_at: 'timestamp',
+                    })
+                    .where('chart_uuid', chartUuid)
+                    .first();
 
-        try {
-            const stats = await this.database(AnalyticsChartViewsTableName)
-                .count({ views: '*' })
-                .min({
-                    first_viewed_at: 'timestamp',
-                })
-                .where('chart_uuid', chartUuid)
-                .first();
-
-            return {
-                views:
-                    typeof stats?.views === 'number'
-                        ? stats.views
-                        : parseInt(stats?.views ?? '0', 10),
-                firstViewedAt: stats?.first_viewed_at ?? new Date(),
-            };
-        } finally {
-            span?.finish();
-        }
+                return {
+                    views:
+                        typeof stats?.views === 'number'
+                            ? stats.views
+                            : parseInt(stats?.views ?? '0', 10),
+                    firstViewedAt: stats?.first_viewed_at ?? new Date(),
+                };
+            },
+        );
     }
 
     async addChartViewEvent(
         chartUuid: string,
         userUuid: string,
     ): Promise<void> {
-        await this.database(AnalyticsChartViewsTableName).insert({
-            chart_uuid: chartUuid,
-            user_uuid: userUuid,
+        await this.database.transaction(async (trx) => {
+            await trx(AnalyticsChartViewsTableName).insert({
+                chart_uuid: chartUuid,
+                user_uuid: userUuid,
+            });
+            await trx(SavedChartsTableName)
+                .update({
+                    // @ts-expect-error knex types don't support raw queries
+                    views_count: trx.raw('views_count + 1'),
+                    // @ts-expect-error knex types don't support raw queries
+                    first_viewed_at: trx.raw(
+                        'COALESCE(first_viewed_at, NOW())',
+                    ), // update first_viewed_at if it is null
+                })
+                .where('saved_query_uuid', chartUuid);
         });
     }
 
@@ -93,9 +105,21 @@ export class AnalyticsModel {
         dashboardUuid: string,
         userUuid: string,
     ): Promise<void> {
-        await this.database(AnalyticsDashboardViewsTableName).insert({
-            dashboard_uuid: dashboardUuid,
-            user_uuid: userUuid,
+        await this.database.transaction(async (trx) => {
+            await this.database(AnalyticsDashboardViewsTableName).insert({
+                dashboard_uuid: dashboardUuid,
+                user_uuid: userUuid,
+            });
+            await trx(DashboardsTableName)
+                .update({
+                    // @ts-expect-error knex types don't support raw queries
+                    views_count: trx.raw('views_count + 1'),
+                    // @ts-expect-error knex types don't support raw queries
+                    first_viewed_at: trx.raw(
+                        'COALESCE(first_viewed_at, NOW())',
+                    ), // update first_viewed_at if it is null
+                })
+                .where('dashboard_uuid', dashboardUuid);
         });
     }
 
@@ -141,6 +165,10 @@ export class AnalyticsModel {
         const dashboardViews = await this.database.raw(
             dashboardViewsSql(projectUuid),
         );
+
+        const userMostViewedDashboards = await this.database.raw(
+            userMostViewedDashboardSql(projectUuid),
+        );
         const chartViews = await this.database.raw(chartViewsSql(projectUuid));
         const parseUsersWithCount = (
             userData: DbUserWithCount,
@@ -176,6 +204,15 @@ export class AnalyticsModel {
             chartWeeklyQueryingUsers: chartWeeklyQueryingUsers.rows,
             chartWeeklyAverageQueries: chartWeeklyAverageQueries.rows,
             dashboardViews: dashboardViews.rows,
+            userMostViewedDashboards: userMostViewedDashboards.rows.map(
+                (row: any) => ({
+                    userUuid: row.user_uuid,
+                    firstName: row.first_name,
+                    lastName: row.last_name,
+                    count: row.count,
+                    dashboardName: row.dashboard_name,
+                }),
+            ),
             chartViews: chartViews.rows,
         };
     }

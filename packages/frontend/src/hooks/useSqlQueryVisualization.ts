@@ -1,23 +1,23 @@
 import {
-    ApiQueryResults,
-    ChartConfig,
     ChartType,
-    CompiledDimension,
-    CompiledMetric,
-    CreateSavedChartVersion,
     DimensionType,
-    Explore,
-    fieldId,
-    FieldId,
     FieldType,
     friendlyName,
+    getItemId,
     MetricType,
     SupportedDbtAdapter,
+    type ApiQueryResults,
+    type ChartConfig,
+    type CompiledDimension,
+    type CompiledMetric,
+    type CreateSavedChartVersion,
+    type Explore,
+    type FieldId,
 } from '@lightdash/common';
 import { useCallback, useMemo, useState } from 'react';
 import { getValidChartConfig } from '../providers/ExplorerProvider';
-import { useSqlQueryMutation } from './useSqlQuery';
-import { SqlRunnerState } from './useSqlRunnerRoute';
+import { type useSqlQueryMutation } from './useSqlQuery';
+import { type SqlRunnerState } from './useSqlRunnerRoute';
 
 const SQL_RESULTS_TABLE_NAME = 'sql_runner';
 
@@ -55,7 +55,7 @@ const useSqlQueryVisualization = ({
                             ...acc,
                             sqlQueryMetrics: {
                                 ...acc.sqlQueryMetrics,
-                                [fieldId(metric)]: metric,
+                                [getItemId(metric)]: metric,
                             },
                         };
                     } else {
@@ -75,7 +75,7 @@ const useSqlQueryVisualization = ({
                             ...acc,
                             sqlQueryDimensions: {
                                 ...acc.sqlQueryDimensions,
-                                [fieldId(dimension)]: dimension,
+                                [getItemId(dimension)]: dimension,
                             },
                         };
                     }

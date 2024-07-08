@@ -10,7 +10,9 @@ import {
     LightdashUserWithAbilityRules,
     NotExistsError,
     NotFoundError,
+    OpenIdIdentityIssuerType,
     OpenIdUser,
+    Organization,
     OrganizationMemberRole,
     ParameterError,
     PersonalAccessToken,
@@ -30,7 +32,10 @@ import {
 } from '../database/entities/emails';
 import { OpenIdIdentitiesTableName } from '../database/entities/openIdIdentities';
 import { OrganizationMembershipsTableName } from '../database/entities/organizationMemberships';
-import { OrganizationTableName } from '../database/entities/organizations';
+import {
+    DbOrganization,
+    OrganizationTableName,
+} from '../database/entities/organizations';
 import {
     DbPasswordLoginIn,
     PasswordLoginTableName,
@@ -87,6 +92,7 @@ const userDetailsQueryBuilder = (
         .joinRaw(
             'LEFT JOIN emails ON users.user_id = emails.user_id AND emails.is_primary',
         )
+        // TODO remove this org join, we should do this in the service
         .leftJoin(
             'organization_memberships',
             'users.user_id',
@@ -192,6 +198,39 @@ export class UserModel {
             }
         }
         return newUser;
+    }
+
+    async getOrganizationsForUser(
+        userUuid: string,
+    ): Promise<
+        Pick<
+            LightdashUser,
+            'organizationUuid' | 'organizationCreatedAt' | 'organizationName'
+        >[]
+    > {
+        const organizations = await this.database('organization_memberships')
+            .leftJoin(
+                'organizations',
+                'organization_memberships.organization_id',
+                'organizations.organization_id',
+            )
+            .where(
+                'user_id',
+                this.database('users')
+                    .where('user_uuid', userUuid)
+                    .select('user_id'),
+            )
+            .select<DbOrganization[]>(
+                'organizations.organization_uuid',
+                'organizations.created_at',
+                'organizations.organization_name',
+            );
+
+        return organizations.map((organization) => ({
+            organizationUuid: organization.organization_uuid,
+            organizationCreatedAt: organization.created_at,
+            organizationName: organization.organization_name,
+        }));
     }
 
     async hasUsers(): Promise<boolean> {
@@ -331,7 +370,10 @@ export class UserModel {
 
     private async getUserProjectRoles(
         userId: number,
-    ): Promise<Pick<ProjectMemberProfile, 'projectUuid' | 'role'>[]> {
+        userUuid: string,
+    ): Promise<
+        Pick<ProjectMemberProfile, 'projectUuid' | 'role' | 'userUuid'>[]
+    > {
         const projectMemberships = await this.database('project_memberships')
             .leftJoin(
                 'projects',
@@ -344,13 +386,17 @@ export class UserModel {
         return projectMemberships.map((membership) => ({
             projectUuid: membership.project_uuid,
             role: membership.role,
+            userUuid,
         }));
     }
 
     private async getUserGroupProjectRoles(
         userId: number,
         organizationId: number,
-    ): Promise<Pick<ProjectMemberProfile, 'projectUuid' | 'role'>[]> {
+        userUuid: string,
+    ): Promise<
+        Pick<ProjectMemberProfile, 'projectUuid' | 'role' | 'userUuid'>[]
+    > {
         // Remember: primary key for an organization is organization_id,user_id - not user_id alone
         const query = this.database('group_memberships')
             .innerJoin(
@@ -370,6 +416,7 @@ export class UserModel {
         return projectMemberships.map((membership) => ({
             projectUuid: membership.project_uuid,
             role: membership.role,
+            userUuid,
         }));
     }
 
@@ -393,10 +440,14 @@ export class UserModel {
             return user;
         }
         const lightdashUser = mapDbUserDetailsToLightdashUser(user);
-        const projectRoles = await this.getUserProjectRoles(user.user_id);
+        const projectRoles = await this.getUserProjectRoles(
+            user.user_id,
+            user.user_uuid,
+        );
         const groupProjectRoles = await this.getUserGroupProjectRoles(
             user.user_id,
             user.organization_id,
+            user.user_uuid,
         );
         const abilityBuilder = getUserAbilityBuilder(lightdashUser, [
             ...projectRoles,
@@ -528,6 +579,12 @@ export class UserModel {
         return this.getUserDetailsByUuid(user.user_uuid);
     }
 
+    /**
+     * Returns the user with the default organization
+     * Used in old methods to get the organizationUuid from the userUuid
+     * You should use findSessionUserAndOrgByUuid instead and stop assuming a user has a default organization
+     * @deprecated
+     */
     async findSessionUserByUUID(userUuid: string): Promise<SessionUser> {
         const [user] = await userDetailsQueryBuilder(this.database)
             .where('user_uuid', userUuid)
@@ -536,10 +593,48 @@ export class UserModel {
             throw new NotFoundError(`Cannot find user with uuid ${userUuid}`);
         }
         const lightdashUser = mapDbUserDetailsToLightdashUser(user);
-        const projectRoles = await this.getUserProjectRoles(user.user_id);
+        const projectRoles = await this.getUserProjectRoles(
+            user.user_id,
+            user.user_uuid,
+        );
         const groupProjectRoles = await this.getUserGroupProjectRoles(
             user.user_id,
             user.organization_id,
+            user.user_uuid,
+        );
+        const abilityBuilder = getUserAbilityBuilder(lightdashUser, [
+            ...projectRoles,
+            ...groupProjectRoles,
+        ]);
+        return {
+            ...lightdashUser,
+            userId: user.user_id,
+            abilityRules: abilityBuilder.rules,
+            ability: abilityBuilder.build(),
+        };
+    }
+
+    async findSessionUserAndOrgByUuid(
+        userUuid: string,
+        organizationUuid: string,
+    ): Promise<SessionUser> {
+        const [user] = await userDetailsQueryBuilder(this.database)
+            .where('user_uuid', userUuid)
+            .andWhere('organizations.organization_uuid', organizationUuid) // We filter organizationUuid here
+            .select('*', 'organizations.created_at as organization_created_at');
+
+        if (user === undefined) {
+            throw new NotFoundError(`Cannot find user with uuid ${userUuid}`);
+        }
+        const lightdashUser = mapDbUserDetailsToLightdashUser(user);
+        const projectRoles = await this.getUserProjectRoles(
+            user.user_id,
+            user.user_uuid,
+        );
+        const groupProjectRoles = await this.getUserGroupProjectRoles(
+            user.user_id,
+            user.organization_id,
+            user.user_uuid,
         );
         const abilityBuilder = getUserAbilityBuilder(lightdashUser, [
             ...projectRoles,
@@ -561,10 +656,14 @@ export class UserModel {
             throw new NotFoundError(`Cannot find user with uuid ${email}`);
         }
         const lightdashUser = mapDbUserDetailsToLightdashUser(user);
-        const projectRoles = await this.getUserProjectRoles(user.user_id);
+        const projectRoles = await this.getUserProjectRoles(
+            user.user_id,
+            user.user_uuid,
+        );
         const groupProjectRoles = await this.getUserGroupProjectRoles(
             user.user_id,
             user.organization_id,
+            user.user_uuid,
         );
         const abilityBuilder = getUserAbilityBuilder(lightdashUser, [
             ...projectRoles,
@@ -632,10 +731,14 @@ export class UserModel {
             return undefined;
         }
         const lightdashUser = mapDbUserDetailsToLightdashUser(row);
-        const projectRoles = await this.getUserProjectRoles(row.user_id);
+        const projectRoles = await this.getUserProjectRoles(
+            row.user_id,
+            row.user_uuid,
+        );
         const groupProjectRoles = await this.getUserGroupProjectRoles(
             row.user_id,
             row.organization_id,
+            row.user_uuid,
         );
         const abilityBuilder = getUserAbilityBuilder(lightdashUser, [
             ...projectRoles,
@@ -759,5 +862,19 @@ export class UserModel {
         }
 
         return row.refresh_token;
+    }
+
+    async getOpenIdIssuers(email: string): Promise<OpenIdIdentityIssuerType[]> {
+        const rows = await this.database('emails')
+            .leftJoin(
+                'openid_identities',
+                'emails.user_id',
+                'openid_identities.user_id',
+            )
+            .whereNotNull('openid_identities.issuer_type')
+            .andWhere('emails.email', email)
+            .andWhere('emails.is_primary', true)
+            .select('openid_identities.issuer_type');
+        return rows.map((row) => row.issuer_type);
     }
 }

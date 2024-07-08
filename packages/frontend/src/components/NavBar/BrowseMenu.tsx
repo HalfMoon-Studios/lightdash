@@ -6,7 +6,7 @@ import {
     IconFolders,
     IconLayoutDashboard,
 } from '@tabler/icons-react';
-import { FC } from 'react';
+import { type FC } from 'react';
 import { Link } from 'react-router-dom';
 
 import { useSpaceSummaries } from '../../hooks/useSpaces';
@@ -17,11 +17,15 @@ interface Props {
 }
 
 const BrowseMenu: FC<Props> = ({ projectUuid }) => {
-    const { data: spaces, isInitialLoading } = useSpaceSummaries(projectUuid);
+    const { data: spaces, isInitialLoading } = useSpaceSummaries(
+        projectUuid,
+        true,
+    );
 
     return (
         <Menu
             withArrow
+            withinPortal
             shadow="lg"
             position="bottom-start"
             arrowOffset={16}

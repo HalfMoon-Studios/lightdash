@@ -1,22 +1,22 @@
 import { LightdashMode } from '@lightdash/common';
 import {
     createContext,
-    FC,
     memo,
     useCallback,
     useContext,
     useEffect,
     useMemo,
     useState,
+    type FC,
 } from 'react';
-import { FormState } from 'react-hook-form';
+import { type FormState } from 'react-hook-form';
 import * as rudderSDK from 'rudder-sdk-js';
 import {
-    CategoryName,
-    EventName,
-    PageName,
     PageType,
-    SectionName,
+    type CategoryName,
+    type EventName,
+    type PageName,
+    type SectionName,
 } from '../types/Events';
 import { useApp } from './AppProvider';
 
@@ -36,6 +36,7 @@ type GenericEvent = {
         | EventName.UPDATE_PROJECT_BUTTON_CLICKED
         | EventName.UPDATE_TABLE_CALCULATION_BUTTON_CLICKED
         | EventName.CREATE_TABLE_CALCULATION_BUTTON_CLICKED
+        | EventName.CREATE_QUICK_TABLE_CALCULATION_BUTTON_CLICKED
         | EventName.ADD_FILTER_CLICKED
         | EventName.NOTIFICATIONS_CLICKED
         | EventName.NOTIFICATIONS_ITEM_CLICKED
@@ -56,7 +57,8 @@ type GenericEvent = {
         | EventName.ADD_CUSTOM_DIMENSION_CLICKED
         | EventName.DATE_ZOOM_CLICKED
         | EventName.COMMENTS_CLICKED
-        | EventName.NOTIFICATIONS_COMMENTS_ITEM_CLICKED;
+        | EventName.NOTIFICATIONS_COMMENTS_ITEM_CLICKED
+        | EventName.DASHBOARD_AUTO_REFRESH_UPDATED;
     properties?: {};
 };
 
@@ -155,6 +157,17 @@ export type DrillByClickedEvent = {
     };
 };
 
+export type DashboardAutoRefreshUpdateEvent = {
+    name: EventName.DASHBOARD_AUTO_REFRESH_UPDATED;
+    properties: {
+        organizationId: string;
+        userId: string;
+        projectId: string;
+        dashboardId: string;
+        frequency: string;
+    };
+};
+
 export type EventData =
     | GenericEvent
     | FormClickedEvent
@@ -166,7 +179,8 @@ export type EventData =
     | OnboardingStepClickedEvent
     | CrossFilterDashboardAppliedEvent
     | ViewUnderlyingDataClickedEvent
-    | DrillByClickedEvent;
+    | DrillByClickedEvent
+    | DashboardAutoRefreshUpdateEvent;
 
 type IdentifyData = {
     id: string;

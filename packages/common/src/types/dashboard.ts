@@ -1,8 +1,9 @@
-import { FilterableField } from './field';
-import { DashboardFilters } from './filter';
-import { ChartKind, SavedChartType } from './savedCharts';
-import { UpdatedByUser } from './user';
-import { ValidationSummary } from './validation';
+import { type FilterableDimension } from './field';
+import { type DashboardFilters } from './filter';
+import { type ChartKind, type SavedChartType } from './savedCharts';
+import { type SpaceShare } from './space';
+import { type UpdatedByUser } from './user';
+import { type ValidationSummary } from './validation';
 
 export enum DashboardTileTypes {
     SAVED_CHART = 'saved_chart',
@@ -17,6 +18,7 @@ type CreateDashboardTileBase = {
     y: number;
     h: number;
     w: number;
+    tabUuid: string | undefined;
 };
 
 type DashboardTileBase = Required<CreateDashboardTileBase>;
@@ -79,6 +81,7 @@ export type CreateDashboard = {
     filters?: DashboardFilters;
     updatedByUser?: Pick<UpdatedByUser, 'userUuid'>;
     spaceUuid?: string;
+    tabs: DashboardTab[];
 };
 
 export type DashboardTile =
@@ -90,9 +93,26 @@ export const isDashboardChartTileType = (
     tile: DashboardTile,
 ): tile is DashboardChartTile => tile.type === DashboardTileTypes.SAVED_CHART;
 
+export const isDashboardMarkdownTileType = (
+    tile: DashboardTile,
+): tile is DashboardMarkdownTile => tile.type === DashboardTileTypes.MARKDOWN;
+
+export const isDashboardLoomTileType = (
+    tile: DashboardTile,
+): tile is DashboardLoomTile => tile.type === DashboardTileTypes.LOOM;
+
+export type DashboardTab = {
+    uuid: string;
+    name: string;
+    order: number;
+};
+
+export type DashboardDAO = Omit<Dashboard, 'isPrivate' | 'access'>;
+
 export type Dashboard = {
     organizationUuid: string;
     projectUuid: string;
+    dashboardVersionId: number;
     uuid: string;
     name: string;
     description?: string;
@@ -106,6 +126,28 @@ export type Dashboard = {
     firstViewedAt: Date | string | null;
     pinnedListUuid: string | null;
     pinnedListOrder: number | null;
+    tabs: DashboardTab[];
+    isPrivate: boolean | null;
+    access: SpaceShare[] | null;
+    slug: string;
+};
+
+export enum DashboardSummaryTone {
+    FRIENDLY = 'friendly',
+    FORMAL = 'formal',
+    DIRECT = 'direct',
+    ENTHUSIASTIC = 'enthusiastic',
+}
+
+export type DashboardSummary = {
+    dashboardSummaryUuid: string;
+    dashboardUuid: string;
+    dashboardVersionId: number;
+    context?: string | null;
+    tone: DashboardSummaryTone;
+    audiences: string[];
+    summary: string;
+    createdAt: Date;
 };
 
 export type DashboardBasicDetails = Pick<
@@ -133,7 +175,7 @@ export type DashboardUnversionedFields = Pick<
 
 export type DashboardVersionedFields = Pick<
     CreateDashboard,
-    'tiles' | 'filters' | 'updatedByUser'
+    'tiles' | 'filters' | 'updatedByUser' | 'tabs'
 >;
 
 export type UpdateDashboardDetails = Pick<Dashboard, 'name' | 'description'>;
@@ -150,7 +192,7 @@ export type UpdateMultipleDashboards = Pick<
 
 export type DashboardAvailableFilters = {
     savedQueryFilters: Record<string, number[]>;
-    allFilterableFields: FilterableField[];
+    allFilterableFields: FilterableDimension[];
 };
 
 export type SavedChartsInfoForDashboardAvailableFilters = {
@@ -193,7 +235,7 @@ export const getDefaultChartTileSize = (
     }
 };
 
-export const hasChartsInDashboard = (dashboard: Dashboard) =>
+export const hasChartsInDashboard = (dashboard: DashboardDAO) =>
     dashboard.tiles.some(
         (tile) => isChartTile(tile) && tile.properties.belongsToDashboard,
     );

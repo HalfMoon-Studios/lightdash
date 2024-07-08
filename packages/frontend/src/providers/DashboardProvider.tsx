@@ -1,37 +1,37 @@
 import {
-    ApiError,
     applyDimensionOverrides,
-    CacheMetadata,
     compressDashboardFiltersToParam,
     convertDashboardFiltersParamToDashboardFilters,
-    Dashboard,
-    DashboardFilterRule,
-    DashboardFilters,
     DateGranularity,
-    fieldId,
-    FilterableField,
+    getItemId,
     isDashboardChartTileType,
-    SavedChartsInfoForDashboardAvailableFilters,
-    SchedulerFilterRule,
-    SortField,
+    type ApiError,
+    type CacheMetadata,
+    type Dashboard,
+    type DashboardFilterRule,
+    type DashboardFilters,
+    type FilterableDimension,
+    type SavedChartsInfoForDashboardAvailableFilters,
+    type SchedulerFilterRule,
+    type SortField,
 } from '@lightdash/common';
 import min from 'lodash/min';
 import React, {
-    Dispatch,
-    SetStateAction,
     useCallback,
     useEffect,
     useMemo,
     useState,
+    type Dispatch,
+    type SetStateAction,
 } from 'react';
 import { useHistory, useLocation, useParams } from 'react-router-dom';
 import { useMount } from 'react-use';
 import { createContext, useContextSelector } from 'use-context-selector';
-import { FieldsWithSuggestions } from '../components/common/Filters/FiltersProvider';
+import { getConditionalRuleLabel } from '../components/common/Filters/FilterInputs';
 import { hasSavedFilterValueChanged } from '../components/DashboardFilter/FilterConfiguration/utils';
 import {
-    useDashboardCommentsCheck,
     useGetComments,
+    type useDashboardCommentsCheck,
 } from '../features/comments';
 import {
     useDashboardQuery,
@@ -57,6 +57,10 @@ type DashboardContext = {
     setDashboardTiles: Dispatch<SetStateAction<Dashboard['tiles'] | undefined>>;
     haveTilesChanged: boolean;
     setHaveTilesChanged: Dispatch<SetStateAction<boolean>>;
+    haveTabsChanged: boolean;
+    setHaveTabsChanged: Dispatch<SetStateAction<boolean>>;
+    dashboardTabs: Dashboard['tabs'];
+    setDashboardTabs: Dispatch<SetStateAction<Dashboard['tabs']>>;
     dashboardFilters: DashboardFilters;
     dashboardTemporaryFilters: DashboardFilters;
     allFilters: DashboardFilters;
@@ -88,9 +92,11 @@ type DashboardContext = {
     oldestCacheTime: Date | undefined;
     invalidateCache: boolean | undefined;
     clearCacheAndFetch: () => void;
-    fieldsWithSuggestions: FieldsWithSuggestions;
-    allFilterableFields: FilterableField[] | undefined;
-    filterableFieldsByTileUuid: Record<string, FilterableField[]> | undefined;
+    allFilterableFieldsMap: Record<string, FilterableDimension>;
+    allFilterableFields: FilterableDimension[] | undefined;
+    filterableFieldsByTileUuid:
+        | Record<string, FilterableDimension[]>
+        | undefined;
     hasChartTiles: boolean;
     chartSort: Record<string, SortField[]>;
     setChartSort: (sort: Record<string, SortField[]>) => void;
@@ -105,6 +111,7 @@ type DashboardContext = {
     dashboardCommentsCheck?: ReturnType<typeof useDashboardCommentsCheck>;
     dashboardComments?: ReturnType<typeof useGetComments>['data'];
     hasTileComments: (tileUuid: string) => boolean;
+    requiredDashboardFilters: Pick<DashboardFilterRule, 'id' | 'label'>[];
 };
 
 const Context = createContext<DashboardContext | undefined>(undefined);
@@ -170,8 +177,9 @@ export const DashboardProvider: React.FC<
     );
 
     const [dashboardTiles, setDashboardTiles] = useState<Dashboard['tiles']>();
-
     const [haveTilesChanged, setHaveTilesChanged] = useState<boolean>(false);
+    const [haveTabsChanged, setHaveTabsChanged] = useState<boolean>(false);
+    const [dashboardTabs, setDashboardTabs] = useState<Dashboard['tabs']>([]);
     const [dashboardTemporaryFilters, setDashboardTemporaryFilters] =
         useState<DashboardFilters>(emptyFilters);
     const [dashboardFilters, setDashboardFilters] =
@@ -368,7 +376,7 @@ export const DashboardProvider: React.FC<
             return;
 
         const filterFieldsMapping = savedChartUuidsAndTileUuids?.reduce<
-            Record<string, FilterableField[]>
+            Record<string, FilterableDimension[]>
         >((acc, { tileUuid }) => {
             const filterFields =
                 dashboardAvailableFiltersData.savedQueryFilters[tileUuid]?.map(
@@ -393,14 +401,15 @@ export const DashboardProvider: React.FC<
         savedChartUuidsAndTileUuids,
     ]);
 
-    const fieldsWithSuggestions = useMemo(() => {
-        return dashboardAvailableFiltersData &&
-            dashboardAvailableFiltersData.allFilterableFields &&
+    const allFilterableFieldsMap = useMemo(() => {
+        return dashboardAvailableFiltersData?.allFilterableFields &&
             dashboardAvailableFiltersData.allFilterableFields.length > 0
-            ? dashboardAvailableFiltersData.allFilterableFields.reduce<FieldsWithSuggestions>(
+            ? dashboardAvailableFiltersData.allFilterableFields.reduce<
+                  Record<string, FilterableDimension>
+              >(
                   (sum, field) => ({
                       ...sum,
-                      [fieldId(field)]: field,
+                      [getItemId(field)]: field,
                   }),
                   {},
               )
@@ -570,6 +579,37 @@ export const DashboardProvider: React.FC<
         [resultsCacheTimes],
     );
 
+    // Filters that are required to have a value set
+    const requiredDashboardFilters = useMemo(
+        () =>
+            dashboardFilters.dimensions
+                // Get filters that are required to have a value set (required) and that have no default value set (disabled)
+                .filter((f) => f.required && f.disabled)
+                .reduce<Pick<DashboardFilterRule, 'id' | 'label'>[]>(
+                    (acc, f) => {
+                        const field = allFilterableFieldsMap[f.target.fieldId];
+
+                        let label = '';
+
+                        if (f.label) {
+                            label = f.label;
+                        } else if (field) {
+                            label = getConditionalRuleLabel(f, field).field;
+                        }
+
+                        return [
+                            ...acc,
+                            {
+                                id: f.id,
+                                label,
+                            },
+                        ];
+                    },
+                    [],
+                ),
+        [dashboardFilters.dimensions, allFilterableFieldsMap],
+    );
+
     const value = {
         projectUuid,
         isDashboardLoading,
@@ -579,6 +619,10 @@ export const DashboardProvider: React.FC<
         setDashboardTiles,
         haveTilesChanged,
         setHaveTilesChanged,
+        haveTabsChanged,
+        setHaveTabsChanged,
+        dashboardTabs,
+        setDashboardTabs,
         setDashboardTemporaryFilters,
         dashboardFilters,
         dashboardTemporaryFilters,
@@ -593,7 +637,7 @@ export const DashboardProvider: React.FC<
         oldestCacheTime,
         invalidateCache,
         clearCacheAndFetch,
-        fieldsWithSuggestions,
+        allFilterableFieldsMap,
         allFilterableFields: dashboardAvailableFiltersData?.allFilterableFields,
         isLoadingDashboardFilters,
         isFetchingDashboardFilters,
@@ -609,6 +653,7 @@ export const DashboardProvider: React.FC<
         dashboardCommentsCheck,
         dashboardComments,
         hasTileComments,
+        requiredDashboardFilters,
     };
     return <Context.Provider value={value}>{children}</Context.Provider>;
 };

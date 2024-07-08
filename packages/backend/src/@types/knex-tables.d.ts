@@ -1,6 +1,8 @@
 import {
     DashboardsTableName,
     DashboardTable,
+    DashboardTabsTable,
+    DashboardTabsTableName,
     DashboardTileChartTable,
     DashboardTileChartTableName,
     DashboardTileLoomsTable,
@@ -87,6 +89,8 @@ import {
     SavedChartAdditionalMetricTableName,
     SavedChartCustomDimensionsTable,
     SavedChartCustomDimensionsTableName,
+    SavedChartCustomSqlDimensionsTable,
+    SavedChartCustomSqlDimensionsTableName,
     SavedChartsTableName,
     SavedChartTable,
     SavedChartTableCalculationTable,
@@ -103,12 +107,13 @@ import { ShareTable, ShareTableName } from '../database/entities/share';
 import {
     DbSlackAuthTokens,
     SlackAuthTokensTable,
+    SlackAuthTokensTableName,
 } from '../database/entities/slackAuthentication';
 import {
-    SpaceShareTable,
-    SpaceShareTableName,
     SpaceTable,
     SpaceTableName,
+    SpaceUserAccessTable,
+    SpaceUserAccessTableName,
 } from '../database/entities/spaces';
 import { UserTable, UserTableName } from '../database/entities/users';
 import {
@@ -122,6 +127,11 @@ import {
     DbAnalyticsChartViews,
     DbAnalyticsDashboardViews,
 } from '../database/entities/analytics';
+import { CatalogTable, CatalogTableName } from '../database/entities/catalog';
+import {
+    DashboardTileCommentsTable,
+    DashboardTileCommentsTableName,
+} from '../database/entities/comments';
 import {
     DashboardTileCommentsTable,
     DashboardTileCommentsTableName,
@@ -231,8 +241,8 @@ declare module 'knex/types/tables' {
         [ProjectGroupAccessTableName]: ProjectGroupAccessTable;
         [DbtCloudIntegrationsTableName]: DbtCloudIntegrationsTable;
         [ShareTableName]: ShareTable;
-        [SpaceShareTableName]: SpaceShareTable;
-        [SlackAuthTokensTable]: DbSlackAuthTokens;
+        [SpaceUserAccessTableName]: SpaceUserAccessTable;
+        [SlackAuthTokensTableName]: SlackAuthTokensTable;
         [AnalyticsChartViewsTableName]: DbAnalyticsChartViews;
         [AnalyticsDashboardViewsTableName]: DbAnalyticsDashboardViews;
         [PinnedListTableName]: PinnedListTable;
@@ -254,9 +264,12 @@ declare module 'knex/types/tables' {
         [OrganizationMemberUserAttributesTable]: DbOrganizationMemberUserAttribute;
         [GroupUserAttributesTable]: DbGroupUserAttribute;
         [SavedChartCustomDimensionsTableName]: SavedChartCustomDimensionsTable;
+        [SavedChartCustomSqlDimensionsTableName]: SavedChartCustomSqlDimensionsTable;
         [DownloadFileTableName]: DownloadFileTable;
         [GithubAppInstallationTableName]: GithubAppInstallationTable;
         [DashboardTileCommentsTableName]: DashboardTileCommentsTable;
+        [DashboardTabsTableName]: DashboardTabsTable;
         [NotificationsTableName]: NotificationsTable;
+        [CatalogTableName]: CatalogTable;
     }
 }

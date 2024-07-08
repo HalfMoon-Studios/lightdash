@@ -159,6 +159,7 @@ projectRouter.post(
                     req.user!,
                     req.params.projectUuid,
                     req.query.duplicateFrom.toString(),
+                    req.body,
                 )
                 .then((results) => {
                     res.json({
@@ -190,24 +191,6 @@ projectRouter.patch(
         req.services
             .getSavedChartService()
             .updateMultiple(req.user!, req.params.projectUuid, req.body)
-            .then((results) => {
-                res.json({
-                    status: 'ok',
-                    results,
-                });
-            })
-            .catch(next);
-    },
-);
-
-projectRouter.get(
-    '/spaces-and-content',
-    allowApiKeyAuthentication,
-    isAuthenticated,
-    async (req, res, next) => {
-        req.services
-            .getSpaceService()
-            .getAllSpaces(req.params.projectUuid, req.user!)
             .then((results) => {
                 res.json({
                     status: 'ok',
@@ -265,7 +248,7 @@ projectRouter.get(
                 ? req.query.chartUuid.toString()
                 : undefined;
 
-        const includePrivate = req.query.includePrivate === 'true';
+        const includePrivate = req.query.includePrivate !== 'false';
 
         req.services
             .getDashboardService()
@@ -299,6 +282,7 @@ projectRouter.post(
                     req.user!,
                     req.params.projectUuid,
                     req.query.duplicateFrom.toString(),
+                    req.body,
                 )
                 .then((results) => {
                     res.status(201).json({

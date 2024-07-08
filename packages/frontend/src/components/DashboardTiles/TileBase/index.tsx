@@ -1,4 +1,9 @@
-import { Dashboard, DashboardTileTypes, isChartTile } from '@lightdash/common';
+import {
+    DashboardTileTypes,
+    isChartTile,
+    type Dashboard,
+    type DashboardTab,
+} from '@lightdash/common';
 import {
     ActionIcon,
     Box,
@@ -12,12 +17,19 @@ import {
     Tooltip,
 } from '@mantine/core';
 import { useHover, useToggle } from '@mantine/hooks';
-import { IconDots, IconEdit, IconTrash } from '@tabler/icons-react';
-import { ReactNode, useState } from 'react';
+import {
+    IconArrowAutofitContent,
+    IconDots,
+    IconEdit,
+    IconTrash,
+} from '@tabler/icons-react';
+import { useState, type ReactNode } from 'react';
 import MantineIcon from '../../common/MantineIcon';
 import DeleteChartTileThatBelongsToDashboardModal from '../../common/modal/DeleteChartTileThatBelongsToDashboardModal';
 import ChartUpdateModal from '../TileForms/ChartUpdateModal';
+import MoveTileToTabModal from '../TileForms/MoveTileToTabModal';
 import TileUpdateModal from '../TileForms/TileUpdateModal';
+
 import {
     ButtonsWrapper,
     ChartContainer,
@@ -43,6 +55,7 @@ type Props<T> = {
     extraHeaderElement?: ReactNode;
     visibleHeaderElement?: ReactNode;
     minimal?: boolean;
+    tabs?: DashboardTab[];
     lockHeaderVisibility?: boolean;
 };
 
@@ -62,9 +75,12 @@ const TileBase = <T extends Dashboard['tiles'][number]>({
     visibleHeaderElement,
     titleHref,
     minimal = false,
+    tabs,
     lockHeaderVisibility = false,
 }: Props<T>) => {
     const [isEditingTileContent, setIsEditingTileContent] = useState(false);
+    const [isMovingTabs, setIsMovingTabs] = useState(false);
+
     const [
         isDeletingChartThatBelongsToDashboard,
         setIsDeletingChartThatBelongsToDashboard,
@@ -103,18 +119,20 @@ const TileBase = <T extends Dashboard['tiles'][number]>({
                     : `1px solid ${theme.colors.gray[1]}`,
             })}
         >
-            <LoadingOverlay visible={isLoading ?? false} />
+            <LoadingOverlay
+                className="loading_chart_overlay"
+                visible={isLoading ?? false}
+                zIndex={getDefaultZIndex('modal') - 10}
+            />
 
             <HeaderContainer
                 $isEditMode={isEditMode}
                 $isEmpty={isMarkdownTileTitleEmpty || hideTitle}
-                style={
-                    isLoading
-                        ? {
-                              zIndex: getDefaultZIndex('overlay') + 1,
-                          }
-                        : {}
-                }
+                style={{
+                    backgroundColor: 'white',
+                    zIndex: isLoading ? getDefaultZIndex('modal') - 10 : 3,
+                    borderRadius: '5px',
+                }}
             >
                 {minimal ? (
                     !hideTitle ? (
@@ -145,16 +163,26 @@ const TileBase = <T extends Dashboard['tiles'][number]>({
                                     withinPortal
                                     maw={400}
                                 >
-                                    <TileTitleLink
-                                        ref={titleRef}
-                                        href={titleHref}
-                                        $hovered={titleHovered}
-                                        target="_blank"
-                                        className="non-draggable"
-                                        hidden={hideTitle}
-                                    >
-                                        {title}
-                                    </TileTitleLink>
+                                    {isEditMode ? (
+                                        <Text
+                                            fw={600}
+                                            fz="md"
+                                            hidden={hideTitle}
+                                        >
+                                            {title}
+                                        </Text>
+                                    ) : (
+                                        <TileTitleLink
+                                            ref={titleRef}
+                                            href={titleHref}
+                                            $hovered={titleHovered}
+                                            target="_blank"
+                                            className="non-draggable"
+                                            hidden={hideTitle}
+                                        >
+                                            {title}
+                                        </TileTitleLink>
+                                    )}
                                 </Tooltip>
                             </Group>
                         </TitleWrapper>
@@ -209,6 +237,25 @@ const TileBase = <T extends Dashboard['tiles'][number]>({
                                                         Edit tile content
                                                     </Menu.Item>
                                                 </Box>
+                                                {tabs && tabs.length > 1 && (
+                                                    <Menu.Item
+                                                        icon={
+                                                            <MantineIcon
+                                                                icon={
+                                                                    IconArrowAutofitContent
+                                                                }
+                                                            />
+                                                        }
+                                                        onClick={() =>
+                                                            setIsMovingTabs(
+                                                                true,
+                                                            )
+                                                        }
+                                                    >
+                                                        Move to another tab
+                                                    </Menu.Item>
+                                                )}
+                                                <Menu.Divider />
                                                 {belongsToDashboard ? (
                                                     <Menu.Item
                                                         color="red"
@@ -221,24 +268,16 @@ const TileBase = <T extends Dashboard['tiles'][number]>({
                                                         Delete chart
                                                     </Menu.Item>
                                                 ) : (
-                                                    <>
-                                                        <Menu.Divider />
-                                                        <Menu.Item
-                                                            color="red"
-                                                            icon={
-                                                                <MantineIcon
-                                                                    icon={
-                                                                        IconTrash
-                                                                    }
-                                                                />
-                                                            }
-                                                            onClick={() =>
-                                                                onDelete(tile)
-                                                            }
-                                                        >
-                                                            Remove tile
-                                                        </Menu.Item>
-                                                    </>
+                                                    <Menu.Item
+                                                        color="red"
+                                                        onClick={() =>
+                                                            setIsDeletingChartThatBelongsToDashboard(
+                                                                true,
+                                                            )
+                                                        }
+                                                    >
+                                                        Delete chart
+                                                    </Menu.Item>
                                                 )}
                                             </>
                                         )}
@@ -311,6 +350,17 @@ const TileBase = <T extends Dashboard['tiles'][number]>({
                     onDelete(tile);
                     setIsDeletingChartThatBelongsToDashboard(false);
                 }}
+            />
+            <MoveTileToTabModal
+                className="non-draggable"
+                opened={isMovingTabs}
+                onConfirm={(newTile) => {
+                    onEdit(newTile as T);
+                    setIsMovingTabs(false);
+                }}
+                tabs={tabs}
+                tile={tile}
+                onClose={() => setIsMovingTabs(false)}
             />
         </Card>
     );

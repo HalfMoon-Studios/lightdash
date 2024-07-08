@@ -1,13 +1,14 @@
 import { subject } from '@casl/ability';
-import { Dashboard } from '@lightdash/common';
+import { type Dashboard } from '@lightdash/common';
 import {
     IconChartBarOff,
     IconLayoutDashboard,
     IconPlayerPlay,
 } from '@tabler/icons-react';
-import { FC } from 'react';
+import { SetStateAction, type FC } from 'react';
 import { useParams } from 'react-router-dom';
 import { useChartSummaries } from '../../../hooks/useChartSummaries';
+import useCreateInAnySpaceAccess from '../../../hooks/user/useCreateInAnySpaceAccess';
 import { useApp } from '../../../providers/AppProvider';
 import { TrackSection } from '../../../providers/TrackingProvider';
 import { SectionName } from '../../../types/Events';
@@ -19,12 +20,20 @@ import AddTileButton from '../AddTileButton';
 
 interface SavedChartsAvailableProps {
     onAddTiles: (tiles: Dashboard['tiles'][number][]) => void;
+    emptyContainerType?: 'dashboard' | 'tab';
     isEditMode: boolean;
+    setAddingTab: (value: React.SetStateAction<boolean>) => void;
+    activeTabUuid?: string;
+    dashboardTabs?: Dashboard['tabs'];
 }
 
 const EmptyStateNoTiles: FC<SavedChartsAvailableProps> = ({
     onAddTiles,
+    emptyContainerType = 'dashboard',
     isEditMode,
+    setAddingTab,
+    activeTabUuid,
+    dashboardTabs,
 }) => {
     const { projectUuid } = useParams<{ projectUuid: string }>();
     const { user } = useApp();
@@ -33,10 +42,25 @@ const EmptyStateNoTiles: FC<SavedChartsAvailableProps> = ({
     const savedCharts = savedChartsRequest.data || [];
     const hasSavedCharts = savedCharts.length > 0;
 
-    const userCanManageDashboard = user.data?.ability.can(
-        'manage',
+    const userCanCreateDashboard = useCreateInAnySpaceAccess(
+        projectUuid,
         'Dashboard',
     );
+
+    const dashboardEmptyStateTitle = () => {
+        switch (emptyContainerType) {
+            case 'dashboard':
+                return userCanCreateDashboard
+                    ? 'Start building your dashboard!'
+                    : 'Dashboard is empty.';
+            case 'tab':
+                return userCanCreateDashboard
+                    ? 'Add tiles to this tab'
+                    : 'Tab is empty';
+            default:
+                return 'Dashboard is empty.';
+        }
+    };
 
     return (
         <TrackSection name={SectionName.EMPTY_RESULTS_TABLE}>
@@ -44,14 +68,15 @@ const EmptyStateNoTiles: FC<SavedChartsAvailableProps> = ({
                 {hasSavedCharts ? (
                     <SuboptimalState
                         icon={IconLayoutDashboard}
-                        title={
-                            userCanManageDashboard
-                                ? 'Start building your dashboard!'
-                                : 'Dashboard is empty.'
-                        }
+                        title={dashboardEmptyStateTitle()}
                         action={
-                            userCanManageDashboard && isEditMode ? (
-                                <AddTileButton onAddTiles={onAddTiles} />
+                            userCanCreateDashboard && isEditMode ? (
+                                <AddTileButton
+                                    onAddTiles={onAddTiles}
+                                    setAddingTab={setAddingTab}
+                                    activeTabUuid={activeTabUuid}
+                                    dashboardTabs={dashboardTabs}
+                                />
                             ) : undefined
                         }
                     />

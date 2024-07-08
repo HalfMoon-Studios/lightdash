@@ -1,10 +1,10 @@
-import { ApiError, Dashboard } from '@lightdash/common';
+import { type ApiError, type TogglePinnedItemInfo } from '@lightdash/common';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { lightdashApi } from '../../api';
 import useToaster from '../toaster/useToaster';
 
 const updateDashboardPinning = async (data: { uuid: string }) =>
-    lightdashApi<Dashboard>({
+    lightdashApi<TogglePinnedItemInfo>({
         url: `/dashboards/${data.uuid}/pinning`,
         method: 'PATCH',
         body: JSON.stringify({}),
@@ -12,8 +12,8 @@ const updateDashboardPinning = async (data: { uuid: string }) =>
 
 export const useDashboardPinningMutation = () => {
     const queryClient = useQueryClient();
-    const { showToastError, showToastSuccess } = useToaster();
-    return useMutation<Dashboard, ApiError, { uuid: string }>(
+    const { showToastApiError, showToastSuccess } = useToaster();
+    return useMutation<TogglePinnedItemInfo, ApiError, { uuid: string }>(
         updateDashboardPinning,
         {
             mutationKey: ['dashboard_pinning_update'],
@@ -29,6 +29,9 @@ export const useDashboardPinningMutation = () => {
                     dashboard.projectUuid,
                     dashboard.spaceUuid,
                 ]);
+                await queryClient.invalidateQueries([
+                    'most-popular-and-recently-updated',
+                ]);
 
                 if (dashboard.pinnedListUuid) {
                     showToastSuccess({
@@ -40,10 +43,10 @@ export const useDashboardPinningMutation = () => {
                     });
                 }
             },
-            onError: (error) => {
-                showToastError({
+            onError: ({ error }) => {
+                showToastApiError({
                     title: 'Failed to pin dashboard',
-                    subtitle: error.error.message,
+                    apiError: error,
                 });
             },
         },

@@ -1,22 +1,22 @@
 import {
-    CreateGroup,
-    GroupWithMembers,
-    UpdateGroupWithMembers,
+    type CreateGroup,
+    type GroupWithMembers,
+    type UpdateGroupWithMembers,
 } from '@lightdash/common';
 import {
     Button,
     Group,
     Loader,
     Modal,
-    ModalProps,
     MultiSelect,
     Stack,
     TextInput,
     Title,
+    type ModalProps,
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { IconUsersGroup } from '@tabler/icons-react';
-import React, { FC, useMemo } from 'react';
+import React, { useMemo, type FC } from 'react';
 import {
     useGroupCreateMutation,
     useGroupUpdateMutation,
@@ -58,11 +58,12 @@ const CreateGroupModal: FC<
     const handleSubmitUpdate = async (
         data: UpdateGroupWithMembers & { uuid: string },
     ) => {
-        mutateAsyncUpdateGroup({
+        await mutateAsyncUpdateGroup({
             name: form.isDirty('name') ? data.name : undefined,
             members: form.isDirty('members') ? data.members : undefined,
             uuid: data.uuid,
         });
+
         form.reset();
         onClose();
     };

@@ -1,5 +1,4 @@
 import { SupportedDbtAdapter } from '../types/dbt';
-import { extractEntityNameFromIdColumn } from '../types/metricQuery';
 import { attachTypesToModels, convertTable } from './translator';
 import {
     DBT_METRIC,
@@ -9,7 +8,6 @@ import {
     DBT_METRIC_WITH_SQL_FIELD,
     DBT_V9_METRIC,
     expectedModelWithType,
-    INVALID_ID_COLUMN_NAMES,
     LIGHTDASH_TABLE_SQL_WHERE,
     LIGHTDASH_TABLE_WITHOUT_AUTO_METRICS,
     LIGHTDASH_TABLE_WITH_ADDITIONAL_DIMENSIONS,
@@ -18,6 +16,7 @@ import {
     LIGHTDASH_TABLE_WITH_DBT_V9_METRICS,
     LIGHTDASH_TABLE_WITH_DEFAULT_TIME_INTERVAL_DIMENSIONS_BIGQUERY,
     LIGHTDASH_TABLE_WITH_DEFAULT_TIME_INTERVAL_DIMENSIONS_SNOWFLAKE,
+    LIGHTDASH_TABLE_WITH_GROUP_BLOCK,
     LIGHTDASH_TABLE_WITH_GROUP_LABEL,
     LIGHTDASH_TABLE_WITH_METRICS,
     LIGHTDASH_TABLE_WITH_OFF_TIME_INTERVAL_DIMENSIONS,
@@ -25,6 +24,7 @@ import {
     MODEL_WITH_ADDITIONAL_DIMENSIONS,
     MODEL_WITH_CUSTOM_TIME_INTERVAL_DIMENSIONS,
     MODEL_WITH_DEFAULT_TIME_INTERVAL_DIMENSIONS,
+    MODEL_WITH_GROUPS_BLOCK,
     MODEL_WITH_GROUP_LABEL,
     MODEL_WITH_METRIC,
     MODEL_WITH_NO_METRICS,
@@ -35,7 +35,6 @@ import {
     MODEL_WITH_SQL_WHERE,
     MODEL_WITH_WRONG_METRIC,
     MODEL_WITH_WRONG_METRICS,
-    VALID_ID_COLUMN_NAMES,
     warehouseSchema,
     warehouseSchemaWithMissingColumn,
     warehouseSchemaWithMissingTable,
@@ -104,20 +103,6 @@ describe('attachTypesToModels', () => {
                 false,
             )[0],
         ).toEqual(expectedModelWithType);
-    });
-});
-
-describe('autogenerate metrics', () => {
-    it('should extract entity names from valid id column names', () => {
-        VALID_ID_COLUMN_NAMES.forEach(({ input, output }) => {
-            expect(extractEntityNameFromIdColumn(input)).toEqual(output);
-        });
-    });
-
-    it('should return null entity names for invalid id columns names', () => {
-        INVALID_ID_COLUMN_NAMES.forEach((name) => {
-            expect(extractEntityNameFromIdColumn(name)).toBeNull();
-        });
     });
 });
 
@@ -285,5 +270,15 @@ describe('convert tables from dbt models', () => {
                 [],
             ),
         ).toStrictEqual(LIGHTDASH_TABLE_WITH_ADDITIONAL_DIMENSIONS);
+    });
+
+    it('should convert dbt model with groups meta block', async () => {
+        expect(
+            convertTable(
+                SupportedDbtAdapter.BIGQUERY,
+                MODEL_WITH_GROUPS_BLOCK,
+                [],
+            ),
+        ).toStrictEqual(LIGHTDASH_TABLE_WITH_GROUP_BLOCK);
     });
 });

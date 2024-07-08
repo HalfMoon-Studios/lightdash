@@ -1,18 +1,18 @@
 import {
-    ApiError,
-    ApiJobStatusResponse,
-    ApiTestSchedulerResponse,
-    CreateSchedulerAndTargets,
-    SchedulerAndTargets,
     SchedulerJobStatus,
-    SchedulerWithLogs,
+    type ApiError,
+    type ApiJobStatusResponse,
+    type ApiTestSchedulerResponse,
+    type CreateSchedulerAndTargets,
+    type SchedulerAndTargets,
+    type SchedulerWithLogs,
 } from '@lightdash/common';
 import { notifications } from '@mantine/notifications';
 import {
     useMutation,
     useQuery,
     useQueryClient,
-    UseQueryOptions,
+    type UseQueryOptions,
 } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { lightdashApi } from '../../../api';
@@ -32,7 +32,7 @@ const getSchedulerLogs = async (projectUuid: string) =>
         body: undefined,
     });
 
-const getSchedulerJobStatus = async (jobId: string) =>
+export const getSchedulerJobStatus = async (jobId: string) =>
     lightdashApi<ApiJobStatusResponse['results']>({
         url: `/schedulers/job/${jobId}/status`,
         method: 'GET',
@@ -71,6 +71,8 @@ const getJobStatus = async (
         .then((data) => {
             if (data.status === SchedulerJobStatus.COMPLETED) {
                 return onComplete();
+            } else if (data.status === SchedulerJobStatus.ERROR) {
+                onError(new Error(data.details?.error || 'Job failed'));
             } else {
                 setTimeout(
                     () => getJobStatus(jobId, onComplete, onError),
@@ -84,18 +86,23 @@ const getJobStatus = async (
 };
 
 export const pollJobStatus = async (jobId: string) => {
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<void>((resolve, reject) =>
         getJobStatus(
             jobId,
             () => resolve(),
             (error) => reject(error),
-        );
-    });
+        ),
+    );
 };
 
 export const useSendNowScheduler = () => {
     const queryClient = useQueryClient();
-    const { showToastError, showToastInfo, showToastSuccess } = useToaster();
+    const {
+        showToastError,
+        showToastInfo,
+        showToastSuccess,
+        showToastApiError,
+    } = useToaster();
 
     const sendNowMutation = useMutation<
         ApiTestSchedulerResponse['results'],
@@ -114,10 +121,10 @@ export const useSendNowScheduler = () => {
         {
             mutationKey: ['sendNowScheduler'],
             onSuccess: () => {},
-            onError: (error) => {
-                showToastError({
+            onError: ({ error }) => {
+                showToastApiError({
                     title: 'Failed to process job',
-                    subtitle: error.error.message,
+                    apiError: error,
                 });
             },
         },
@@ -125,7 +132,10 @@ export const useSendNowScheduler = () => {
 
     const { data: sendNowData } = sendNowMutation;
 
-    const { data: scheduledDeliveryJobStatus } = useQuery(
+    const { data: scheduledDeliveryJobStatus } = useQuery<
+        ApiJobStatusResponse['results'] | undefined,
+        ApiError
+    >(
         ['jobStatus', sendNowData?.jobId],
         () => {
             if (!sendNowData?.jobId) return;
@@ -184,10 +194,10 @@ export const useSendNowScheduler = () => {
                     );
                 }
             },
-            onError: (error: { error: Error }) => {
-                showToastError({
+            onError: async ({ error }) => {
+                showToastApiError({
                     title: 'Error polling job status',
-                    subtitle: error?.error?.message,
+                    apiError: error,
                 });
 
                 setTimeout(
@@ -198,7 +208,10 @@ export const useSendNowScheduler = () => {
                     1000,
                 );
 
-                queryClient.cancelQueries(['jobStatus', sendNowData?.jobId]);
+                await queryClient.cancelQueries([
+                    'jobStatus',
+                    sendNowData?.jobId,
+                ]);
             },
             enabled: Boolean(sendNowData && sendNowData?.jobId !== undefined),
         },

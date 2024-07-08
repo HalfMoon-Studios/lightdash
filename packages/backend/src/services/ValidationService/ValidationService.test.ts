@@ -1,19 +1,17 @@
-import { TableSelectionType } from '@lightdash/common';
-import {
-    dashboardModel,
-    projectModel,
-    savedChartModel,
-    spaceModel,
-    validationModel,
-} from '../../models/models';
-
+import { TableSelectionType, ValidationTarget } from '@lightdash/common';
 import { analyticsMock } from '../../analytics/LightdashAnalytics.mock';
+import { DashboardModel } from '../../models/DashboardModel/DashboardModel';
+import { ProjectModel } from '../../models/ProjectModel/ProjectModel';
+import { SavedChartModel } from '../../models/SavedChartModel';
+import { SpaceModel } from '../../models/SpaceModel';
+import { ValidationModel } from '../../models/ValidationModel/ValidationModel';
+import { SchedulerClient } from '../../scheduler/SchedulerClient';
 import { ValidationService } from './ValidationService';
 import {
-    chart,
-    chartWithJoinedField,
+    chartForValidation,
+    chartForValidationWithJoinedField,
     config,
-    dashboard,
+    dashboardForValidation,
     explore,
     exploreError,
     exploreWithJoin,
@@ -23,39 +21,32 @@ import {
     tableConfiguration,
 } from './ValidationService.mock';
 
-jest.mock('../../clients/clients', () => ({
-    schedulerClient: {},
-}));
-
-jest.mock('../../models/models', () => ({
-    savedChartModel: {
-        find: jest.fn(async () => [{}]),
-        get: jest.fn(async () => chart),
-    },
-    projectModel: {
-        getExploresFromCache: jest.fn(async () => [explore]),
-        get: jest.fn(async () => project),
-        getTablesConfiguration: jest.fn(async () => tableConfiguration),
-    },
-    validationModel: {
-        delete: jest.fn(async () => {}),
-        create: jest.fn(async () => {}),
-    },
-    dashboardModel: {
-        getAllByProject: jest.fn(async () => [{}]),
-        getById: jest.fn(async () => dashboard),
-    },
-}));
+const savedChartModel = {
+    findChartsForValidation: jest.fn(async () => [chartForValidation]),
+};
+const projectModel = {
+    getExploresFromCache: jest.fn(async () => [explore]),
+    get: jest.fn(async () => project),
+    getTablesConfiguration: jest.fn(async () => tableConfiguration),
+};
+const validationModel = {
+    delete: jest.fn(async () => {}),
+    create: jest.fn(async () => {}),
+};
+const dashboardModel = {
+    findDashboardsForValidation: jest.fn(async () => [dashboardForValidation]),
+};
 
 describe('validation', () => {
     const validationService = new ValidationService({
         analytics: analyticsMock,
-        validationModel,
-        projectModel,
-        savedChartModel,
-        dashboardModel,
+        validationModel: validationModel as unknown as ValidationModel,
+        projectModel: projectModel as unknown as ProjectModel,
+        savedChartModel: savedChartModel as unknown as SavedChartModel,
+        dashboardModel: dashboardModel as unknown as DashboardModel,
         lightdashConfig: config,
-        spaceModel,
+        spaceModel: {} as SpaceModel,
+        schedulerClient: {} as SchedulerClient,
     });
 
     afterEach(() => {
@@ -64,7 +55,7 @@ describe('validation', () => {
 
     it('Should validate project without errors', async () => {
         expect(
-            await validationService.generateValidation(chart.projectUuid),
+            await validationService.generateValidation('projectUuid'),
         ).toEqual([]);
     });
     it('Should validate project with dimension errors', async () => {
@@ -73,7 +64,7 @@ describe('validation', () => {
         );
 
         const errors = await validationService.generateValidation(
-            chart.projectUuid,
+            'projectUuid',
         );
 
         expect({ ...errors[0], createdAt: undefined }).toEqual({
@@ -92,7 +83,7 @@ describe('validation', () => {
             "Dimension error: the field 'table_dimension' no longer exists",
             "Filter error: the field 'table_dimension' no longer exists",
             "Sorting error: the field 'table_dimension' no longer exists",
-            "Custom metric error: the base dimension 'dimension' no longer exists",
+            "Custom metric error: the base dimension 'table_dimension' no longer exists",
             "The chart 'Test chart' is broken on this dashboard.",
         ];
         expect(errors.map((error) => error.error)).toEqual(expectedErrors);
@@ -104,7 +95,7 @@ describe('validation', () => {
         );
 
         const errors = await validationService.generateValidation(
-            chart.projectUuid,
+            'projectUuid',
         );
 
         expect({ ...errors[0], createdAt: undefined }).toEqual({
@@ -133,7 +124,7 @@ describe('validation', () => {
         );
 
         const errors = await validationService.generateValidation(
-            chart.projectUuid,
+            'projectUuid',
         );
 
         const tableErrors = errors.filter((ve) => ve.source === 'table');
@@ -167,7 +158,7 @@ describe('validation', () => {
             },
         }));
         const errors = await validationService.generateValidation(
-            chart.projectUuid,
+            'projectUuid',
         );
         const tableErrors = errors.filter((ve) => ve.source === 'table');
 
@@ -194,7 +185,7 @@ describe('validation', () => {
             },
         }));
         const errors = await validationService.generateValidation(
-            chart.projectUuid,
+            'projectUuid',
         );
         const tableErrors = errors.filter((ve) => ve.source === 'table');
 
@@ -214,16 +205,102 @@ describe('validation', () => {
             'Model "valid_explore" has a dimension reference: ${is_completed} which matches no dimension',
         );
     });
+
+    it('Should validate only tables in project', async () => {
+        (projectModel.getExploresFromCache as jest.Mock).mockImplementationOnce(
+            async () => [exploreError, exploreWithoutDimension],
+        );
+
+        const errors = await validationService.generateValidation(
+            'projectUuid',
+            undefined,
+            new Set([ValidationTarget.TABLES]),
+        );
+
+        const expectedErrors: string[] = [
+            'Model "valid_explore" has a dimension reference: ${is_completed} which matches no dimension',
+        ];
+
+        expect(errors.map((error) => error.error)).toEqual(expectedErrors);
+    });
+
+    it('Should validate only charts in project', async () => {
+        (projectModel.getExploresFromCache as jest.Mock).mockImplementationOnce(
+            async () => [exploreError, exploreWithoutDimension],
+        );
+
+        const errors = await validationService.generateValidation(
+            'projectUuid',
+            undefined,
+            new Set([ValidationTarget.CHARTS]),
+        );
+
+        const expectedErrors: string[] = [
+            "Dimension error: the field 'table_dimension' no longer exists",
+            "Filter error: the field 'table_dimension' no longer exists",
+            "Sorting error: the field 'table_dimension' no longer exists",
+            "Custom metric error: the base dimension 'table_dimension' no longer exists",
+        ];
+
+        expect(errors.map((error) => error.error)).toEqual(expectedErrors);
+    });
+
+    it('Should validate only dashboards in project', async () => {
+        (projectModel.getExploresFromCache as jest.Mock).mockImplementationOnce(
+            async () => [exploreError, exploreWithoutDimension],
+        );
+
+        const errors = await validationService.generateValidation(
+            'projectUuid',
+            undefined,
+            new Set([ValidationTarget.DASHBOARDS]),
+        );
+
+        const expectedErrors: string[] = [
+            "Dimension error: the field 'table_dimension' no longer exists",
+            "Filter error: the field 'table_dimension' no longer exists",
+            "Sorting error: the field 'table_dimension' no longer exists",
+            "Custom metric error: the base dimension 'table_dimension' no longer exists",
+            "The chart 'Test chart' is broken on this dashboard.",
+        ];
+
+        expect(errors.map((error) => error.error)).toEqual(expectedErrors);
+    });
+
+    it('Should validate only tables and charts in project', async () => {
+        (projectModel.getExploresFromCache as jest.Mock).mockImplementationOnce(
+            async () => [exploreError, exploreWithoutDimension],
+        );
+
+        const errors = await validationService.generateValidation(
+            'projectUuid',
+            undefined,
+            new Set([ValidationTarget.TABLES, ValidationTarget.CHARTS]),
+        );
+
+        const expectedErrors: string[] = [
+            'Model "valid_explore" has a dimension reference: ${is_completed} which matches no dimension',
+            "Dimension error: the field 'table_dimension' no longer exists",
+            "Filter error: the field 'table_dimension' no longer exists",
+            "Sorting error: the field 'table_dimension' no longer exists",
+            "Custom metric error: the base dimension 'table_dimension' no longer exists",
+        ];
+
+        expect(errors.map((error) => error.error)).toEqual(expectedErrors);
+    });
+
     it('Should validate fields from joined explores', async () => {
         (projectModel.getExploresFromCache as jest.Mock).mockImplementationOnce(
             async () => [explore, exploreWithJoin],
         );
-        (savedChartModel.get as jest.Mock).mockImplementationOnce(
-            async () => chartWithJoinedField,
-        );
+        (
+            savedChartModel.findChartsForValidation as jest.Mock
+        ).mockImplementationOnce(async () => [
+            chartForValidationWithJoinedField,
+        ]);
 
         const errors = await validationService.generateValidation(
-            chart.projectUuid,
+            'projectUuid',
         );
 
         expect(errors.length).toEqual(0);

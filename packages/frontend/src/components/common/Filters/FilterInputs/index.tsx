@@ -1,29 +1,32 @@
 import {
     assertUnreachable,
-    ConditionalRule,
-    ConditionalRuleLabels,
     DimensionType,
-    Field,
-    FilterableField,
-    FilterableItem,
     FilterOperator,
     FilterType,
     formatBoolean,
     formatDate,
-    formatTimestamp,
     getFilterTypeFromItem,
     getItemId,
+    getLocalTimeDisplay,
+    isCustomSqlDimension,
     isDashboardFilterRule,
     isDimension,
     isField,
     isFilterableItem,
     isFilterRule,
     isMomentInput,
-    TableCalculation,
+    type ConditionalRule,
+    type ConditionalRuleLabels,
+    type CustomSqlDimension,
+    type Field,
+    type FilterableDimension,
+    type FilterableItem,
+    type TableCalculation,
 } from '@lightdash/common';
-import { PopoverProps } from '@mantine/core';
+import { type PopoverProps } from '@mantine/core';
 import isEmpty from 'lodash/isEmpty';
 import uniq from 'lodash/uniq';
+import { type MomentInput } from 'moment';
 import BooleanFilterInputs from './BooleanFilterInputs';
 import DateFilterInputs from './DateFilterInputs';
 import DefaultFilterInputs from './DefaultFilterInputs';
@@ -45,6 +48,7 @@ const filterOperatorLabel: Record<FilterOperator, string> = {
     [FilterOperator.NOT_IN_THE_PAST]: 'not in the last',
     [FilterOperator.IN_THE_NEXT]: 'in the next',
     [FilterOperator.IN_THE_CURRENT]: 'in the current',
+    [FilterOperator.NOT_IN_THE_CURRENT]: 'not in the current',
     [FilterOperator.IN_BETWEEN]: 'is between',
 };
 
@@ -69,6 +73,7 @@ const timeFilterOptions: Array<{
         FilterOperator.NOT_IN_THE_PAST,
         FilterOperator.IN_THE_NEXT,
         FilterOperator.IN_THE_CURRENT,
+        FilterOperator.NOT_IN_THE_CURRENT,
     ]),
     { value: FilterOperator.LESS_THAN, label: 'is before' },
     { value: FilterOperator.LESS_THAN_OR_EQUAL, label: 'is on or before' },
@@ -148,7 +153,7 @@ export const FilterInputComponent = <T extends ConditionalRule>(
 const getValueAsString = (
     filterType: FilterType,
     rule: ConditionalRule,
-    field: Field | TableCalculation,
+    field: Field | TableCalculation | CustomSqlDimension,
 ) => {
     const { operator, values } = rule;
     const firstValue = values?.[0];
@@ -171,8 +176,12 @@ const getValueAsString = (
                         rule.settings?.completed ? 'completed ' : ''
                     }${rule.settings?.unitOfTime}`;
                 case FilterOperator.IN_BETWEEN:
-                    return `${firstValue} and ${secondValue}`;
+                    return `${getLocalTimeDisplay(
+                        firstValue as MomentInput,
+                        false,
+                    )} and ${getLocalTimeDisplay(secondValue as MomentInput)}`;
                 case FilterOperator.IN_THE_CURRENT:
+                case FilterOperator.NOT_IN_THE_CURRENT:
                     if (!isFilterRule(rule)) throw new Error('Invalid rule');
 
                     return rule.settings?.unitOfTime.slice(0, -1);
@@ -190,19 +199,19 @@ const getValueAsString = (
                 case FilterOperator.GREATER_THAN_OR_EQUAL:
                     return values
                         ?.map((value) => {
+                            const type = isCustomSqlDimension(field)
+                                ? field.dimensionType
+                                : field.type;
                             if (
                                 isDimension(field) &&
                                 isMomentInput(value) &&
-                                field.type === DimensionType.TIMESTAMP
+                                type === DimensionType.TIMESTAMP
                             ) {
-                                return formatTimestamp(
-                                    value,
-                                    field.timeInterval,
-                                );
+                                return getLocalTimeDisplay(value);
                             } else if (
                                 isDimension(field) &&
                                 isMomentInput(value) &&
-                                field.type === DimensionType.DATE
+                                type === DimensionType.DATE
                             ) {
                                 return formatDate(value, field.timeInterval);
                             } else {
@@ -245,8 +254,8 @@ export const getConditionalRuleLabel = (
 
 export const getFilterRuleTables = (
     filterRule: ConditionalRule,
-    field: FilterableField,
-    filterableFields: FilterableField[],
+    field: FilterableDimension,
+    filterableFields: FilterableDimension[],
 ): string[] => {
     if (
         isDashboardFilterRule(filterRule) &&

@@ -2,6 +2,7 @@ import { Ability } from '@casl/ability';
 import {
     ApiQueryResults,
     ChartKind,
+    ChartType,
     DbtCloudIDEProjectConfig,
     DbtProjectType,
     DefaultSupportedDbtVersion,
@@ -192,6 +193,10 @@ export const expectedExploreSummaryFilteredByName = [
     expectedAllExploreSummary[0],
 ];
 
+export const expectedAllExploreSummaryWithoutErrors = [
+    expectedAllExploreSummary[0],
+];
+
 export const tablesConfiguration: TablesConfiguration = {
     tableSelection: {
         type: TableSelectionType.ALL,
@@ -254,7 +259,9 @@ export const defaultProject: OrganizationProject = {
 export const spacesWithSavedCharts: Space[] = [
     {
         organizationUuid: user.organizationUuid!,
-        name: 'sapce',
+        name: 'space',
+        slug: 'space',
+
         isPrivate: false,
         uuid: 'uuid',
         pinnedListUuid: null,
@@ -267,21 +274,30 @@ export const spacesWithSavedCharts: Space[] = [
                 spaceUuid: 'uuid',
                 pinnedListUuid: null,
                 pinnedListOrder: null,
-                chartType: ChartKind.AREA,
+                chartType: ChartType.CARTESIAN,
+                chartKind: ChartKind.AREA,
                 views: 1,
                 firstViewedAt: new Date(),
+                dashboardName: 'dashboardName',
+                dashboardUuid: 'dashboardUuid',
+                projectUuid: 'projectUuid',
+                spaceName: 'spaceName',
+                organizationUuid: 'organizationUuid',
             },
         ],
         projectUuid,
         dashboards: [],
         access: [],
+        groupsAccess: [],
     },
 ];
 
 export const spacesWithNoSavedCharts: Space[] = [
     {
         organizationUuid: user.organizationUuid!,
-        name: 'sapce',
+        name: 'space',
+        slug: 'space',
+
         uuid: 'uuid',
         pinnedListUuid: null,
         pinnedListOrder: null,
@@ -290,6 +306,7 @@ export const spacesWithNoSavedCharts: Space[] = [
         isPrivate: false,
         dashboards: [],
         access: [],
+        groupsAccess: [],
     },
 ];
 
@@ -348,6 +365,7 @@ export const lightdashConfigWithNoSMTP: Pick<
     query: {
         maxLimit: 100,
         csvCellsLimit: 100,
+        timezone: undefined,
     },
 };
 

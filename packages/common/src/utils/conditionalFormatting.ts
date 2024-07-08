@@ -1,26 +1,26 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { ItemsMap } from '..';
 import {
-    ConditionalFormattingConfig,
-    ConditionalFormattingConfigWithColorRange,
-    ConditionalFormattingConfigWithSingleColor,
-    ConditionalFormattingWithConditionalOperator,
     isConditionalFormattingConfigWithColorRange,
     isConditionalFormattingConfigWithSingleColor,
+    type ConditionalFormattingConfig,
+    type ConditionalFormattingConfigWithColorRange,
+    type ConditionalFormattingConfigWithSingleColor,
+    type ConditionalFormattingWithConditionalOperator,
 } from '../types/conditionalFormatting';
 import {
     ConditionalOperator,
-    ConditionalRuleLabels,
+    type ConditionalRuleLabels,
 } from '../types/conditionalRule';
 import {
     CustomFormatType,
-    FilterableItem,
     Format,
     isField,
     isFilterableItem,
     isTableCalculation,
+    type FilterableItem,
 } from '../types/field';
-import { FieldTarget } from '../types/filter';
+import { type FieldTarget } from '../types/filter';
 import assertUnreachable from './assertUnreachable';
 import { getItemId, isNumericItem } from './item';
 
@@ -118,6 +118,7 @@ export const hasMatchingConditionalRules = (
                 case ConditionalOperator.NOT_IN_THE_PAST:
                 case ConditionalOperator.IN_THE_NEXT:
                 case ConditionalOperator.IN_THE_CURRENT:
+                case ConditionalOperator.NOT_IN_THE_CURRENT:
                 case ConditionalOperator.IN_BETWEEN:
                     throw new Error('Not implemented');
                 default:
@@ -146,7 +147,14 @@ export const getConditionalFormattingConfig = (
     value: unknown | undefined,
     conditionalFormattings: ConditionalFormattingConfig[] | undefined,
 ) => {
-    if (!conditionalFormattings || !field || !isNumericItem(field))
+    // For backwards compatibility with old table calculations without type
+    const isCalculationTypeUndefined =
+        field && isTableCalculation(field) && field.type === undefined;
+    if (
+        !conditionalFormattings ||
+        !field ||
+        (!isNumericItem(field) && !isCalculationTypeUndefined)
+    )
         return undefined;
 
     const fieldConfigs = conditionalFormattings.filter(

@@ -1,7 +1,7 @@
 import assertUnreachable from '../utils/assertUnreachable';
-import { WeekDay } from '../utils/timeFrames';
+import { type WeekDay } from '../utils/timeFrames';
 import { DbtManifestVersion } from './dbt';
-import { ProjectGroupAccess } from './projectGroupAccess';
+import { type ProjectGroupAccess } from './projectGroupAccess';
 
 export enum ProjectType {
     DEFAULT = 'DEFAULT',
@@ -152,6 +152,7 @@ export type CreateSnowflakeCredentials = {
     queryTag?: string;
     accessUrl?: string;
     startOfWeek?: WeekDay | null;
+    quotedIdentifiersIgnoreCase?: boolean;
 };
 export type SnowflakeCredentials = Omit<
     CreateSnowflakeCredentials,
@@ -190,6 +191,7 @@ export enum SupportedDbtVersions {
     V1_5 = 'v1.5',
     V1_6 = 'v1.6',
     V1_7 = 'v1.7',
+    V1_8 = 'v1.8',
 }
 
 export const GetDbtManifestVersion = (
@@ -204,6 +206,8 @@ export const GetDbtManifestVersion = (
             return DbtManifestVersion.V10;
         case SupportedDbtVersions.V1_7:
             return DbtManifestVersion.V11;
+        case SupportedDbtVersions.V1_8:
+            return DbtManifestVersion.V12;
         default:
             assertUnreachable(
                 dbtVersion,
@@ -292,13 +296,13 @@ export type Project = {
     dbtConnection: DbtProjectConfig;
     warehouseConnection?: WarehouseCredentials;
     pinnedListUuid?: string;
-    copiedFromProjectUuid?: string;
+    upstreamProjectUuid?: string;
     dbtVersion: SupportedDbtVersions;
 };
 
 export type ProjectSummary = Pick<
     Project,
-    'name' | 'projectUuid' | 'organizationUuid' | 'type'
+    'name' | 'projectUuid' | 'organizationUuid' | 'type' | 'upstreamProjectUuid'
 >;
 
 export type ApiProjectResponse = {

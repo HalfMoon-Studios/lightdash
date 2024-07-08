@@ -1,6 +1,13 @@
-import { fieldId as getFieldId, getVisibleFields } from '@lightdash/common';
+import {
+    convertFieldRefToFieldId,
+    getAllReferences,
+    getItemId,
+    getVisibleFields,
+    isCustomBinDimension,
+    isCustomSqlDimension,
+} from '@lightdash/common';
 import { Skeleton, Stack } from '@mantine/core';
-import { FC, memo, useMemo } from 'react';
+import { memo, useMemo, type FC } from 'react';
 import { useExplore } from '../../../hooks/useExplore';
 import { useExplorerContext } from '../../../providers/ExplorerProvider';
 import PageBreadcrumbs from '../../common/PageBreadcrumbs';
@@ -48,7 +55,57 @@ const ExplorePanel: FC<ExplorePanelProps> = memo(({ onBack }) => {
     const toggleActiveField = useExplorerContext(
         (context) => context.actions.toggleActiveField,
     );
-    const { data, status } = useExplore(activeTableName);
+    const { data: explore, status } = useExplore(activeTableName);
+
+    const missingFields = useMemo(() => {
+        if (explore) {
+            const visibleFields = getVisibleFields(explore);
+
+            const allFields = [
+                ...visibleFields,
+                ...(additionalMetrics || []),
+                ...(customDimensions || []),
+            ];
+            const selectedFields = [...metrics, ...dimensions];
+            const fieldIds = allFields.map((field) => getItemId(field));
+
+            const missingCustomMetrics = additionalMetrics?.filter((metric) => {
+                const table = explore.tables[metric.table];
+                return (
+                    !table ||
+                    (metric.baseDimensionName &&
+                        !table.dimensions[metric.baseDimensionName])
+                );
+            });
+
+            const missingCustomDimensions = customDimensions?.filter(
+                (customDimension) => {
+                    const isCustomBinDimensionMissing =
+                        isCustomBinDimension(customDimension) &&
+                        !fieldIds.includes(customDimension.dimensionId);
+
+                    const isCustomSqlDimensionMissing =
+                        isCustomSqlDimension(customDimension) &&
+                        getAllReferences(customDimension.sql)
+                            .map((ref) => convertFieldRefToFieldId(ref))
+                            .some(
+                                (refFieldId) => !fieldIds.includes(refFieldId),
+                            );
+
+                    return (
+                        isCustomBinDimensionMissing ||
+                        isCustomSqlDimensionMissing
+                    );
+                },
+            );
+
+            return {
+                all: selectedFields.filter((node) => !fieldIds.includes(node)),
+                customMetrics: missingCustomMetrics,
+                customDimensions: missingCustomDimensions,
+            };
+        }
+    }, [explore, additionalMetrics, metrics, dimensions, customDimensions]);
 
     const missingFields = useMemo(() => {
         if (data) {
@@ -66,7 +123,7 @@ const ExplorePanel: FC<ExplorePanelProps> = memo(({ onBack }) => {
         return <LoadingSkeleton />;
     }
 
-    if (!data) return null;
+    if (!explore) return null;
 
     if (status === 'error') {
         if (onBack) onBack();
@@ -87,7 +144,7 @@ const ExplorePanel: FC<ExplorePanelProps> = memo(({ onBack }) => {
                           ]
                         : []),
                     {
-                        title: data.label,
+                        title: explore.label,
                         active: true,
                     },
                 ]}
@@ -95,7 +152,7 @@ const ExplorePanel: FC<ExplorePanelProps> = memo(({ onBack }) => {
 
             <ItemDetailProvider>
                 <ExploreTree
-                    explore={data}
+                    explore={explore}
                     additionalMetrics={additionalMetrics || []}
                     selectedNodes={activeFields}
                     onSelectedFieldChange={toggleActiveField}

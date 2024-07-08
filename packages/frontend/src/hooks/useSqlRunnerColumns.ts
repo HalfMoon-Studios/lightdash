@@ -1,11 +1,15 @@
 import {
-    ApiQueryResults,
-    Field,
-    FieldId,
-    fieldId as getFieldId,
+    getItemId,
+    type ApiQueryResults,
+    type Field,
+    type FieldId,
 } from '@lightdash/common';
 import { useMemo } from 'react';
-import { columnHelper, TableColumn } from '../components/common/Table/types';
+import {
+    columnHelper,
+    type TableColumn,
+} from '../components/common/Table/types';
+import { getRawValueCell } from './useColumns';
 import useColumnTotals from './useColumnTotals';
 
 type Args = {
@@ -24,29 +28,14 @@ const useSqlRunnerColumns = ({
     return useMemo(() => {
         if (fieldsMap) {
             return Object.values(fieldsMap).map<TableColumn>((dimension) => {
-                const fieldId = getFieldId(dimension);
+                const fieldId = getItemId(dimension);
                 return columnHelper.accessor((row) => row[fieldId], {
                     id: fieldId,
                     header: () =>
                         columnHeader !== undefined
                             ? columnHeader(dimension)
                             : dimension.label,
-                    cell: (info) => {
-                        let raw;
-                        try {
-                            raw = info.getValue().value.raw;
-                        } catch {
-                            console.error(
-                                'Error getting cell data for field',
-                                fieldId,
-                            );
-                            return 'Error';
-                        }
-                        if (raw === null) return '∅';
-                        if (raw === undefined) return '-';
-                        if (raw instanceof Date) return raw.toISOString();
-                        return `${raw}`;
-                    },
+                    cell: getRawValueCell,
                     footer: () => (totals[fieldId] ? totals[fieldId] : null),
                     meta: {
                         item: dimension,

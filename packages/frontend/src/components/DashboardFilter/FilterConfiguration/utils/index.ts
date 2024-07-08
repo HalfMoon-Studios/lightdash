@@ -1,26 +1,12 @@
 import {
     assertUnreachable,
-    DashboardFilterRule,
     FilterOperator,
+    type DashboardFilterRule,
 } from '@lightdash/common';
-import produce from 'immer';
+import { produce } from 'immer';
 import isEqual from 'lodash/isEqual';
 
-export const isFilterEnabled = (
-    filterRule?: DashboardFilterRule,
-    isEditMode?: boolean,
-    isCreatingNew?: boolean,
-) => {
-    if (!filterRule) return false;
-
-    const isFilterRuleDisabled = filterRule.disabled;
-    if (
-        (isFilterRuleDisabled && isEditMode) ||
-        (isFilterRuleDisabled && !isCreatingNew)
-    ) {
-        return true;
-    }
-
+export const hasFilterValueSet = (filterRule: DashboardFilterRule) => {
     switch (filterRule.operator) {
         case FilterOperator.NULL:
         case FilterOperator.NOT_NULL:
@@ -39,8 +25,15 @@ export const isFilterEnabled = (
         case FilterOperator.IN_THE_PAST:
         case FilterOperator.NOT_IN_THE_PAST:
         case FilterOperator.IN_THE_NEXT:
+            return (
+                filterRule.settings &&
+                filterRule.settings.unitOfTime &&
+                filterRule.values &&
+                filterRule.values.length > 0
+            );
         case FilterOperator.IN_THE_CURRENT:
-            return filterRule.settings;
+        case FilterOperator.NOT_IN_THE_CURRENT:
+            return filterRule.settings && filterRule.settings.unitOfTime;
         case FilterOperator.IN_BETWEEN:
             return (
                 filterRule.values &&
@@ -50,6 +43,24 @@ export const isFilterEnabled = (
         default:
             return assertUnreachable(filterRule.operator, 'unknown operator');
     }
+};
+
+export const isFilterEnabled = (
+    filterRule?: DashboardFilterRule,
+    isEditMode?: boolean,
+    isCreatingNew?: boolean,
+) => {
+    if (!filterRule) return false;
+
+    const isFilterRuleDisabled = filterRule.disabled;
+    if (
+        (isFilterRuleDisabled && isEditMode) ||
+        (isFilterRuleDisabled && !isCreatingNew)
+    ) {
+        return true;
+    }
+
+    return hasFilterValueSet(filterRule);
 };
 
 export const getFilterRuleRevertableObject = (

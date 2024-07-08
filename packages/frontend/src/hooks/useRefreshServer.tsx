@@ -1,10 +1,11 @@
 import {
-    ApiError,
-    ApiRefreshResults,
-    Job,
     JobStatusType,
-    JobStep,
     JobStepStatusType,
+    JobType,
+    type ApiError,
+    type ApiRefreshResults,
+    type Job,
+    type JobStep,
 } from '@lightdash/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
@@ -98,9 +99,16 @@ export const useJob = (
                 ? false
                 : 500,
         staleTime: 0,
-        onSuccess: (job) => {
+        onSuccess: async (job) => {
             if (job.jobStatus === JobStatusType.DONE) {
-                queryClient.invalidateQueries(['tables']);
+                await queryClient.invalidateQueries(['tables']);
+
+                if (job.jobType === JobType.COMPILE_PROJECT) {
+                    await queryClient.invalidateQueries([
+                        'catalog',
+                        job.projectUuid,
+                    ]);
+                }
             }
             onSuccess(job);
         },
@@ -112,17 +120,17 @@ export const useRefreshServer = () => {
     const { projectUuid } = useParams<{ projectUuid: string }>();
     const queryClient = useQueryClient();
     const { setActiveJobId } = useActiveJob();
-    const { showToastError } = useToaster();
+    const { showToastApiError } = useToaster();
     return useMutation<ApiRefreshResults, ApiError>({
         mutationKey: ['refresh', projectUuid],
         mutationFn: () => refresh(projectUuid),
         onSettled: async () =>
             queryClient.setQueryData(['status', projectUuid], 'loading'),
         onSuccess: (data) => setActiveJobId(data.jobUuid),
-        onError: (result) =>
-            showToastError({
+        onError: ({ error }) =>
+            showToastApiError({
                 title: 'Error syncing dbt project',
-                subtitle: result.error.message,
+                apiError: error,
             }),
     });
 };

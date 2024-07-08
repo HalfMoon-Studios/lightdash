@@ -10,7 +10,6 @@ import {
     isUserWithOrg,
     lightdashDbtYamlSchema,
     ParseError,
-    Project,
     PullRequestCreated,
     SavedChart,
     SessionUser,
@@ -25,16 +24,18 @@ import {
     getOrRefreshToken,
     updateFile,
 } from '../../clients/github/Github';
-import { LightdashConfig, SentryConfig } from '../../config/parseConfig';
+import { LightdashConfig } from '../../config/parseConfig';
 import { GithubAppInstallationsModel } from '../../models/GithubAppInstallations/GithubAppInstallationsModel';
 import { ProjectModel } from '../../models/ProjectModel/ProjectModel';
 import { SavedChartModel } from '../../models/SavedChartModel';
-import { ProjectService } from '../ProjectService/ProjectService';
+import { SpaceModel } from '../../models/SpaceModel';
+import { BaseService } from '../BaseService';
 
 type GitIntegrationServiceArguments = {
     lightdashConfig: LightdashConfig;
     savedChartModel: SavedChartModel;
     projectModel: ProjectModel;
+    spaceModel: SpaceModel;
     githubAppInstallationsModel: GithubAppInstallationsModel;
 };
 
@@ -63,19 +64,23 @@ export type YamlSchema = {
     models?: DbtModelNode[];
 };
 
-export class GitIntegrationService {
+export class GitIntegrationService extends BaseService {
     private readonly lightdashConfig: LightdashConfig;
 
     private readonly savedChartModel: SavedChartModel;
 
     private readonly projectModel: ProjectModel;
 
+    private readonly spaceModel: SpaceModel;
+
     private readonly githubAppInstallationsModel: GithubAppInstallationsModel;
 
     constructor(args: GitIntegrationServiceArguments) {
+        super();
         this.lightdashConfig = args.lightdashConfig;
         this.savedChartModel = args.savedChartModel;
         this.projectModel = args.projectModel;
+        this.spaceModel = args.spaceModel;
         this.githubAppInstallationsModel = args.githubAppInstallationsModel;
     }
 
@@ -318,19 +323,26 @@ Affected charts:
         projectUuid: string,
         chartUuid: string,
     ): Promise<PullRequestCreated> {
+        const chartDao = await this.savedChartModel.get(chartUuid);
+        const space = await this.spaceModel.getSpaceSummary(chartDao.spaceUuid);
+        const access = await this.spaceModel.getUserSpaceAccess(
+            user.userUuid,
+            chartDao.spaceUuid,
+        );
         if (
             user.ability.cannot(
                 'manage',
                 subject('SavedChart', {
                     organizationUuid: user.organizationUuid!,
                     projectUuid,
+                    isPrivate: space.isPrivate,
+                    access,
                 }),
             )
         ) {
             throw new ForbiddenError();
         }
-        const chart = await this.savedChartModel.get(chartUuid);
-        const customMetrics = chart.metricQuery.additionalMetrics;
+        const customMetrics = chartDao.metricQuery.additionalMetrics;
         if (customMetrics === undefined || customMetrics.length === 0)
             throw new Error('Missing custom metrics');
 
@@ -354,6 +366,12 @@ Affected charts:
             token,
         });
 
+        const chart = {
+            ...chartDao,
+            isPrivate: space.isPrivate,
+            access,
+        };
+
         return this.getPullRequestDetails({
             user,
             customMetrics: customMetrics || [],
@@ -372,17 +390,6 @@ Affected charts:
         customMetricsIds: string[],
         quoteChar: `"` | `'`,
     ): Promise<PullRequestCreated> {
-        if (
-            user.ability.cannot(
-                'manage',
-                subject('SavedChart', {
-                    organizationUuid: user.organizationUuid!,
-                    projectUuid,
-                }),
-            )
-        ) {
-            throw new ForbiddenError();
-        }
         const chartSummaries = await this.savedChartModel.find({
             projectUuid,
         });
@@ -390,6 +397,29 @@ Affected charts:
             this.savedChartModel.get(summary.uuid, undefined),
         );
         const charts = await Promise.all(chartPromises);
+
+        const chartsHasAccess = charts.map(async (chart) => {
+            const space = await this.spaceModel.getSpaceSummary(
+                chart.spaceUuid,
+            );
+            const access = this.spaceModel.getUserSpaceAccess(
+                user.userUuid,
+                chart.spaceUuid,
+            );
+            return user.ability.can(
+                'manage',
+                subject('SavedChart', {
+                    organizationUuid: user.organizationUuid!,
+                    projectUuid,
+                    isPrivate: space.isPrivate,
+                    access,
+                }),
+            );
+        });
+
+        if (chartsHasAccess.some((hasAccess) => !hasAccess))
+            throw new ForbiddenError('User does not have access to all charts');
+
         const allCustomMetrics = charts.reduce<AdditionalMetric[]>(
             (acc, chart) => [
                 ...acc,

@@ -1,6 +1,5 @@
-import { HealthState, LightdashUser } from '@lightdash/common';
+import { type HealthState, type LightdashUser } from '@lightdash/common';
 import * as Sentry from '@sentry/react';
-import { Integrations } from '@sentry/tracing';
 import { useEffect, useState } from 'react';
 
 const useSentry = (
@@ -10,13 +9,23 @@ const useSentry = (
     const [isSentryLoaded, setIsSentryLoaded] = useState(false);
 
     useEffect(() => {
-        if (sentryConfig && !isSentryLoaded && sentryConfig.dsn) {
+        if (sentryConfig && !isSentryLoaded && sentryConfig.frontend.dsn) {
             Sentry.init({
-                dsn: sentryConfig.dsn,
+                dsn: sentryConfig.frontend.dsn,
                 release: sentryConfig.release,
                 environment: sentryConfig.environment,
-                integrations: [new Integrations.BrowserTracing()],
-                tracesSampleRate: 0.2,
+                integrations: [
+                    Sentry.browserTracingIntegration(),
+                    Sentry.replayIntegration(),
+                ],
+                tracesSampler(samplingContext) {
+                    if (samplingContext.parentSampled !== undefined) {
+                        return samplingContext.parentSampled;
+                    }
+
+                    return sentryConfig.tracesSampleRate;
+                },
+                replaysOnErrorSampleRate: 1.0,
             });
             setIsSentryLoaded(true);
         }
@@ -25,8 +34,8 @@ const useSentry = (
                 id: user.userUuid,
                 email: user.email,
                 username: user.email,
-                segment: user.organizationUuid,
             });
+            Sentry.setTag('organization', user.organizationUuid);
         }
     }, [isSentryLoaded, setIsSentryLoaded, sentryConfig, user]);
 };

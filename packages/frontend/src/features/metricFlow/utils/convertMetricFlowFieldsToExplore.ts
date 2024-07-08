@@ -1,18 +1,18 @@
 import {
-    CompiledDimension,
-    CompiledMetric,
     DimensionType,
-    Explore,
-    fieldId,
     FieldType,
     friendlyName,
+    getItemId,
     MetricType,
     SupportedDbtAdapter,
+    type CompiledDimension,
+    type CompiledMetric,
+    type Explore,
 } from '@lightdash/common';
 import {
-    GetMetricFlowFieldsResponse,
-    GetSemanticLayerMetricsResponse,
     MetricFlowDimensionType,
+    type GetMetricFlowFieldsResponse,
+    type GetSemanticLayerMetricsResponse,
 } from '../../../api/MetricFlowAPI';
 import { convertDimensionNameToLabels } from './convertDimensionNameToLabels';
 
@@ -40,7 +40,7 @@ export default function convertMetricFlowFieldsToExplore(
                 tablesReferences: [tableName],
                 hidden: false,
             };
-            acc[fieldId(dimension)] = dimension;
+            acc[getItemId(dimension)] = dimension;
 
             if (isTimeDimension && queryableGranularities) {
                 queryableGranularities.forEach((timeGranularity) => {
@@ -62,7 +62,7 @@ export default function convertMetricFlowFieldsToExplore(
                         tablesReferences: [tableName],
                         hidden: false,
                     };
-                    acc[fieldId(timeDimension)] = timeDimension;
+                    acc[getItemId(timeDimension)] = timeDimension;
                 });
             }
 
@@ -86,7 +86,7 @@ export default function convertMetricFlowFieldsToExplore(
             hidden: false,
         };
 
-        return { ...acc, [fieldId(metric)]: metric };
+        return { ...acc, [getItemId(metric)]: metric };
     }, {});
 
     const explore: Explore = {

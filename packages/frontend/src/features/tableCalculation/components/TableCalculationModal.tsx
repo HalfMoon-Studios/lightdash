@@ -1,25 +1,29 @@
 import {
-    CustomFormat,
     CustomFormatType,
+    getItemId,
     NumberSeparator,
-    TableCalculation,
+    TableCalculationType,
+    type CustomFormat,
+    type TableCalculation,
 } from '@lightdash/common';
 import {
     ActionIcon,
     Button,
     Group,
     Modal,
-    ModalProps,
+    Select,
     Stack,
     Tabs,
     TextInput,
+    Tooltip,
     useMantineTheme,
+    type ModalProps,
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { IconMaximize, IconMinimize } from '@tabler/icons-react';
-import { FC } from 'react';
+import { type FC } from 'react';
 import { useToggle } from 'react-use';
-import { ValueOf } from 'type-fest';
+import { type ValueOf } from 'type-fest';
 import MantineIcon from '../../../components/common/MantineIcon';
 import { FormatForm } from '../../../components/Explorer/FormatForm';
 import useToaster from '../../../hooks/toaster/useToaster';
@@ -36,6 +40,7 @@ type TableCalculationFormInputs = {
     name: string;
     sql: string;
     format: CustomFormat;
+    type?: TableCalculationType;
 };
 
 const TableCalculationModal: FC<Props> = ({
@@ -53,11 +58,16 @@ const TableCalculationModal: FC<Props> = ({
         (context) =>
             context.state.unsavedChartVersion.metricQuery.tableCalculations,
     );
+    const customDimensions = useExplorerContext(
+        (context) =>
+            context.state.unsavedChartVersion.metricQuery.customDimensions,
+    );
 
     const form = useForm<TableCalculationFormInputs>({
         initialValues: {
             name: tableCalculation?.displayName || '',
             sql: tableCalculation?.sql || '',
+            type: tableCalculation?.type || TableCalculationType.NUMBER,
             format: {
                 type:
                     tableCalculation?.format?.type || CustomFormatType.DEFAULT,
@@ -71,6 +81,31 @@ const TableCalculationModal: FC<Props> = ({
                 suffix: tableCalculation?.format?.suffix,
             },
         },
+        validate: {
+            name: (label) => {
+                if (!label) return null;
+
+                if (
+                    tableCalculation &&
+                    tableCalculation.displayName === label
+                ) {
+                    return null;
+                }
+
+                const isInvalid = [
+                    ...tableCalculations,
+                    ...(customDimensions ?? []),
+                ].some(
+                    (i) =>
+                        getItemId(i).toLowerCase().trim() ===
+                        label.toLowerCase().trim(),
+                );
+
+                return isInvalid
+                    ? 'Table calculation/Dimension with this label already exists'
+                    : null;
+            },
+        },
     });
 
     const handleSubmit = form.onSubmit((data) => {
@@ -81,6 +116,7 @@ const TableCalculationModal: FC<Props> = ({
                 displayName: name,
                 sql,
                 format: data.format,
+                type: data.type,
             });
         } catch (e) {
             showToastError({
@@ -126,8 +162,10 @@ const TableCalculationModal: FC<Props> = ({
                         label="Name"
                         required
                         placeholder="E.g. Cumulative order count"
+                        data-testid="table-calculation-name-input"
                         {...form.getInputProps('name')}
                     />
+
                     <Tabs
                         defaultValue="sqlEditor"
                         color="indigo"
@@ -160,7 +198,29 @@ const TableCalculationModal: FC<Props> = ({
                             />
                         </Tabs.Panel>
                     </Tabs>
-
+                    <Tooltip
+                        position="bottom"
+                        withArrow
+                        multiline
+                        maw={400}
+                        withinPortal
+                        label={
+                            'Manually select the type of the result of this SQL table calculation, this will help us to treat this field correctly in filters or results.'
+                        }
+                    >
+                        <Select
+                            label={'Result type'}
+                            id="download-type"
+                            {...form.getInputProps('type')}
+                            onChange={(value) => {
+                                const tcType = Object.values(
+                                    TableCalculationType,
+                                ).find((type) => type === value);
+                                if (tcType) form.setFieldValue(`type`, tcType);
+                            }}
+                            data={Object.values(TableCalculationType)}
+                        ></Select>
+                    </Tooltip>
                     <Group position="apart">
                         <ActionIcon
                             variant="outline"
@@ -177,7 +237,12 @@ const TableCalculationModal: FC<Props> = ({
                             <Button variant="outline" onClick={onClose}>
                                 Cancel
                             </Button>
-                            <Button type="submit"> Save </Button>
+                            <Button
+                                type="submit"
+                                data-testid="table-calculation-save-button"
+                            >
+                                Save
+                            </Button>
                         </Group>
                     </Group>
                 </Stack>

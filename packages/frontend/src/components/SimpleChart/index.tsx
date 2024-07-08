@@ -1,8 +1,15 @@
-import { PivotReference } from '@lightdash/common';
+import { type PivotReference } from '@lightdash/common';
 import { IconChartBarOff } from '@tabler/icons-react';
 import EChartsReact from 'echarts-for-react';
-import { EChartsReactProps, Opts } from 'echarts-for-react/lib/types';
-import { FC, memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { type EChartsReactProps, type Opts } from 'echarts-for-react/lib/types';
+import {
+    memo,
+    useCallback,
+    useEffect,
+    useMemo,
+    useState,
+    type FC,
+} from 'react';
 import useEchartsCartesianConfig, {
     isLineSeriesOption,
 } from '../../hooks/echarts/useEchartsCartesianConfig';
@@ -173,7 +180,7 @@ const SimpleChart: FC<SimpleChartProps> = memo((props) => {
                                     // on `useEchartsCartesianConfig` to generate the tooltip
                                     if (eChartsOptions.tooltip.formatter) {
                                         const dim =
-                                            param.encode?.x[0] !== undefined
+                                            param.encode?.x?.[0] !== undefined
                                                 ? param.dimensionNames[
                                                       param.encode?.x[0]
                                                   ]

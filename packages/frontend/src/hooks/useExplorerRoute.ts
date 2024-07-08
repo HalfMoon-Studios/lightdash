@@ -1,17 +1,43 @@
 import {
     ChartType,
-    CreateSavedChartVersion,
+    CustomDimensionType,
     DateGranularity,
-    MetricQuery,
+    type CreateSavedChartVersion,
+    type CustomBinDimension,
+    type CustomDimension,
+    type MetricQuery,
 } from '@lightdash/common';
 import { useEffect, useMemo } from 'react';
 import { useHistory, useLocation, useParams } from 'react-router-dom';
 import {
-    ExplorerReduceState,
     ExplorerSection,
     useExplorerContext,
+    type ExplorerReduceState,
 } from '../providers/ExplorerProvider';
 import useToaster from './toaster/useToaster';
+
+export const DEFAULT_EMPTY_EXPLORE_CONFIG: CreateSavedChartVersion = {
+    tableName: '',
+    metricQuery: {
+        exploreName: '',
+        dimensions: [],
+        metrics: [],
+        tableCalculations: [],
+        filters: {},
+        sorts: [],
+        limit: 500,
+    },
+    chartConfig: {
+        type: ChartType.CARTESIAN,
+        config: {
+            layout: {},
+            eChartsConfig: {},
+        },
+    },
+    tableConfig: {
+        columnOrder: [],
+    },
+};
 
 export const getExplorerUrlFromCreateSavedChartVersion = (
     projectUuid: string,
@@ -66,6 +92,19 @@ export const parseExplorerSearchParams = (
                 exploreName:
                     parsedValue.metricQuery.exploreName ||
                     parsedValue.tableName,
+                customDimensions:
+                    parsedValue.metricQuery.customDimensions?.map<CustomDimension>(
+                        (customDimension) => {
+                            if (customDimension.type === undefined) {
+                                return {
+                                    ...(customDimension as CustomBinDimension),
+                                    type: CustomDimensionType.BIN, // add type for backwards compatibility
+                                };
+                            } else {
+                                return customDimension;
+                            }
+                        },
+                    ),
             },
         };
     }
@@ -132,28 +171,31 @@ export const useExplorerUrlState = (): ExplorerReduceState | undefined => {
 
     return useMemo(() => {
         if (pathParams.tableId) {
-            const unsavedChartVersion = parseExplorerSearchParams(search) || {
-                tableName: '',
-                metricQuery: {
-                    exploreName: '',
-                    dimensions: [],
-                    metrics: [],
-                    filters: {},
-                    sorts: [],
-                    limit: 500,
-                    tableCalculations: [],
-                    additionalMetrics: [],
-                },
-                pivotConfig: undefined,
-                tableConfig: {
-                    columnOrder: [],
-                },
-                chartConfig: {
-                    type: ChartType.CARTESIAN,
-                    config: { layout: {}, eChartsConfig: {} },
-                },
-            };
             try {
+                const unsavedChartVersion = parseExplorerSearchParams(
+                    search,
+                ) || {
+                    tableName: '',
+                    metricQuery: {
+                        exploreName: '',
+                        dimensions: [],
+                        metrics: [],
+                        filters: {},
+                        sorts: [],
+                        limit: 500,
+                        tableCalculations: [],
+                        additionalMetrics: [],
+                    },
+                    pivotConfig: undefined,
+                    tableConfig: {
+                        columnOrder: [],
+                    },
+                    chartConfig: {
+                        type: ChartType.CARTESIAN,
+                        config: { layout: {}, eChartsConfig: {} },
+                    },
+                };
+
                 return {
                     shouldFetchResults: true,
                     expandedSections: unsavedChartVersion
@@ -173,7 +215,11 @@ export const useExplorerUrlState = (): ExplorerReduceState | undefined => {
                     },
                 };
             } catch (e: any) {
-                showToastError({ title: 'Error parsing url', subtitle: e });
+                const errorMessage = e.message ? ` Error: "${e.message}"` : '';
+                showToastError({
+                    title: 'Error parsing url',
+                    subtitle: `URL is invalid or incomplete.${errorMessage}`,
+                });
             }
         }
     }, [pathParams, search, showToastError]);

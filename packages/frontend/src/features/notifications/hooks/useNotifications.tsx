@@ -1,10 +1,10 @@
 import {
-    ApiError,
-    ApiGetNotifications,
-    ApiNotificationResourceType,
-    ApiNotificationUpdateParams,
-    ApiSuccessEmpty,
-    Notification,
+    type ApiError,
+    type ApiGetNotifications,
+    type ApiNotificationResourceType,
+    type ApiNotificationUpdateParams,
+    type ApiSuccessEmpty,
+    type Notification,
 } from '@lightdash/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { lightdashApi } from '../../../api';
@@ -24,7 +24,7 @@ export const useGetNotifications = (
         ['notifications', type],
         () => getNotifications(type),
         {
-            refetchInterval: 30 * 1000, // 30 seconds
+            refetchInterval: 3 * 60 * 1000, // 3 minutes
             retry: (_, error) => error.error.statusCode !== 403,
             enabled,
         },

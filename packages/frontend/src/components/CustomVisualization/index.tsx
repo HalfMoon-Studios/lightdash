@@ -1,6 +1,6 @@
 import { Center, Loader, Text } from '@mantine/core';
-import { FC, lazy, Suspense } from 'react';
-import { CustomVisualizationConfigAndData } from '../../hooks/useCustomVisualizationConfig';
+import { lazy, Suspense, type FC } from 'react';
+import { type CustomVisualizationConfigAndData } from '../../hooks/useCustomVisualizationConfig';
 import { isCustomVisualizationConfig } from '../LightdashVisualization/VisualizationCustomConfig';
 import { useVisualizationContext } from '../LightdashVisualization/VisualizationProvider';
 
@@ -83,6 +83,7 @@ const CustomVisualization: FC<Props> = (props) => {
                         data: { name: 'values' },
                     }}
                     data={data}
+                    actions={false}
                 />
             </Suspense>
         </div>

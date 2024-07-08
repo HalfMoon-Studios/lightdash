@@ -5,7 +5,9 @@ import {
     Metric,
     MetricType,
     SupportedDbtAdapter,
+    WarehouseCatalog,
     WarehouseQueryError,
+    WarehouseResults,
 } from '@lightdash/common';
 import { readFileSync } from 'fs';
 import path from 'path';
@@ -149,7 +151,7 @@ export class PostgresClient<
         return alteredQuery;
     }
 
-    private convertQueryResultFields(
+    static convertQueryResultFields(
         fields: QueryResult<any>['fields'],
     ): Record<string, { type: DimensionType }> {
         return fields.reduce(
@@ -163,12 +165,17 @@ export class PostgresClient<
         );
     }
 
-    async runQuery(sql: string, tags?: Record<string, string>) {
+    async streamQuery(
+        sql: string,
+        streamCallback: (data: WarehouseResults) => void,
+        options: {
+            values?: any[];
+            tags?: Record<string, string>;
+            timezone?: string;
+        },
+    ): Promise<void> {
         let pool: pg.Pool | undefined;
-        return new Promise<{
-            fields: Record<string, { type: DimensionType }>;
-            rows: Record<string, any>[];
-        }>((resolve, reject) => {
+        return new Promise<void>((resolve, reject) => {
             pool = new pg.Pool({
                 ...this.config,
                 connectionTimeoutMillis: 5000,
@@ -206,47 +213,65 @@ export class PostgresClient<
                     done();
                 });
 
-                // CodeQL: This will raise a security warning because user defined raw SQL is being passed into the database module.
-                //         In this case this is exactly what we want to do. We're hitting the user's warehouse not the application's database.
-                const stream = client.query(
-                    new QueryStream(this.getSQLWithMetadata(sql, tags)),
-                );
-                const rows: any[] = [];
-                let fields: QueryResult<any>['fields'] = [];
-                // release the client when the stream is finished
-                stream.on('end', () => {
-                    done();
-                    resolve({
-                        rows,
-                        fields: this.convertQueryResultFields(fields),
+                const runQuery = () => {
+                    // CodeQL: This will raise a security warning because user defined raw SQL is being passed into the database module.
+                    //         In this case this is exactly what we want to do. We're hitting the user's warehouse not the application's database.
+                    const stream = client.query(
+                        new QueryStream(
+                            this.getSQLWithMetadata(sql, options?.tags),
+                            options?.values,
+                        ),
+                    );
+                    // release the client when the stream is finished
+                    stream.on('end', () => {
+                        done();
+                        resolve();
                     });
-                });
-                stream.on('error', (err2) => {
-                    reject(err2);
-                    done();
-                });
-                stream
-                    .pipe(
-                        new Writable({
-                            objectMode: true,
-                            write(
-                                chunk: {
-                                    row: any;
-                                    fields: QueryResult<any>['fields'];
-                                },
-                                encoding,
-                                callback,
-                            ) {
-                                rows.push(chunk.row);
-                                fields = chunk.fields;
-                                callback();
-                            },
-                        }),
-                    )
-                    .on('error', (err2) => {
+                    stream.on('error', (err2) => {
                         reject(err2);
                         done();
                     });
+                    stream
+                        .pipe(
+                            new Writable({
+                                objectMode: true,
+                                write(
+                                    chunk: {
+                                        row: any;
+                                        fields: QueryResult<any>['fields'];
+                                    },
+                                    encoding,
+                                    callback,
+                                ) {
+                                    streamCallback({
+                                        fields: PostgresClient.convertQueryResultFields(
+                                            chunk.fields,
+                                        ),
+                                        rows: [chunk.row],
+                                    });
+                                    callback();
+                                },
+                            }),
+                        )
+                        .on('error', (err2) => {
+                            reject(err2);
+                            done();
+                        });
+                };
+
+                if (options?.timezone) {
+                    console.debug(
+                        `Setting postgres session timezone ${options?.timezone}`,
+                    );
+                    client
+                        .query(`SET timezone TO '${options?.timezone}';`)
+                        .then(() => {
+                            runQuery();
+                        })
+                        .catch((sessionError) => {
+                            reject(sessionError);
+                        });
+                } else runQuery();
             });
         })
             .catch((e) => {
@@ -334,8 +359,52 @@ export class PostgresClient<
         return catalog;
     }
 
-    getFieldQuoteChar() {
-        return '"';
+    async getTables(
+        schema?: string,
+        tags?: Record<string, string>,
+    ): Promise<WarehouseCatalog> {
+        const schemaFilter = schema ? `AND table_schema = $1` : '';
+        const query = `
+            SELECT table_catalog, table_schema, table_name
+            FROM information_schema.tables
+            WHERE table_type = 'BASE TABLE'
+                ${schemaFilter}
+            ORDER BY 1, 2, 3
+        `;
+        const { rows } = await this.runQuery(
+            query,
+            tags,
+            undefined,
+            schema ? [schema] : undefined,
+        );
+        return this.parseWarehouseCatalog(rows, mapFieldType);
+    }
+
+    async getFields(
+        tableName: string,
+        schema?: string,
+        tags?: Record<string, string>,
+    ): Promise<WarehouseCatalog> {
+        const schemaFilter = schema ? `AND table_schema = $2` : '';
+
+        const query = `
+            SELECT table_catalog,
+                   table_schema,
+                   table_name,
+                   column_name,
+                   data_type
+            FROM information_schema.columns
+            WHERE table_name = $1
+                ${schemaFilter};
+        `;
+        const { rows } = await this.runQuery(
+            query,
+            tags,
+            undefined,
+            schema ? [tableName, schema] : [tableName],
+        );
+
+        return this.parseWarehouseCatalog(rows, mapFieldType);
     }
 
     getStringQuoteChar() {
@@ -352,6 +421,8 @@ export class PostgresClient<
 
     getMetricSql(sql: string, metric: Metric) {
         switch (metric.type) {
+            case MetricType.AVERAGE:
+                return `AVG(${sql}::DOUBLE PRECISION)`;
             case MetricType.PERCENTILE:
                 return `PERCENTILE_CONT(${
                     (metric.percentile ?? 50) / 100

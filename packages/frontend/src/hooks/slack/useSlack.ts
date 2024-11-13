@@ -54,19 +54,20 @@ export const useDeleteSlack = () => {
     });
 };
 
-const getSlackChannels = async () =>
-    lightdashApi<SlackChannel[]>({
-        url: `/slack/channels`,
+const getSlackChannels = async (search: string) =>
+    lightdashApi<SlackChannel[] | undefined>({
+        url: `/slack/channels?search=${search}`,
         method: 'GET',
         body: undefined,
     });
 
 export const useSlackChannels = (
-    useQueryOptions?: UseQueryOptions<SlackChannel[], ApiError>,
+    search: string,
+    useQueryOptions?: UseQueryOptions<SlackChannel[] | undefined, ApiError>,
 ) =>
-    useQuery<SlackChannel[], ApiError>({
-        queryKey: ['slack_channels'],
-        queryFn: getSlackChannels,
+    useQuery<SlackChannel[] | undefined, ApiError>({
+        queryKey: ['slack_channels', search],
+        queryFn: () => getSlackChannels(search),
         ...useQueryOptions,
     });
 

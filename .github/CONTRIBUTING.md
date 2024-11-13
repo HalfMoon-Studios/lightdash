@@ -332,7 +332,6 @@ PGUSER=pg_user *OR* machine username if no prior postgres set up
 PGPASSWORD=pg_password *OR* blank if no prior postgres set up
 PGDATABASE=postgres
 DBT_DEMO_DIR=$PWD/examples/full-jaffle-shop-demo
-LIGHTDASH_CONFIG_FILE=$PWD/lightdash.yml
 
 # 9 Install packages
 yarn
@@ -414,7 +413,7 @@ If you want to debug some of these features, you should run headless browser loc
 
 #### Running Lightdash on docker and headless browser
 
-If you are running both Lightdash and Headless browser using our docker-compose you should be ok, and everything should work as expected.
+If you are running both Lightdash and Headless browser using our docker-compose yml set-up you should be ok, and everything should work as expected.
 
 #### Running Lightdash without docker and headless browser on Linux
 

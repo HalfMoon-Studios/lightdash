@@ -16,6 +16,7 @@ import {
     SchedulerSlackTarget,
     SchedulerWithLogs,
     UpdateSchedulerAndTargets,
+    type SchedulerCronUpdate,
 } from '@lightdash/common';
 import { Knex } from 'knex';
 import { DashboardsTableName } from '../../database/entities/dashboards';
@@ -61,6 +62,7 @@ export class SchedulerModel {
             updatedAt: scheduler.updated_at,
             createdBy: scheduler.created_by,
             cron: scheduler.cron,
+            timezone: scheduler.timezone ?? undefined,
             savedChartUuid: scheduler.saved_chart_uuid,
             dashboardUuid: scheduler.dashboard_uuid,
             format: scheduler.format,
@@ -70,6 +72,7 @@ export class SchedulerModel {
             thresholds: scheduler.thresholds || undefined,
             enabled: scheduler.enabled,
             notificationFrequency: scheduler.notification_frequency,
+            selectedTabs: scheduler.selected_tabs,
         } as Scheduler;
     }
 
@@ -137,7 +140,15 @@ export class SchedulerModel {
     }
 
     async getAllSchedulers(): Promise<SchedulerAndTargets[]> {
-        const schedulers = this.database(SchedulerTableName).select();
+        const schedulers = this.database(SchedulerTableName)
+            .select()
+            .join(
+                UserTableName,
+                `${UserTableName}.user_uuid`,
+                `${SchedulerTableName}.created_by`,
+            )
+            .where(`${SchedulerTableName}.enabled`, true)
+            .where(`${UserTableName}.is_active`, true);
         return this.getSchedulersWithTargets(await schedulers);
     }
 
@@ -146,7 +157,17 @@ export class SchedulerModel {
     ): Promise<SchedulerAndTargets[]> {
         const schedulers = this.database(SchedulerTableName)
             .select()
-            .where(`${SchedulerTableName}.saved_chart_uuid`, savedChartUuid);
+            .where(`${SchedulerTableName}.saved_chart_uuid`, savedChartUuid)
+            .orderBy([
+                {
+                    column: 'name',
+                    order: 'asc',
+                },
+                {
+                    column: 'created_at',
+                    order: 'asc',
+                },
+            ]);
         return this.getSchedulersWithTargets(await schedulers);
     }
 
@@ -155,7 +176,17 @@ export class SchedulerModel {
     ): Promise<SchedulerAndTargets[]> {
         const schedulers = this.database(SchedulerTableName)
             .select()
-            .where(`${SchedulerTableName}.dashboard_uuid`, dashboardUuid);
+            .where(`${SchedulerTableName}.dashboard_uuid`, dashboardUuid)
+            .orderBy([
+                {
+                    column: 'name',
+                    order: 'asc',
+                },
+                {
+                    column: 'created_at',
+                    order: 'asc',
+                },
+            ]);
         return this.getSchedulersWithTargets(await schedulers);
     }
 
@@ -213,6 +244,7 @@ export class SchedulerModel {
                     format: newScheduler.format,
                     created_by: newScheduler.createdBy,
                     cron: newScheduler.cron,
+                    timezone: newScheduler.timezone ?? null,
                     saved_chart_uuid: newScheduler.savedChartUuid,
                     dashboard_uuid: newScheduler.dashboardUuid,
                     updated_at: new Date(),
@@ -233,6 +265,11 @@ export class SchedulerModel {
                     enabled: true,
                     notification_frequency:
                         newScheduler.notificationFrequency || null,
+                    selected_tabs:
+                        isDashboardScheduler(newScheduler) &&
+                        newScheduler.selectedTabs
+                            ? newScheduler.selectedTabs
+                            : null,
                 })
                 .returning('*');
             const targetPromises = newScheduler.targets.map(async (target) => {
@@ -281,6 +318,7 @@ export class SchedulerModel {
                     message: scheduler.message,
                     format: scheduler.format,
                     cron: scheduler.cron,
+                    timezone: scheduler.timezone ?? null,
                     updated_at: new Date(),
                     options: scheduler.options,
                     filters:
@@ -297,6 +335,10 @@ export class SchedulerModel {
                         : null,
                     notification_frequency:
                         scheduler.notificationFrequency || null,
+                    selected_tabs:
+                        'selectedTabs' in scheduler && scheduler.selectedTabs
+                            ? (scheduler.selectedTabs as string[])
+                            : null,
                 })
                 .where('scheduler_uuid', scheduler.schedulerUuid);
 
@@ -640,5 +682,21 @@ export class SchedulerModel {
         )[0];
 
         return job;
+    }
+
+    async bulkUpdateSchedulersCron(
+        schedulerCronUpdates: SchedulerCronUpdate[],
+    ) {
+        await this.database.transaction(async (trx) => {
+            const updatePromises = schedulerCronUpdates.map(
+                async ({ schedulerUuid, cron }) => {
+                    await trx(SchedulerTableName)
+                        .update({ cron })
+                        .where('scheduler_uuid', schedulerUuid);
+                },
+            );
+
+            await Promise.all(updatePromises);
+        });
     }
 }

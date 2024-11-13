@@ -40,6 +40,11 @@ export const deploy = async (
     explores: (Explore | ExploreError)[],
     options: DeployArgs,
 ): Promise<void> => {
+    if (explores.length === 0) {
+        GlobalState.log(styles.warning('No explores found'));
+        process.exit(1);
+    }
+
     const errors = explores.filter((e) => isExploreError(e)).length;
     if (errors > 0) {
         if (options.ignoreErrors) {
@@ -194,9 +199,10 @@ export const deployHandler = async (options: DeployHandlerOptions) => {
 
     await deploy(explores, { ...options, projectUuid });
 
+    const serverUrl = config.context?.serverUrl?.replace(/\/$/, '');
     const displayUrl = options.create
-        ? `${config.context?.serverUrl}/createProject/cli?projectUuid=${projectUuid}`
-        : `${config.context?.serverUrl}/projects/${projectUuid}/home`;
+        ? `${serverUrl}/createProject/cli?projectUuid=${projectUuid}`
+        : `${serverUrl}/projects/${projectUuid}/home`;
 
     console.error(`${styles.bold('Successfully deployed project:')}`);
     console.error('');

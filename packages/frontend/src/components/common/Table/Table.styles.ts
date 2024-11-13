@@ -44,7 +44,7 @@ export const TableContainer = styled.div<TableContainerProps>`
             `}
 `;
 
-export const Table = styled.table<{ $showFooter: boolean }>`
+export const Table = styled.table<{ $showFooter?: boolean }>`
     border-spacing: 0;
     font-size: 14px;
     background-color: white;
@@ -137,6 +137,10 @@ export const Table = styled.table<{ $showFooter: boolean }>`
         z-index: 1;
         background-color: white !important;
         word-break: break-word;
+        :hover {
+            white-space: normal;
+            background-color: white;
+        }
     }
     .last-sticky-column {
         border-right: 2px solid darkgray;

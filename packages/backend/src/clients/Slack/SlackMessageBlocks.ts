@@ -1,8 +1,7 @@
 import {
-    assertUnreachable,
     friendlyName,
     LightdashPage,
-    operatorAction,
+    operatorActionValue,
     ThresholdOperator,
     ThresholdOptions,
 } from '@lightdash/common';
@@ -22,13 +21,23 @@ type GetChartAndDashboardBlocksArgs = {
 
 const getSectionFields = (
     fields: [string, string | undefined][],
-): SectionBlock['fields'] =>
-    fields
-        .filter(([, text]) => Boolean(text))
-        .map(([title, text]) => ({
-            type: 'mrkdwn',
-            text: `*${title}*: \n${text}`,
-        }));
+): SectionBlock['fields'] => {
+    const availableFields = fields.filter(([, text]) => Boolean(text));
+
+    if (availableFields.length === 0) {
+        // Return empty field placeholder to avoid `cannot_parse_attachment` error from Slack
+        return [
+            {
+                type: 'mrkdwn',
+                text: ' ',
+            },
+        ];
+    }
+    return availableFields.map(([title, text]) => ({
+        type: 'mrkdwn',
+        text: `*${title}*: \n${text}`,
+    }));
+};
 
 const getBlocks = (blocks: (KnownBlock | undefined)[]): KnownBlock[] =>
     blocks.filter((block): block is KnownBlock => Boolean(block));
@@ -214,9 +223,11 @@ export const getChartThresholdAlertBlocks = ({
         type: 'section',
         text: {
             type: 'mrkdwn',
-            text: `• *${friendlyName(threshold.fieldId)}* ${operatorAction(
+            text: `• *${friendlyName(threshold.fieldId)}* ${operatorActionValue(
                 threshold.operator,
-            )} *${threshold.value}*`,
+                threshold.value,
+                '*',
+            )}`,
         },
     }));
     return getBlocks([
@@ -327,23 +338,33 @@ export const getDashboardCsvResultsBlocks = ({
                 action_id: 'button-action',
             },
         },
-        ...csvUrls.map<KnownBlock>((csvUrl, index) => ({
-            type: 'section',
-            text: {
-                type: 'mrkdwn',
-                text: `:black_small_square: ${csvUrl.filename}`,
-            },
-            accessory: {
-                type: 'button',
-                text: {
-                    type: 'plain_text',
-                    text: 'Download results',
-                    emoji: true,
-                },
-                url: csvUrl.path,
-                action_id: `download-results-${index}`,
-            },
-        })),
+        ...csvUrls.map<KnownBlock>((csvUrl, index) =>
+            csvUrl.path !== '#no-results'
+                ? {
+                      type: 'section',
+                      text: {
+                          type: 'mrkdwn',
+                          text: `:black_small_square: ${csvUrl.filename}`,
+                      },
+                      accessory: {
+                          type: 'button',
+                          text: {
+                              type: 'plain_text',
+                              text: 'Download results',
+                              emoji: true,
+                          },
+                          url: csvUrl.path,
+                          action_id: `download-results-${index}`,
+                      },
+                  }
+                : {
+                      type: 'section',
+                      text: {
+                          type: 'mrkdwn',
+                          text: '*_This query returned no results_*',
+                      },
+                  },
+        ),
         footerMarkdown
             ? {
                   type: 'context',

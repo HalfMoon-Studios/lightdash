@@ -5,6 +5,7 @@ import {
     convertToGroups,
     isV9MetricRef,
     SupportedDbtAdapter,
+    type DbtColumnLightdashDimension,
     type DbtMetric,
     type DbtModelColumn,
     type DbtModelNode,
@@ -83,7 +84,7 @@ const isInterval = (
     meta.dimension?.time_intervals !== false &&
     ((meta.dimension?.time_intervals &&
         meta.dimension.time_intervals !== 'OFF') ||
-        !meta.dimension?.time_intervals);
+        !meta?.dimension?.time_intervals);
 
 const convertDimension = (
     index: number,
@@ -118,10 +119,12 @@ const convertDimension = (
         timeInterval === undefined && isInterval(type, column);
 
     let timeIntervalBaseDimensionName: string | undefined;
+
     const groups: string[] = convertToGroups(
         column.meta.dimension?.groups,
         column.meta.dimension?.group_label,
     );
+
     if (timeInterval) {
         timeIntervalBaseDimensionName = name;
         sql = timeFrameConfigs[timeInterval].getSql(
@@ -168,6 +171,13 @@ const convertDimension = (
         ...(isAdditionalDimension ? { isAdditionalDimension } : {}),
         groups,
         isIntervalBase,
+        ...(column.meta.dimension && column.meta.dimension.tags
+            ? {
+                  tags: Array.isArray(column.meta.dimension.tags)
+                      ? column.meta.dimension.tags
+                      : [column.meta.dimension.tags],
+              }
+            : {}),
     };
 };
 
@@ -269,6 +279,13 @@ const convertDbtMetricToLightdashMetric = (
         showUnderlyingValues: metric.meta?.show_underlying_values,
         filters: parseFilters(metric.meta?.filters),
         ...(metric.meta?.urls ? { urls: metric.meta.urls } : {}),
+        ...(metric.meta && metric.meta.tags
+            ? {
+                  tags: Array.isArray(metric.meta.tags)
+                      ? metric.meta.tags
+                      : [metric.meta.tags],
+              }
+            : {}),
     };
 };
 
@@ -296,65 +313,108 @@ export const convertTable = (
                 startOfWeek,
             );
 
-            let extraDimensions = {};
+            const processIntervalDimension = (
+                dim: Dimension,
+                overrideTimeIntervals: DbtColumnLightdashDimension['time_intervals'],
+            ) => {
+                if (dim.isIntervalBase) {
+                    let intervals: TimeFrames[] = [];
 
-            if (isInterval(dimension.type, column)) {
-                let intervals: TimeFrames[] = [];
-                if (
-                    column.meta.dimension?.time_intervals &&
-                    Array.isArray(column.meta.dimension.time_intervals)
-                ) {
-                    intervals = validateTimeFrames(
-                        column.meta.dimension.time_intervals,
+                    if (
+                        !dim.isAdditionalDimension &&
+                        column.meta.dimension?.time_intervals &&
+                        Array.isArray(column.meta.dimension.time_intervals)
+                    ) {
+                        intervals = validateTimeFrames(
+                            column.meta.dimension.time_intervals,
+                        );
+                    } else if (
+                        dim.isAdditionalDimension &&
+                        Array.isArray(overrideTimeIntervals)
+                    ) {
+                        intervals = validateTimeFrames(overrideTimeIntervals);
+                    } else {
+                        intervals = getDefaultTimeFrames(dim.type);
+                    }
+
+                    return intervals.reduce(
+                        (acc, interval) => ({
+                            ...acc,
+                            [`${dim.name}_${interval.toLowerCase()}`]:
+                                convertDimension(
+                                    index,
+                                    adapterType,
+                                    model,
+                                    tableLabel,
+                                    {
+                                        ...column,
+                                        ...('isAdditionalDimension' in dim &&
+                                        dim.isAdditionalDimension
+                                            ? {
+                                                  name: dim.name,
+                                                  meta: {
+                                                      dimension: {
+                                                          ...column.meta
+                                                              .dimension,
+                                                          type: dim.type,
+                                                          label: dim.label,
+                                                          groups: dim.groups,
+                                                          sql: dim.sql,
+                                                          description:
+                                                              dim.description,
+                                                      },
+                                                  },
+                                              }
+                                            : {}),
+                                    },
+                                    undefined,
+                                    interval,
+                                    startOfWeek,
+                                    'isAdditionalDimension' in dim &&
+                                        dim.isAdditionalDimension,
+                                ),
+                        }),
+                        {},
                     );
-                } else {
-                    intervals = getDefaultTimeFrames(dimension.type);
                 }
+                return {};
+            };
 
-                extraDimensions = intervals.reduce(
-                    (acc, interval) => ({
-                        ...acc,
-                        [`${column.name}_${interval.toLowerCase()}`]:
-                            convertDimension(
-                                index,
-                                adapterType,
-                                model,
-                                tableLabel,
-                                column,
-                                undefined,
-                                interval,
-                                startOfWeek,
-                            ),
-                    }),
-                    {},
-                );
-            }
+            let extraDimensions = {
+                ...processIntervalDimension(dimension, undefined),
+            };
 
             extraDimensions = Object.entries(
                 column.meta.additional_dimensions || {},
-            ).reduce(
-                (acc, [subDimensionName, subDimension]) => ({
-                    ...acc,
-                    [subDimensionName]: convertDimension(
-                        index,
-                        adapterType,
-                        model,
-                        tableLabel,
-                        {
-                            ...column,
-                            name: subDimensionName,
-                            meta: {
-                                dimension: subDimension,
-                            },
+            ).reduce((acc, [subDimensionName, subDimension]) => {
+                const additionalDim = convertDimension(
+                    index,
+                    adapterType,
+                    model,
+                    tableLabel,
+                    {
+                        ...column,
+                        name: subDimensionName,
+                        meta: {
+                            dimension: subDimension,
                         },
-                        undefined,
-                        undefined,
-                        startOfWeek,
-                        true,
+                    },
+                    undefined,
+                    undefined,
+                    startOfWeek,
+                    true,
+                );
+
+                return {
+                    ...acc,
+                    // When the additional dim is interval AND the base dimension is a interval base then we want to compute all additional dims with the parent intervals otherwise just set the additional dim
+                    [subDimensionName]: additionalDim,
+                    ...processIntervalDimension(
+                        additionalDim,
+                        subDimension.time_intervals,
                     ),
-                }),
-                extraDimensions,
-            );
+                };
+            }, extraDimensions);
 
             const columnMetrics = Object.fromEntries(
                 Object.entries(column.meta.metrics || {}).map(
@@ -572,26 +632,6 @@ export const convertExplores = async (
     );
 
     const exploreCompiler = new ExploreCompiler(warehouseClient);
-    const joinAliases = validModels.reduce<
-        Record<string, Record<string, string>>
-    >((acc, model) => {
-        const joins = model.config?.meta?.joins;
-        if (joins === undefined) return acc;
-
-        const aliases = joins.reduce<Record<string, string>>((acc2, join) => {
-            if (join.alias && tableLookup[join.join]) {
-                return {
-                    ...acc2,
-                    [join.alias]: join.join,
-                };
-            }
-            return acc2;
-        }, {});
-        return {
-            ...acc,
-            [model.name]: aliases,
-        };
-    }, {});
 
     const explores: (Explore | ExploreError)[] = validModels.map((model) => {
         const meta = model.config?.meta || model.meta; // Config block takes priority, then meta block
@@ -617,7 +657,6 @@ export const convertExplores = async (
                 warehouse: model.config?.snowflake_warehouse,
                 ymlPath: model.patch_path?.split('://')?.[1],
                 sqlPath: model.path,
-                joinAliases,
             });
         } catch (e) {
             return {

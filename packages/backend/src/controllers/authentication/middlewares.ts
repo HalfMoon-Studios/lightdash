@@ -1,6 +1,10 @@
 /// <reference path="../../@types/passport-openidconnect.d.ts" />
 /// <reference path="../../@types/express-session.d.ts" />
-import { AuthorizationError, LightdashMode } from '@lightdash/common';
+import {
+    AuthorizationError,
+    DeactivatedAccountError,
+    LightdashMode,
+} from '@lightdash/common';
 import { Request, RequestHandler } from 'express';
 import passport from 'passport';
 import { URL } from 'url';
@@ -8,7 +12,18 @@ import { lightdashConfig } from '../../config/lightdashConfig';
 
 export const isAuthenticated: RequestHandler = (req, res, next) => {
     if (req.user?.userUuid) {
-        next();
+        if (req.user.isActive) {
+            next();
+        } else {
+            // Destroy session if user is deactivated and return error
+            req.session.destroy((err) => {
+                if (err) {
+                    next(err);
+                } else {
+                    next(new DeactivatedAccountError());
+                }
+            });
+        }
     } else {
         next(new AuthorizationError(`Failed to authorize user`));
     }
@@ -35,7 +50,7 @@ export const allowApiKeyAuthentication: RequestHandler = (req, res, next) => {
 };
 
 export const storeOIDCRedirect: RequestHandler = (req, res, next) => {
-    const { redirect, inviteCode } = req.query;
+    const { redirect, inviteCode, isPopup } = req.query;
     req.session.oauth = {};
 
     if (typeof inviteCode === 'string') {
@@ -55,32 +70,32 @@ export const storeOIDCRedirect: RequestHandler = (req, res, next) => {
             next(); // fail silently if we can't parse url
         }
     }
+    if (typeof isPopup === 'string' && isPopup === 'true') {
+        req.session.oauth.isPopup = true;
+    }
     next();
 };
 
-export const getSuccessURLWithReturnTo = (req: Request): string => {
-    const url = new URL('/api/v1/oauth/success', lightdashConfig.siteUrl);
-    if (req.session.oauth?.returnTo) {
-        url.searchParams.set(
-            'returnTo',
-            decodeURIComponent(req.session.oauth.returnTo),
-        );
-    }
-    return url.href;
-};
-
-export const redirectOIDC: RequestHandler = (req, res) => {
-    // Workaround for https://github.com/jaredhanson/passport/pull/941
-    const queryReturn = req.query.returnTo;
-
-    const returnUrl =
-        queryReturn && typeof queryReturn === 'string'
-            ? new URL(queryReturn, lightdashConfig.siteUrl)
-            : undefined;
-
-    if (returnUrl && returnUrl.host === new URL(lightdashConfig.siteUrl).host) {
-        const redirectUrl = `${returnUrl.pathname}${returnUrl.search}`;
-        return res.redirect(redirectUrl);
-    }
-    return res.redirect('/');
-};
+export const getOidcRedirectURL =
+    (isSuccess: boolean) =>
+    (req: Request): string => {
+        if (req.session.oauth?.isPopup) {
+            return new URL(
+                isSuccess ? '/auth/popup/success' : '/auth/popup/failure',
+                lightdashConfig.siteUrl,
+            ).href;
+        }
+        if (
+            req.session.oauth?.returnTo &&
+            typeof req.session.oauth?.returnTo === 'string'
+        ) {
+            const returnUrl = new URL(
+                req.session.oauth?.returnTo,
+                lightdashConfig.siteUrl,
+            );
+            if (returnUrl.host === new URL(lightdashConfig.siteUrl).host) {
+                return returnUrl.href;
+            }
+        }
+        return new URL('/', lightdashConfig.siteUrl).href;
+    };

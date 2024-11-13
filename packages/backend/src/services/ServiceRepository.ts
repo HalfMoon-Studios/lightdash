@@ -6,6 +6,7 @@ import { AnalyticsService } from './AnalyticsService/AnalyticsService';
 import { BaseService } from './BaseService';
 import { CatalogService } from './CatalogService/CatalogService';
 import { CommentService } from './CommentService/CommentService';
+import { ContentService } from './ContentService/ContentService';
 import { CsvService } from './CsvService/CsvService';
 import { DashboardService } from './DashboardService/DashboardService';
 import { DownloadFileService } from './DownloadFileService/DownloadFileService';
@@ -21,8 +22,11 @@ import { PinningService } from './PinningService/PinningService';
 import { ProjectService } from './ProjectService/ProjectService';
 import { PromoteService } from './PromoteService/PromoteService';
 import { SavedChartService } from './SavedChartsService/SavedChartService';
+import { SavedSemanticViewerChartService } from './SavedSemanticViewerChartService/SavedSemanticViewerChartService';
+import { SavedSqlService } from './SavedSqlService/SavedSqlService';
 import { SchedulerService } from './SchedulerService/SchedulerService';
 import { SearchService } from './SearchService/SearchService';
+import { SemanticLayerService } from './SemanticLayerService/SemanticLayerService';
 import { ShareService } from './ShareService/ShareService';
 import { SlackIntegrationService } from './SlackIntegrationService/SlackIntegrationService';
 import { SpaceService } from './SpaceService/SpaceService';
@@ -66,6 +70,10 @@ interface ServiceManifest {
     validationService: ValidationService;
     catalogService: CatalogService;
     promoteService: PromoteService;
+    savedSqlService: SavedSqlService;
+    contentService: ContentService;
+    semanticLayerService: SemanticLayerService;
+    savedSemanticViewerChartService: SavedSemanticViewerChartService;
 
     /** An implementation signature for these services are not available at this stage */
     embedService: unknown;
@@ -237,8 +245,10 @@ export class ServiceRepository
                     s3Client: this.clients.getS3Client(),
                     dashboardModel: this.models.getDashboardModel(),
                     savedChartModel: this.models.getSavedChartModel(),
+                    savedSqlModel: this.models.getSavedSqlModel(),
                     downloadFileModel: this.models.getDownloadFileModel(),
                     schedulerClient: this.clients.getSchedulerClient(),
+                    projectModel: this.models.getProjectModel(),
                 }),
         );
     }
@@ -255,8 +265,10 @@ export class ServiceRepository
                     pinnedListModel: this.models.getPinnedListModel(),
                     schedulerModel: this.models.getSchedulerModel(),
                     savedChartModel: this.models.getSavedChartModel(),
+                    projectModel: this.models.getProjectModel(),
                     schedulerClient: this.clients.getSchedulerClient(),
                     slackClient: this.clients.getSlackClient(),
+                    catalogModel: this.models.getCatalogModel(),
                 }),
         );
     }
@@ -283,6 +295,7 @@ export class ServiceRepository
                     spaceModel: this.models.getSpaceModel(),
                     githubAppInstallationsModel:
                         this.models.getGithubAppInstallationsModel(),
+                    analytics: this.context.lightdashAnalytics,
                 }),
         );
     }
@@ -295,6 +308,8 @@ export class ServiceRepository
                     githubAppInstallationsModel:
                         this.models.getGithubAppInstallationsModel(),
                     userModel: this.models.getUserModel(),
+                    lightdashConfig: this.context.lightdashConfig,
+                    analytics: this.context.lightdashAnalytics,
                 }),
         );
     }
@@ -417,10 +432,15 @@ export class ServiceRepository
                     dashboardModel: this.models.getDashboardModel(),
                     userWarehouseCredentialsModel:
                         this.models.getUserWarehouseCredentialsModel(),
+                    warehouseAvailableTablesModel:
+                        this.models.getWarehouseAvailableTablesModel(),
                     emailModel: this.models.getEmailModel(),
                     schedulerClient: this.clients.getSchedulerClient(),
                     downloadFileModel: this.models.getDownloadFileModel(),
                     s3Client: this.clients.getS3Client(),
+                    groupsModel: this.models.getGroupsModel(),
+                    tagsModel: this.models.getTagsModel(),
+                    catalogModel: this.models.getCatalogModel(),
                 }),
         );
     }
@@ -440,6 +460,7 @@ export class ServiceRepository
                     schedulerClient: this.clients.getSchedulerClient(),
                     slackClient: this.clients.getSlackClient(),
                     dashboardModel: this.models.getDashboardModel(),
+                    catalogModel: this.models.getCatalogModel(),
                 }),
         );
     }
@@ -455,6 +476,7 @@ export class ServiceRepository
                     savedChartModel: this.models.getSavedChartModel(),
                     dashboardModel: this.models.getDashboardModel(),
                     spaceModel: this.models.getSpaceModel(),
+                    projectModel: this.models.getProjectModel(),
                     schedulerClient: this.clients.getSchedulerClient(),
                     slackClient: this.clients.getSlackClient(),
                 }),
@@ -575,6 +597,8 @@ export class ServiceRepository
                         this.models.getOrganizationAllowedEmailDomainsModel(),
                     userWarehouseCredentialsModel:
                         this.models.getUserWarehouseCredentialsModel(),
+                    warehouseAvailableTablesModel:
+                        this.models.getWarehouseAvailableTablesModel(),
                 }),
         );
     }
@@ -608,6 +632,7 @@ export class ServiceRepository
                     catalogModel: this.models.getCatalogModel(),
                     savedChartModel: this.models.getSavedChartModel(),
                     spaceModel: this.models.getSpaceModel(),
+                    tagsModel: this.models.getTagsModel(),
                 }),
         );
     }
@@ -623,6 +648,67 @@ export class ServiceRepository
                     savedChartModel: this.models.getSavedChartModel(),
                     spaceModel: this.models.getSpaceModel(),
                     dashboardModel: this.models.getDashboardModel(),
+                }),
+        );
+    }
+
+    public getSavedSqlService(): SavedSqlService {
+        return this.getService(
+            'savedSqlService',
+            () =>
+                new SavedSqlService({
+                    analytics: this.context.lightdashAnalytics,
+                    projectModel: this.models.getProjectModel(),
+                    spaceModel: this.models.getSpaceModel(),
+                    savedSqlModel: this.models.getSavedSqlModel(),
+                    schedulerClient: this.clients.getSchedulerClient(),
+                    analyticsModel: this.models.getAnalyticsModel(),
+                }),
+        );
+    }
+
+    public getContentService(): ContentService {
+        return this.getService(
+            'contentService',
+            () =>
+                new ContentService({
+                    analytics: this.context.lightdashAnalytics,
+                    projectModel: this.models.getProjectModel(),
+                    spaceModel: this.models.getSpaceModel(),
+                    contentModel: this.models.getContentModel(),
+                }),
+        );
+    }
+
+    public getSemanticLayerService(): SemanticLayerService {
+        return this.getService(
+            'semanticLayerService',
+            () =>
+                new SemanticLayerService({
+                    lightdashConfig: this.context.lightdashConfig,
+                    analytics: this.context.lightdashAnalytics,
+                    projectModel: this.models.getProjectModel(),
+                    downloadFileModel: this.models.getDownloadFileModel(),
+
+                    schedulerClient: this.clients.getSchedulerClient(),
+                    s3Client: this.clients.getS3Client(),
+
+                    savedSemanticViewerChartService:
+                        this.getSavedSemanticViewerChartService(),
+                }),
+        );
+    }
+
+    public getSavedSemanticViewerChartService(): SavedSemanticViewerChartService {
+        return this.getService(
+            'savedSemanticViewerChartService',
+            () =>
+                new SavedSemanticViewerChartService({
+                    analytics: this.context.lightdashAnalytics,
+                    projectModel: this.models.getProjectModel(),
+                    savedSemanticViewerChartModel:
+                        this.models.getSavedSemanticViewerChartModel(),
+                    spaceModel: this.models.getSpaceModel(),
                 }),
         );
     }

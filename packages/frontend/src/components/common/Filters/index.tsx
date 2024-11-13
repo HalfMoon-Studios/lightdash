@@ -21,6 +21,7 @@ import {
     Group,
     Stack,
     Text,
+    Tooltip,
 } from '@mantine/core';
 import { IconAlertCircle, IconPlus, IconX } from '@tabler/icons-react';
 import { useCallback, useMemo, type FC } from 'react';
@@ -59,13 +60,16 @@ const getInvalidFilterRules = (
     }, []);
 
 const FiltersForm: FC<Props> = ({ filters, setFilters, isEditMode }) => {
-    const { itemsMap } = useFiltersContext<FieldsWithSuggestions>();
+    const { itemsMap, baseTable } = useFiltersContext<FieldsWithSuggestions>();
     const [isOpen, toggleFieldInput] = useToggle(false);
     const fields = useMemo<FieldWithSuggestions[]>(() => {
         return Object.values(itemsMap);
     }, [itemsMap]);
 
     const totalFilterRules = getTotalFilterRules(filters);
+    const clearAllFilters = useCallback(() => {
+        setFilters({}, false);
+    }, [setFilters]);
     const invalidFilterRules = getInvalidFilterRules(fields, totalFilterRules);
     const hasInvalidFilterRules = invalidFilterRules.length > 0;
 
@@ -195,7 +199,6 @@ const FiltersForm: FC<Props> = ({ filters, setFilters, isEditMode }) => {
                                 isEditMode={isEditMode}
                                 onChange={updateFiltersFromGroup}
                                 onDelete={() => setFilters({}, true)}
-                                allowConvertToGroup
                             />
                         )}
                     </>
@@ -241,18 +244,36 @@ const FiltersForm: FC<Props> = ({ filters, setFilters, isEditMode }) => {
                     </Stack>
                 ))}
 
-            {isEditMode ? (
+            {isEditMode && (
                 <Box bg="white" pos="relative" style={{ zIndex: 2 }}>
                     {!isOpen ? (
-                        <Button
-                            variant="outline"
-                            size="xs"
-                            leftIcon={<MantineIcon icon={IconPlus} />}
-                            disabled={fields.length <= 0}
-                            onClick={toggleFieldInput}
-                        >
-                            Add filter
-                        </Button>
+                        <Group align="center" position="apart" sx={{ flex: 1 }}>
+                            <Button
+                                variant="outline"
+                                size="xs"
+                                leftIcon={<MantineIcon icon={IconPlus} />}
+                                disabled={fields.length <= 0}
+                                onClick={toggleFieldInput}
+                            >
+                                Add filter
+                            </Button>
+                            {totalFilterRules.length > 0 && (
+                                <Tooltip
+                                    label="Clear all filters"
+                                    position="bottom"
+                                >
+                                    <Button
+                                        variant="light"
+                                        size="xs"
+                                        color="gray"
+                                        onClick={clearAllFilters}
+                                        disabled={totalFilterRules.length === 0}
+                                    >
+                                        Clear all
+                                    </Button>
+                                </Tooltip>
+                            )}
+                        </Group>
                     ) : (
                         <FieldSelect
                             size="xs"
@@ -260,6 +281,7 @@ const FiltersForm: FC<Props> = ({ filters, setFilters, isEditMode }) => {
                             maw={300}
                             autoFocus
                             hasGrouping
+                            baseTable={baseTable}
                             items={fields}
                             onChange={(field) => {
                                 if (!field) return;
@@ -274,7 +296,7 @@ const FiltersForm: FC<Props> = ({ filters, setFilters, isEditMode }) => {
                         />
                     )}
                 </Box>
-            ) : null}
+            )}
         </Stack>
     );
 };

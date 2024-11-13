@@ -101,6 +101,9 @@ const schedulerWorkerFactory = (context: {
         s3Client: context.clients.getS3Client(),
         schedulerClient: context.clients.getSchedulerClient(),
         slackClient: context.clients.getSlackClient(),
+        semanticLayerService:
+            context.serviceRepository.getSemanticLayerService(),
+        catalogService: context.serviceRepository.getCatalogService(),
     });
 
 const slackBotFactory = (context: {
@@ -130,6 +133,7 @@ type AppArguments = {
     utilProviders?: UtilProviderMap;
     slackBotFactory?: typeof slackBotFactory;
     schedulerWorkerFactory?: typeof schedulerWorkerFactory;
+    customExpressMiddlewares?: Array<(app: Express) => void>; // Array of custom middleware functions
 };
 
 export default class App {
@@ -158,6 +162,8 @@ export default class App {
     private readonly schedulerWorkerFactory: typeof schedulerWorkerFactory;
 
     private readonly prometheusMetrics: PrometheusMetrics;
+
+    private readonly customExpressMiddlewares: Array<(app: Express) => void>;
 
     constructor(args: AppArguments) {
         this.lightdashConfig = args.lightdashConfig;
@@ -215,6 +221,7 @@ export default class App {
         this.prometheusMetrics = new PrometheusMetrics(
             this.lightdashConfig.prometheus,
         );
+        this.customExpressMiddlewares = args.customExpressMiddlewares || [];
     }
 
     async start() {
@@ -260,6 +267,11 @@ export default class App {
             tablename: 'sessions',
             sidfieldname: 'sid',
         });
+
+        // Use custom middlewares if provided
+        this.customExpressMiddlewares.forEach((middleware) =>
+            middleware(expressApp),
+        );
 
         expressApp.use(
             express.json({ limit: this.lightdashConfig.maxPayloadSize }),
@@ -310,6 +322,7 @@ export default class App {
             'https://accounts.google.com',
             'https://vega.github.io',
             'https://cdn.jsdelivr.net/npm/monaco-editor@0.43.0/',
+            'https://*.lightdash.cloud',
             ...this.lightdashConfig.security.contentSecurityPolicy
                 .allowedDomains,
         ];
@@ -621,7 +634,7 @@ export default class App {
         }
         if (postHogClient) {
             try {
-                await postHogClient.shutdownAsync();
+                await postHogClient.shutdown();
                 Logger.info('Stopped PostHog Client');
             } catch (e) {
                 Logger.error('Error stopping PostHog Client', e);

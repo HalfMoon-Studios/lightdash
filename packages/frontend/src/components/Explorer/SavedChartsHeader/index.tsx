@@ -1,5 +1,6 @@
 import { subject } from '@casl/ability';
 import {
+    DashboardTileTypes,
     FeatureFlags,
     type ApiError,
     type GitIntegrationConfiguration,
@@ -54,6 +55,7 @@ import {
 import { ChartSchedulersModal } from '../../../features/scheduler';
 import {
     getSchedulerUuidFromUrlParams,
+    getThresholdUuidFromUrlParams,
     isSchedulerTypeSync,
 } from '../../../features/scheduler/utils';
 import { SyncModal as GoogleSheetsSyncModal } from '../../../features/sync/components';
@@ -218,8 +220,7 @@ const SavedChartsHeader: FC<SavedChartsHeaderProps> = ({
         return resultsData?.fields;
     }, [resultsData]);
 
-    const { clearIsEditingDashboardChart, getIsEditingDashboardChart } =
-        useDashboardStorage();
+    const { clearIsEditingDashboardChart } = useDashboardStorage();
 
     const [blockedNavigationLocation, setBlockedNavigationLocation] =
         useState<string>();
@@ -270,11 +271,18 @@ const SavedChartsHeader: FC<SavedChartsHeaderProps> = ({
             } else {
                 scheduledDeliveriesModalHandlers.open();
             }
+        } else {
+            const thresholdUuidFromUrlParams =
+                getThresholdUuidFromUrlParams(search);
+            if (thresholdUuidFromUrlParams) {
+                thresholdAlertsModalHandlers.open();
+            }
         }
     }, [
         search,
         syncWithGoogleSheetsModalHandlers,
         scheduledDeliveriesModalHandlers,
+        thresholdAlertsModalHandlers,
     ]);
 
     useEffect(() => {
@@ -902,31 +910,22 @@ const SavedChartsHeader: FC<SavedChartsHeaderProps> = ({
                                     <>
                                         <Menu.Divider />
 
-                                        <Tooltip
-                                            disabled={
-                                                !getIsEditingDashboardChart()
-                                            }
-                                            position="bottom"
-                                            label="This chart can be deleted from its dashboard"
-                                        >
-                                            <Box>
-                                                <Menu.Item
-                                                    icon={
-                                                        <MantineIcon
-                                                            icon={IconTrash}
-                                                            color="red"
-                                                        />
-                                                    }
-                                                    color="red"
-                                                    disabled={getIsEditingDashboardChart()}
-                                                    onClick={
-                                                        deleteModalHandlers.open
-                                                    }
-                                                >
-                                                    Delete
-                                                </Menu.Item>
-                                            </Box>
-                                        </Tooltip>
+                                        <Box>
+                                            <Menu.Item
+                                                icon={
+                                                    <MantineIcon
+                                                        icon={IconTrash}
+                                                        color="red"
+                                                    />
+                                                }
+                                                color="red"
+                                                onClick={
+                                                    deleteModalHandlers.open
+                                                }
+                                            >
+                                                Delete
+                                            </Menu.Item>
+                                        </Box>
                                     </>
                                 )}
                             </Menu.Dropdown>
@@ -956,7 +955,8 @@ const SavedChartsHeader: FC<SavedChartsHeaderProps> = ({
                 <AddTilesToDashboardModal
                     isOpen={isAddToDashboardModalOpen}
                     projectUuid={projectUuid}
-                    savedChartUuid={savedChart.uuid}
+                    uuid={savedChart.uuid}
+                    dashboardTileType={DashboardTileTypes.SAVED_CHART}
                     onClose={addToDashboardModalHandlers.close}
                 />
             )}
@@ -976,8 +976,14 @@ const SavedChartsHeader: FC<SavedChartsHeaderProps> = ({
                             }
                         });
 
-                        history.push('/');
-
+                        if (dashboardUuid) {
+                            history.push(
+                                `/projects/${projectUuid}/dashboards/${dashboardUuid}`,
+                            );
+                        } else {
+                            history.push(`/`);
+                        }
+                        clearIsEditingDashboardChart();
                         deleteModalHandlers.close();
                     }}
                 />

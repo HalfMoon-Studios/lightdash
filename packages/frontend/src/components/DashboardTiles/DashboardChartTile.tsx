@@ -19,6 +19,7 @@ import {
     type Dashboard,
     type DashboardChartTile as IDashboardChartTile,
     type DashboardFilterRule,
+    type DashboardFilters,
     type Field,
     type FilterDashboardToRule,
     type ItemsMap,
@@ -30,6 +31,7 @@ import {
     ActionIcon,
     Badge,
     Box,
+    Group,
     HoverCard,
     Menu,
     Portal,
@@ -40,6 +42,7 @@ import {
 import { useClipboard } from '@mantine/hooks';
 import {
     IconAlertCircle,
+    IconAlertTriangle,
     IconCopy,
     IconFilter,
     IconFolders,
@@ -56,7 +59,7 @@ import React, {
 } from 'react';
 import { useParams } from 'react-router-dom';
 import { v4 as uuid4 } from 'uuid';
-import { downloadCsv } from '../../api/csv';
+import { downloadCsvFromSavedChart } from '../../api/csv';
 import { DashboardTileComments } from '../../features/comments';
 import { DateZoomInfoOnTile } from '../../features/dateZoom';
 import { ExportToGoogleSheet } from '../../features/export';
@@ -89,45 +92,43 @@ import MetricQueryDataProvider, {
 } from '../MetricQueryData/MetricQueryDataProvider';
 import UnderlyingDataModal from '../MetricQueryData/UnderlyingDataModal';
 import { type EchartSeriesClickEvent } from '../SimpleChart';
+import { DashboardMinimalDownloadCsv } from './DashboardMinimalDownloadCsv';
 import EditChartMenuItem from './EditChartMenuItem';
 import TileBase from './TileBase/index';
 
 interface ExportResultAsCSVModalProps {
     projectUuid: string;
-    savedChart: SavedChart;
+    chartUuid: string;
+    dashboardFilters?: DashboardFilters;
+    tileUuid?: string;
+    // Csv properties
     rows: ApiChartAndResults['rows'];
     onClose: () => void;
     onConfirm: () => void;
 }
 
 const ExportResultAsCSVModal: FC<ExportResultAsCSVModalProps> = ({
-    savedChart,
+    projectUuid,
+    chartUuid,
+    dashboardFilters,
+    tileUuid,
     rows,
     onClose,
     onConfirm,
 }) => {
-    const getCsvLink = async (limit: number | null, onlyRaw: boolean) => {
-        return downloadCsv({
-            projectUuid: savedChart.projectUuid,
-            tableId: savedChart.tableName,
-            query: savedChart.metricQuery,
-            csvLimit: limit,
-            onlyRaw: onlyRaw,
-            columnOrder: savedChart.tableConfig.columnOrder,
-            showTableNames: isTableChartConfig(savedChart.chartConfig.config)
-                ? savedChart.chartConfig.config.showTableNames ?? false
-                : true,
-            customLabels: getCustomLabelsFromTableConfig(
-                savedChart.chartConfig.config,
-            ),
-            hiddenFields: getHiddenTableFields(savedChart.chartConfig),
-            chartName: savedChart.name,
+    const getCsvLink = async (csvLimit: number | null, onlyRaw: boolean) => {
+        return downloadCsvFromSavedChart({
+            chartUuid,
+            dashboardFilters,
+            tileUuid,
+            onlyRaw,
+            csvLimit,
         });
     };
 
     return (
         <ExportCSVModal
-            projectUuid={savedChart.projectUuid}
+            projectUuid={projectUuid}
             opened
             rows={rows}
             getCsvLink={getCsvLink}
@@ -284,6 +285,7 @@ interface DashboardChartTileMainProps
     tile: IDashboardChartTile;
     chartAndResults: ApiChartAndResults;
     onAddTiles?: (tiles: Dashboard['tiles'][number][]) => void;
+    canExportCsv?: boolean;
 }
 
 const DashboardChartTileMain: FC<DashboardChartTileMainProps> = (props) => {
@@ -339,6 +341,13 @@ const DashboardChartTileMain: FC<DashboardChartTileMainProps> = (props) => {
     const userCanExportData = user.data?.ability.can(
         'manage',
         subject('ExportCsv', {
+            organizationUuid: chart.organizationUuid,
+            projectUuid: chart.projectUuid,
+        }),
+    );
+    const userCanRunCustomSql = user.data?.ability.can(
+        'manage',
+        subject('CustomSql', {
             organizationUuid: chart.organizationUuid,
             projectUuid: chart.projectUuid,
         }),
@@ -558,14 +567,31 @@ const DashboardChartTileMain: FC<DashboardChartTileMainProps> = (props) => {
         }),
         [chart, metricQuery],
     );
-    const { pathname: chartPathname, search: chartSearch } = useMemo(
-        () =>
-            getExplorerUrlFromCreateSavedChartVersion(
+    const cannotUseCustomDimensions =
+        !userCanRunCustomSql &&
+        chartWithDashboardFilters.metricQuery.customDimensions;
+
+    const { pathname: chartPathname, search: chartSearch } = useMemo(() => {
+        if (cannotUseCustomDimensions) {
+            const queryWithoutCustomDimensions = {
+                ...chartWithDashboardFilters,
+                metricQuery: {
+                    ...chartWithDashboardFilters.metricQuery,
+                    customDimensions: undefined,
+                },
+            };
+            return getExplorerUrlFromCreateSavedChartVersion(
                 chartWithDashboardFilters.projectUuid,
-                chartWithDashboardFilters,
-            ),
-        [chartWithDashboardFilters],
-    );
+                queryWithoutCustomDimensions,
+                true,
+            );
+        }
+        return getExplorerUrlFromCreateSavedChartVersion(
+            chartWithDashboardFilters.projectUuid,
+            chartWithDashboardFilters,
+            true,
+        );
+    }, [chartWithDashboardFilters, cannotUseCustomDimensions]);
 
     const [isCommentsMenuOpen, setIsCommentsMenuOpen] = useState(false);
     const showComments = useDashboardContext(
@@ -775,22 +801,43 @@ const DashboardChartTileMain: FC<DashboardChartTileMainProps> = (props) => {
                                     </Tooltip>
 
                                     {userCanManageExplore && chartPathname && (
-                                        <Menu.Item
-                                            icon={
-                                                <MantineIcon
-                                                    icon={IconTelescope}
-                                                />
+                                        <Tooltip
+                                            label={
+                                                'This chart contains custom dimensions, you will not be able to run custom SQL on explore.'
                                             }
-                                            disabled={isEditMode}
-                                            onClick={() =>
-                                                handleCreateShareUrl(
-                                                    chartPathname,
-                                                    chartSearch,
-                                                )
+                                            position="top-start"
+                                            variant="xs"
+                                            disabled={
+                                                !cannotUseCustomDimensions
                                             }
                                         >
-                                            Explore from here
-                                        </Menu.Item>
+                                            <Menu.Item
+                                                icon={
+                                                    <MantineIcon
+                                                        icon={IconTelescope}
+                                                    />
+                                                }
+                                                disabled={isEditMode}
+                                                onClick={() =>
+                                                    handleCreateShareUrl(
+                                                        chartPathname,
+                                                        chartSearch,
+                                                    )
+                                                }
+                                            >
+                                                <Group>
+                                                    Explore from here
+                                                    {cannotUseCustomDimensions && (
+                                                        <MantineIcon
+                                                            icon={
+                                                                IconAlertTriangle
+                                                            }
+                                                            color="yellow.9"
+                                                        />
+                                                    )}
+                                                </Group>
+                                            </Menu.Item>
+                                        </Tooltip>
                                     )}
 
                                     {userCanExportData && (
@@ -842,7 +889,7 @@ const DashboardChartTileMain: FC<DashboardChartTileMainProps> = (props) => {
                                     onClick={() =>
                                         duplicateChart({
                                             uuid: savedChartUuid,
-                                            name: chart.name,
+                                            name: `Copy of ${chart.name}`,
                                             description: chart.description,
                                         })
                                     }
@@ -979,7 +1026,9 @@ const DashboardChartTileMain: FC<DashboardChartTileMainProps> = (props) => {
             {isCSVExportModalOpen ? (
                 <ExportResultAsCSVModal
                     projectUuid={projectUuid}
-                    savedChart={chartWithDashboardFilters}
+                    chartUuid={chart.uuid}
+                    tileUuid={tileUuid}
+                    dashboardFilters={appliedDashboardFilters}
                     rows={rows}
                     onClose={() => setIsCSVExportModalOpen(false)}
                     onConfirm={() => setIsCSVExportModalOpen(false)}
@@ -996,6 +1045,7 @@ const DashboardChartTileMinimal: FC<DashboardChartTileMainProps> = (props) => {
             properties: { savedChartUuid, hideTitle, title },
         },
         chartAndResults,
+        canExportCsv,
     } = props;
     const { chart } = chartAndResults;
     const { projectUuid } = useParams<{ projectUuid: string }>();
@@ -1007,6 +1057,13 @@ const DashboardChartTileMinimal: FC<DashboardChartTileMainProps> = (props) => {
             description={chart.description}
             isLoading={false}
             minimal={true}
+            extraMenuItems={
+                canExportCsv && (
+                    <DashboardMinimalDownloadCsv
+                        chartAndResults={chartAndResults}
+                    />
+                )
+            }
             {...props}
         >
             <ValidDashboardChartTileMinimal
@@ -1024,6 +1081,7 @@ type DashboardChartTileProps = Omit<
     'chartAndResults'
 > & {
     minimal?: boolean;
+    canExportCsv?: boolean;
 };
 
 // Abstraction needed for enterprise version
@@ -1041,6 +1099,7 @@ export const GenericDashboardChartTile: FC<
     isLoading,
     data,
     error,
+    canExportCsv = false,
     ...rest
 }) => {
     const { projectUuid } = useParams<{
@@ -1118,6 +1177,7 @@ export const GenericDashboardChartTile: FC<
                     tile={tile}
                     isEditMode={isEditMode}
                     chartAndResults={data}
+                    canExportCsv={canExportCsv}
                 />
             ) : (
                 <DashboardChartTileMain

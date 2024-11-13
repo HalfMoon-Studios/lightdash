@@ -1,6 +1,7 @@
 import { type AbilityBuilder } from '@casl/ability';
 import { type ProjectMemberProfile } from '../types/projectMemberProfile';
 import { type ProjectMemberRole } from '../types/projectMemberRole';
+import { ProjectType } from '../types/projects';
 import { SpaceMemberRole } from '../types/space';
 import { type MemberAbility } from './types';
 
@@ -55,10 +56,16 @@ export const projectMemberAbilities: Record<
         can('view', 'DashboardComments', {
             projectUuid: member.projectUuid,
         });
+        can('view', 'Tags', {
+            projectUuid: member.projectUuid,
+        });
     },
     interactive_viewer(member, { can }) {
         projectMemberAbilities.viewer(member, { can });
         can('view', 'UnderlyingData', {
+            projectUuid: member.projectUuid,
+        });
+        can('view', 'SemanticViewer', {
             projectUuid: member.projectUuid,
         });
         can('manage', 'Explore', {
@@ -83,6 +90,15 @@ export const projectMemberAbilities: Record<
             },
         });
         can('manage', 'SavedChart', {
+            projectUuid: member.projectUuid,
+            access: {
+                $elemMatch: {
+                    userUuid: member.userUuid,
+                    role: SpaceMemberRole.EDITOR,
+                },
+            },
+        });
+        can('manage', 'SemanticViewer', {
             projectUuid: member.projectUuid,
             access: {
                 $elemMatch: {
@@ -137,9 +153,18 @@ export const projectMemberAbilities: Record<
         can('manage', 'DashboardComments', {
             projectUuid: member.projectUuid,
         });
+        can('manage', 'SemanticViewer', {
+            projectUuid: member.projectUuid,
+        });
+        can('manage', 'Tags', {
+            projectUuid: member.projectUuid,
+        });
     },
     developer(member, { can }) {
         projectMemberAbilities.editor(member, { can });
+        can('manage', 'VirtualView', {
+            projectUuid: member.projectUuid,
+        });
         can('manage', 'CustomSql', {
             projectUuid: member.projectUuid,
         });
@@ -168,18 +193,40 @@ export const projectMemberAbilities: Record<
                 },
             },
         });
+
+        can('manage', 'CompileProject', {
+            projectUuid: member.projectUuid,
+        });
+
+        can('delete', 'Project', {
+            type: ProjectType.PREVIEW,
+            createdByUserUuid: member.userUuid,
+        });
+
+        can('create', 'Project', {
+            upstreamProjectUuid: member.projectUuid,
+            type: ProjectType.PREVIEW,
+        });
     },
     admin(member, { can }) {
         projectMemberAbilities.developer(member, { can });
+
+        can('delete', 'Project', {
+            projectUuid: member.projectUuid,
+        });
+
         can('manage', 'Project', {
             projectUuid: member.projectUuid,
         });
+
         can('manage', 'Space', {
             projectUuid: member.projectUuid,
         });
+
         can('manage', 'Dashboard', {
             projectUuid: member.projectUuid,
         });
+
         can('manage', 'SavedChart', {
             projectUuid: member.projectUuid,
         });

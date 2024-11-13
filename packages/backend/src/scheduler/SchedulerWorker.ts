@@ -1,4 +1,10 @@
-import { SchedulerJobStatus, sqlRunnerJob } from '@lightdash/common';
+import {
+    indexCatalogJob,
+    SchedulerJobStatus,
+    semanticLayerQueryJob,
+    sqlRunnerJob,
+    sqlRunnerPivotQueryJob,
+} from '@lightdash/common';
 import { getSchedule, stringToArray } from 'cron-converter';
 import {
     JobHelpers,
@@ -92,24 +98,6 @@ const traceTasks = (tasks: TaskList) => {
     return tracedTasks;
 };
 
-export const getDailyDatesFromCron = (
-    cron: string,
-    when = new Date(),
-): Date[] => {
-    const arr = stringToArray(cron);
-    const startOfMinute = moment(when).startOf('minute').toDate(); // round down to the nearest minute so we can even process 00:00 on daily jobs
-    const schedule = getSchedule(arr, startOfMinute, 'UTC');
-    const tomorrow = moment(startOfMinute)
-        .add(1, 'day')
-        .startOf('day')
-        .toDate();
-    const dailyDates: Date[] = [];
-    while (schedule.next() < tomorrow) {
-        dailyDates.push(schedule.date.toJSDate());
-    }
-    return dailyDates;
-};
-
 const workerLogger = new GraphileLogger((scope) => (_, message, meta) => {
     Logger.debug(message, { meta, scope });
 });
@@ -158,8 +146,14 @@ export class SchedulerWorker extends SchedulerTask {
                 const schedulers =
                     await this.schedulerService.getAllSchedulers();
                 const promises = schedulers.map(async (scheduler) => {
+                    const defaultTimezone =
+                        await this.schedulerService.getSchedulerDefaultTimezone(
+                            scheduler.schedulerUuid,
+                        );
+
                     await this.schedulerClient.generateDailyJobsForScheduler(
                         scheduler,
+                        defaultTimezone,
                     );
                 });
 
@@ -427,6 +421,105 @@ export class SchedulerWorker extends SchedulerTask {
                     async (job, e) => {
                         await this.schedulerService.logSchedulerJob({
                             task: sqlRunnerJob,
+                            jobId: job.id,
+                            scheduledTime: job.run_at,
+                            status: SchedulerJobStatus.ERROR,
+                            details: {
+                                createdByUserUuid: payload.userUuid,
+                                error: e.message,
+                            },
+                        });
+                    },
+                );
+            },
+            [sqlRunnerPivotQueryJob]: async (
+                payload: any,
+                helpers: JobHelpers,
+            ) => {
+                await tryJobOrTimeout(
+                    SchedulerClient.processJob(
+                        sqlRunnerPivotQueryJob,
+                        helpers.job.id,
+                        helpers.job.run_at,
+                        payload,
+                        async () => {
+                            await this.sqlRunnerPivotQuery(
+                                helpers.job.id,
+                                helpers.job.run_at,
+                                payload,
+                            );
+                        },
+                    ),
+                    helpers.job,
+                    this.lightdashConfig.scheduler.jobTimeout,
+                    async (job, e) => {
+                        await this.schedulerService.logSchedulerJob({
+                            task: sqlRunnerPivotQueryJob,
+                            jobId: job.id,
+                            scheduledTime: job.run_at,
+                            status: SchedulerJobStatus.ERROR,
+                            details: {
+                                createdByUserUuid: payload.userUuid,
+                                error: e.message,
+                            },
+                        });
+                    },
+                );
+            },
+            [semanticLayerQueryJob]: async (
+                payload: any,
+                helpers: JobHelpers,
+            ) => {
+                await tryJobOrTimeout(
+                    SchedulerClient.processJob(
+                        semanticLayerQueryJob,
+                        helpers.job.id,
+                        helpers.job.run_at,
+                        payload,
+                        async () => {
+                            await this.semanticLayerQuery(
+                                helpers.job.id,
+                                helpers.job.run_at,
+                                payload,
+                            );
+                        },
+                    ),
+                    helpers.job,
+                    this.lightdashConfig.scheduler.jobTimeout,
+                    async (job, e) => {
+                        await this.schedulerService.logSchedulerJob({
+                            task: semanticLayerQueryJob,
+                            jobId: job.id,
+                            scheduledTime: job.run_at,
+                            status: SchedulerJobStatus.ERROR,
+                            details: {
+                                createdByUserUuid: payload.userUuid,
+                                error: e.message,
+                            },
+                        });
+                    },
+                );
+            },
+            [indexCatalogJob]: async (payload: any, helpers: JobHelpers) => {
+                await tryJobOrTimeout(
+                    SchedulerClient.processJob(
+                        indexCatalogJob,
+                        helpers.job.id,
+                        helpers.job.run_at,
+                        payload,
+                        async () => {
+                            await this.indexCatalog(
+                                helpers.job.id,
+                                helpers.job.run_at,
+                                payload,
+                            );
+                        },
+                    ),
+                    helpers.job,
+                    this.lightdashConfig.scheduler.jobTimeout,
+                    async (job, e) => {
+                        await this.schedulerService.logSchedulerJob({
+                            task: indexCatalogJob,
                             jobId: job.id,
                             scheduledTime: job.run_at,
                             status: SchedulerJobStatus.ERROR,

@@ -6,18 +6,23 @@ import { S3CacheClient } from '../../clients/Aws/S3CacheClient';
 import EmailClient from '../../clients/EmailClient/EmailClient';
 import { lightdashConfig } from '../../config/lightdashConfig';
 import { AnalyticsModel } from '../../models/AnalyticsModel';
+import type { CatalogModel } from '../../models/CatalogModel/CatalogModel';
 import { DashboardModel } from '../../models/DashboardModel/DashboardModel';
 import { DownloadFileModel } from '../../models/DownloadFileModel';
 import { EmailModel } from '../../models/EmailModel';
+import { GroupsModel } from '../../models/GroupsModel';
 import { JobModel } from '../../models/JobModel/JobModel';
 import { OnboardingModel } from '../../models/OnboardingModel/OnboardingModel';
 import { ProjectModel } from '../../models/ProjectModel/ProjectModel';
 import { SavedChartModel } from '../../models/SavedChartModel';
+import { SavedSqlModel } from '../../models/SavedSqlModel';
 import { SpaceModel } from '../../models/SpaceModel';
 import { SshKeyPairModel } from '../../models/SshKeyPairModel';
+import type { TagsModel } from '../../models/TagsModel';
 import { UserAttributesModel } from '../../models/UserAttributesModel';
 import { UserModel } from '../../models/UserModel';
 import { UserWarehouseCredentialsModel } from '../../models/UserWarehouseCredentials/UserWarehouseCredentialsModel';
+import { WarehouseAvailableTablesModel } from '../../models/WarehouseAvailableTablesModel/WarehouseAvailableTablesModel';
 import { SchedulerClient } from '../../scheduler/SchedulerClient';
 import { ProjectService } from '../ProjectService/ProjectService';
 import { CsvService } from './CsvService';
@@ -43,6 +48,7 @@ describe('Csv service', () => {
             sshKeyPairModel: {} as SshKeyPairModel,
             userAttributesModel: {} as UserAttributesModel,
             userWarehouseCredentialsModel: {} as UserWarehouseCredentialsModel,
+            warehouseAvailableTablesModel: {} as WarehouseAvailableTablesModel,
             emailModel: {
                 getPrimaryEmailStatus: (userUuid: string) => ({
                     isVerified: true,
@@ -51,12 +57,17 @@ describe('Csv service', () => {
             schedulerClient: {} as SchedulerClient,
             downloadFileModel: {} as DownloadFileModel,
             s3Client: {} as S3Client,
+            groupsModel: {} as GroupsModel,
+            tagsModel: {} as TagsModel,
+            catalogModel: {} as CatalogModel,
         }),
         s3Client: {} as S3Client,
         savedChartModel: {} as SavedChartModel,
         dashboardModel: {} as DashboardModel,
         downloadFileModel: {} as DownloadFileModel,
         schedulerClient: {} as SchedulerClient,
+        projectModel: {} as ProjectModel,
+        savedSqlModel: {} as SavedSqlModel,
     });
 
     it('Should convert rows to CSV with format', async () => {

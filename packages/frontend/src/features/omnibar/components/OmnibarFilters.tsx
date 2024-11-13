@@ -13,6 +13,7 @@ import {
     IconCalendar,
     IconChartBar,
     IconChevronDown,
+    IconCodeCircle,
     IconFolder,
     IconLayoutDashboard,
     IconRectangle,
@@ -34,6 +35,7 @@ const getOmnibarItemIcon = (itemType: SearchItemType) => {
             return IconRectangle;
         case SearchItemType.DASHBOARD:
             return IconLayoutDashboard;
+        case SearchItemType.SEMANTIC_VIEWER_CHART:
         case SearchItemType.CHART:
             return IconChartBar;
         case SearchItemType.SPACE:
@@ -42,6 +44,8 @@ const getOmnibarItemIcon = (itemType: SearchItemType) => {
             return IconTable;
         case SearchItemType.PAGE:
             return IconBrowser;
+        case SearchItemType.SQL_CHART:
+            return IconCodeCircle;
         default:
             return assertUnreachable(
                 itemType,
@@ -247,7 +251,6 @@ const OmnibarFilters: FC<Props> = ({ filters, onSearchFilterChange }) => {
                         withinPortal
                         value={filters?.createdByUuid}
                         allowDeselect
-                        limit={5}
                         data={
                             organizationUsers?.map((user) => ({
                                 value: user.userUuid,

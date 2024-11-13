@@ -6,6 +6,7 @@ import { type CreateWarehouseCredentials } from './projects';
 export type WarehouseTableSchema = {
     [column: string]: DimensionType;
 };
+
 export type WarehouseCatalog = {
     [database: string]: {
         [schema: string]: {
@@ -13,6 +14,21 @@ export type WarehouseCatalog = {
         };
     };
 };
+
+export type WarehouseTablesCatalog = {
+    [database: string]: {
+        [schema: string]: {
+            [table: string]: { partitionColumn?: PartitionColumn };
+        };
+    };
+};
+
+export type WarehouseTables = {
+    database: string;
+    schema: string;
+    table: string;
+    partitionColumn?: PartitionColumn;
+}[];
 
 export type WarehouseResults = {
     fields: Record<string, { type: DimensionType }>;
@@ -34,7 +50,7 @@ export interface WarehouseClient {
         streamCallback: (data: WarehouseResults) => void,
         options: {
             values?: any[];
-            tags?: Record<string, string>;
+            tags: Record<string, string>;
             timezone?: string;
         },
     ): Promise<void>;
@@ -49,7 +65,7 @@ export interface WarehouseClient {
      */
     runQuery(
         sql: string,
-        tags?: Record<string, string>,
+        tags: Record<string, string>,
         timezone?: string,
         values?: any[],
     ): Promise<WarehouseResults>;
@@ -68,13 +84,15 @@ export interface WarehouseClient {
 
     concatString(...args: string[]): string;
 
-    getTables(
+    getAllTables(
         schema?: string,
         tags?: Record<string, string>,
-    ): Promise<WarehouseCatalog>;
+    ): Promise<WarehouseTables>;
+
     getFields(
         tableName: string,
         schema?: string,
+        database?: string,
         tags?: Record<string, string>,
     ): Promise<WarehouseCatalog>;
 
@@ -82,6 +100,8 @@ export interface WarehouseClient {
         rows: Record<string, any>[],
         mapFieldType: (type: string) => DimensionType,
     ): WarehouseCatalog;
+
+    parseError(error: Error): Error;
 }
 
 export type ApiWarehouseCatalog = {
@@ -89,7 +109,22 @@ export type ApiWarehouseCatalog = {
     results: WarehouseCatalog;
 };
 
+export type ApiWarehouseTablesCatalog = {
+    status: 'ok';
+    results: WarehouseTablesCatalog;
+};
+
 export type ApiWarehouseTableFields = {
     status: 'ok';
     results: WarehouseTableSchema;
+};
+
+export enum PartitionType {
+    DATE = 'DATE',
+    RANGE = 'RANGE',
+}
+
+export type PartitionColumn = {
+    partitionType: PartitionType;
+    field: string;
 };

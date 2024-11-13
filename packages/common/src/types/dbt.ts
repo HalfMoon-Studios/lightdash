@@ -47,10 +47,19 @@ export type DbtRawModelNode = CompiledModelNode & {
 };
 export type DbtModelNode = DbtRawModelNode & {
     database: string;
+    unrendered_config?: {
+        meta?: {
+            joins?: Array<{ join: string }>;
+        };
+    };
 };
 export type DbtModelColumn = ColumnInfo & {
     meta: DbtColumnMetadata;
     data_type?: DimensionType;
+};
+
+type DbtLightdashFieldTags = {
+    tags?: string | string[];
 };
 
 type DbtModelMetadata = DbtModelLightdashConfig & {};
@@ -94,7 +103,7 @@ type DbtColumnLightdashConfig = {
     metrics?: { [metricName: string]: DbtColumnLightdashMetric };
 };
 
-type DbtColumnLightdashDimension = {
+export type DbtColumnLightdashDimension = {
     name?: string;
     label?: string;
     type?: DimensionType;
@@ -110,11 +119,11 @@ type DbtColumnLightdashDimension = {
     colors?: Record<string, string>;
     urls?: FieldUrl[];
     required_attributes?: Record<string, string | string[]>;
-};
+} & DbtLightdashFieldTags;
 
 type DbtColumnLightdashAdditionalDimension = Omit<
     DbtColumnLightdashDimension,
-    'name' | 'time_intervals'
+    'name'
 >;
 
 export type DbtColumnLightdashMetric = {
@@ -132,7 +141,7 @@ export type DbtColumnLightdashMetric = {
     show_underlying_values?: string[];
     filters?: { [key: string]: any }[];
     percentile?: number;
-};
+} & DbtLightdashFieldTags;
 
 export type DbtModelLightdashMetric = DbtColumnLightdashMetric &
     Required<Pick<DbtColumnLightdashMetric, 'sql'>>;
@@ -439,6 +448,13 @@ export const convertModelMetric = ({
         dimensionReference,
         requiredAttributes,
         ...(metric.urls ? { urls: metric.urls } : {}),
+        ...(metric.tags
+            ? {
+                  tags: Array.isArray(metric.tags)
+                      ? metric.tags
+                      : [metric.tags],
+              }
+            : {}),
     };
 };
 type ConvertColumnMetricArgs = Omit<ConvertModelMetricArgs, 'metric'> & {

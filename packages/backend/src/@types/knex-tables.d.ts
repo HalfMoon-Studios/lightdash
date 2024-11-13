@@ -17,10 +17,6 @@ import {
     DashboardViewsTableName,
     DashboardViewTable,
 } from '../database/entities/dashboards';
-import {
-    DbtCloudIntegrationsTable,
-    DbtCloudIntegrationsTableName,
-} from '../database/entities/dbtCloudIntegrations';
 import { EmailTable, EmailTableName } from '../database/entities/emails';
 import {
     InviteLinkTable,
@@ -105,7 +101,6 @@ import {
 import { SessionTable, SessionTableName } from '../database/entities/sessions';
 import { ShareTable, ShareTableName } from '../database/entities/share';
 import {
-    DbSlackAuthTokens,
     SlackAuthTokensTable,
     SlackAuthTokensTableName,
 } from '../database/entities/slackAuthentication';
@@ -127,7 +122,12 @@ import {
     DbAnalyticsChartViews,
     DbAnalyticsDashboardViews,
 } from '../database/entities/analytics';
-import { CatalogTable, CatalogTableName } from '../database/entities/catalog';
+import {
+    CatalogTable,
+    CatalogTableName,
+    CatalogTagsTable,
+    CatalogTagsTableName,
+} from '../database/entities/catalog';
 import {
     DashboardTileCommentsTable,
     DashboardTileCommentsTableName,
@@ -164,6 +164,18 @@ import {
     ProjectGroupAccessTableName,
 } from '../database/entities/projectGroupAccess';
 import {
+    SavedSemanticViewerChartsTable,
+    SavedSemanticViewerChartsTableName,
+    SavedSemanticViewerChartVersionsTable,
+    SavedSemanticViewerChartVersionsTableName,
+} from '../database/entities/savedSemanticViewerCharts';
+import {
+    SavedSqlTable,
+    SavedSqlTableName,
+    SavedSqlVersionsTable,
+    SavedSqlVersionsTableName,
+} from '../database/entities/savedSql';
+import {
     SchedulerEmailTargetTable,
     SchedulerEmailTargetTableName,
     SchedulerLogTable,
@@ -177,6 +189,7 @@ import {
     SshKeyPairTable,
     SshKeyPairTableName,
 } from '../database/entities/sshKeyPairs';
+import { TagsTable, TagsTableName } from '../database/entities/tags';
 import {
     DbGroupUserAttribute,
     DbOrganizationMemberUserAttribute,
@@ -195,6 +208,10 @@ import {
     DbValidationTable,
     ValidationTableName,
 } from '../database/entities/validation';
+import {
+    WarehouseAvailableTablesTable,
+    WarehouseAvailableTablesTableName,
+} from '../database/entities/warehouseAvailableTables';
 
 declare module 'knex/types/tables' {
     interface Tables {
@@ -213,6 +230,10 @@ declare module 'knex/types/tables' {
         [SavedChartVersionSortsTableName]: SavedChartVersionSortsTable;
         [SavedChartTableCalculationTableName]: SavedChartTableCalculationTable;
         [SavedChartAdditionalMetricTableName]: SavedChartAdditionalMetricTable;
+        [SavedSqlTableName]: SavedSqlTable;
+        [SavedSqlVersionsTableName]: SavedSqlVersionsTable;
+        [SavedSemanticViewerChartsTableName]: SavedSemanticViewerChartsTable;
+        [SavedSemanticViewerChartVersionsTableName]: SavedSemanticViewerChartVersionsTable;
         [SpaceTableName]: SpaceTable;
         [DashboardsTableName]: DashboardTable;
         [DashboardVersionsTableName]: DashboardVersionTable;
@@ -235,7 +256,6 @@ declare module 'knex/types/tables' {
         [PersonalAccessTokenTableName]: PersonalAccessTokenTable;
         [ProjectMembershipsTableName]: ProjectMembershipsTable;
         [ProjectGroupAccessTableName]: ProjectGroupAccessTable;
-        [DbtCloudIntegrationsTableName]: DbtCloudIntegrationsTable;
         [ShareTableName]: ShareTable;
         [SpaceUserAccessTableName]: SpaceUserAccessTable;
         [SlackAuthTokensTableName]: SlackAuthTokensTable;
@@ -267,5 +287,8 @@ declare module 'knex/types/tables' {
         [DashboardTabsTableName]: DashboardTabsTable;
         [NotificationsTableName]: NotificationsTable;
         [CatalogTableName]: CatalogTable;
+        [WarehouseAvailableTablesTableName]: WarehouseAvailableTablesTable;
+        [TagsTableName]: TagsTable;
+        [CatalogTagsTableName]: CatalogTagsTable;
     }
 }

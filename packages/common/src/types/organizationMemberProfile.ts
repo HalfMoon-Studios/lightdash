@@ -1,4 +1,5 @@
 import { type Group } from './groups';
+import { type KnexPaginatedData } from './knex-paginate';
 
 export enum OrganizationMemberRole {
     MEMBER = 'member',
@@ -30,13 +31,17 @@ export type OrganizationMemberProfile = {
      */
     role: OrganizationMemberRole;
     /**
-     * Whether the user has accepted their invite to the organization
+     * Whether the user can login
      */
     isActive: boolean;
     /**
      * Whether the user's invite to the organization has expired
      */
     isInviteExpired?: boolean;
+    /**
+     * Whether the user doesn't have an authentication method (password or openId)
+     */
+    isPending?: boolean;
 };
 
 export type OrganizationMemberProfileWithGroups = OrganizationMemberProfile & {
@@ -53,7 +58,7 @@ export type OrganizationMemberProfileUpdate = {
 
 export type ApiOrganizationMemberProfiles = {
     status: 'ok';
-    results: OrganizationMemberProfile[];
+    results: KnexPaginatedData<OrganizationMemberProfile[]>;
 };
 
 export type ApiOrganizationMemberProfile = {

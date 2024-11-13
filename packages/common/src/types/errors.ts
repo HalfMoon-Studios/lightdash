@@ -35,6 +35,20 @@ export class ForbiddenError extends LightdashError {
     }
 }
 
+export class DeactivatedAccountError extends LightdashError {
+    constructor(
+        message = 'Your account has been deactivated. Please contact your organization administrator.',
+        data: { [key: string]: any } = {},
+    ) {
+        super({
+            message,
+            name: 'DeactivatedAccountError',
+            statusCode: 403,
+            data,
+        });
+    }
+}
+
 export class AuthorizationError extends LightdashError {
     constructor(
         message = "You don't have authorization to perform this action",
@@ -227,6 +241,17 @@ export class NotFoundError extends LightdashError {
     }
 }
 
+export class InvalidUser extends LightdashError {
+    constructor(message: string) {
+        super({
+            message,
+            name: 'InvalidUser',
+            statusCode: 404,
+            data: {},
+        });
+    }
+}
+
 export class WarehouseConnectionError extends LightdashError {
     constructor(message: string) {
         super({
@@ -239,12 +264,12 @@ export class WarehouseConnectionError extends LightdashError {
 }
 
 export class WarehouseQueryError extends LightdashError {
-    constructor(message: string) {
+    constructor(message: string, data: { [key: string]: any } = {}) {
         super({
             message,
             name: 'WarehouseQueryError',
             statusCode: 400,
-            data: {},
+            data,
         });
     }
 }
@@ -298,6 +323,28 @@ export class NotEnoughResults extends LightdashError {
             message,
             name: 'NotEnoughResults',
             statusCode: 406,
+            data: {},
+        });
+    }
+}
+
+export class KnexPaginationError extends LightdashError {
+    constructor(message: string) {
+        super({
+            message,
+            name: 'KnexPaginationError',
+            statusCode: 422,
+            data: {},
+        });
+    }
+}
+
+export class SlackInstallationNotFoundError extends LightdashError {
+    constructor(message: string = 'Could not find slack installation') {
+        super({
+            message,
+            name: 'SlackInstallationNotFoundError',
+            statusCode: 404,
             data: {},
         });
     }

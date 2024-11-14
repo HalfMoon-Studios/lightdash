@@ -1,4 +1,3 @@
-import { type DimensionType } from '@lightdash/common';
 import {
     ActionIcon,
     Box,
@@ -14,46 +13,16 @@ import {
     Tooltip,
 } from '@mantine/core';
 import { useDebouncedValue, useHover } from '@mantine/hooks';
-import {
-    Icon123,
-    IconAbc,
-    IconCalendar,
-    IconClockHour4,
-    IconCopy,
-    IconQuestionMark,
-    IconSearch,
-    IconX,
-} from '@tabler/icons-react';
-import { memo, useMemo, useState, type FC } from 'react';
-import { getItemIconName } from '../../../components/common/Filters/FieldIcon';
+import { IconCopy, IconSearch, IconX } from '@tabler/icons-react';
+import { memo, useState, type FC } from 'react';
 import MantineIcon from '../../../components/common/MantineIcon';
+import { TableFieldIcon } from '../../../components/DataViz/Icons';
 import { useIsTruncated } from '../../../hooks/useIsTruncated';
 import {
     useTableFields,
     type WarehouseTableField,
 } from '../hooks/useTableFields';
 import { useAppSelector } from '../store/hooks';
-
-const TableFieldIcon: FC<{
-    fieldType: DimensionType;
-}> = memo(({ fieldType }) => {
-    const Icon = useMemo(() => {
-        switch (getItemIconName(fieldType)) {
-            case 'citation':
-                return IconAbc;
-            case 'numerical':
-                return Icon123;
-            case 'calendar':
-                return IconCalendar;
-            case 'time':
-                return IconClockHour4;
-            default:
-                return IconQuestionMark;
-        }
-    }, [fieldType]);
-
-    return <MantineIcon icon={Icon} color="gray.5" />;
-});
 
 const TableField: FC<{
     activeTable: string;
@@ -68,13 +37,24 @@ const TableField: FC<{
                 <Box display={hovered ? 'block' : 'none'}>
                     <CopyButton value={`${activeTable}.${field.name}`}>
                         {({ copied, copy }) => (
-                            <ActionIcon size={16} onClick={copy} bg="gray.1">
-                                <MantineIcon
-                                    icon={IconCopy}
-                                    color={copied ? 'green' : 'blue'}
+                            <Tooltip
+                                variant="xs"
+                                label={copied ? 'Copied to clipboard' : 'Copy'}
+                                withArrow
+                                position="right"
+                            >
+                                <ActionIcon
+                                    size={16}
                                     onClick={copy}
-                                />
-                            </ActionIcon>
+                                    bg="gray.1"
+                                >
+                                    <MantineIcon
+                                        icon={IconCopy}
+                                        color={copied ? 'green' : 'blue'}
+                                        onClick={copy}
+                                    />
+                                </ActionIcon>
+                            </Tooltip>
                         )}
                     </CopyButton>
                 </Box>
@@ -114,6 +94,9 @@ const TableField: FC<{
 export const TableFields: FC = () => {
     const projectUuid = useAppSelector((state) => state.sqlRunner.projectUuid);
     const activeTable = useAppSelector((state) => state.sqlRunner.activeTable);
+    const activeSchema = useAppSelector(
+        (state) => state.sqlRunner.activeSchema,
+    );
 
     const [search, setSearch] = useState<string>('');
     const [debouncedSearch] = useDebouncedValue(search, 300);
@@ -121,6 +104,7 @@ export const TableFields: FC = () => {
     const isValidSearch = Boolean(
         debouncedSearch && debouncedSearch.trim().length > 2,
     );
+
     const {
         data: tableFields,
         isLoading,
@@ -128,13 +112,14 @@ export const TableFields: FC = () => {
     } = useTableFields({
         projectUuid,
         tableName: activeTable,
+        schema: activeSchema,
         search: isValidSearch ? debouncedSearch : undefined,
     });
 
     return (
-        <Stack pt="sm" spacing="xs" h="calc(100% - 20px)" py="xs">
+        <Stack spacing="xs" h="calc(100% - 20px)" pt="sm" py="xs">
             {activeTable ? (
-                <>
+                <Box px="sm">
                     <Text fz="sm" fw={600} c="gray.7">
                         {activeTable}
                     </Text>
@@ -163,11 +148,12 @@ export const TableFields: FC = () => {
                         onChange={(e) => setSearch(e.target.value)}
                         styles={(theme) => ({
                             input: {
+                                borderRadius: theme.radius.md,
                                 border: `1px solid ${theme.colors.gray[3]}`,
                             },
                         })}
                     />
-                </>
+                </Box>
             ) : (
                 <Center p="md">
                     <Text c="gray.4">No table selected</Text>
@@ -180,6 +166,8 @@ export const TableFields: FC = () => {
                     className="only-vertical"
                     sx={{ flex: 1 }}
                     type="auto"
+                    scrollbarSize={8}
+                    pl="sm"
                 >
                     <Stack spacing={0}>
                         {tableFields.map((field) => (

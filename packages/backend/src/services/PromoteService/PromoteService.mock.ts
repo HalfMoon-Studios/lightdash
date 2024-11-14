@@ -5,7 +5,10 @@ import {
     DashboardChartTile,
     DashboardTileTypes,
     OrganizationMemberRole,
+    ProjectMemberRole,
     SessionUser,
+    Space,
+    SpaceMemberRole,
 } from '@lightdash/common';
 import {
     PromotedChart,
@@ -74,6 +77,43 @@ export const upstreamSpace: UpstreamChart['space'] = {
     slug: 'jaffle-shop',
 };
 
+export const upstreamFullSpace: Space = {
+    ...upstreamSpace,
+    queries: [],
+    dashboards: [],
+    access: [
+        {
+            userUuid: 'userUuid',
+            firstName: 'firstName',
+            lastName: 'lastName',
+            email: 'email',
+            role: SpaceMemberRole.ADMIN,
+            hasDirectAccess: true,
+            projectRole: ProjectMemberRole.VIEWER,
+            inheritedRole: OrganizationMemberRole.VIEWER,
+            inheritedFrom: 'organization',
+        },
+        {
+            userUuid: 'adminUuid',
+            firstName: 'firstName',
+            lastName: 'lastName',
+            email: 'adminemail',
+            role: SpaceMemberRole.ADMIN,
+            hasDirectAccess: false,
+            projectRole: ProjectMemberRole.ADMIN,
+            inheritedRole: undefined,
+            inheritedFrom: undefined,
+        },
+    ],
+    groupsAccess: [
+        {
+            groupUuid: 'groupUuid',
+            groupName: 'groupName',
+            spaceRole: SpaceMemberRole.ADMIN,
+        },
+    ],
+};
+
 export const promotedChart: PromotedChart = {
     chart: {
         uuid: 'promoted-chart-uuid',
@@ -132,6 +172,7 @@ export const existingUpstreamChart: UpstreamChart = {
         dashboardName: null,
         updatedAt: new Date(),
         chartType: ChartType.CARTESIAN,
+        slug: 'apple-chart',
     },
     projectUuid: upstreamProjectUuid,
     space: upstreamSpace,
@@ -222,5 +263,14 @@ export const promotedDashboardWithChartWithinDashboard = {
         name: 'dashboard with chart within dashboard',
         uuid: 'promoted-dashboard-with-chart-within-dashboard-uuid',
         tiles: [dashboardChartWithinDashboardTile],
+    },
+};
+
+export const promotedDashboardWithNewPrivateSpace = {
+    ...promotedDashboard,
+    space: {
+        ...promotedDashboard.space,
+        name: 'Private space',
+        isPrivate: true,
     },
 };

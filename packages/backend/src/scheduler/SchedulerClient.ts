@@ -8,6 +8,7 @@ import {
     getSchedulerUuid,
     GsheetsNotificationPayload,
     hasSchedulerUuid,
+    indexCatalogJob,
     isCreateSchedulerSlackTarget,
     NotificationPayloadBase,
     ScheduledDeliveryPayload,
@@ -16,12 +17,16 @@ import {
     SchedulerAndTargets,
     SchedulerFormat,
     SchedulerJobStatus,
+    semanticLayerQueryJob,
+    SemanticLayerQueryPayload,
     SlackNotificationPayload,
     sqlRunnerJob,
     SqlRunnerPayload,
-    UnexpectedServerError,
+    sqlRunnerPivotQueryJob,
+    SqlRunnerPivotQueryPayload,
     UploadMetricGsheetPayload,
     ValidateProjectPayload,
+    type SchedulerIndexCatalogJobPayload,
 } from '@lightdash/common';
 import * as Sentry from '@sentry/node';
 import { getSchedule, stringToArray } from 'cron-converter';
@@ -42,13 +47,18 @@ type SchedulerClientArguments = {
 const SCHEDULED_JOB_MAX_ATTEMPTS = 1;
 
 export const getDailyDatesFromCron = (
-    cron: string,
+    {
+        cron,
+        timezone,
+    }: {
+        cron: string;
+        timezone: string;
+    },
     when = new Date(),
 ): Date[] => {
     const arr = stringToArray(cron);
     const startOfMinute = moment(when).startOf('minute').toDate(); // round down to the nearest minute so we can even process 00:00 on daily jobs
-    const schedule = getSchedule(arr, startOfMinute, 'UTC');
-
+    const schedule = getSchedule(arr, startOfMinute, timezone);
     const tomorrow = moment(startOfMinute)
         .utc()
         .add(1, 'day')
@@ -412,9 +422,15 @@ export class SchedulerClient {
 
     async generateDailyJobsForScheduler(
         scheduler: SchedulerAndTargets,
+        defaultTimezone: string,
     ): Promise<void> {
         if (scheduler.enabled === false) return; // Do not add jobs for disabled schedulers
-        const dates = getDailyDatesFromCron(scheduler.cron);
+
+        const dates = getDailyDatesFromCron({
+            cron: scheduler.cron,
+            timezone: scheduler.timezone ?? defaultTimezone,
+        });
+
         try {
             const promises = dates.map((date: Date) =>
                 this.addScheduledDeliveryJob(
@@ -573,6 +589,28 @@ export class SchedulerClient {
         return jobId;
     }
 
+    async semanticLayerStreamingResults(payload: SemanticLayerQueryPayload) {
+        const graphileClient = await this.graphileUtils;
+        const now = new Date();
+        const jobId = await SchedulerClient.addJob(
+            graphileClient,
+            semanticLayerQueryJob,
+            payload,
+            now,
+        );
+        await this.schedulerModel.logSchedulerJob({
+            task: semanticLayerQueryJob,
+            jobId,
+            scheduledTime: now,
+            status: SchedulerJobStatus.SCHEDULED,
+            details: {
+                createdByUserUuid: payload.userUuid,
+            },
+        });
+
+        return jobId;
+    }
+
     async runSql(payload: SqlRunnerPayload) {
         const graphileClient = await this.graphileUtils;
         const now = new Date();
@@ -584,6 +622,29 @@ export class SchedulerClient {
         );
         await this.schedulerModel.logSchedulerJob({
             task: sqlRunnerJob,
+            jobId,
+            scheduledTime: now,
+            status: SchedulerJobStatus.SCHEDULED,
+            details: {
+                createdByUserUuid: payload.userUuid,
+            },
+        });
+
+        return jobId;
+    }
+
+    async runSqlPivotQuery(payload: SqlRunnerPivotQueryPayload) {
+        const graphileClient = await this.graphileUtils;
+        const now = new Date();
+        const jobId = await SchedulerClient.addJob(
+            graphileClient,
+            sqlRunnerPivotQueryJob,
+            payload,
+            now,
+        );
+
+        await this.schedulerModel.logSchedulerJob({
+            task: sqlRunnerPivotQueryJob,
             jobId,
             scheduledTime: now,
             status: SchedulerJobStatus.SCHEDULED,
@@ -649,6 +710,30 @@ export class SchedulerClient {
         });
 
         return { jobId };
+    }
+
+    // Indexes catalog and calculates chart usages - for example, metric_1 is used by 2 charts, so its chart_usage will be 2
+    async indexCatalog(payload: SchedulerIndexCatalogJobPayload) {
+        const graphileClient = await this.graphileUtils;
+        const now = new Date();
+        const jobId = await SchedulerClient.addJob(
+            graphileClient,
+            indexCatalogJob,
+            payload,
+            now,
+        );
+        await this.schedulerModel.logSchedulerJob({
+            task: indexCatalogJob,
+            jobId,
+            scheduledTime: now,
+            status: SchedulerJobStatus.SCHEDULED,
+            details: {
+                createdByUserUuid: payload.userUuid,
+                projectUuid: payload.projectUuid,
+            },
+        });
+
+        return jobId;
     }
 
     async getJobStatistics(): Promise<

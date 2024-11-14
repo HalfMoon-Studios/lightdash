@@ -4,10 +4,8 @@ import {
     ParseError,
     SentryConfig,
 } from '@lightdash/common';
-import Ajv from 'ajv';
-import addFormats from 'ajv-formats';
 import { type ClientAuthMethod } from 'openid-client';
-import lightdashV1JsonSchema from '../jsonSchemas/lightdashConfig/v1.json';
+import internal from 'stream';
 import { VERSION } from '../version';
 
 export const getIntegerFromEnvironmentVariable = (
@@ -141,11 +139,6 @@ export const getPemFileContent = (certValue: string | undefined) =>
         decodeUnlessStartsWith: '-----BEGIN ', // -----BEGIN CERTIFICATE | -----BEGIN PRIVATE KEY
     });
 
-export type LightdashConfigIn = {
-    version: '1.0';
-    mode: LightdashMode;
-};
-
 type LoggingLevel = 'error' | 'warn' | 'info' | 'http' | 'debug';
 const assertIsLoggingLevel = (x: string): x is LoggingLevel =>
     ['error', 'warn', 'info', 'http', 'debug'].includes(x);
@@ -191,7 +184,6 @@ export type LoggingConfig = {
 };
 
 export type LightdashConfig = {
-    version: '1.0';
     lightdashSecret: string;
     secureCookies: boolean;
     security: {
@@ -206,7 +198,7 @@ export type LightdashConfig = {
     databaseConnectionUri?: string;
     smtp: SmtpConfig | undefined;
     rudder: RudderConfig;
-    posthog: PosthogConfig;
+    posthog: PosthogConfig | undefined;
     mode: LightdashMode;
     sentry: SentryConfig;
     auth: AuthConfig;
@@ -253,7 +245,7 @@ export type LightdashConfig = {
         enabled: boolean;
     };
     s3?: S3Config;
-    headlessBrowser?: HeadlessBrowserConfig;
+    headlessBrowser: HeadlessBrowserConfig;
     resultsCache: {
         enabled: boolean;
         cacheStateTimeSeconds: number;
@@ -278,6 +270,10 @@ export type LightdashConfig = {
         enabled: boolean;
     };
     logging: LoggingConfig;
+    github: {
+        appName: string;
+        redirectDomain: string;
+    };
 };
 
 export type SlackConfig = {
@@ -285,10 +281,15 @@ export type SlackConfig = {
     clientId?: string;
     clientSecret?: string;
     stateSecret: string;
+    appToken?: string;
+    port: number;
+    socketMode?: boolean;
+    channelsCachedTime: number;
 };
 export type HeadlessBrowserConfig = {
     host?: string;
     port?: string;
+    internalLightdashHost: string;
 };
 export type S3Config = {
     region?: string;
@@ -315,7 +316,8 @@ export type RudderConfig = {
 
 export type PosthogConfig = {
     projectApiKey: string;
-    apiHost: string;
+    feApiHost: string;
+    beApiHost: string;
 };
 
 type JwtKeySetConfig = {
@@ -393,6 +395,7 @@ export type AuthConfig = {
     disablePasswordAuthentication: boolean;
     enableGroupSync: boolean;
     enableOidcLinking: boolean;
+    enableOidcToEmailLinking: boolean;
     google: AuthGoogleConfig;
     okta: AuthOktaConfig;
     oneLogin: AuthOneLoginConfig;
@@ -419,7 +422,7 @@ export type SmtpConfig = {
 
 const DEFAULT_JOB_TIMEOUT = 1000 * 60 * 10; // 10 minutes
 
-const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
+export const parseConfig = (): LightdashConfig => {
     const lightdashSecret = process.env.LIGHTDASH_SECRET;
     if (!lightdashSecret) {
         throw new ParseError(
@@ -437,7 +440,8 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
         );
     }
 
-    const mode = lightdashMode || config.mode;
+    const mode = lightdashMode || LightdashMode.DEFAULT;
+
     const siteUrl = process.env.SITE_URL || 'http://localhost:8080';
     if (
         process.env.NODE_ENV !== 'development' &&
@@ -449,7 +453,6 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
     }
 
     return {
-        ...config,
         mode,
         security: {
             contentSecurityPolicy: {
@@ -480,14 +483,22 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
                   },
               }
             : undefined,
-        posthog: {
-            projectApiKey: process.env.POSTHOG_PROJECT_API_KEY || '',
-            apiHost: process.env.POSTHOG_API_HOST || 'https://app.posthog.com',
-        },
+        posthog: process.env.POSTHOG_PROJECT_API_KEY
+            ? {
+                  projectApiKey: process.env.POSTHOG_PROJECT_API_KEY,
+                  feApiHost:
+                      process.env.POSTHOG_FE_API_HOST ||
+                      'https://us.i.posthog.com',
+                  beApiHost:
+                      process.env.POSTHOG_BE_API_HOST ||
+                      'https://us.i.posthog.com',
+              }
+            : undefined,
         rudder: {
             writeKey:
-                process.env.RUDDERSTACK_WRITE_KEY ||
-                '1vqkSlWMVtYOl70rk3QSE0v1fqY',
+                process.env.RUDDERSTACK_WRITE_KEY === undefined
+                    ? '1vqkSlWMVtYOl70rk3QSE0v1fqY'
+                    : process.env.RUDDERSTACK_WRITE_KEY,
             dataPlaneUrl:
                 process.env.RUDDERSTACK_DATA_PLANE_URL ||
                 'https://analytics.lightdash.com',
@@ -538,6 +549,8 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
                 process.env.AUTH_DISABLE_PASSWORD_AUTHENTICATION === 'true',
             enableGroupSync: process.env.AUTH_ENABLE_GROUP_SYNC === 'true',
             enableOidcLinking: process.env.AUTH_ENABLE_OIDC_LINKING === 'true',
+            enableOidcToEmailLinking:
+                process.env.AUTH_ENABLE_OIDC_TO_EMAIL_LINKING === 'true',
             google: {
                 oauth2ClientId: process.env.AUTH_GOOGLE_OAUTH2_CLIENT_ID,
                 oauth2ClientSecret:
@@ -611,7 +624,10 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
             },
         },
         intercom: {
-            appId: process.env.INTERCOM_APP_ID || 'zppxyjpp',
+            appId:
+                process.env.INTERCOM_APP_ID === undefined
+                    ? 'zppxyjpp'
+                    : process.env.INTERCOM_APP_ID,
             apiBase:
                 process.env.INTERCOM_APP_BASE || 'https://api-iam.intercom.io',
         },
@@ -691,6 +707,8 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
         headlessBrowser: {
             port: process.env.HEADLESS_BROWSER_PORT,
             host: process.env.HEADLESS_BROWSER_HOST,
+            internalLightdashHost:
+                process.env.INTERNAL_LIGHTDASH_HOST || siteUrl,
         },
         resultsCache: {
             enabled: process.env.RESULTS_CACHE_ENABLED === 'true',
@@ -710,6 +728,13 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
             clientId: process.env.SLACK_CLIENT_ID,
             clientSecret: process.env.SLACK_CLIENT_SECRET,
             stateSecret: process.env.SLACK_STATE_SECRET || 'slack-state-secret',
+            appToken: process.env.SLACK_APP_TOKEN,
+            port: parseInt(process.env.SLACK_PORT || '4351', 10),
+            socketMode: process.env.SLACK_SOCKET_MODE === 'true',
+            channelsCachedTime: parseInt(
+                process.env.SLACK_CHANNELS_CACHED_TIME || '600000',
+                10,
+            ), // 10 minutes
         },
         scheduler: {
             enabled: process.env.SCHEDULER_ENABLED !== 'false',
@@ -763,27 +788,11 @@ const mergeWithEnvironment = (config: LightdashConfigIn): LightdashConfig => {
                     : parseLoggingLevel(process.env.LIGHTDASH_LOG_FILE_LEVEL),
             filePath: process.env.LIGHTDASH_LOG_FILE_PATH || './logs/all.log',
         },
+        github: {
+            appName: process.env.GITHUB_APP_NAME || 'lightdash-app-dev',
+            redirectDomain:
+                process.env.GITHUB_REDIRECT_DOMAIN ||
+                siteUrl.split('.')[0].split('//')[1],
+        },
     };
-};
-
-export const parseConfig = (raw: any): LightdashConfig => {
-    const ajv = new Ajv({
-        schemaId: 'id',
-        useDefaults: true,
-        discriminator: true,
-        allowUnionTypes: true,
-    });
-    addFormats(ajv);
-    const validate = ajv.compile<LightdashConfigIn>(lightdashV1JsonSchema);
-    const validated = validate(raw);
-    if (!validated) {
-        const lineErrorMessages = (validate.errors || [])
-            .map((err) => `Field at ${err.instancePath} ${err.message}`)
-            .join('\n');
-        throw new ParseError(
-            `Lightdash config file successfully loaded but invalid: ${lineErrorMessages}`,
-            {},
-        );
-    }
-    return mergeWithEnvironment(raw);
 };

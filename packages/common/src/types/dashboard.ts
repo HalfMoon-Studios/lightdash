@@ -7,6 +7,8 @@ import { type ValidationSummary } from './validation';
 
 export enum DashboardTileTypes {
     SAVED_CHART = 'saved_chart',
+    SQL_CHART = 'sql_chart',
+    SEMANTIC_VIEWER_CHART = 'semantic_viewer_chart',
     MARKDOWN = 'markdown',
     LOOM = 'loom',
 }
@@ -52,6 +54,26 @@ export type DashboardChartTileProperties = {
     };
 };
 
+export type DashboardSqlChartTileProperties = {
+    type: DashboardTileTypes.SQL_CHART;
+    properties: {
+        title?: string;
+        savedSqlUuid: string | null;
+        chartName: string;
+        hideTitle?: boolean;
+    };
+};
+
+export type DashboardSemanticViewerChartTileProperties = {
+    type: DashboardTileTypes.SEMANTIC_VIEWER_CHART;
+    properties: {
+        title?: string;
+        savedSemanticViewerChartUuid: string | null;
+        chartName: string;
+        hideTitle?: boolean;
+    };
+};
+
 export type CreateDashboardMarkdownTile = CreateDashboardTileBase &
     DashboardMarkdownTileProperties;
 export type DashboardMarkdownTile = DashboardTileBase &
@@ -66,6 +88,16 @@ export type CreateDashboardChartTile = CreateDashboardTileBase &
 export type DashboardChartTile = DashboardTileBase &
     DashboardChartTileProperties;
 
+export type CreateDashboardSqlChartTile = CreateDashboardTileBase &
+    DashboardSqlChartTileProperties;
+export type DashboardSqlChartTile = DashboardTileBase &
+    DashboardSqlChartTileProperties;
+
+export type CreateDashboardSemanticViewerChartTile = CreateDashboardTileBase &
+    DashboardSemanticViewerChartTileProperties;
+export type DashboardSemanticViewerChartTile = DashboardTileBase &
+    DashboardSemanticViewerChartTileProperties;
+
 export const isChartTile = (
     tile: DashboardTileBase,
 ): tile is DashboardChartTile => tile.type === DashboardTileTypes.SAVED_CHART;
@@ -77,6 +109,8 @@ export type CreateDashboard = {
         | CreateDashboardChartTile
         | CreateDashboardMarkdownTile
         | CreateDashboardLoomTile
+        | CreateDashboardSqlChartTile
+        | CreateDashboardSemanticViewerChartTile
     >;
     filters?: DashboardFilters;
     updatedByUser?: Pick<UpdatedByUser, 'userUuid'>;
@@ -87,7 +121,9 @@ export type CreateDashboard = {
 export type DashboardTile =
     | DashboardChartTile
     | DashboardMarkdownTile
-    | DashboardLoomTile;
+    | DashboardLoomTile
+    | DashboardSqlChartTile
+    | DashboardSemanticViewerChartTile;
 
 export const isDashboardChartTileType = (
     tile: DashboardTile,
@@ -100,6 +136,15 @@ export const isDashboardMarkdownTileType = (
 export const isDashboardLoomTileType = (
     tile: DashboardTile,
 ): tile is DashboardLoomTile => tile.type === DashboardTileTypes.LOOM;
+
+export const isDashboardSqlChartTile = (
+    tile: DashboardTileBase,
+): tile is DashboardSqlChartTile => tile.type === DashboardTileTypes.SQL_CHART;
+
+export const isDashboardSemanticViewerChartTile = (
+    tile: DashboardTileBase,
+): tile is DashboardSemanticViewerChartTile =>
+    tile.type === DashboardTileTypes.SEMANTIC_VIEWER_CHART;
 
 export type DashboardTab = {
     uuid: string;
@@ -165,6 +210,10 @@ export type DashboardBasicDetails = Pick<
     | 'pinnedListUuid'
     | 'pinnedListOrder'
 > & { validationErrors?: ValidationSummary[] };
+
+export type DashboardBasicDetailsWithTileTypes = DashboardBasicDetails & {
+    tileTypes: DashboardTileTypes[];
+};
 
 export type SpaceDashboard = DashboardBasicDetails;
 
@@ -239,3 +288,29 @@ export const hasChartsInDashboard = (dashboard: DashboardDAO) =>
     dashboard.tiles.some(
         (tile) => isChartTile(tile) && tile.properties.belongsToDashboard,
     );
+
+export type ApiGetDashboardsResponse = {
+    status: 'ok';
+    results: DashboardBasicDetailsWithTileTypes[];
+};
+
+export type ApiCreateDashboardResponse = {
+    status: 'ok';
+    results: Dashboard;
+};
+
+export type ApiUpdateDashboardsResponse = {
+    status: 'ok';
+    results: Dashboard[];
+};
+
+export type DuplicateDashboardParams = {
+    dashboardName: string;
+    dashboardDesc: string;
+};
+
+export function isDuplicateDashboardParams(
+    params: DuplicateDashboardParams | CreateDashboard,
+): params is DuplicateDashboardParams {
+    return 'dashboardName' in params && 'dashboardDesc' in params;
+}

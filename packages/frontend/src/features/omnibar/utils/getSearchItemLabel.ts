@@ -14,6 +14,10 @@ export const getSearchItemLabel = (itemType: SearchItemType) => {
             return 'Tables';
         case SearchItemType.PAGE:
             return 'Pages';
+        case SearchItemType.SQL_CHART:
+            return 'SQL Charts';
+        case SearchItemType.SEMANTIC_VIEWER_CHART:
+            return 'Semantic Viewer Charts';
         default:
             return assertUnreachable(
                 itemType,
@@ -33,6 +37,7 @@ export const getSearchItemErrorLabel = (itemType: SearchItemType) => {
         case SearchItemType.SPACE:
         case SearchItemType.TABLE:
         case SearchItemType.PAGE:
+
         default:
             return new Error(`Unknown error item type: ${itemType}`);
     }

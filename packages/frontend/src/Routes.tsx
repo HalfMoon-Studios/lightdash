@@ -13,6 +13,7 @@ import PrivateRoute from './components/PrivateRoute';
 import ProjectRoute from './components/ProjectRoute';
 import UserCompletionModal from './components/UserCompletionModal';
 
+import AuthPopupResult from './pages/AuthPopupResult';
 import Catalog from './pages/Catalog';
 import ChartHistory from './pages/ChartHistory';
 import CreateProject from './pages/CreateProject';
@@ -23,7 +24,7 @@ import Home from './pages/Home';
 import Invite from './pages/Invite';
 import JoinOrganization from './pages/JoinOrganization';
 import Login from './pages/Login';
-import MetricFlowPage from './pages/MetricFlow';
+import MetricsCatalog from './pages/MetricsCatalog';
 import MinimalDashboard from './pages/MinimalDashboard';
 import MinimalSavedExplorer from './pages/MinimalSavedExplorer';
 import PasswordRecovery from './pages/PasswordRecovery';
@@ -33,6 +34,8 @@ import Register from './pages/Register';
 import SavedDashboards from './pages/SavedDashboards';
 import SavedExplorer from './pages/SavedExplorer';
 import SavedQueries from './pages/SavedQueries';
+import SemanticViewerEditPage from './pages/SemanticViewerEdit';
+import SemanticViewerViewPage from './pages/SemanticViewerView';
 import Settings from './pages/Settings';
 import ShareRedirect from './pages/ShareRedirect';
 import Space from './pages/Space';
@@ -41,10 +44,14 @@ import SqlRunner from './pages/SqlRunner';
 import SqlRunnerNew from './pages/SqlRunnerNew';
 import UserActivity from './pages/UserActivity';
 import VerifyEmailPage from './pages/VerifyEmail';
+import ViewSqlChart from './pages/ViewSqlChart';
 
 const Routes: FC = () => {
     return (
         <Switch>
+            <Route path="/auth/popup/:status">
+                <AuthPopupResult />
+            </Route>
             <PrivateRoute path="/minimal">
                 <Switch>
                     <Route path="/minimal/projects/:projectUuid/saved/:savedQueryUuid">
@@ -226,16 +233,59 @@ const Routes: FC = () => {
                                         </TrackPage>
                                     </Route>
 
-                                    <Route path="/projects/:projectUuid/sql-runner-new">
+                                    <Route
+                                        exact
+                                        path="/projects/:projectUuid/sql-runner/:slug"
+                                    >
+                                        <NavBar />
+
+                                        <ViewSqlChart />
+                                    </Route>
+
+                                    <Route
+                                        exact
+                                        path="/projects/:projectUuid/sql-runner/:slug/edit"
+                                    >
+                                        <NavBar />
+
+                                        <SqlRunnerNew isEditMode />
+                                    </Route>
+
+                                    <Route
+                                        exact
+                                        path="/projects/:projectUuid/sql-runner"
+                                    >
                                         <NavBar />
 
                                         <SqlRunnerNew />
                                     </Route>
 
-                                    <Route path="/projects/:projectUuid/dbtsemanticlayer">
+                                    <Route
+                                        exact
+                                        path={[
+                                            '/projects/:projectUuid/semantic-viewer/:savedSemanticViewerChartSlug/edit',
+                                            '/projects/:projectUuid/semantic-viewer/new',
+                                            '/projects/:projectUuid/semantic-viewer',
+                                        ]}
+                                    >
                                         <NavBar />
-                                        <TrackPage name={PageName.METRIC_FLOW}>
-                                            <MetricFlowPage />
+                                        <TrackPage
+                                            name={PageName.SEMANTIC_VIEWER_EDIT}
+                                        >
+                                            <SemanticViewerEditPage />
+                                        </TrackPage>
+                                    </Route>
+
+                                    <Route
+                                        exact
+                                        path="/projects/:projectUuid/semantic-viewer/:savedSemanticViewerChartSlug"
+                                    >
+                                        <NavBar />
+
+                                        <TrackPage
+                                            name={PageName.SEMANTIC_VIEWER_VIEW}
+                                        >
+                                            <SemanticViewerViewPage />
                                         </TrackPage>
                                     </Route>
 
@@ -298,6 +348,15 @@ const Routes: FC = () => {
                                         <NavBar />
                                         <TrackPage name={PageName.CATALOG}>
                                             <Catalog />
+                                        </TrackPage>
+                                    </Route>
+
+                                    <Route path="/projects/:projectUuid/metrics">
+                                        <NavBar />
+                                        <TrackPage
+                                            name={PageName.METRICS_CATALOG}
+                                        >
+                                            <MetricsCatalog />
                                         </TrackPage>
                                     </Route>
 

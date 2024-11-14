@@ -1,7 +1,9 @@
 import {
     assertUnreachable,
     ChartKind,
+    ChartSourceType,
     ResourceViewItemType,
+    type ResourceViewChartItem,
     type ResourceViewItem,
 } from '@lightdash/common';
 import dayjs from 'dayjs';
@@ -48,13 +50,33 @@ export const getResourceTypeName = (item: ResourceViewItem) => {
     }
 };
 
+const getChartResourceUrl = (
+    projectUuid: string,
+    item: ResourceViewChartItem,
+) => {
+    switch (item.data.source) {
+        case ChartSourceType.SQL:
+            return `/projects/${projectUuid}/sql-runner/${item.data.slug}`;
+        case ChartSourceType.SEMANTIC_LAYER:
+            return `/projects/${projectUuid}/semantic-viewer/${item.data.slug}`;
+        case ChartSourceType.DBT_EXPLORE:
+        case undefined:
+            return `/projects/${projectUuid}/saved/${item.data.uuid}`;
+        default:
+            return assertUnreachable(
+                item.data.source,
+                `Unknown source type: ${item.data.source}`,
+            );
+    }
+};
+
 export const getResourceUrl = (projectUuid: string, item: ResourceViewItem) => {
     const itemType = item.type;
     switch (item.type) {
         case ResourceViewItemType.DASHBOARD:
             return `/projects/${projectUuid}/dashboards/${item.data.uuid}/view`;
         case ResourceViewItemType.CHART:
-            return `/projects/${projectUuid}/saved/${item.data.uuid}`;
+            return getChartResourceUrl(projectUuid, item);
         case ResourceViewItemType.SPACE:
             return `/projects/${projectUuid}/spaces/${item.data.uuid}`;
         default:

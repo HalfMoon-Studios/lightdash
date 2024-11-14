@@ -12,15 +12,22 @@ export const BASE_API_URL =
         ? `http://test.lightdash/`
         : import.meta.env.BASE_URL;
 
-const apiPrefix = `${BASE_API_URL}api/v1`;
-
 const defaultHeaders = {
     'Content-Type': 'application/json',
     [LightdashRequestMethodHeader]: RequestMethod.WEB_APP,
 };
 
 const handleError = (err: any): ApiError => {
-    if (err.error?.statusCode && err.error?.name) return err;
+    if (err.error?.statusCode && err.error?.name) {
+        if (
+            err.error?.name === 'DeactivatedAccountError' &&
+            window.location.pathname !== '/login'
+        ) {
+            // redirect to login page when account is deactivated
+            window.location.href = '/login';
+        }
+        return err;
+    }
     return {
         status: 'error',
         error: {
@@ -38,13 +45,17 @@ type LightdashApiProps = {
     url: string;
     body: BodyInit | null | undefined;
     headers?: Record<string, string> | undefined;
+    version?: 'v1' | 'v2';
 };
 export const lightdashApi = async <T extends ApiResponse['results']>({
     method,
     url,
     body,
     headers,
+    version = 'v1',
 }: LightdashApiProps): Promise<T> => {
+    const apiPrefix = `${BASE_API_URL}api/${version}`;
+
     let sentryTrace: string | undefined;
     // Manually create a span for the fetch request to be able to trace it in Sentry. This also enables Distributed Tracing.
     Sentry.startSpan(

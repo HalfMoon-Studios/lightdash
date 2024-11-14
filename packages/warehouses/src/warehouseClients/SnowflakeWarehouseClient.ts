@@ -16,14 +16,24 @@ import {
     Connection,
     ConnectionOptions,
     createConnection,
+    SnowflakeError,
 } from 'snowflake-sdk';
 import { pipeline, Transform, Writable } from 'stream';
 import * as Util from 'util';
 import { WarehouseCatalog } from '../types';
 import WarehouseBaseClient from './WarehouseBaseClient';
 
+const assertIsSnowflakeLoggingLevel = (
+    x: string | undefined,
+): x is 'ERROR' | 'WARN' | 'INFO' | 'DEBUG' | 'TRACE' =>
+    x !== undefined && ['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'].includes(x);
+
 // Prevent snowflake sdk from flooding the output with info logs
-configure({ logLevel: 'ERROR' });
+configure({
+    logLevel: assertIsSnowflakeLoggingLevel(process.env.SNOWFLAKE_SDK_LOG_LEVEL)
+        ? process.env.SNOWFLAKE_SDK_LOG_LEVEL
+        : 'ERROR',
+});
 
 export enum SnowflakeTypes {
     NUMBER = 'NUMBER',
@@ -122,21 +132,29 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
 
     constructor(credentials: CreateSnowflakeCredentials) {
         super(credentials);
-        let decodedPrivateKey: string | Buffer | undefined =
-            credentials.privateKey;
-        if (credentials.privateKey && credentials.privateKeyPass) {
-            // Get the private key from the file as an object.
-            const privateKeyObject = crypto.createPrivateKey({
-                key: credentials.privateKey,
-                format: 'pem',
-                passphrase: credentials.privateKeyPass,
-            });
 
-            // Extract the private key from the object as a PEM-encoded string.
-            decodedPrivateKey = privateKeyObject.export({
-                format: 'pem',
-                type: 'pkcs8',
-            });
+        let privateKey: string | undefined;
+        if (credentials.privateKey) {
+            if (
+                typeof credentials.privateKeyPass === 'string' &&
+                credentials.privateKeyPass.length > 0
+            ) {
+                // Get the private key from the file as an object and
+                // extract the private key from the object as a PEM-encoded string.
+                privateKey = crypto
+                    .createPrivateKey({
+                        key: credentials.privateKey,
+                        format: 'pem',
+                        passphrase: credentials.privateKeyPass,
+                    })
+                    .export({
+                        format: 'pem',
+                        type: 'pkcs8',
+                    })
+                    .toString();
+            } else {
+                privateKey = credentials.privateKey;
+            }
         }
 
         if (typeof credentials.quotedIdentifiersIgnoreCase !== 'undefined') {
@@ -145,15 +163,14 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
         }
 
         let authenticationOptions: Partial<ConnectionOptions> = {};
-
         if (credentials.password) {
             authenticationOptions = {
                 password: credentials.password,
                 authenticator: 'SNOWFLAKE',
             };
-        } else if (decodedPrivateKey) {
+        } else if (privateKey) {
             authenticationOptions = {
-                privateKey: decodedPrivateKey,
+                privateKey,
                 authenticator: 'SNOWFLAKE_JWT',
             };
         }
@@ -169,7 +186,7 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
             ...(credentials.accessUrl?.length
                 ? { accessUrl: credentials.accessUrl }
                 : {}),
-        } as ConnectionOptions; // force type because accessUrl property is not recognised
+        };
     }
 
     async streamQuery(
@@ -184,7 +201,7 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
         let connection: Connection;
         try {
             connection = createConnection(this.connectionOptions);
-            await Util.promisify(connection.connect)();
+            await Util.promisify(connection.connect.bind(connection))();
         } catch (e) {
             throw new WarehouseConnectionError(`Snowflake error: ${e.message}`);
         }
@@ -242,7 +259,8 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
                 options,
             );
         } catch (e) {
-            throw new WarehouseQueryError(e.message);
+            const error = e as SnowflakeError;
+            throw this.parseError(error, sql);
         } finally {
             await new Promise((resolve, reject) => {
                 connection.destroy((err, conn) => {
@@ -270,7 +288,7 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
                 streamResult: true,
                 complete: (err, stmt) => {
                     if (err) {
-                        reject(new WarehouseQueryError(err.message));
+                        reject(err);
                     }
 
                     const columns = stmt.getColumns();
@@ -305,7 +323,7 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
                         }),
                         (error) => {
                             if (error) {
-                                reject(new WarehouseQueryError(error.message));
+                                reject(error);
                             } else {
                                 resolve();
                             }
@@ -366,7 +384,7 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
                 schema,
                 database,
             });
-            await Util.promisify(connection.connect)();
+            await Util.promisify(connection.connect.bind(connection))();
         } catch (e) {
             throw new WarehouseConnectionError(`Snowflake error: ${e.message}`);
         }
@@ -456,53 +474,115 @@ export class SnowflakeWarehouseClient extends WarehouseBaseClient<CreateSnowflak
         }
     }
 
-    async getTables(
-        schema?: string,
-        tags?: Record<string, string>,
-    ): Promise<WarehouseCatalog> {
-        const schemaFilter = schema ? `AND TABLE_SCHEMA ILIKE ?` : '';
+    async getAllTables() {
+        const databaseName = this.connectionOptions.database;
+        const whereSql = databaseName ? `AND TABLE_CATALOG ILIKE ?` : '';
         const query = `
-            SELECT 
-                LOWER(TABLE_CATALOG) as "table_catalog", 
-                LOWER(TABLE_SCHEMA) as "table_schema",
-                LOWER(TABLE_NAME) as "table_name"
+            SELECT
+                TABLE_CATALOG as "table_catalog",
+                TABLE_SCHEMA as "table_schema",
+                TABLE_NAME as "table_name"
             FROM information_schema.tables
-            WHERE TABLE_TYPE = 'BASE TABLE' 
-            ${schemaFilter}
+            WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+            ${whereSql}
             ORDER BY 1,2,3
         `;
+        console.debug('Running query to fetch all tables: ', {
+            query,
+            databaseName,
+        });
         const { rows } = await this.runQuery(
             query,
-            tags,
+            {},
             undefined,
-            schema ? [schema] : undefined,
+            databaseName ? [databaseName] : undefined,
         );
-        return this.parseWarehouseCatalog(rows, mapFieldType);
+        return rows.map((row: Record<string, any>) => ({
+            database: row.table_catalog,
+            schema: row.table_schema,
+            table: row.table_name,
+        }));
     }
 
     async getFields(
         tableName: string,
         schema?: string,
+        database?: string,
         tags?: Record<string, string>,
     ): Promise<WarehouseCatalog> {
-        const schemaFilter = schema ? `AND TABLE_SCHEMA ILIKE ?` : '';
-
         const query = `
-            SELECT LOWER(TABLE_CATALOG) as "table_catalog",
-                   LOWER(TABLE_SCHEMA)  as "table_schema",
-                   LOWER(TABLE_NAME)    as "table_name",
-                   LOWER(COLUMN_NAME)   as "column_name",
+            SELECT TABLE_CATALOG as "table_catalog",
+                   TABLE_SCHEMA  as "table_schema",
+                   TABLE_NAME    as "table_name",
+                   COLUMN_NAME   as "column_name",
                    DATA_TYPE            as "data_type"
             FROM information_schema.columns
-            WHERE TABLE_NAME ILIKE ? ${schemaFilter}
+            WHERE TABLE_NAME = ?
+            ${schema ? 'AND TABLE_SCHEMA = ?' : ''}
+            ${database ? 'AND TABLE_CATALOG = ?' : ''}
             ORDER BY 1, 2, 3;
         `;
-        const { rows } = await this.runQuery(
+        const values = [tableName];
+        if (schema) {
+            values.push(schema);
+        }
+        if (database) {
+            values.push(database);
+        }
+        console.debug('Running query to fetch fields: ', {
             query,
-            tags,
-            undefined,
-            schema ? [tableName, schema] : [tableName],
-        );
+            values,
+        });
+        const { rows } = await this.runQuery(query, tags, undefined, values);
         return this.parseWarehouseCatalog(rows, mapFieldType);
+    }
+
+    parseError(error: SnowflakeError, query: string = '') {
+        // if the error has no code or data, return a generic error
+        if (!error?.code && !error.data) {
+            return new WarehouseQueryError(error?.message || 'Unknown error');
+        }
+        // pull error type from data object
+        const errorType = error.data?.type || error.code;
+        switch (errorType) {
+            // if query is mistyped (compilation error)
+            case 'COMPILATION':
+                // The query will look something like this:
+                // 'WITH user_sql AS (
+                //     SELECT * FROM `lightdash-database-staging`.`e2e_jaffle_shop`.`users`;
+                // ) select * from user_sql limit 500';
+                // We want to check for the first part of the query, if so strip the first and last lines
+                const queryMatch = query.match(
+                    /(?:WITH\s+[a-zA-Z_]+\s+AS\s*\()\s*?/i,
+                );
+                // also match the line number and character number in the error message
+                const lineMatch = error.message.match(
+                    /line\s+(\d+)\s+at\s+position\s+(\d+)/,
+                );
+                if (lineMatch) {
+                    // parse out line number and character number
+                    let lineNumber = Number(lineMatch[1]) || undefined;
+                    const charNumber = Number(lineMatch[2]) + 1 || undefined; // Note the + 1 as it is 0 indexed
+                    // if query match, subtract the number of lines from the line number
+                    if (queryMatch && lineNumber && lineNumber > 1) {
+                        lineNumber -= 1;
+                    }
+                    // re-inject the line and character number into the error message
+                    const message = error.message.replace(
+                        /line\s+\d+\s+at\s+position\s+\d+/,
+                        `line ${lineNumber} at position ${charNumber}`,
+                    );
+                    // return a new error with the line and character number in data object
+                    return new WarehouseQueryError(message, {
+                        lineNumber,
+                        charNumber,
+                    });
+                }
+                break;
+            default:
+                break;
+        }
+        // otherwise return a generic error
+        return new WarehouseQueryError(error?.message || 'Unknown error');
     }
 }

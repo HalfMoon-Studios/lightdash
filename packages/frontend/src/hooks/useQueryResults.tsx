@@ -26,18 +26,23 @@ type QueryResultsProps = {
     csvLimit?: number | null; //giving null returns all results (no limit)
     chartUuid?: string;
     dateZoomGranularity?: DateGranularity;
+    context?: string;
 };
 
 const getChartResults = async ({
     chartUuid,
     invalidateCache,
+    context,
 }: {
     chartUuid?: string;
     invalidateCache?: boolean;
     dashboardSorts?: SortField[];
+    context?: string;
 }) => {
     return lightdashApi<ApiQueryResults>({
-        url: `/saved/${chartUuid}/results`,
+        url: `/saved/${chartUuid}/results${
+            context ? `?context=${context}` : ''
+        }`,
         method: 'POST',
         body: JSON.stringify({
             ...(invalidateCache && { invalidateCache: true }),
@@ -52,6 +57,8 @@ const getChartAndResults = async ({
     invalidateCache,
     dashboardSorts,
     granularity,
+    autoRefresh,
+    context,
 }: {
     chartUuid?: string;
     dashboardUuid: string;
@@ -59,9 +66,13 @@ const getChartAndResults = async ({
     invalidateCache?: boolean;
     dashboardSorts: SortField[];
     granularity?: DateGranularity;
-}) =>
-    lightdashApi<ApiChartAndResults>({
-        url: `/saved/${chartUuid}/chart-and-results`,
+    autoRefresh?: boolean;
+    context?: string;
+}) => {
+    return lightdashApi<ApiChartAndResults>({
+        url: `/saved/${chartUuid}/chart-and-results${
+            context ? `?context=${context}` : ''
+        }`,
         method: 'POST',
         body: JSON.stringify({
             dashboardUuid,
@@ -69,15 +80,17 @@ const getChartAndResults = async ({
             dashboardSorts,
             granularity,
             ...(invalidateCache && { invalidateCache: true }),
+            autoRefresh,
         }),
     });
-
+};
 const getQueryResults = async ({
     projectUuid,
     tableId,
     query,
     csvLimit,
     dateZoomGranularity,
+    context,
 }: QueryResultsProps) => {
     const timezoneFixQuery = query && {
         ...query,
@@ -92,6 +105,7 @@ const getQueryResults = async ({
             ...timezoneFixQuery,
             granularity: dateZoomGranularity,
             csvLimit,
+            context,
         }),
     });
 };
@@ -100,6 +114,7 @@ export const useQueryResults = (props?: {
     chartUuid?: string;
     isViewOnly?: boolean;
     dateZoomGranularity?: DateGranularity;
+    context?: string;
 }) => {
     const { projectUuid } = useParams<{ projectUuid: string }>();
     const setErrorResponse = useQueryError({
@@ -136,6 +151,7 @@ export const useQueryResults = (props?: {
                     query: metricQuery,
                     chartUuid: props?.chartUuid,
                     dateZoomGranularity: props?.dateZoomGranularity,
+                    context: props?.context,
                 });
             } else {
                 console.warn(
@@ -152,6 +168,7 @@ export const useQueryResults = (props?: {
             projectUuid,
             props?.chartUuid,
             props?.dateZoomGranularity,
+            props?.context,
         ],
     );
 
@@ -211,6 +228,8 @@ export const useChartAndResults = (
     dashboardSorts: SortField[],
     invalidateCache?: boolean,
     granularity?: DateGranularity,
+    autoRefresh?: boolean,
+    context?: string,
 ) => {
     const setChartsWithDateZoomApplied = useDashboardContext(
         (c) => c.setChartsWithDateZoomApplied,
@@ -229,8 +248,16 @@ export const useChartAndResults = (
             dashboardFilters,
             invalidateCache,
             sortKey,
+            autoRefresh,
         ],
-        [chartUuid, dashboardUuid, dashboardFilters, invalidateCache, sortKey],
+        [
+            chartUuid,
+            dashboardUuid,
+            dashboardFilters,
+            invalidateCache,
+            sortKey,
+            autoRefresh,
+        ],
     );
     const apiChartAndResults =
         queryClient.getQueryData<ApiChartAndResults>(queryKey);
@@ -249,6 +276,8 @@ export const useChartAndResults = (
                 invalidateCache,
                 dashboardSorts,
                 granularity,
+                autoRefresh,
+                context,
             }),
         [
             chartUuid,
@@ -257,6 +286,8 @@ export const useChartAndResults = (
             invalidateCache,
             dashboardSorts,
             granularity,
+            autoRefresh,
+            context,
         ],
     );
 

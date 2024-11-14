@@ -12,6 +12,8 @@ import {
     DimensionType,
     Metric,
     MetricType,
+    PartitionColumn,
+    PartitionType,
     SupportedDbtAdapter,
     WarehouseConnectionError,
     WarehouseQueryError,
@@ -114,7 +116,7 @@ export class BigqueryWarehouseClient extends WarehouseBaseClient<CreateBigqueryC
         super(credentials);
         try {
             this.client = new BigQuery({
-                projectId: credentials.project,
+                projectId: credentials.executionProject || credentials.project,
                 location: credentials.location,
                 maxRetries: credentials.retries,
                 credentials: credentials.keyfileContents,
@@ -197,7 +199,9 @@ export class BigqueryWarehouseClient extends WarehouseBaseClient<CreateBigqueryC
 
             await streamPromise;
         } catch (e) {
-            throw new WarehouseQueryError(e.message);
+            const response = e?.response as bigquery.IJob;
+            const responseError = response?.status?.errorResult || e;
+            throw this.parseError(responseError, query);
         }
     }
 
@@ -206,8 +210,9 @@ export class BigqueryWarehouseClient extends WarehouseBaseClient<CreateBigqueryC
         table: string,
     ): Promise<[string, string, string, TableSchema]> {
         const [metadata] = await dataset.table(table).getMetadata();
+
         return [
-            dataset.bigQuery.projectId,
+            dataset.projectId,
             dataset.id!,
             table,
             isTableSchema(metadata?.schema) ? metadata.schema : { fields: [] },
@@ -221,19 +226,12 @@ export class BigqueryWarehouseClient extends WarehouseBaseClient<CreateBigqueryC
             table: string;
         }[],
     ) {
-        const databaseClients: { [client: string]: BigQuery } = {};
         const tablesMetadataPromises: Promise<
             [string, string, string, TableSchema] | undefined
         >[] = requests.map(({ database, schema, table }) => {
-            databaseClients[database] =
-                databaseClients[database] ||
-                new BigQuery({
-                    projectId: database,
-                    location: this.credentials.location,
-                    maxRetries: this.credentials.retries,
-                    credentials: this.credentials.keyfileContents,
-                });
-            const dataset = databaseClients[database].dataset(schema);
+            const dataset: Dataset = new Dataset(this.client, schema, {
+                projectId: database,
+            });
             return BigqueryWarehouseClient.getTableMetadata(
                 dataset,
                 table,
@@ -294,36 +292,76 @@ export class BigqueryWarehouseClient extends WarehouseBaseClient<CreateBigqueryC
         }
     }
 
-    async getTables(schema: string): Promise<WarehouseCatalog> {
-        const client = new BigQuery({
-            projectId: this.credentials.project,
-            location: this.credentials.location,
-            maxRetries: this.credentials.retries,
-            credentials: this.credentials.keyfileContents,
-        });
-        const dataset = client.dataset(schema);
-        const tables = (await dataset.getTables())?.[0] ?? [];
-        return this.parseWarehouseCatalog(
-            tables.map((table) => ({
-                table_catalog: table.dataset.bigQuery.projectId,
-                table_schema: table.dataset.id,
-                table_name: table.id,
-            })),
-            mapFieldType,
+    async getAllTables() {
+        const [datasets] = await this.client.getDatasets();
+        const datasetTablesResponses = await Promise.all(
+            datasets.map((d) => d.getTables()),
+        );
+
+        const datasetMetadata = await Promise.all(
+            datasets.map(async (dataset) => {
+                try {
+                    const [rows] = await this.client.query(`
+                        SELECT table_name, column_name, data_type
+                        FROM \`${dataset.id}.INFORMATION_SCHEMA.COLUMNS\`
+                        WHERE is_partitioning_column = "YES"
+                    `);
+                    return {
+                        datasetId: dataset.id,
+                        partitionColumns: rows,
+                    };
+                } catch (error) {
+                    console.error(
+                        `Error fetching partition info for dataset ${dataset.id}:`,
+                        error,
+                    );
+                    return {
+                        datasetId: dataset.id,
+                        partitionColumns: [],
+                    };
+                }
+            }),
+        );
+
+        return datasetTablesResponses.flatMap(([tables]) =>
+            tables.map((t) => {
+                const datasetPartitionInfo = datasetMetadata.find(
+                    (d) => d.datasetId === t.dataset.id,
+                );
+                const tablePartitionInfo =
+                    datasetPartitionInfo?.partitionColumns.find(
+                        (pc) => pc.table_name === t.id,
+                    );
+                const partitionColumn: PartitionColumn | undefined =
+                    tablePartitionInfo
+                        ? {
+                              field: tablePartitionInfo.column_name,
+                              partitionType:
+                                  tablePartitionInfo.data_type ===
+                                  BigqueryFieldType.INT64
+                                      ? PartitionType.RANGE
+                                      : PartitionType.DATE,
+                          }
+                        : undefined;
+
+                return {
+                    database: t.bigQuery.projectId,
+                    schema: t.dataset.id!,
+                    table: t.id!,
+                    partitionColumn,
+                };
+            }),
         );
     }
 
     async getFields(
         tableName: string,
         schema: string,
+        database?: string,
     ): Promise<WarehouseCatalog> {
-        const client = new BigQuery({
-            projectId: this.credentials.project,
-            location: this.credentials.location,
-            maxRetries: this.credentials.retries,
-            credentials: this.credentials.keyfileContents,
+        const dataset: Dataset = new Dataset(this.client, schema, {
+            projectId: database,
         });
-        const dataset = client.dataset(schema);
         const schemas = await BigqueryWarehouseClient.getTableMetadata(
             dataset,
             tableName,
@@ -338,5 +376,54 @@ export class BigqueryWarehouseClient extends WarehouseBaseClient<CreateBigqueryC
             })),
             mapFieldType,
         );
+    }
+
+    parseError(error: bigquery.IErrorProto, query: string = '') {
+        // if the error has no reason, return a generic error
+        if (!error?.reason) {
+            return new WarehouseQueryError(error?.message || 'Unknown error');
+        }
+        switch (error?.reason) {
+            // if query is mistyped
+            case 'invalidQuery':
+                // if the location is in query and the end of the message looks like "at [line:char]"
+                if (error?.message && error?.location === 'query') {
+                    // The query will look something like this:
+                    // 'WITH user_sql AS (
+                    //     SELECT * FROM `lightdash-database-staging`.`e2e_jaffle_shop`.`users`;
+                    // ) select * from user_sql limit 500';
+                    // We want to check for the first part of the query, if so strip the first and last lines
+                    const queryMatch = query.match(
+                        /(?:WITH\s+[a-zA-Z_]+\s+AS\s*\()\s*?/i,
+                    );
+                    // also match the line number and character number in the error message
+                    const lineMatch = error.message.match(/at \[(\d+):(\d+)\]/);
+                    if (lineMatch) {
+                        // parse out line number and character number
+                        let lineNumber = Number(lineMatch[1]) || undefined;
+                        const charNumber = Number(lineMatch[2]) || undefined;
+                        // if query match, subtract the number of lines from the line number
+                        if (queryMatch && lineNumber && lineNumber > 1) {
+                            lineNumber -= 1;
+                        }
+                        // re-inject the line and character number into the error message
+                        const message = error.message.replace(
+                            /at \[\d+:\d+\]/,
+                            `at [${lineNumber}:${charNumber}]`,
+                        );
+                        // return a new error with the line and character number in data object
+                        return new WarehouseQueryError(message, {
+                            lineNumber,
+                            charNumber,
+                        });
+                    }
+                    break;
+                }
+                break;
+            default:
+                break;
+        }
+        // otherwise return a generic error
+        return new WarehouseQueryError(error?.message || 'Unknown error');
     }
 }

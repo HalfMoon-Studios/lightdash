@@ -1,25 +1,35 @@
 /// <reference path="../@types/rudder-sdk-node.d.ts" />
+import { Type } from '@aws-sdk/client-s3';
 import {
     CartesianSeriesType,
+    ChartKind,
     ChartType,
     DbtProjectType,
+    getRequestMethod,
     LightdashInstallType,
     LightdashMode,
+    LightdashRequestMethodHeader,
     LightdashUser,
+    OpenIdIdentityIssuerType,
     OrganizationMemberRole,
     PinnedItem,
     ProjectMemberRole,
+    QueryExecutionContext,
     RequestMethod,
     SchedulerFormat,
+    SemanticLayerQuery,
     TableSelectionType,
     ValidateProjectPayload,
     WarehouseTypes,
+    type SemanticLayerType,
 } from '@lightdash/common';
 import Analytics, {
     Track as AnalyticsTrack,
 } from '@rudderstack/rudder-sdk-node';
+import { Request } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { LightdashConfig } from '../config/parseConfig';
+import Logger from '../logging/logger';
 import { VERSION } from '../version';
 
 type Identify = {
@@ -66,47 +76,53 @@ type DbtCloudIntegration = BaseTrack & {
     };
 };
 
-type SqlExecutedEvent = BaseTrack & {
-    event: 'sql.executed';
-    properties: {
-        projectId: string;
-    };
-};
-
 type LoginEvent = BaseTrack & {
     event: 'user.logged_in';
     properties: {
-        loginProvider: 'password' | 'google';
+        loginProvider: 'password' | OpenIdIdentityIssuerType;
     };
 };
 
 type IdentityLinkedEvent = BaseTrack & {
     event: 'user.identity_linked' | 'user.identity_removed';
     properties: {
-        loginProvider: 'google';
+        loginProvider: OpenIdIdentityIssuerType;
     };
 };
 
-type CreateUserEvent = BaseTrack & {
+export type CreateUserEvent = BaseTrack & {
     event: 'user.created';
+    userId?: string;
     properties: {
-        userConnectionType: 'password' | 'google';
+        context: string; // context on where/why this user was created
+        createdUserId: string;
+        organizationId: string | undefined; // undefined because they can join an org later
+        userConnectionType: 'password' | OpenIdIdentityIssuerType;
     };
 };
 
-type DeleteUserEvent = BaseTrack & {
+export type DeleteUserEvent = BaseTrack & {
     event: 'user.deleted';
+    userId?: string;
     properties: {
+        context: string; // context on where/why this user was delete
         firstName: string;
         lastName: string;
-        email: string;
-        organizationId: string;
+        email: string | undefined;
+        organizationId: string | undefined;
+        deletedUserId: string;
     };
 };
 
-type UpdateUserEvent = BaseTrack & {
+export type UpdateUserEvent = BaseTrack & {
     event: 'user.updated';
-    properties: LightdashUser & { jobTitle?: string };
+    userId?: string;
+    properties: Omit<LightdashUser, 'userUuid' | 'organizationUuid'> & {
+        updatedUserId: string;
+        organizationId: string | undefined;
+        jobTitle?: string;
+        context: string; // context on where/why this user was updated
+    };
 };
 
 function isUserUpdatedEvent(event: BaseTrack): event is UpdateUserEvent {
@@ -152,42 +168,84 @@ type UserJoinOrganizationEvent = BaseTrack & {
     };
 };
 
-export enum QueryExecutionContext {
-    DASHBOARD = 'dashboardView',
-    EXPLORE = 'exploreView',
-    CHART = 'chartView',
-    VIEW_UNDERLYING_DATA = 'viewUnderlyingData',
-    CSV = 'csvDownload',
-    GSHEETS = 'gsheets',
-    CALCULATE_TOTAL = 'calculateTotal',
-}
+export const getContextFromHeader = (req: Request) => {
+    const method = getRequestMethod(req.header(LightdashRequestMethodHeader));
+    switch (method) {
+        case RequestMethod.CLI:
+        case RequestMethod.CLI_CI:
+            return QueryExecutionContext.CLI;
+        case RequestMethod.UNKNOWN:
+            return QueryExecutionContext.API;
+        default:
+            return undefined;
+    }
+};
+
+export const getContextFromQueryOrHeader = (
+    req: Request,
+): QueryExecutionContext | undefined => {
+    const context: QueryExecutionContext | undefined =
+        typeof req.query.context === 'string'
+            ? (req.query.context as QueryExecutionContext)
+            : undefined;
+    if (context) {
+        for (const [key, value] of Object.entries(QueryExecutionContext)) {
+            if (value.toLowerCase() === context.toLowerCase()) {
+                return value as QueryExecutionContext;
+            }
+        }
+        console.warn('Invalid query execution context', context);
+    }
+    return getContextFromHeader(req);
+};
+
+type MetricQueryExecutionProperties = {
+    chartId?: string;
+    metricsCount: number;
+    dimensionsCount: number;
+    tableCalculationsCount: number;
+    tableCalculationsPercentFormatCount: number;
+    tableCalculationsCurrencyFormatCount: number;
+    tableCalculationsNumberFormatCount: number;
+    filtersCount: number;
+    sortsCount: number;
+    hasExampleMetric: boolean;
+    additionalMetricsCount: number;
+    additionalMetricsFilterCount: number;
+    additionalMetricsPercentFormatCount: number;
+    additionalMetricsCurrencyFormatCount: number;
+    additionalMetricsNumberFormatCount: number;
+    numFixedWidthBinCustomDimensions: number;
+    numFixedBinsBinCustomDimensions: number;
+    numCustomRangeBinCustomDimensions: number;
+    numCustomSqlDimensions: number;
+    dateZoomGranularity: string | null;
+    timezone?: string;
+    virtualViewId?: string;
+};
+
+type SqlExecutionProperties = {
+    sqlChartId?: string;
+    usingStreaming: boolean;
+};
+
+type SemanticViewerExecutionProperties = {
+    semanticViewerChartId?: string;
+    usingStreaming: boolean;
+    semanticLayer: SemanticLayerType;
+};
 
 type QueryExecutionEvent = BaseTrack & {
     event: 'query.executed';
     properties: {
-        projectId: string;
-        metricsCount: number;
-        dimensionsCount: number;
-        tableCalculationsCount: number;
-        tableCalculationsPercentFormatCount: number;
-        tableCalculationsCurrencyFormatCount: number;
-        tableCalculationsNumberFormatCount: number;
-        filtersCount: number;
-        sortsCount: number;
-        hasExampleMetric: boolean;
-        additionalMetricsCount: number;
-        additionalMetricsFilterCount: number;
-        additionalMetricsPercentFormatCount: number;
-        additionalMetricsCurrencyFormatCount: number;
-        additionalMetricsNumberFormatCount: number;
         context: QueryExecutionContext;
-        numFixedWidthBinCustomDimensions: number;
-        numFixedBinsBinCustomDimensions: number;
-        numCustomRangeBinCustomDimensions: number;
-        numCustomSqlDimensions: number;
-        dateZoomGranularity: string | null;
-        timezone?: string;
-    };
+        organizationId: string;
+        projectId: string;
+    } & (
+        | MetricQueryExecutionProperties
+        | SqlExecutionProperties
+        | SemanticViewerExecutionProperties
+    );
 };
 
 type CreateOrganizationEvent = BaseTrack & {
@@ -231,13 +289,6 @@ type OrganizationAllowedEmailDomainUpdatedEvent = BaseTrack & {
     };
 };
 
-type TrackUserDeletedEvent = BaseTrack & {
-    event: 'user.deleted';
-    properties: {
-        deletedUserUuid: string;
-    };
-};
-
 type MetricFlowQueryEvent = BaseTrack & {
     event: 'metricflow_query.executed';
     properties: {
@@ -262,6 +313,7 @@ type UpdateSavedChartEvent = BaseTrack & {
         projectId: string;
         savedQueryId: string;
         dashboardId: string | undefined;
+        virtualViewId: string | undefined;
     };
 };
 type DeleteSavedChartEvent = BaseTrack & {
@@ -302,6 +354,8 @@ type RollbackChartVersionEvent = BaseTrack & {
 export type CreateSavedChartVersionEvent = BaseTrack & {
     event: 'saved_chart_version.created';
     properties: {
+        title: string;
+        description: string | undefined;
         projectId: string;
         savedQueryId: string;
         dimensionsCount: number;
@@ -344,6 +398,7 @@ export type CreateSavedChartEvent = BaseTrack & {
     properties: CreateSavedChartVersionEvent['properties'] & {
         dashboardId: string | undefined;
         duplicated?: boolean;
+        virtualViewId: string | undefined;
     };
 };
 
@@ -477,11 +532,14 @@ type UpdatedDashboardEvent = BaseTrack & {
 export type CreateDashboardOrVersionEvent = BaseTrack & {
     event: 'dashboard.created' | 'dashboard_version.created';
     properties: {
+        title: string;
+        description: string | undefined;
         projectId: string;
         dashboardId: string;
         filtersCount: number;
         tilesCount: number;
         chartTilesCount: number;
+        sqlChartTilesCount: number;
         markdownTilesCount: number;
         loomTilesCount: number;
         duplicated?: boolean;
@@ -546,6 +604,7 @@ type ProjectSearch = BaseTrack & {
         spacesResultsCount: number;
         dashboardsResultsCount: number;
         savedChartsResultsCount: number;
+        sqlChartsResultsCount: number;
         tablesResultsCount: number;
         fieldsResultsCount: number;
     };
@@ -641,6 +700,97 @@ type DashboardView = BaseTrack & {
     };
 };
 
+type ViewSqlChart = BaseTrack & {
+    event: 'sql_chart.view';
+    userId: string;
+    properties: {
+        chartId: string;
+        projectId: string;
+        organizationId: string;
+    };
+};
+
+type CreateSqlChartEvent = BaseTrack & {
+    event: 'sql_chart.created';
+    userId: string;
+    properties: {
+        chartId: string;
+        projectId: string;
+        organizationId: string;
+    };
+};
+
+type UpdateSqlChartEvent = BaseTrack & {
+    event: 'sql_chart.updated';
+    userId: string;
+    properties: {
+        chartId: string;
+        projectId: string;
+        organizationId: string;
+    };
+};
+
+type DeleteSqlChartEvent = BaseTrack & {
+    event: 'sql_chart.deleted';
+    userId: string;
+    properties: {
+        chartId: string;
+        projectId: string;
+        organizationId: string;
+    };
+};
+
+export type CreateSqlChartVersionEvent = BaseTrack & {
+    event: 'sql_chart_version.created';
+    userId: string;
+    properties: {
+        chartId: string;
+        versionId: string;
+        projectId: string;
+        organizationId: string;
+        chartKind: ChartKind;
+        barChart?: {
+            groupByCount: number;
+            yAxisCount: number;
+            aggregationTypes: string[];
+        };
+        lineChart?: {
+            groupByCount: number;
+            yAxisCount: number;
+            aggregationTypes: string[];
+        };
+        pieChart?: {
+            groupByCount: number;
+        };
+    };
+};
+
+export type CreateSemanticViewerChartVersionEvent = BaseTrack & {
+    event: 'semantic_viewer_chart_version.created';
+    userId: string;
+    properties: {
+        chartId: string;
+        versionId: string;
+        projectId: string;
+        organizationId: string;
+        chartKind: ChartKind;
+        semanticLayerQuery: SemanticLayerQuery;
+        barChart?: {
+            groupByCount: number;
+            yAxisCount: number;
+            aggregationTypes: string[];
+        };
+        lineChart?: {
+            groupByCount: number;
+            yAxisCount: number;
+            aggregationTypes: string[];
+        };
+        pieChart?: {
+            groupByCount: number;
+        };
+    };
+};
+
 type PromoteContent = BaseTrack & {
     event: 'promote.executed' | 'promote.error';
     userId: string;
@@ -706,6 +856,16 @@ export type SchedulerUpsertEvent = BaseTrack & {
             schedulerTargetId: string;
             type: 'slack' | 'email';
         }>;
+        timeZone: string | undefined;
+    };
+};
+export type SchedulerTimezoneUpdateEvent = BaseTrack & {
+    event: 'default_scheduler_time_zone.updated';
+    userId: string;
+    properties: {
+        projectId: string;
+        organizationId?: string;
+        timeZone: string;
     };
 };
 
@@ -805,8 +965,8 @@ export type DownloadCsv = BaseTrack & {
         context?:
             | 'results'
             | 'chart'
-            | 'scheduled delivery chart'
-            | 'scheduled delivery dashboard'
+            | QueryExecutionContext.ALERT
+            | QueryExecutionContext.SCHEDULED_DELIVERY
             | 'sql runner'
             | 'dashboard csv zip';
         storage?: 'local' | 's3';
@@ -883,8 +1043,9 @@ export type UserAttributeDeleteEvent = BaseTrack & {
 
 export type GroupCreateAndUpdateEvent = BaseTrack & {
     event: 'group.created' | 'group.updated';
-    userId: string;
+    userId?: string;
     properties: {
+        context: string; // context on where/why this group was created/updated
         organizationId: string;
         groupId: string;
         name: string;
@@ -895,10 +1056,72 @@ export type GroupCreateAndUpdateEvent = BaseTrack & {
 
 export type GroupDeleteEvent = BaseTrack & {
     event: 'group.deleted';
+    userId?: string;
+    properties: {
+        context: string; // context on where/why this group was deleted
+        organizationId: string;
+        groupId: string;
+    };
+};
+
+export type SemanticLayerView = BaseTrack & {
+    event: 'semantic_layer.get_views'; // started, completed, error suffix when using wrapEvent
     userId: string;
     properties: {
         organizationId: string;
-        groupId: string;
+        projectId: string;
+        // on completed
+        viewsCount?: number;
+        // on error
+        error?: string;
+    };
+};
+
+export type VirtualViewEvent = BaseTrack & {
+    event:
+        | 'virtual_view.created'
+        | 'virtual_view.updated'
+        | 'virtual_view.deleted';
+    userId: string;
+    properties: {
+        virtualViewId: string;
+        projectId: string;
+        organizationId: string;
+        name?: string;
+    };
+};
+
+export type GithubInstallEvent = BaseTrack & {
+    event:
+        | 'github_install.started'
+        | 'github_install.completed'
+        | 'github_install.error';
+    userId: string;
+    properties: {
+        organizationId: string;
+        byAdmin?: boolean;
+        error?: string; // only for error
+    };
+};
+
+export type WriteBackEvent = BaseTrack & {
+    event: 'write_back.created';
+    userId: string;
+    properties: {
+        name: string;
+        organizationId: string;
+        projectId: string;
+        context: QueryExecutionContext;
+    };
+};
+
+type CreateTagEvent = BaseTrack & {
+    event: 'category.created';
+    userId: string;
+    properties: {
+        name: string;
+        projectId: string;
+        organizationId: string;
     };
 };
 
@@ -918,7 +1141,6 @@ type TypedEvent =
     | ViewChartVersionEvent
     | RollbackChartVersionEvent
     | CreateSavedChartVersionEvent
-    | TrackUserDeletedEvent
     | ProjectErrorEvent
     | ApiErrorEvent
     | ProjectEvent
@@ -936,7 +1158,6 @@ type TypedEvent =
     | UserWarehouseCredentialsDeleteEvent
     | LoginEvent
     | IdentityLinkedEvent
-    | SqlExecutedEvent
     | DbtCloudIntegration
     | PersonalAccessTokenEvent
     | DuplicatedChartCreatedEvent
@@ -970,7 +1191,19 @@ type TypedEvent =
     | GroupCreateAndUpdateEvent
     | GroupDeleteEvent
     | ConditionalFormattingRuleSavedEvent
-    | CommentsEvent;
+    | ViewSqlChart
+    | CreateSqlChartEvent
+    | UpdateSqlChartEvent
+    | DeleteSqlChartEvent
+    | CreateSqlChartVersionEvent
+    | CommentsEvent
+    | VirtualViewEvent
+    | GithubInstallEvent
+    | WriteBackEvent
+    | SchedulerTimezoneUpdateEvent
+    | CreateTagEvent;
+
+type WrapTypedEvent = SemanticLayerView;
 
 type UntypedEvent<T extends BaseTrack> = Omit<BaseTrack, 'event'> &
     T & {
@@ -983,6 +1216,7 @@ type LightdashAnalyticsArguments = {
     dataPlaneUrl: string;
     options?: ConstructorParameters<typeof Analytics>[2];
 };
+
 export class LightdashAnalytics extends Analytics {
     private readonly lightdashConfig: LightdashConfig;
 
@@ -1017,6 +1251,8 @@ export class LightdashAnalytics extends Analytics {
     static anonymousId = process.env.LIGHTDASH_INSTALL_ID || uuidv4();
 
     identify(payload: Identify) {
+        if (!this.lightdashConfig.rudder.writeKey) return; // Tracking disabled
+
         super.identify({
             ...payload,
             context: { ...this.lightdashContext }, // NOTE: spread because rudderstack manipulates arg
@@ -1024,6 +1260,7 @@ export class LightdashAnalytics extends Analytics {
     }
 
     track<T extends BaseTrack>(payload: TypedEvent | UntypedEvent<T>) {
+        if (!this.lightdashConfig.rudder.writeKey) return; // Tracking disabled
         if (isUserUpdatedEvent(payload)) {
             const basicEventProperties = {
                 is_tracking_anonymized: payload.properties.isTrackingAnonymized,
@@ -1070,9 +1307,49 @@ export class LightdashAnalytics extends Analytics {
     }
 
     group(payload: Group) {
+        if (!this.lightdashConfig.rudder.writeKey) return; // Tracking disabled
+
         super.group({
             ...payload,
             context: { ...this.lightdashContext }, // NOTE: spread because rudderstack manipulates arg
         });
+    }
+
+    async wrapEvent<T>(
+        payload: WrapTypedEvent,
+        func: () => Promise<T>,
+        extraProperties?: (r: T) => any,
+    ) {
+        try {
+            this.track({
+                ...payload,
+                event: `${payload.event}.started`,
+            });
+
+            const results = await func();
+
+            const properties = extraProperties ? extraProperties(results) : {};
+            this.track({
+                ...payload,
+                event: `${payload.event}.completed`,
+                properties: {
+                    ...payload.properties,
+                    ...properties,
+                },
+            });
+
+            return results;
+        } catch (e) {
+            await this.track({
+                ...payload,
+                event: `${payload.event}.error`,
+                properties: {
+                    ...payload.properties,
+                    error: e.message,
+                },
+            });
+            Logger.error(`Error in scheduler task: ${e}`);
+            throw e;
+        }
     }
 }

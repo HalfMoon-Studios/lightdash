@@ -221,7 +221,7 @@ export class TrinoWarehouseClient extends WarehouseBaseClient<CreateTrinoCredent
             // stream initial data
             streamCallback({
                 fields,
-                rows: resultHandler(schema, queryResult.value.data),
+                rows: resultHandler(schema, queryResult.value.data ?? []),
             });
             // Using `await` in this loop ensures data chunks are fetched and processed sequentially.
             // This maintains order and data integrity.
@@ -231,7 +231,7 @@ export class TrinoWarehouseClient extends WarehouseBaseClient<CreateTrinoCredent
                 // stream next chunk of data
                 streamCallback({
                     fields,
-                    rows: resultHandler(schema, queryResult.value.data),
+                    rows: resultHandler(schema, queryResult.value.data ?? []),
                 });
             }
         } catch (e: any) {
@@ -320,12 +320,9 @@ export class TrinoWarehouseClient extends WarehouseBaseClient<CreateTrinoCredent
     async getFields(
         tableName: string,
         schema?: string,
+        database?: string,
         tags?: Record<string, string>,
     ): Promise<WarehouseCatalog> {
-        const schemaFilter = schema
-            ? `AND table_schema = '${this.sanitizeInput(schema)}'`
-            : '';
-
         const query = `
             SELECT table_catalog,
                    table_schema,
@@ -334,10 +331,41 @@ export class TrinoWarehouseClient extends WarehouseBaseClient<CreateTrinoCredent
                    data_type
             FROM information_schema.columns
             WHERE table_name = '${this.sanitizeInput(tableName)}'
-            ${schemaFilter};
+            ${
+                schema
+                    ? `AND table_schema = '${this.sanitizeInput(schema)}'`
+                    : ''
+            }
+            ${
+                database
+                    ? `AND table_catalog = '${this.sanitizeInput(database)}'`
+                    : ''
+            }
         `;
         const { rows } = await this.runQuery(query, tags);
 
         return this.parseWarehouseCatalog(rows, convertDataTypeToDimensionType);
+    }
+
+    async getAllTables() {
+        const databaseName = this.connectionOptions.catalog;
+        const whereSql = databaseName
+            ? `AND table_catalog = '${this.sanitizeInput(databaseName)}'`
+            : '';
+        const filterSystemTables = `AND table_schema NOT IN ('information_schema', 'pg_catalog')`;
+        const query = `
+            SELECT table_catalog, table_schema, table_name
+            FROM information_schema.tables
+            WHERE table_type = 'BASE TABLE'
+                ${whereSql}
+                ${filterSystemTables}
+            ORDER BY 1, 2, 3
+        `;
+        const { rows } = await this.runQuery(query, {}, undefined);
+        return rows.map((row) => ({
+            database: row.table_catalog,
+            schema: row.table_schema,
+            table: row.table_name,
+        }));
     }
 }

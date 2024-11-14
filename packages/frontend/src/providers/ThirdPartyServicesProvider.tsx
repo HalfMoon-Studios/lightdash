@@ -1,3 +1,4 @@
+import { LightdashMode } from '@lightdash/common';
 import { PostHogProvider, usePostHog } from 'posthog-js/react';
 import { useEffect, type FC } from 'react';
 import { Helmet } from 'react-helmet';
@@ -45,6 +46,26 @@ const Pylon = () => {
     );
 };
 
+const Clarity = () => {
+    const { health } = useApp();
+
+    if (health.data?.mode !== LightdashMode.DEMO) {
+        return null;
+    }
+
+    return (
+        <Helmet>
+            <script type="text/javascript">
+                {`(function(c,l,a,r,i,t,y){
+        c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+        t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+        y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+    })(window, document, "clarity", "script", "ngeq4wyadb");`}
+            </script>
+        </Helmet>
+    );
+};
+
 const PosthogIdentified: FC<React.PropsWithChildren<{}>> = ({ children }) => {
     const { user } = useApp();
     const posthog = usePostHog();
@@ -84,9 +105,9 @@ const ThirdPartyServicesEnabledProvider: FC<React.PropsWithChildren<{}>> = ({
             autoBoot
         >
             <PostHogProvider
-                apiKey={health.data?.posthog.projectApiKey || ''}
+                apiKey={health.data?.posthog?.projectApiKey || ''}
                 options={{
-                    api_host: health.data?.posthog.apiHost,
+                    api_host: health.data?.posthog?.feApiHost,
                     autocapture: false,
                     capture_pageview: false,
                 }}
@@ -94,6 +115,7 @@ const ThirdPartyServicesEnabledProvider: FC<React.PropsWithChildren<{}>> = ({
                 <PosthogIdentified>
                     <Intercom />
                     <Pylon />
+                    <Clarity />
                     {children}
                 </PosthogIdentified>
             </PostHogProvider>

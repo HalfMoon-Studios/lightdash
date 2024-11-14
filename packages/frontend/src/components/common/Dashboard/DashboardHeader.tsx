@@ -35,7 +35,7 @@ import {
 } from '@tabler/icons-react';
 import dayjs from 'dayjs';
 import { useCallback, useEffect, useState } from 'react';
-import { useHistory, useLocation, useParams } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
 import { useToggle } from 'react-use';
 import { PromotionConfirmDialog } from '../../../features/promotion/components/PromotionConfirmDialog';
 import {
@@ -69,6 +69,7 @@ type DashboardHeaderProps = {
     dashboard: Dashboard;
     organizationUuid?: string;
     hasDashboardChanged: boolean;
+    hasNewSemanticLayerChart: boolean;
     isEditMode: boolean;
     isSaving: boolean;
     isFullscreen: boolean;
@@ -86,6 +87,7 @@ type DashboardHeaderProps = {
     onToggleFullscreen: () => void;
     setAddingTab: (value: React.SetStateAction<boolean>) => void;
     onTogglePin: () => void;
+    onEditClicked: () => void;
 };
 
 const DashboardHeader = ({
@@ -93,6 +95,7 @@ const DashboardHeader = ({
     dashboard,
     organizationUuid,
     hasDashboardChanged,
+    hasNewSemanticLayerChart,
     isEditMode,
     isSaving,
     isFullscreen,
@@ -110,6 +113,7 @@ const DashboardHeader = ({
     onToggleFullscreen,
     setAddingTab,
     onTogglePin,
+    onEditClicked,
 }: DashboardHeaderProps) => {
     const { search } = useLocation();
     const { projectUuid, dashboardUuid } = useParams<{
@@ -118,7 +122,6 @@ const DashboardHeader = ({
         organizationUuid: string;
     }>();
 
-    const history = useHistory();
     const { data: project } = useProject(projectUuid);
 
     const { track } = useTracking();
@@ -297,10 +300,12 @@ const DashboardHeader = ({
                     <AddTileButton
                         onAddTiles={onAddTiles}
                         disabled={isSaving}
+                        hasNewSemanticLayerChart={hasNewSemanticLayerChart}
                         setAddingTab={setAddingTab}
                         activeTabUuid={activeTabUuid}
                         dashboardTabs={dashboardTabs}
                     />
+
                     <Tooltip
                         fz="xs"
                         withinPortal
@@ -370,11 +375,7 @@ const DashboardHeader = ({
                         >
                             <ActionIcon
                                 variant="default"
-                                onClick={() => {
-                                    history.replace(
-                                        `/projects/${projectUuid}/dashboards/${dashboardUuid}/edit`,
-                                    );
-                                }}
+                                onClick={onEditClicked}
                             >
                                 <MantineIcon icon={IconPencil} />
                             </ActionIcon>
@@ -565,18 +566,21 @@ const DashboardHeader = ({
                                     </Menu.Item>
                                 )}
 
-                                {!!userCanCreateDeliveries && (
-                                    <Menu.Item
-                                        icon={<MantineIcon icon={IconSend} />}
-                                        onClick={() => {
-                                            toggleScheduledDeliveriesModal(
-                                                true,
-                                            );
-                                        }}
-                                    >
-                                        Scheduled deliveries
-                                    </Menu.Item>
-                                )}
+                                {!!userCanCreateDeliveries &&
+                                    !hasNewSemanticLayerChart && (
+                                        <Menu.Item
+                                            icon={
+                                                <MantineIcon icon={IconSend} />
+                                            }
+                                            onClick={() => {
+                                                toggleScheduledDeliveriesModal(
+                                                    true,
+                                                );
+                                            }}
+                                        >
+                                            Scheduled deliveries
+                                        </Menu.Item>
+                                    )}
 
                                 {userCanPromoteDashboard && (
                                     <Tooltip
@@ -613,14 +617,20 @@ const DashboardHeader = ({
                                 )}
 
                                 {(userCanExportData ||
-                                    userCanManageDashboard) && (
-                                    <Menu.Item
-                                        icon={<MantineIcon icon={IconUpload} />}
-                                        onClick={onExport}
-                                    >
-                                        Export dashboard{' '}
-                                    </Menu.Item>
-                                )}
+                                    userCanManageDashboard) &&
+                                    !hasNewSemanticLayerChart && (
+                                        <Menu.Item
+                                            icon={
+                                                <MantineIcon
+                                                    icon={IconUpload}
+                                                />
+                                            }
+                                            onClick={onExport}
+                                        >
+                                            Export dashboard
+                                        </Menu.Item>
+                                    )}
+
                                 {userCanManageDashboard && (
                                     <>
                                         <Menu.Divider />

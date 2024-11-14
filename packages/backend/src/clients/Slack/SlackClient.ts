@@ -1,6 +1,8 @@
 import {
+    MissingConfigError,
     SlackAppCustomSettings,
     SlackChannel,
+    SlackInstallationNotFoundError,
     SlackSettings,
 } from '@lightdash/common';
 import * as Sentry from '@sentry/node';
@@ -21,7 +23,8 @@ type SlackClientArguments = {
     lightdashConfig: LightdashConfig;
 };
 
-const CACHE_TIME = 1000 * 60 * 10; // 10 minutes
+const DEFAULT_CACHE_TIME = 1000 * 60 * 10; // 10 minutes
+const MAX_CHANNELS_LIMIT = 100000;
 const cachedChannels: Record<
     string,
     { lastCached: Date; channels: SlackChannel[] }
@@ -47,30 +50,61 @@ export class SlackClient {
 
     private async getWebClient(organizationUuid: string): Promise<WebClient> {
         if (!this.isEnabled) {
-            throw new Error('Slack is not configured');
+            throw new MissingConfigError('Slack is not configured');
         }
         const installation =
             await this.slackAuthenticationModel.getInstallationFromOrganizationUuid(
                 organizationUuid,
             );
 
-        return new WebClient(installation?.token);
+        if (!installation) {
+            throw new SlackInstallationNotFoundError();
+        }
+
+        return new WebClient(installation.token);
     }
 
-    async getChannels(organizationUuid: string): Promise<SlackChannel[]> {
+    async getChannels(
+        organizationUuid: string,
+        search?: string,
+    ): Promise<SlackChannel[] | undefined> {
+        const getCachedChannels = () => {
+            let finalResults: SlackChannel[];
+            if (!search) {
+                finalResults = cachedChannels[organizationUuid].channels;
+            } else {
+                finalResults = cachedChannels[organizationUuid].channels.filter(
+                    (channel) => channel.name.includes(search),
+                );
+            }
+
+            if (finalResults.length > MAX_CHANNELS_LIMIT) {
+                return finalResults.slice(0, MAX_CHANNELS_LIMIT);
+            }
+            return finalResults;
+        };
+
         if (
             cachedChannels[organizationUuid] &&
             new Date().getTime() -
                 cachedChannels[organizationUuid].lastCached.getTime() <
-                CACHE_TIME
+                (this.lightdashConfig.slack?.channelsCachedTime ||
+                    DEFAULT_CACHE_TIME)
         ) {
-            return cachedChannels[organizationUuid].channels;
+            return getCachedChannels();
         }
 
         Logger.debug('Fetching channels from Slack API');
 
         let nextCursor: string | undefined;
         let allChannels: ConversationsListResponse['channels'] = [];
+
+        const installation =
+            await this.slackAuthenticationModel.getInstallationFromOrganizationUuid(
+                organizationUuid,
+            );
+
+        if (!installation) return undefined;
 
         const webClient = await this.getWebClient(organizationUuid);
 
@@ -126,24 +160,25 @@ export class SlackClient {
         Logger.debug(`Total slack users ${allUsers.length}`);
 
         const sortedChannels = allChannels
-            .reduce<SlackChannel[]>(
-                (acc, { id, name }) =>
-                    id && name ? [...acc, { id, name: `#${name}` }] : acc,
-                [],
-            )
+            .filter(({ id, name }) => id && name)
+            .map<SlackChannel>(({ id, name }) => ({
+                id: id!,
+                name: `#${name!}`,
+            }))
             .sort((a, b) => a.name.localeCompare(b.name));
 
         const sortedUsers = allUsers
-            .reduce<SlackChannel[]>(
-                (acc, { id, name }) =>
-                    id && name ? [...acc, { id, name: `@${name}` }] : acc,
-                [],
-            )
+            .filter(({ id, name }) => id && name)
+            .map<SlackChannel>(({ id, name }) => ({
+                id: id!,
+                name: `@${name!}`,
+            }))
             .sort((a, b) => a.name.localeCompare(b.name));
 
         const channels = [...sortedChannels, ...sortedUsers];
         cachedChannels[organizationUuid] = { lastCached: new Date(), channels };
-        return channels;
+
+        return getCachedChannels();
     }
 
     async joinChannels(organizationUuid: string, channels: string[]) {
@@ -173,10 +208,17 @@ export class SlackClient {
     ) {
         const { organizationUuid, ...slackMessageArgs } = message;
         const webClient = await this.getWebClient(organizationUuid);
-        const { appProfilePhotoUrl } =
-            (await this.slackAuthenticationModel.getInstallationFromOrganizationUuid(
+
+        const installation =
+            await this.slackAuthenticationModel.getInstallationFromOrganizationUuid(
                 organizationUuid,
-            )) || {};
+            );
+
+        if (!installation) {
+            throw new SlackInstallationNotFoundError();
+        }
+
+        const { appProfilePhotoUrl } = installation;
 
         return webClient.chat
             .postMessage({

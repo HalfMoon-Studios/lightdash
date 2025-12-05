@@ -16,7 +16,6 @@ services:
         platform: linux/amd64
         image: lightdash/lightdash:latest
         depends_on:
-            - db
             - minio
         environment:
             - PGHOST=${PGHOST:-db}
@@ -124,20 +123,7 @@ services:
         ports:
             - ${PORT:-8080}:${PORT:-8080}
 
-    db:
-        image: pgvector/pgvector:pg15
-        restart: always
-        environment:
-            POSTGRES_PASSWORD: ${PGPASSWORD}
-            POSTGRES_USER: ${PGUSER:-postgres}
-            POSTGRES_DB: ${PGDATABASE:-postgres}
-        volumes:
-            - db-data:/var/lib/postgresql/data
-
     headless-browser:
         build:
             dockerfile: docker/Dockerfile.headless-browser
         restart: always
-
-volumes:
-    db-data:

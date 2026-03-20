@@ -43,8 +43,6 @@ export enum FeatureFlags {
      */
     AiCustomViz = 'ai-custom-viz',
 
-    BigquerySSO = 'bigquery-sso',
-
     /**
      * Use workers for async query execution
      */
@@ -66,14 +64,35 @@ export enum FeatureFlags {
     UnusedContentDashboard = 'unused-content-dashboard',
 
     /**
-     * Enable period-over-period comparisons option
+     * Enable viewing and editing YAML source files in the Explore UI
      */
-    PeriodOverPeriod = 'pop',
+    EditYamlInUi = 'edit-yaml-in-ui',
 
     /**
-     * Dark mode
+     * Enable saved metrics tree in metrics catalog
      */
-    DarkMode = 'dark-mode',
+    SavedMetricsTree = 'saved-metrics-tree',
+
+    /**
+     * Enable default personal spaces for project members
+     */
+    DefaultUserSpaces = 'default-user-spaces',
+
+    /**
+     * Enable Google Chat as a scheduled delivery destination
+     */
+    GoogleChatEnabled = 'google-chat-enabled',
+
+    /**
+     * Enable admin user impersonation. When disabled, impersonation
+     * actions are blocked and active sessions are cleared.
+     */
+    UserImpersonation = 'user-impersonation',
+
+    /**
+     * Enable custom group bins for string dimensions
+     */
+    CustomGroupBins = 'custom-group-bins',
 }
 
 export type FeatureFlag = {

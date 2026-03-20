@@ -1,5 +1,5 @@
 import { assertUnreachable, ChartType } from '@lightdash/common';
-import { Anchor, Text } from '@mantine/core';
+import { Anchor, Text } from '@mantine-8/core';
 import { IconChartBarOff } from '@tabler/icons-react';
 import { forwardRef, Fragment, lazy, memo, Suspense } from 'react';
 import { EmptyState } from '../common/EmptyState';
@@ -10,6 +10,7 @@ import FunnelChart from '../FunnelChart';
 import SimpleChart from '../SimpleChart';
 import SimpleGauge from '../SimpleGauge';
 import SimplePieChart from '../SimplePieChart';
+import SimpleSankey from '../SimpleSankey';
 import SimpleStatistic from '../SimpleStatistic';
 import SimpleTable from '../SimpleTable';
 import SimpleTreemap from '../SimpleTreemap';
@@ -24,6 +25,8 @@ interface LightdashVisualizationProps {
     isTitleHidden?: boolean;
     className?: string;
     'data-testid'?: string;
+    onScreenshotReady?: () => void;
+    onScreenshotError?: () => void;
 }
 
 const LightdashVisualization = memo(
@@ -32,8 +35,10 @@ const LightdashVisualization = memo(
             {
                 isDashboard = false,
                 tileUuid,
-                isTitleHidden = false,
+                isTitleHidden: _isTitleHidden = false,
                 className,
+                onScreenshotReady,
+                onScreenshotError,
                 ...props
             },
             ref,
@@ -47,122 +52,130 @@ const LightdashVisualization = memo(
 
             if (apiErrorDetail) {
                 return (
-                    <EmptyState
-                        icon={
-                            // Icon consistent with SuboptimalState in charts
-                            <MantineIcon
-                                color="ldGray.5"
-                                size="xxl"
-                                icon={IconChartBarOff}
-                            />
-                        }
-                        h="100%"
-                        w="100%"
-                        justify="center"
-                        title="Unable to load visualization"
-                        description={
-                            <Fragment>
-                                <Text style={{ whiteSpace: 'pre-wrap' }}>
-                                    {apiErrorDetail.message || ''}
-                                </Text>
-                                {apiErrorDetail.data.documentationUrl && (
-                                    <Fragment>
-                                        <br />
-                                        <Anchor
-                                            href={
-                                                apiErrorDetail.data
-                                                    .documentationUrl
-                                            }
-                                            target="_blank"
-                                            rel="noreferrer"
-                                        >
-                                            Learn how to resolve this in our
-                                            documentation →
-                                        </Anchor>
-                                    </Fragment>
-                                )}
-                            </Fragment>
-                        }
-                    ></EmptyState>
+                    <div
+                        ref={ref}
+                        className={className}
+                        data-testid={props['data-testid']}
+                    >
+                        <EmptyState
+                            icon={
+                                // Icon consistent with SuboptimalState in charts
+                                <MantineIcon
+                                    color="ldGray.5"
+                                    size="xxl"
+                                    icon={IconChartBarOff}
+                                />
+                            }
+                            h="100%"
+                            w="100%"
+                            justify="center"
+                            title="Unable to load visualization"
+                            description={
+                                <Fragment>
+                                    <Text style={{ whiteSpace: 'pre-wrap' }}>
+                                        {apiErrorDetail.message || ''}
+                                    </Text>
+                                    {apiErrorDetail.data.documentationUrl && (
+                                        <Fragment>
+                                            <Anchor
+                                                href={
+                                                    apiErrorDetail.data
+                                                        .documentationUrl
+                                                }
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                fz="xs"
+                                                fw="bold"
+                                            >
+                                                Learn how to resolve this in our
+                                                documentation →
+                                            </Anchor>
+                                        </Fragment>
+                                    )}
+                                </Fragment>
+                            }
+                        ></EmptyState>
+                    </div>
                 );
             }
 
+            // Render chart content based on type
+            let chartContent: React.ReactNode;
+
             switch (visualizationConfig.chartType) {
                 case ChartType.BIG_NUMBER:
-                    return (
+                    chartContent = (
                         <SimpleStatistic
                             minimal={minimal}
-                            isTitleHidden={isTitleHidden}
-                            isDashboard={isDashboard}
-                            className={className}
-                            data-testid={props['data-testid']}
-                            {...props}
+                            onScreenshotReady={onScreenshotReady}
+                            onScreenshotError={onScreenshotError}
                         />
                     );
+                    break;
                 case ChartType.TABLE:
-                    return (
+                    chartContent = (
                         <SimpleTable
                             tileUuid={tileUuid}
                             minimal={minimal}
                             isDashboard={!!isDashboard}
-                            className={className}
                             $shouldExpand
-                            data-testid={props['data-testid']}
-                            {...props}
+                            onScreenshotReady={onScreenshotReady}
+                            onScreenshotError={onScreenshotError}
                         />
                     );
+                    break;
                 case ChartType.CARTESIAN:
-                    return (
+                    chartContent = (
                         <SimpleChart
-                            className={className}
                             isInDashboard={!!isDashboard}
                             $shouldExpand
-                            data-testid={props['data-testid']}
-                            {...props}
+                            onScreenshotReady={onScreenshotReady}
+                            onScreenshotError={onScreenshotError}
                         />
                     );
+                    break;
                 case ChartType.PIE:
-                    return (
+                    chartContent = (
                         <SimplePieChart
-                            className={className}
                             isInDashboard={!!isDashboard}
                             $shouldExpand
-                            data-testid={props['data-testid']}
-                            {...props}
+                            onScreenshotReady={onScreenshotReady}
+                            onScreenshotError={onScreenshotError}
                         />
                     );
+                    break;
                 case ChartType.FUNNEL:
-                    return (
+                    chartContent = (
                         <FunnelChart
-                            className={className}
                             isInDashboard={!!isDashboard}
                             $shouldExpand
-                            data-testid={props['data-testid']}
-                            {...props}
+                            onScreenshotReady={onScreenshotReady}
+                            onScreenshotError={onScreenshotError}
                         />
                     );
+                    break;
                 case ChartType.TREEMAP:
-                    return (
+                    chartContent = (
                         <SimpleTreemap
-                            className={className}
                             isInDashboard={!!isDashboard}
                             $shouldExpand
-                            data-testid={props['data-testid']}
-                            {...props}
+                            onScreenshotReady={onScreenshotReady}
+                            onScreenshotError={onScreenshotError}
                         />
                     );
+                    break;
                 case ChartType.GAUGE:
-                    return (
+                    chartContent = (
                         <SimpleGauge
-                            className={className}
                             isInDashboard={isDashboard}
                             $shouldExpand
-                            data-testid={props['data-testid']}
-                            {...props}
+                            onScreenshotReady={onScreenshotReady}
+                            onScreenshotError={onScreenshotError}
                         />
                     );
+                    break;
                 case ChartType.MAP:
-                    return (
+                    chartContent = (
                         <Suspense
                             fallback={
                                 <SuboptimalState
@@ -172,38 +185,57 @@ const LightdashVisualization = memo(
                             }
                         >
                             <LazySimpleMap
-                                className={className}
                                 isInDashboard={isDashboard}
                                 $shouldExpand
-                                data-testid={props['data-testid']}
-                                {...props}
+                                onScreenshotReady={onScreenshotReady}
+                                onScreenshotError={onScreenshotError}
                             />
                         </Suspense>
                     );
+                    break;
                 case ChartType.CUSTOM:
-                    return (
-                        <div
-                            ref={ref}
-                            style={{
-                                width: '100%',
-                                height: '100%',
-                                display: 'flex',
-                                flexDirection: 'column',
-                            }}
-                        >
-                            <CustomVisualization
-                                data-testid={props['data-testid']}
-                                className={className}
-                            />
-                        </div>
+                    chartContent = (
+                        <CustomVisualization
+                            onScreenshotReady={onScreenshotReady}
+                            onScreenshotError={onScreenshotError}
+                        />
                     );
-
+                    break;
+                case ChartType.SANKEY:
+                    chartContent = (
+                        <SimpleSankey
+                            isInDashboard={!!isDashboard}
+                            $shouldExpand
+                            onScreenshotReady={onScreenshotReady}
+                            onScreenshotError={onScreenshotError}
+                        />
+                    );
+                    break;
                 default:
                     return assertUnreachable(
                         visualizationConfig,
                         `Chart type is not implemented`,
                     );
             }
+
+            // Wrap in a div to ensure data-testid and ref are on a DOM element
+            // (some chart components like echarts-for-react don't forward these props)
+            return (
+                <div
+                    ref={ref}
+                    className={className}
+                    data-testid={props['data-testid']}
+                    style={{
+                        width: '100%',
+                        height: '100%',
+                        minHeight: 'inherit',
+                        display: 'flex',
+                        flexDirection: 'column',
+                    }}
+                >
+                    {chartContent}
+                </div>
+            );
         },
     ),
 );

@@ -1,6 +1,6 @@
 import { CommercialFeatureFlags } from '@lightdash/common';
 import { useActiveProject } from '../../../../hooks/useActiveProject';
-import { useFeatureFlag } from '../../../../hooks/useFeatureFlagEnabled';
+import { useServerFeatureFlag } from '../../../../hooks/useServerOrClientFeatureFlag';
 import useApp from '../../../../providers/App/useApp';
 import { useAiAgentPermission } from './useAiAgentPermission';
 import { useAiOrganizationSettings } from './useAiOrganizationSettings';
@@ -15,13 +15,13 @@ export const useAiAgentButtonVisibility = () => {
     const projectUuid = activeProjectQuery.data ?? undefined;
 
     const appQuery = useApp();
-    const organizationSettingsQuery = useAiOrganizationSettings();
+    const aiOrganizationSettingsQuery = useAiOrganizationSettings();
     const agentsQuery = useProjectAiAgents({
         projectUuid,
         options: {
             enabled:
-                organizationSettingsQuery.isSuccess &&
-                organizationSettingsQuery.data?.aiAgentsVisible,
+                aiOrganizationSettingsQuery.isSuccess &&
+                aiOrganizationSettingsQuery.data?.aiAgentsVisible,
         },
         redirectOnUnauthorized: false,
     });
@@ -35,11 +35,13 @@ export const useAiAgentButtonVisibility = () => {
         projectUuid,
     });
 
-    const aiCopilotFlagQuery = useFeatureFlag(CommercialFeatureFlags.AiCopilot);
+    const aiCopilotFlagQuery = useServerFeatureFlag(
+        CommercialFeatureFlags.AiCopilot,
+    );
 
     if (
         agentsQuery.isLoading ||
-        organizationSettingsQuery.isLoading ||
+        aiOrganizationSettingsQuery.isLoading ||
         appQuery.user.isLoading ||
         appQuery.health.isLoading ||
         aiCopilotFlagQuery.isLoading
@@ -49,14 +51,17 @@ export const useAiAgentButtonVisibility = () => {
 
     const hasAgents = agentsQuery.data && agentsQuery.data.length > 0;
     const canViewButton = (canViewAiAgents && hasAgents) || canManageAiAgents;
-    const isAiAgentEnabled = organizationSettingsQuery.data?.aiAgentsVisible;
+    const isAiAgentEnabled = aiOrganizationSettingsQuery.data?.aiAgentsVisible;
+    const isAiCopilotEnabledOrTrial =
+        aiCopilotFlagQuery.data?.enabled ||
+        aiOrganizationSettingsQuery.data?.isTrial;
 
     if (
         !canViewButton ||
         !canViewAiAgents ||
         !isAiAgentEnabled ||
         !projectUuid ||
-        !aiCopilotFlagQuery.data?.enabled
+        !isAiCopilotEnabledOrTrial
     ) {
         return false;
     }

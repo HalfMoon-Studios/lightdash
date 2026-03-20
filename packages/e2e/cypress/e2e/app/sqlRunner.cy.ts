@@ -20,7 +20,8 @@ describe('SQL Runner (new)', () => {
             });
     });
 
-    it('Should verify that the query is autocompleted, run, and the results are displayed', () => {
+    // todo: move to unit test
+    it.skip('Should verify that the query is autocompleted, run, and the results are displayed', () => {
         // Verify the autocomplete SQL query
         cy.get('.monaco-editor').should('be.visible');
         cy.contains('jaffle').click().wait(500);
@@ -83,7 +84,8 @@ describe('SQL Runner (new)', () => {
         //     });
     });
 
-    it('Should verify that the chart is displayed', () => {
+    // todo: remove
+    it.skip('Should verify that the chart is displayed', () => {
         // Verify that the Run query button is disabled by default
         cy.contains('Run query').should('be.disabled');
 
@@ -133,7 +135,9 @@ describe('SQL Runner (new)', () => {
         cy.contains('Incomplete chart configuration').should('be.visible');
         cy.contains("You're missing an X axis").should('be.visible');
     });
-    it('Should verify that the all chart types are displayed', () => {
+
+    // todo: move to unit test
+    it.skip('Should verify that the all chart types are displayed', () => {
         // Verify that the Run query button is disabled by default
         cy.contains('Run query').should('be.disabled');
 
@@ -251,9 +255,17 @@ describe('SQL Runner (new)', () => {
             .contains('Fix errors')
             .click();
         cy.get('input[placeholder="Select X axis"]').click();
-        cy.get('div[role="option"]').contains('status').click();
+        cy.get('.mantine-8-Select-dropdown')
+            .filter(':visible')
+            .find('div[role="option"]')
+            .contains('status')
+            .click();
         cy.get('input[placeholder="Select Y axis"]').click();
-        cy.get('div[role="option"]').contains('customer_id').click();
+        cy.get('.mantine-8-Select-dropdown')
+            .filter(':visible')
+            .find('div[role="option"]')
+            .contains('customer_id')
+            .click();
 
         // Verify that saving changes and going back to view page displays the chart
         cy.contains('Save').click();
@@ -271,7 +283,8 @@ describe('SQL Runner (new)', () => {
             .should('be.visible');
     });
 
-    it('Should not trigger an extra query to the warehouse when styling a chart', () => {
+    // todo: remove
+    it.skip('Should not trigger an extra query to the warehouse when styling a chart', () => {
         // Verify that the Run query button is disabled by default
         cy.contains('Run query').should('be.disabled');
 

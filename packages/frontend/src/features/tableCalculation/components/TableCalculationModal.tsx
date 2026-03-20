@@ -8,6 +8,7 @@ import {
     TableCalculationType,
     type CustomFormat,
     type TableCalculation,
+    type TableCalculationTemplate,
 } from '@lightdash/common';
 import {
     ActionIcon,
@@ -44,8 +45,8 @@ import {
 } from 'react';
 import { useToggle } from 'react-use';
 import { type ValueOf } from 'type-fest';
-import { FormatForm } from '../../../components/Explorer/FormatForm';
 import MantineIcon from '../../../components/common/MantineIcon';
+import { FormatForm } from '../../../components/Explorer/FormatForm';
 import {
     selectCustomDimensions,
     selectTableCalculations,
@@ -154,6 +155,19 @@ const TableCalculationModal: FC<Props> = ({
         [tableCalculation, existingItemIds],
     );
 
+    // Memoize template for TemplateViewer
+    const template = useMemo(
+        () =>
+            tableCalculation && isTemplateTableCalculation(tableCalculation)
+                ? tableCalculation.template
+                : undefined,
+        [tableCalculation],
+    );
+
+    const [editedTemplate, setEditedTemplate] = useState<
+        TableCalculationTemplate | undefined
+    >(template);
+
     const form = useForm<TableCalculationFormInputs>({
         initialValues,
         validate: {
@@ -207,7 +221,7 @@ const TableCalculationModal: FC<Props> = ({
                     displayName: name,
                     format: data.format,
                     type: data.type,
-                    template: tableCalculation.template,
+                    template: editedTemplate ?? tableCalculation.template,
                 });
             } else {
                 onSave({
@@ -248,13 +262,11 @@ const TableCalculationModal: FC<Props> = ({
         }
     }, []);
 
-    // Memoize template for TemplateViewer
-    const template = useMemo(
-        () =>
-            tableCalculation && isTemplateTableCalculation(tableCalculation)
-                ? tableCalculation.template
-                : undefined,
-        [tableCalculation],
+    const handleTemplateChange = useCallback(
+        (updated: TableCalculationTemplate) => {
+            setEditedTemplate(updated);
+        },
+        [],
     );
 
     // Memoize table calculation type options
@@ -385,7 +397,7 @@ const TableCalculationModal: FC<Props> = ({
                                     radius="xs"
                                     styles={{
                                         panel: {
-                                            borderColor: colors.gray[2],
+                                            borderColor: colors.ldGray[2],
                                             borderWidth: 1,
                                             borderStyle: 'solid',
                                             borderTop: 'none',
@@ -407,8 +419,13 @@ const TableCalculationModal: FC<Props> = ({
 
                                     <Tabs.Panel value="template" p="sm">
                                         <TemplateViewer
-                                            template={template}
-                                            readOnly={true}
+                                            template={
+                                                editedTemplate ?? template
+                                            }
+                                            readOnly={false}
+                                            onTemplateChange={
+                                                handleTemplateChange
+                                            }
                                         />
                                     </Tabs.Panel>
 
@@ -438,7 +455,7 @@ const TableCalculationModal: FC<Props> = ({
                                             borderStyle: 'solid',
                                             borderTop: 'none',
                                             height: isExpanded
-                                                ? 'calc(90vh - 400px)'
+                                                ? 'calc(80vh - 400px)'
                                                 : 'auto',
                                         },
                                     }}
@@ -452,7 +469,14 @@ const TableCalculationModal: FC<Props> = ({
                                         </Tabs.Tab>
                                     </Tabs.List>
 
-                                    <Tabs.Panel value="sqlEditor">
+                                    <Tabs.Panel
+                                        value="sqlEditor"
+                                        style={{
+                                            height: isExpanded
+                                                ? 'calc(85vh - 400px)'
+                                                : 'auto',
+                                        }}
+                                    >
                                         <Suspense
                                             fallback={
                                                 <Box
@@ -561,6 +585,10 @@ const TableCalculationModal: FC<Props> = ({
                                     type="submit"
                                     ref={submitButtonRef}
                                     data-testid="table-calculation-save-button"
+                                    disabled={
+                                        editMode === EditMode.SQL &&
+                                        form.values.sql.length === 0
+                                    }
                                 >
                                     {tableCalculation
                                         ? 'Save changes'

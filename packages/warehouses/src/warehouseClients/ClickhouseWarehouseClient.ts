@@ -7,6 +7,7 @@ import {
     Metric,
     MetricType,
     SupportedDbtAdapter,
+    TimeIntervalUnit,
     WarehouseConnectionError,
     WarehouseQueryError,
     WarehouseResults,
@@ -62,14 +63,21 @@ interface TableInfo {
     table: string;
 }
 
-const convertDataTypeToDimensionType = (
+export const convertDataTypeToDimensionType = (
     type: ClickhouseTypes | string,
 ): DimensionType => {
-    // Remove nullable wrapper and low cardinality wrapper
-    const cleanType = type
-        .replace(/^Nullable\((.+)\)$/, '$1')
-        .replace(/^LowCardinality\((.+)\)$/, '$1')
-        .replace(/\(\d+\)/, ''); // Remove precision from decimals and fixed strings
+    // Iteratively unwrap Nullable/LowCardinality wrappers in any nesting order
+    // e.g. LowCardinality(Nullable(Int32)) -> Nullable(Int32) -> Int32
+    let cleanType = type;
+    let prev = '';
+    while (cleanType !== prev) {
+        prev = cleanType;
+        cleanType = cleanType
+            .replace(/^Nullable\((.+)\)$/, '$1')
+            .replace(/^LowCardinality\((.+)\)$/, '$1');
+    }
+    // Strip all parenthesized arguments (handles Decimal(18,2), DateTime64(3,'UTC'), FixedString(N), etc.)
+    cleanType = cleanType.replace(/\(.*\)$/, '');
 
     switch (cleanType) {
         case ClickhouseTypes.BOOL:
@@ -172,6 +180,30 @@ export class ClickhouseSqlBuilder extends WarehouseBaseSqlBuilder {
                 .replaceAll('\0', '')
         );
     }
+
+    castToTimestamp(date: Date): string {
+        // ClickHouse uses toDateTime function with ISO 8601 format
+        return `toDateTime('${date.toISOString()}')`;
+    }
+
+    getIntervalSql(value: number, unit: TimeIntervalUnit): string {
+        // ClickHouse uses INTERVAL with value and keyword unit (no quotes)
+        const unitStr = ClickhouseSqlBuilder.intervalUnitsSingular[unit];
+        return `INTERVAL ${value} ${unitStr}`;
+    }
+
+    getTimestampDiffSeconds(
+        startTimestampSql: string,
+        endTimestampSql: string,
+    ): string {
+        // ClickHouse uses dateDiff function
+        return `dateDiff('second', ${startTimestampSql}, ${endTimestampSql})`;
+    }
+
+    getMedianSql(valueSql: string): string {
+        // ClickHouse has a native median function
+        return `median(${valueSql})`;
+    }
 }
 
 export class ClickhouseWarehouseClient extends WarehouseBaseClient<CreateClickhouseCredentials> {
@@ -194,7 +226,7 @@ export class ClickhouseWarehouseClient extends WarehouseBaseClient<CreateClickho
 
     async streamQuery(
         sql: string,
-        streamCallback: (data: WarehouseResults) => void,
+        streamCallback: (data: WarehouseResults) => void | Promise<void>,
         options: {
             queryParams?: Record<string, AnyType>;
             tags?: Record<string, string>;
@@ -202,76 +234,105 @@ export class ClickhouseWarehouseClient extends WarehouseBaseClient<CreateClickho
         },
     ): Promise<void> {
         try {
-            let alteredQuery = sql;
+            // Build clickhouse_settings with optional timezone and log_comment for query tags
+            const clickhouseSettings: Record<string, string> = {};
+            if (options?.timezone) {
+                clickhouseSettings.timezone = options.timezone;
+            }
             if (options?.tags) {
-                alteredQuery = `${alteredQuery}\n-- ${JSON.stringify(
-                    options?.tags,
-                )}`;
+                // Use native log_comment setting - persists in system.query_log
+                clickhouseSettings.log_comment = JSON.stringify(options.tags);
             }
 
             const resultSet = await this.client.query({
-                query: alteredQuery,
+                query: sql,
                 format: 'JSONCompactEachRowWithNamesAndTypes',
                 query_params: options?.queryParams,
-                clickhouse_settings: options?.timezone
-                    ? { timezone: options.timezone }
-                    : undefined,
+                clickhouse_settings:
+                    Object.keys(clickhouseSettings).length > 0
+                        ? clickhouseSettings
+                        : undefined,
             });
 
             const columnNames: string[] = [];
             const fields: Record<string, { type: DimensionType }> = {};
 
             const stream = resultSet.stream();
+
+            // Track async callback completion to handle backpressure
+            let processingPromise: Promise<void> = Promise.resolve();
+
+            // Process rows sequentially to handle backpressure
+            const processRows = async (
+                rows: Row<unknown, 'JSONCompactEachRowWithNamesAndTypes'>[],
+            ): Promise<void> => {
+                for (let i = 0; i < rows.length; i += 1) {
+                    const row: unknown[] = rows[i].json();
+                    // handle first row with column names
+                    if (columnNames.length === 0) {
+                        row.forEach((c) => {
+                            if (typeof c === 'string') {
+                                columnNames.push(c);
+                            } else {
+                                columnNames.push(String(c));
+                            }
+                        });
+                    } else if (Object.keys(fields).length === 0) {
+                        // handle second row with column types
+                        columnNames.forEach((c, index) => {
+                            fields[c] = {
+                                type: convertDataTypeToDimensionType(
+                                    String(row[index]),
+                                ),
+                            };
+                        });
+                        // eslint-disable-next-line no-await-in-loop
+                        await streamCallback({
+                            fields,
+                            rows: [],
+                        });
+                    } else {
+                        // eslint-disable-next-line no-await-in-loop
+                        await streamCallback({
+                            fields,
+                            rows: [
+                                // convert value array to object
+                                columnNames.reduce<Record<string, unknown>>(
+                                    (acc, c, index) => {
+                                        acc[c] = row[index];
+                                        return acc;
+                                    },
+                                    {},
+                                ),
+                            ],
+                        });
+                    }
+                }
+            };
+
             stream.on(
                 'data',
                 (
                     rows: Row<unknown, 'JSONCompactEachRowWithNamesAndTypes'>[],
                 ) => {
-                    // handle the rest of the rows with results
-                    rows.forEach((r: Row) => {
-                        const row: unknown[] = r.json();
-                        // handle first row with column names
-                        if (columnNames.length === 0) {
-                            row.map((c) => {
-                                if (typeof c === 'string') {
-                                    return columnNames.push(c);
-                                }
-                                return columnNames.push(String(c));
-                            });
-                        } else if (Object.keys(fields).length === 0) {
-                            // handle second row with column types
-                            columnNames.forEach((c, index) => {
-                                fields[c] = {
-                                    type: convertDataTypeToDimensionType(
-                                        String(row[index]),
-                                    ),
-                                };
-                            });
-                            streamCallback({
-                                fields,
-                                rows: [],
-                            });
-                        } else {
-                            streamCallback({
-                                fields,
-                                rows: [
-                                    // convert value array to object
-                                    columnNames.reduce<Record<string, unknown>>(
-                                        (acc, c, index) => {
-                                            acc[c] = row[index];
-                                            return acc;
-                                        },
-                                        {},
-                                    ),
-                                ],
-                            });
-                        }
-                    });
+                    // Pause stream to handle backpressure while processing
+                    stream.pause();
+
+                    // Chain processing to ensure sequential handling
+                    processingPromise = processingPromise
+                        .then(async () => {
+                            await processRows(rows);
+                        })
+                        .finally(() => {
+                            // Always resume stream, even on error
+                            stream.resume();
+                        });
                 },
             );
             await new Promise<void>((resolve, reject) => {
                 stream.on('end', () => {
-                    resolve();
+                    // Wait for any pending processing to complete before resolving
+                    processingPromise.then(resolve).catch(reject);
                 });
                 stream.on('error', reject);
             });

@@ -1,7 +1,7 @@
 import {
     AxisSide,
-    ValueLabelPositionOptions,
     getEChartsChartTypeFromChartKind,
+    ValueLabelPositionOptions,
     type CartesianChartDisplay,
     type ChartKind,
 } from '@lightdash/common';
@@ -15,9 +15,9 @@ import {
     TextInput,
 } from '@mantine/core';
 import { IconAlignLeft, IconAlignRight } from '@tabler/icons-react';
+import MantineIcon from '../../common/MantineIcon';
 import ColorSelector from '../../VisualizationConfigs/ColorSelector';
 import { Config } from '../../VisualizationConfigs/common/Config';
-import MantineIcon from '../../common/MantineIcon';
 import { CartesianChartTypeConfig } from './CartesianChartTypeConfig';
 import { CartesianChartValueLabelConfig } from './CartesianChartValueLabelConfig';
 
@@ -140,7 +140,7 @@ export const SingleSeriesConfiguration = ({
                                     <Group spacing="xs" noWrap>
                                         <MantineIcon
                                             icon={IconAlignLeft}
-                                            color="ldDark.0"
+                                            color="ldDark.8"
                                         />
                                         <Text>Left</Text>
                                     </Group>
@@ -153,7 +153,7 @@ export const SingleSeriesConfiguration = ({
                                         <Text>Right</Text>
                                         <MantineIcon
                                             icon={IconAlignRight}
-                                            color="ldDark.0"
+                                            color="ldDark.8"
                                         />
                                     </Group>
                                 ),

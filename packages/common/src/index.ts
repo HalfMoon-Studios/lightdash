@@ -53,6 +53,7 @@ export * from './authorization/parseAccount';
 export * from './authorization/roleToScopeMapping';
 export * from './authorization/scopes';
 export * from './authorization/serviceAccountAbility';
+export * from './authorization/space/spaceAccessResolver';
 export * from './authorization/types';
 export * from './compiler/compilationReport';
 export * from './compiler/exploreCompiler';
@@ -60,7 +61,9 @@ export * from './compiler/filtersCompiler';
 export * from './compiler/lightdashModelConverter';
 export * from './compiler/parameters';
 export * from './compiler/translator';
+export * from './constants/screenshot';
 export * from './constants/sessionStorageKeys';
+export * from './constants/spaces';
 export * from './constants/sqlRunner';
 export { default as DbtSchemaEditor } from './dbt/DbtSchemaEditor/DbtSchemaEditor';
 export * from './dbt/validation';
@@ -69,13 +72,16 @@ export * from './pivot/derivePivotConfigFromChart';
 export * from './pivot/pivotConfig';
 export * from './pivot/pivotQueryResults';
 export * from './pivot/utils';
+export * from './preAggregates';
 export { default as chartAsCodeSchema } from './schemas/json/chart-as-code-1.0.json';
 export { default as dashboardAsCodeSchema } from './schemas/json/dashboard-as-code-1.0.json';
 export { default as lightdashDbtYamlSchema } from './schemas/json/lightdash-dbt-2.0.json';
 export { default as lightdashProjectConfigSchema } from './schemas/json/lightdash-project-config-1.0.json';
 export { default as modelAsCodeSchema } from './schemas/json/model-as-code-1.0.json';
+export * from './templating/liquidSql';
 export * from './templating/template';
 export * from './types/account';
+export * from './types/adminNotifications';
 export * from './types/analytics';
 export * from './types/any';
 export * from './types/api';
@@ -104,10 +110,13 @@ export * from './types/downloadFile';
 export * from './types/email';
 export * from './types/errors';
 export * from './types/explore';
+export * from './types/favorites';
 export * from './types/featureFlags';
+export * from './types/impersonationOrganizationSettings';
 export * from './types/field';
 export * from './types/fieldMatch';
 export * from './types/filter';
+export * from './types/funnel';
 export * from './types/gdrive';
 export * from './types/gitIntegration';
 export * from './types/groups';
@@ -129,6 +138,7 @@ export * from './types/periodOverPeriodComparison';
 export * from './types/personalAccessToken';
 export * from './types/pinning';
 export * from './types/pivot';
+export * from './types/preAggregate';
 export * from './types/projectCompileLogs';
 export * from './types/projectGroupAccess';
 export * from './types/projectMemberProfile';
@@ -149,6 +159,7 @@ export * from './types/search';
 export * from './types/share';
 export * from './types/slack';
 export * from './types/slackSettings';
+export * from './types/softDelete';
 export * from './types/space';
 export * from './types/spotlightTableConfig';
 export * from './types/sqlRunner';
@@ -167,12 +178,14 @@ export * from './utils/accessors';
 export * from './utils/additionalMetrics';
 export * from './utils/api';
 export { default as assertUnreachable } from './utils/assertUnreachable';
-export * from './utils/catalogMetricsTree';
+export * from './utils/bigNumber';
 export * from './utils/changeset';
 export * from './utils/charts';
+export * from './utils/chartValidation';
 export * from './utils/colors';
 export * from './utils/conditionalFormatExpressions';
 export * from './utils/conditionalFormatting';
+export * from './utils/connectionChanges';
 export * from './utils/convertCustomDimensionsToYaml';
 export * from './utils/convertCustomMetricsToYaml';
 export * from './utils/customDimensions';
@@ -198,9 +211,12 @@ export * from './utils/promises';
 export * from './utils/sanitizeHtml';
 export * from './utils/scheduler';
 export * from './utils/searchParams';
+export * from './utils/slack';
 export * from './utils/sleep';
 export * from './utils/slugs';
 export * from './utils/subtotals';
+export * from './utils/dateZoom';
+export * from './utils/tableCalculationFunctions';
 export * from './utils/time';
 export * from './utils/timeFrames';
 export * from './utils/virtualView';
@@ -381,6 +397,13 @@ export const SEED_ORG_2_ADMIN_PASSWORD = {
 };
 export const SEED_ORG_2_ADMIN_ROLE = OrganizationMemberRole.ADMIN;
 export const SEED_EMBED_SECRET = 'zU3h50saDOO20czNFNRok';
+
+// Deterministic PAT for dev environment
+// Use with: Authorization: ApiKey ldpat_deadbeefdeadbeefdeadbeefdeadbeef
+export const SEED_PAT = {
+    token: 'ldpat_deadbeefdeadbeefdeadbeefdeadbeef',
+    description: 'Dev seed PAT',
+};
 
 export const SEED_PROJECT = {
     project_uuid: '3675b69e-8324-4110-bdca-059031aa8da3',
@@ -599,6 +622,28 @@ export function getItemMap(
         return acc;
     }, {} as ItemsMap);
 }
+
+export const getFieldsFromMetricQuery = (
+    metricQuery: MetricQuery,
+    explore: Explore,
+): ItemsMap => {
+    const itemsMap = getItemMap(
+        explore,
+        metricQuery.additionalMetrics,
+        metricQuery.tableCalculations,
+        metricQuery.customDimensions,
+    );
+    const itemIdsInMetricQuery = [
+        ...metricQuery.dimensions,
+        ...metricQuery.metrics,
+        ...(metricQuery.tableCalculations || []).map(getItemId),
+    ];
+    return itemIdsInMetricQuery.reduce<ItemsMap>((acc, id) => {
+        const item = itemsMap[id];
+        if (item) acc[id] = item;
+        return acc;
+    }, {});
+};
 
 export const getDimensionsFromItemsMap = (itemsMap: ItemsMap) =>
     Object.entries(itemsMap).reduce<
@@ -844,7 +889,7 @@ export const SPACE_TREE_1: TreeCreateSpace[] = [
     },
     {
         name: 'Parent Space 2',
-        isPrivate: true,
+        inheritParentPermissions: false,
         children: [
             {
                 name: 'Child Space 2.1',
@@ -858,7 +903,7 @@ export const SPACE_TREE_1: TreeCreateSpace[] = [
     },
     {
         name: 'Parent Space 3',
-        isPrivate: true,
+        inheritParentPermissions: false,
         access: [
             // Admin will automatically be added, we only seed editor
             {
@@ -875,7 +920,7 @@ export const SPACE_TREE_1: TreeCreateSpace[] = [
     // Created by admin and added group access
     {
         name: 'Parent Space 5',
-        isPrivate: true,
+        inheritParentPermissions: false,
         access: [],
         groupAccess: [
             {
@@ -894,7 +939,7 @@ export const SPACE_TREE_1: TreeCreateSpace[] = [
 export const SPACE_TREE_2: TreeCreateSpace[] = [
     {
         name: 'Parent Space 4',
-        isPrivate: true,
+        inheritParentPermissions: false,
         access: [],
         children: [
             {

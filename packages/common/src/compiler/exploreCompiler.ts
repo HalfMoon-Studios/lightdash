@@ -1,10 +1,12 @@
 import { type DbtRawModelNode, type SupportedDbtAdapter } from '../types/dbt';
 import { CompileError } from '../types/errors';
 import {
+    InlineErrorType,
     type CompiledExploreJoin,
     type CompiledTable,
     type Explore,
     type ExploreJoin,
+    type InlineError,
     type Table,
 } from '../types/explore';
 import {
@@ -12,6 +14,7 @@ import {
     isCustomBinDimension,
     isNonAggregateMetric,
     isPostCalculationMetric,
+    MetricType,
     type CompiledCustomDimension,
     type CompiledCustomSqlDimension,
     type CompiledDimension,
@@ -19,9 +22,11 @@ import {
     type CustomDimension,
     type CustomSqlDimension,
     type Dimension,
+    type FieldCompilationError,
     type Metric,
 } from '../types/field';
 import { type LightdashProjectConfig } from '../types/lightdashProjectConfig';
+import { type PreAggregateDef } from '../types/preAggregate';
 import {
     dateGranularityToTimeFrameMap,
     type DateGranularity,
@@ -39,6 +44,7 @@ import {
     getAvailableParametersFromTables,
     getParameterReferences,
     getParameterReferencesFromSqlAndFormat,
+    validateParameterConfiguration,
     validateParameterNames,
     validateParameterReferences,
 } from './parameters';
@@ -50,6 +56,111 @@ export const lightdashVariablePattern =
 type Reference = {
     refTable: string;
     refName: string;
+};
+
+/**
+ * Regex pattern to detect SQL aggregation functions.
+ * Used to allow dimension references in non-aggregate metrics when
+ * the SQL itself contains an aggregation function (common pattern).
+ *
+ * Matches: sum(, count(, avg(, etc. with word boundary to avoid false positives
+ * like "summary" matching "sum".
+ */
+const SQL_AGGREGATION_FUNCTIONS_PATTERN =
+    /\b(sum|count_if|countif|count|avg|average|min|max|median|stddev|stddev_pop|stddev_samp|variance|var_pop|var_samp|percentile|percentile_cont|percentile_disc|count_distinct|approx_count_distinct|any_value|array_agg|string_agg|group_concat|listagg|corr|covar_pop|covar_samp|mode|approx_percentile)\s*\(/i;
+
+/**
+ * Check if the SQL contains any aggregation functions.
+ *
+ * This is used to determine if a non-aggregate metric with dimension references
+ * should be allowed. It's common to define metrics as type:number
+ * with aggregation functions in the SQL field. These are valid in Lightdash
+ * because the aggregation happens in the SQL itself.
+ *
+ * @param sql - The SQL expression to check
+ * @returns True if the SQL contains aggregation functions, false otherwise
+ */
+export const sqlContainsAggregation = (
+    sql: string | undefined | null,
+): boolean => {
+    if (!sql) return false;
+    return SQL_AGGREGATION_FUNCTIONS_PATTERN.test(sql);
+};
+
+/**
+ * Check if any of the given ${} references appear inside an SQL aggregation
+ * function call. This is used to distinguish:
+ * - `sum(${max_value})` — ref IS inside aggregation (nested aggregate)
+ * - `sum(raw_col) / ${count_records}` — ref is NOT inside aggregation
+ *
+ * Uses a simple parenthesis-depth approach: track aggregation function
+ * positions and check if references fall within their parentheses.
+ */
+export const sqlAggregationWrapsReferences = (
+    sql: string,
+    refNames: string[],
+): boolean => {
+    if (!sql || refNames.length === 0) return false;
+
+    // Build a pattern that matches aggregation functions with opening paren
+    const aggPattern = new RegExp(
+        SQL_AGGREGATION_FUNCTIONS_PATTERN.source,
+        'gi',
+    );
+
+    // Find all aggregation function positions and their matching close-paren
+    const aggRanges: Array<{ start: number; end: number }> = [];
+    let match: RegExpExecArray | null;
+    // eslint-disable-next-line no-cond-assign
+    while ((match = aggPattern.exec(sql)) !== null) {
+        const openParenPos = sql.indexOf('(', match.index + match[1].length);
+        if (openParenPos !== -1) {
+            // Find the matching close paren by tracking depth
+            let depth = 1;
+            let pos = openParenPos + 1;
+            while (pos < sql.length && depth > 0) {
+                if (sql[pos] === '(') depth += 1;
+                else if (sql[pos] === ')') depth -= 1;
+                pos += 1;
+            }
+            if (depth === 0) {
+                aggRanges.push({ start: openParenPos, end: pos - 1 });
+            }
+        }
+    }
+
+    if (aggRanges.length === 0) return false;
+
+    // Check if any of the references appear inside any aggregation range
+    return refNames.some((refName) => {
+        const refPattern = new RegExp(
+            `\\$\\{${refName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\}`,
+            'g',
+        );
+        let refMatch: RegExpExecArray | null;
+        // eslint-disable-next-line no-cond-assign
+        while ((refMatch = refPattern.exec(sql)) !== null) {
+            const refPos = refMatch.index;
+            if (
+                aggRanges.some(
+                    (range) => refPos > range.start && refPos < range.end,
+                )
+            ) {
+                return true;
+            }
+        }
+        return false;
+    });
+};
+
+type FieldContext = {
+    fieldType:
+        | 'metric'
+        | 'dimension'
+        | 'custom_dimension'
+        | 'join'
+        | 'sql_where';
+    fieldName: string;
 };
 export const getParsedReference = (
     ref: string,
@@ -99,6 +210,9 @@ export type UncompiledExplore = {
     meta: DbtRawModelNode['meta'];
     databricksCompute?: string;
     projectParameters?: LightdashProjectConfig['parameters'];
+    preAggregates?: PreAggregateDef[];
+    caseSensitive?: boolean;
+    projectDefaults?: LightdashProjectConfig['defaults'];
 };
 
 const getReferencedTable = (
@@ -113,11 +227,29 @@ const getReferencedTable = (
     );
 };
 
+/**
+ * Options for the ExploreCompiler.
+ */
+export type ExploreCompilerOptions = {
+    /**
+     * When enabled, fields that fail to compile will be marked with a
+     * compilationError instead of causing the entire explore to fail.
+     * This allows users to still access other fields in the explore.
+     */
+    allowPartialCompilation?: boolean;
+};
+
 export class ExploreCompiler {
     private readonly warehouseClient: WarehouseSqlBuilder;
 
-    constructor(warehouseClient: WarehouseSqlBuilder) {
+    private readonly options: ExploreCompilerOptions;
+
+    constructor(
+        warehouseClient: WarehouseSqlBuilder,
+        options: ExploreCompilerOptions = {},
+    ) {
         this.warehouseClient = warehouseClient;
+        this.options = options;
     }
 
     compileExplore({
@@ -137,25 +269,60 @@ export class ExploreCompiler {
         databricksCompute,
         aiHint,
         projectParameters,
+        preAggregates,
+        caseSensitive,
+        projectDefaults,
     }: UncompiledExplore): Explore {
-        // Check that base table and joined tables exist
+        // Check that base table exists (always required)
         if (!tables[baseTable]) {
             throw new CompileError(
                 `Failed to compile explore "${name}". Tried to find base table but cannot find table with name "${baseTable}"`,
                 {},
             );
         }
-        joinedTables.forEach((join) => {
-            if (!tables[join.table]) {
-                throw new CompileError(
-                    `Failed to compile explore "${name}". Tried to join table "${join.table}" to "${baseTable}" but cannot find table with name "${join.table}"`,
-                    {},
-                );
-            }
-        });
+
+        // Collect warnings for partial compilation
+        const exploreWarnings: InlineError[] = [];
+
+        // Collect warnings from the base table (e.g. unresolved custom granularities)
+        if (tables[baseTable].warnings) {
+            tables[baseTable].warnings.forEach((message) => {
+                exploreWarnings.push({
+                    type: InlineErrorType.FIELD_ERROR,
+                    message,
+                });
+            });
+        }
+
+        // Filter joined tables - skip missing tables when partial compilation is enabled
+        const validJoinedTables = this.options.allowPartialCompilation
+            ? joinedTables.filter((join) => {
+                  if (tables[join.table] === undefined) {
+                      exploreWarnings.push({
+                          type: InlineErrorType.MISSING_TABLE,
+                          message: `Join to table "${join.table}" was skipped because the table does not exist`,
+                      });
+                      return false;
+                  }
+                  return true;
+              })
+            : joinedTables;
+
+        // Validate all joined tables exist (only when partial compilation is disabled)
+        if (!this.options.allowPartialCompilation) {
+            joinedTables.forEach((join) => {
+                if (!tables[join.table]) {
+                    throw new CompileError(
+                        `Failed to compile explore "${name}". Tried to join table "${join.table}" to "${baseTable}" but cannot find table with name "${join.table}"`,
+                        {},
+                    );
+                }
+            });
+        }
+
         const aliases = [
             baseTable,
-            ...joinedTables.map((join) => join.alias || join.table),
+            ...validJoinedTables.map((join) => join.alias || join.table),
         ];
         if (aliases.length !== new Set(aliases).size) {
             throw new CompileError(
@@ -178,7 +345,17 @@ export class ExploreCompiler {
             );
         }
 
-        const includedTables = joinedTables.reduce<Record<string, Table>>(
+        const { isValid, error: paramConfigError } =
+            validateParameterConfiguration(meta.parameters);
+
+        if (!isValid) {
+            exploreWarnings.push({
+                type: InlineErrorType.INVALID_PARAMETER,
+                message: `Invalid parameter configuration: ${paramConfigError}`,
+            });
+        }
+
+        const includedTables = validJoinedTables.reduce<Record<string, Table>>(
             (prev, join) => {
                 const joinTableName = join.alias || tables[join.table].name;
                 const joinTableLabel =
@@ -300,21 +477,97 @@ export class ExploreCompiler {
             exploreAvailableParameters,
         );
 
-        const compiledTables: Record<string, CompiledTable> = aliases.reduce(
-            (prev, tableName) => ({
-                ...prev,
-                [tableName]: this.compileTable(
-                    includedTables[tableName],
+        // Compile joins first to determine which ones succeed
+        // Failed joins will be skipped along with their tables when partial compilation is enabled
+        const joinResults: Array<{
+            join: ExploreJoin;
+            compiled: CompiledExploreJoin | null;
+            tableName: string;
+        }> = validJoinedTables.map((j) => {
+            const tableName = j.alias || j.table;
+            if (this.options.allowPartialCompilation) {
+                try {
+                    return {
+                        join: j,
+                        compiled: this.compileJoin(
+                            j,
+                            includedTables,
+                            availableParametersNames,
+                        ),
+                        tableName,
+                    };
+                } catch (e) {
+                    // Join failed to compile - skip it and add error
+                    const errorMessage =
+                        e instanceof Error
+                            ? e.message
+                            : `Failed to compile join to "${j.table}"`;
+                    exploreWarnings.push({
+                        type: InlineErrorType.SKIPPED_JOIN,
+                        message: errorMessage,
+                    });
+                    return { join: j, compiled: null, tableName };
+                }
+            }
+            return {
+                join: j,
+                compiled: this.compileJoin(
+                    j,
                     includedTables,
                     availableParametersNames,
                 ),
-            }),
-            {},
-        );
+                tableName,
+            };
+        });
 
-        const compiledJoins: CompiledExploreJoin[] = joinedTables.map((j) =>
-            this.compileJoin(j, includedTables, availableParametersNames),
-        );
+        // Filter to only successful joins
+        const compiledJoins: CompiledExploreJoin[] = joinResults
+            .filter((r) => r.compiled !== null)
+            .map((r) => r.compiled!);
+
+        // Get table names that should be included (base table + successful joins)
+        const successfulTableNames = new Set([
+            baseTable,
+            ...joinResults
+                .filter((r) => r.compiled !== null)
+                .map((r) => r.tableName),
+        ]);
+
+        const compiledTables: Record<string, CompiledTable> = aliases
+            .filter((tableName) => successfulTableNames.has(tableName))
+            .reduce(
+                (prev, tableName) => ({
+                    ...prev,
+                    [tableName]: this.compileTable(
+                        includedTables[tableName],
+                        includedTables,
+                        availableParametersNames,
+                    ),
+                }),
+                {},
+            );
+
+        // Collect field-level compilation errors
+        if (this.options.allowPartialCompilation) {
+            Object.entries(compiledTables).forEach(([, table]) => {
+                Object.entries(table.dimensions).forEach(([, dimension]) => {
+                    if (dimension.compilationError) {
+                        exploreWarnings.push({
+                            type: InlineErrorType.FIELD_ERROR,
+                            message: dimension.compilationError.message,
+                        });
+                    }
+                });
+                Object.entries(table.metrics).forEach(([, metric]) => {
+                    if (metric.compilationError) {
+                        exploreWarnings.push({
+                            type: InlineErrorType.FIELD_ERROR,
+                            message: metric.compilationError.message,
+                        });
+                    }
+                });
+            });
+        }
 
         const spotlightVisibility =
             meta.spotlight?.visibility ?? spotlightConfig?.default_visibility;
@@ -339,14 +592,61 @@ export class ExploreCompiler {
             ymlPath,
             sqlPath,
             databricksCompute,
+            // Use explore-level caseSensitive if set, otherwise fall back to project defaults
+            ...(caseSensitive !== undefined ||
+            projectDefaults?.case_sensitive !== undefined
+                ? {
+                      caseSensitive:
+                          caseSensitive ?? projectDefaults?.case_sensitive,
+                  }
+                : {}),
             ...(aiHint ? { aiHint } : {}),
-            ...getSpotlightConfigurationForResource(
-                spotlightVisibility,
-                spotlightCategories,
-            ),
+            ...getSpotlightConfigurationForResource({
+                visibility: spotlightVisibility,
+                categories: spotlightCategories,
+                owner: meta.spotlight?.owner ?? meta.owner,
+            }),
             ...(meta.parameters && Object.keys(meta.parameters).length > 0
                 ? { parameters: meta.parameters }
                 : {}),
+            ...(preAggregates && preAggregates.length > 0
+                ? { preAggregates }
+                : {}),
+            ...(exploreWarnings.length > 0
+                ? { warnings: exploreWarnings }
+                : {}),
+        };
+    }
+
+    /**
+     * Creates a dimension with a compilation error marker.
+     * Used when partial compilation is enabled and a dimension fails to compile.
+     */
+    private static createDimensionWithError(
+        dimension: Dimension,
+        error: FieldCompilationError,
+    ): CompiledDimension {
+        return {
+            ...dimension,
+            compiledSql: 'NULL', // Placeholder SQL that won't cause query failures
+            tablesReferences: undefined,
+            compilationError: error,
+        };
+    }
+
+    /**
+     * Creates a metric with a compilation error marker.
+     * Used when partial compilation is enabled and a metric fails to compile.
+     */
+    private static createMetricWithError(
+        metric: Metric,
+        error: FieldCompilationError,
+    ): CompiledMetric {
+        return {
+            ...metric,
+            compiledSql: 'NULL', // Placeholder SQL that won't cause query failures
+            tablesReferences: undefined,
+            compilationError: error,
         };
     }
 
@@ -357,30 +657,80 @@ export class ExploreCompiler {
     ): CompiledTable {
         const dimensions: Record<string, CompiledDimension> = Object.keys(
             table.dimensions,
-        ).reduce(
-            (prev, dimensionKey) => ({
+        ).reduce((prev, dimensionKey) => {
+            const dimension = table.dimensions[dimensionKey];
+            if (this.options.allowPartialCompilation) {
+                try {
+                    return {
+                        ...prev,
+                        [dimensionKey]: this.compileDimension(
+                            dimension,
+                            tables,
+                            availableParameters,
+                        ),
+                    };
+                } catch (e) {
+                    const errorMessage =
+                        e instanceof Error
+                            ? e.message
+                            : `Failed to compile dimension "${dimensionKey}"`;
+                    return {
+                        ...prev,
+                        [dimensionKey]:
+                            ExploreCompiler.createDimensionWithError(
+                                dimension,
+                                { message: errorMessage },
+                            ),
+                    };
+                }
+            }
+            return {
                 ...prev,
                 [dimensionKey]: this.compileDimension(
-                    table.dimensions[dimensionKey],
+                    dimension,
                     tables,
                     availableParameters,
                 ),
-            }),
-            {},
-        );
+            };
+        }, {});
+
         const metrics: Record<string, CompiledMetric> = Object.keys(
             table.metrics,
-        ).reduce(
-            (prev, metricKey) => ({
+        ).reduce((prev, metricKey) => {
+            const metric = table.metrics[metricKey];
+            if (this.options.allowPartialCompilation) {
+                try {
+                    return {
+                        ...prev,
+                        [metricKey]: this.compileMetric(
+                            metric,
+                            tables,
+                            availableParameters,
+                        ),
+                    };
+                } catch (e) {
+                    const errorMessage =
+                        e instanceof Error
+                            ? e.message
+                            : `Failed to compile metric "${metricKey}"`;
+                    return {
+                        ...prev,
+                        [metricKey]: ExploreCompiler.createMetricWithError(
+                            metric,
+                            { message: errorMessage },
+                        ),
+                    };
+                }
+            }
+            return {
                 ...prev,
                 [metricKey]: this.compileMetric(
-                    table.metrics[metricKey],
+                    metric,
                     tables,
                     availableParameters,
                 ),
-            }),
-            {},
-        );
+            };
+        }, {});
 
         const compiledSqlWhere = table.sqlWhere?.replace(
             lightdashVariablePattern,
@@ -389,6 +739,7 @@ export class ExploreCompiler {
                     p1,
                     tables,
                     table.name,
+                    { fieldType: 'sql_where', fieldName: table.name },
                 );
 
                 return compiledReference.sql;
@@ -485,6 +836,18 @@ export class ExploreCompiler {
             },
             {},
         );
+        const tablesAnyAttributes = Array.from(
+            compiledMetric.tablesReferences,
+        ).reduce<Record<string, Record<string, string | string[]>>>(
+            (acc, tableReference) => {
+                const table = tables[tableReference] as Table | undefined;
+                if (table?.anyAttributes) {
+                    acc[tableReference] = table.anyAttributes;
+                }
+                return acc;
+            },
+            {},
+        );
 
         const compiledSql = compiledMetric.sql;
 
@@ -508,7 +871,16 @@ export class ExploreCompiler {
             ...(Object.keys(tablesRequiredAttributes).length
                 ? { tablesRequiredAttributes }
                 : {}),
+            ...(Object.keys(tablesAnyAttributes).length
+                ? { tablesAnyAttributes }
+                : {}),
             ...(parameterReferences.length > 0 ? { parameterReferences } : {}),
+            ...(compiledMetric.valueSql !== undefined
+                ? { compiledValueSql: compiledMetric.valueSql }
+                : {}),
+            ...(compiledMetric.compiledDistinctKeys
+                ? { compiledDistinctKeys: compiledMetric.compiledDistinctKeys }
+                : {}),
         };
     }
 
@@ -516,7 +888,12 @@ export class ExploreCompiler {
         metric: Metric,
         tables: Record<string, Table>,
         availableParameters: string[],
-    ): { sql: string; tablesReferences: Set<string> } {
+    ): {
+        sql: string;
+        tablesReferences: Set<string>;
+        valueSql?: string;
+        compiledDistinctKeys?: string[];
+    } {
         // Metric might have references to other dimensions
         if (!tables[metric.table]) {
             throw new CompileError(
@@ -527,6 +904,12 @@ export class ExploreCompiler {
         const currentRef = `${metric.table}.${metric.name}`;
         const currentShortRef = metric.name;
         let tablesReferences = new Set([metric.table]);
+        if (metric.sql === undefined || metric.sql === null) {
+            throw new CompileError(
+                `Metric "${metric.name}" in table "${metric.table}" is missing a sql definition`,
+                {},
+            );
+        }
         let renderedSql = metric.sql.replace(
             lightdashVariablePattern,
             (_, p1) => {
@@ -537,20 +920,98 @@ export class ExploreCompiler {
                     );
                 }
 
-                const compiledReference =
-                    isNonAggregateMetric(metric) ||
-                    isPostCalculationMetric(metric)
-                        ? this.compileMetricReference(
-                              p1,
-                              tables,
-                              metric.table,
-                              availableParameters,
-                          )
-                        : this.compileDimensionReference(
-                              p1,
-                              tables,
-                              metric.table,
-                          );
+                const fieldContext = {
+                    fieldType: 'metric' as const,
+                    fieldName: metric.name,
+                };
+
+                // Determine how to resolve the reference:
+                // - Post-calculation metrics can ONLY reference other metrics
+                // - Non-aggregate metrics without aggregation can only reference other metrics
+                // - Non-aggregate metrics that have aggregation in their SQL can
+                //   reference BOTH dimensions AND metrics (common pattern like
+                //   type:number with sql: "sum(${dim}) / ${metric}")
+                // - Aggregate metrics can only reference dimensions
+                const isNonAggregate = isNonAggregateMetric(metric);
+                const isPostCalc = isPostCalculationMetric(metric);
+                const hasAggregationInSql =
+                    isNonAggregate && sqlContainsAggregation(metric.sql);
+
+                // Check what type the reference is (dimension or metric)
+                const { refTable, refName } = getParsedReference(
+                    p1,
+                    metric.table,
+                );
+                const referencedTable = getReferencedTable(refTable, tables);
+                const isDimensionRef =
+                    referencedTable?.dimensions[refName] !== undefined;
+                const isMetricRef =
+                    referencedTable?.metrics[refName] !== undefined;
+
+                let compiledReference: {
+                    sql: string;
+                    tablesReferences: Set<string>;
+                };
+
+                if (isPostCalc) {
+                    // Post-calc metrics can ONLY reference other metrics
+                    compiledReference = this.compileMetricReference(
+                        p1,
+                        tables,
+                        metric.table,
+                        availableParameters,
+                        fieldContext,
+                    );
+                } else if (isNonAggregate && !hasAggregationInSql) {
+                    // Non-aggregate metrics without SQL aggregation can only reference metrics
+                    compiledReference = this.compileMetricReference(
+                        p1,
+                        tables,
+                        metric.table,
+                        availableParameters,
+                        fieldContext,
+                    );
+                } else if (hasAggregationInSql) {
+                    // Non-aggregate metrics WITH SQL aggregation can reference both
+                    // dimensions and metrics - detect based on what the reference actually is
+                    // Handle TABLE reference first (common pattern: ${TABLE}.column)
+                    if (p1 === 'TABLE') {
+                        compiledReference = this.compileDimensionReference(
+                            p1,
+                            tables,
+                            metric.table,
+                            fieldContext,
+                        );
+                    } else if (isDimensionRef) {
+                        compiledReference = this.compileDimensionReference(
+                            p1,
+                            tables,
+                            metric.table,
+                            fieldContext,
+                        );
+                    } else if (isMetricRef) {
+                        compiledReference = this.compileMetricReference(
+                            p1,
+                            tables,
+                            metric.table,
+                            availableParameters,
+                            fieldContext,
+                        );
+                    } else {
+                        throw new CompileError(
+                            `Metric "${metric.name}" references "${p1}" which is neither a dimension nor a metric`,
+                            {},
+                        );
+                    }
+                } else {
+                    // Aggregate metrics can only reference dimensions
+                    compiledReference = this.compileDimensionReference(
+                        p1,
+                        tables,
+                        metric.table,
+                        fieldContext,
+                    );
+                }
                 tablesReferences = new Set([
                     ...tablesReferences,
                     ...compiledReference.tablesReferences,
@@ -626,12 +1087,46 @@ export class ExploreCompiler {
                 ' AND ',
             )}) THEN (${renderedSql}) ELSE NULL END`;
         }
+        if (
+            metric.type === MetricType.SUM_DISTINCT ||
+            metric.type === MetricType.AVERAGE_DISTINCT
+        ) {
+            if (!metric.distinctKeys || metric.distinctKeys.length === 0) {
+                throw new CompileError(
+                    `Metric "${metric.name}" of type "${metric.type}" requires a "distinct_keys" property`,
+                    {},
+                );
+            }
+            const compiledKeys = metric.distinctKeys.map((keyRef) => {
+                const compiled = this.compileDimensionReference(
+                    keyRef,
+                    tables,
+                    metric.table,
+                    { fieldType: 'metric', fieldName: metric.name },
+                );
+                tablesReferences = new Set([
+                    ...tablesReferences,
+                    ...compiled.tablesReferences,
+                ]);
+                return compiled.sql;
+            });
+            // CTE-based dedup is handled by MetricQueryBuilder; store metadata here
+            const fallbackAgg =
+                metric.type === MetricType.AVERAGE_DISTINCT ? 'AVG' : 'SUM';
+            return {
+                sql: `${fallbackAgg}(${renderedSql})`, // fallback compiledSql
+                tablesReferences,
+                valueSql: renderedSql,
+                compiledDistinctKeys: compiledKeys,
+            };
+        }
+
         const compiledSql = this.warehouseClient.getMetricSql(
             renderedSql,
             metric,
         );
 
-        return { sql: compiledSql, tablesReferences };
+        return { sql: compiledSql, tablesReferences, valueSql: renderedSql };
     }
 
     compileDimension(
@@ -647,6 +1142,18 @@ export class ExploreCompiler {
                 const table = tables[tableReference] as Table | undefined;
                 if (table?.requiredAttributes) {
                     acc[tableReference] = table.requiredAttributes;
+                }
+                return acc;
+            },
+            {},
+        );
+        const tablesAnyAttributes = Array.from(
+            compiledDimension.tablesReferences,
+        ).reduce<Record<string, Record<string, string | string[]>>>(
+            (acc, tableReference) => {
+                const table = tables[tableReference] as Table | undefined;
+                if (table?.anyAttributes) {
+                    acc[tableReference] = table.anyAttributes;
                 }
                 return acc;
             },
@@ -674,6 +1181,9 @@ export class ExploreCompiler {
             ...(Object.keys(tablesRequiredAttributes).length
                 ? { tablesRequiredAttributes }
                 : {}),
+            ...(Object.keys(tablesAnyAttributes).length
+                ? { tablesAnyAttributes }
+                : {}),
             ...(parameterReferences.length > 0 ? { parameterReferences } : {}),
         };
     }
@@ -699,6 +1209,7 @@ export class ExploreCompiler {
                 p1,
                 tables,
                 dimension.table,
+                { fieldType: 'dimension', fieldName: dimension.name },
             );
             tablesReferences = new Set([
                 ...tablesReferences,
@@ -733,6 +1244,10 @@ export class ExploreCompiler {
                     p1,
                     tables,
                     dimension.table,
+                    {
+                        fieldType: 'custom_dimension',
+                        fieldName: dimension.name,
+                    },
                 );
                 tablesReferences = new Set([
                     ...tablesReferences,
@@ -783,6 +1298,7 @@ export class ExploreCompiler {
         ref: string,
         tables: Record<string, Table>,
         currentTable: string,
+        fieldContext?: FieldContext,
     ): { sql: string; tablesReferences: Set<string> } {
         // Reference to current table
         if (ref === 'TABLE') {
@@ -800,8 +1316,11 @@ export class ExploreCompiler {
         const referencedDimension = referencedTable?.dimensions[refName];
 
         if (referencedDimension === undefined) {
+            const fieldInfo = fieldContext
+                ? ` in ${fieldContext.fieldType} "${fieldContext.fieldName}"`
+                : '';
             throw new CompileError(
-                `Model "${currentTable}" has a dimension reference: \${${ref}} which matches no dimension`,
+                `Model "${currentTable}"${fieldInfo} has a dimension reference: \${${ref}} which matches no dimension`,
                 {},
             );
         }
@@ -824,6 +1343,7 @@ export class ExploreCompiler {
         tables: Record<string, Table>,
         currentTable: string,
         availableParameters: string[],
+        fieldContext?: FieldContext,
     ): { sql: string; tablesReferences: Set<string> } {
         // Reference to current table
         if (ref === 'TABLE') {
@@ -843,8 +1363,11 @@ export class ExploreCompiler {
         const referencedMetric = referencedTable?.metrics[refName];
 
         if (referencedMetric === undefined) {
+            const fieldInfo = fieldContext
+                ? ` in ${fieldContext.fieldType} "${fieldContext.fieldName}"`
+                : '';
             throw new CompileError(
-                `Model "${currentTable}" has a metric reference: \${${ref}} which matches no metric`,
+                `Model "${currentTable}"${fieldInfo} has a metric reference: \${${ref}} which matches no metric`,
                 {},
             );
         }
@@ -875,6 +1398,7 @@ export class ExploreCompiler {
                 p1,
                 tables,
                 join.table,
+                { fieldType: 'join', fieldName: join.table },
             );
             // Update table references
             compiledReference.tablesReferences.forEach((value) =>
@@ -935,6 +1459,11 @@ export const createDimensionWithGranularity = (
         {
             ...baseTimeDimension,
             name: dimensionName,
+            // Base dimensions (isIntervalBase) don't have timeIntervalBaseDimensionName set,
+            // but the zoomed dimension needs it for field identification (e.g., granularity labels)
+            timeIntervalBaseDimensionName:
+                baseTimeDimension.timeIntervalBaseDimensionName ??
+                baseTimeDimension.name,
             type: timeFrameConfigs[newTimeInterval].getDimensionType(
                 baseTimeDimension.type,
             ),

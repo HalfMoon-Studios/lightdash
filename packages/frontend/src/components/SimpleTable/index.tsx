@@ -1,10 +1,12 @@
 import { Box, Button, Flex, Text } from '@mantine/core';
 import { noop } from '@mantine/utils';
-import { IconAlertCircle, IconRefresh } from '@tabler/icons-react';
-import { type FC, useCallback, useEffect, useMemo } from 'react';
-import { isTableVisualizationConfig } from '../LightdashVisualization/types';
-import { useVisualizationContext } from '../LightdashVisualization/useVisualizationContext';
-import { LoadingChart } from '../SimpleChart';
+import { IconAlertCircle, IconRefresh, IconTable } from '@tabler/icons-react';
+import { useCallback, useEffect, useMemo, useRef, type FC } from 'react';
+import {
+    isChunkLoadError,
+    triggerChunkErrorReload,
+} from '../../features/chunkErrorHandler';
+import LoadingChart from '../common/LoadingChart';
 import PivotTable from '../common/PivotTable';
 import SuboptimalState from '../common/SuboptimalState/SuboptimalState';
 import Table from '../common/Table';
@@ -13,6 +15,8 @@ import {
     type CellContextMenuProps,
     type HeaderProps,
 } from '../common/Table/types';
+import { isTableVisualizationConfig } from '../LightdashVisualization/types';
+import { useVisualizationContext } from '../LightdashVisualization/useVisualizationContext';
 import CellContextMenu from './CellContextMenu';
 import DashboardCellContextMenu from './DashboardCellContextMenu';
 import DashboardHeaderContextMenu from './DashboardHeaderContextMenu';
@@ -24,6 +28,8 @@ type SimpleTableProps = {
     className?: string;
     $shouldExpand?: boolean;
     minimal?: boolean;
+    onScreenshotReady?: () => void;
+    onScreenshotError?: () => void;
 };
 
 const SimpleTable: FC<SimpleTableProps> = ({
@@ -32,6 +38,8 @@ const SimpleTable: FC<SimpleTableProps> = ({
     className,
     $shouldExpand,
     minimal = false,
+    onScreenshotReady,
+    onScreenshotError,
     ...rest
 }) => {
     const {
@@ -40,15 +48,18 @@ const SimpleTable: FC<SimpleTableProps> = ({
         visualizationConfig,
         resultsData,
         isLoading,
+        isEditMode,
     } = useVisualizationContext();
+
+    const hasSignaledScreenshotReady = useRef(false);
 
     const shouldPaginateResults = useMemo(() => {
         return Boolean(
             !resultsData ||
-                !isTableVisualizationConfig(visualizationConfig) ||
-                // When subtotals are disable and there is no pivot table data, we don't need to load all the rows
-                (!visualizationConfig.chartConfig.showSubtotals &&
-                    !visualizationConfig.chartConfig.pivotTableData?.data),
+            !isTableVisualizationConfig(visualizationConfig) ||
+            // When subtotals are disable and there is no pivot table data, we don't need to load all the rows
+            (!visualizationConfig.chartConfig.showSubtotals &&
+                !visualizationConfig.chartConfig.pivotTableData?.data),
         );
     }, [resultsData, visualizationConfig]);
 
@@ -73,6 +84,41 @@ const SimpleTable: FC<SimpleTableProps> = ({
 
         return isSuccess ? 'success' : 'loading';
     }, [resultsData, shouldPaginateResults, isLoading]);
+
+    useEffect(() => {
+        if (hasSignaledScreenshotReady.current) return;
+        if (!onScreenshotReady && !onScreenshotError) return;
+        if (!isTableVisualizationConfig(visualizationConfig)) return;
+
+        const { pivotTableData, isPivotTableEnabled } =
+            visualizationConfig.chartConfig;
+
+        if (pivotTableData.error) {
+            onScreenshotError?.();
+            hasSignaledScreenshotReady.current = true;
+            return;
+        }
+
+        if (isPivotTableEnabled) {
+            if (pivotTableData.data && resultsData?.hasFetchedAllRows) {
+                onScreenshotReady?.();
+                hasSignaledScreenshotReady.current = true;
+            }
+            return;
+        }
+
+        // Signal ready for both success and idle (idle = no data to fetch)
+        if (loadResultsStatus === 'success' || loadResultsStatus === 'idle') {
+            onScreenshotReady?.();
+            hasSignaledScreenshotReady.current = true;
+        }
+    }, [
+        visualizationConfig,
+        loadResultsStatus,
+        resultsData?.hasFetchedAllRows,
+        onScreenshotReady,
+        onScreenshotError,
+    ]);
 
     const showColumnCalculation = useMemo(() => {
         if (!isTableVisualizationConfig(visualizationConfig)) {
@@ -121,6 +167,16 @@ const SimpleTable: FC<SimpleTableProps> = ({
         [isDashboard, itemsMap, minimal, tileUuid],
     );
 
+    const DashboardEmptyState = useCallback(() => {
+        return (
+            <SuboptimalState
+                icon={IconTable}
+                title="No results"
+                description="This query ran successfully but returned no results"
+            />
+        );
+    }, []);
+
     useEffect(() => {
         if (shouldPaginateResults) return;
 
@@ -128,10 +184,15 @@ const SimpleTable: FC<SimpleTableProps> = ({
         resultsData?.setFetchAll(true);
     }, [shouldPaginateResults, resultsData]);
 
+    const tableColumns = useMemo(() => {
+        return isTableVisualizationConfig(visualizationConfig)
+            ? visualizationConfig.chartConfig.columns
+            : [];
+    }, [visualizationConfig]);
+
     if (!isTableVisualizationConfig(visualizationConfig)) return null;
 
     const {
-        columns,
         conditionalFormattings,
         minMaxMap,
         hideRowNumbers,
@@ -140,12 +201,18 @@ const SimpleTable: FC<SimpleTableProps> = ({
         getField,
         showResultsTotal,
         showSubtotals,
+        updateColumnProperty,
     } = visualizationConfig.chartConfig;
 
+    const onColumnWidthChange =
+        !isDashboard && isEditMode !== false
+            ? (fieldId: string, width: number) => {
+                  updateColumnProperty(fieldId, { width });
+              }
+            : undefined;
+
     if (pivotTableData.error) {
-        const isWorkerFetchError = pivotTableData.error.includes(
-            'Failed to fetch dynamically imported module',
-        );
+        const isWorkerFetchError = isChunkLoadError(pivotTableData.error);
         if (isWorkerFetchError) {
             return (
                 <SuboptimalState
@@ -168,7 +235,7 @@ const SimpleTable: FC<SimpleTableProps> = ({
                             variant="default"
                             size={'xs'}
                             leftIcon={<IconRefresh size={16} />}
-                            onClick={() => window.location.reload()}
+                            onClick={triggerChunkErrorReload}
                         >
                             Refresh page
                         </Button>
@@ -186,7 +253,7 @@ const SimpleTable: FC<SimpleTableProps> = ({
     } else if (pivotTableData.loading || pivotTableData.data) {
         return (
             <Box
-                p="xs"
+                p={isDashboard ? 0 : 'xs'}
                 pb={showResultsTotal ? 'xxl' : 'xl'}
                 miw="100%"
                 h="100%"
@@ -197,6 +264,7 @@ const SimpleTable: FC<SimpleTableProps> = ({
                             className={className}
                             data={pivotTableData.data}
                             isMinimal={minimal}
+                            isDashboard={isDashboard}
                             conditionalFormattings={conditionalFormattings}
                             minMaxMap={minMaxMap}
                             getFieldLabel={getFieldLabel}
@@ -206,6 +274,7 @@ const SimpleTable: FC<SimpleTableProps> = ({
                             columnProperties={
                                 visualizationConfig.chartConfig.columnProperties
                             }
+                            onColumnWidthChange={onColumnWidthChange}
                             {...rest}
                         />
                         {showResultsTotal && (
@@ -224,8 +293,9 @@ const SimpleTable: FC<SimpleTableProps> = ({
     }
 
     return (
-        <Box p="xs" pb="md" miw="100%" h="100%">
+        <Box p={isDashboard ? 0 : 'xs'} pb="md" miw="100%" h="100%">
             <Table
+                isDashboard={isDashboard}
                 minimal={minimal}
                 $shouldExpand={$shouldExpand}
                 className={className}
@@ -233,15 +303,17 @@ const SimpleTable: FC<SimpleTableProps> = ({
                 data={resultsData?.rows || []}
                 totalRowsCount={resultsData?.totalResults || 0}
                 isFetchingRows={!!resultsData?.isFetchingRows}
-                loadingState={LoadingChart}
+                loadingState={() => <LoadingChart />}
+                emptyState={isDashboard ? DashboardEmptyState : undefined}
                 fetchMoreRows={resultsData?.fetchMoreRows || noop}
-                columns={columns}
+                columns={tableColumns}
                 columnOrder={columnOrder}
                 hideRowNumbers={hideRowNumbers}
                 showColumnCalculation={showColumnCalculation}
                 showSubtotals={showSubtotals}
                 conditionalFormattings={conditionalFormattings}
                 minMaxMap={minMaxMap}
+                onColumnWidthChange={onColumnWidthChange}
                 columnProperties={
                     visualizationConfig.chartConfig.columnProperties
                 }

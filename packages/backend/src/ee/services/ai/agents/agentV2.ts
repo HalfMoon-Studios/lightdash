@@ -1,14 +1,13 @@
 import { AgentToolOutput, assertUnreachable, Explore } from '@lightdash/common';
 import * as Sentry from '@sentry/node';
 import {
-    generateObject,
+    APICallError,
     generateText,
-    NoSuchToolError,
     smoothStream,
     stepCountIs,
     streamText,
-    ToolCallRepairFunction,
-    ToolSet,
+    StreamTextResult,
+    type Output,
 } from 'ai';
 import Logger from '../../../../logging/logger';
 import { getSystemPromptV2 } from '../prompts/systemV2';
@@ -16,6 +15,7 @@ import { getFindContent } from '../tools/findContent';
 import { getFindExplores } from '../tools/findExplores';
 import { getFindFields } from '../tools/findFields';
 import { getGenerateDashboardV2 } from '../tools/generateDashboardV2';
+import { getGetDashboardCharts } from '../tools/getDashboardCharts';
 import { getImproveContext } from '../tools/improveContext';
 import { getProposeChange } from '../tools/proposeChange';
 import { getRunQuery } from '../tools/runQuery';
@@ -26,6 +26,7 @@ import type {
     AiStreamAgentResponseArgs,
 } from '../types/aiAgent';
 import { AgentContext } from '../utils/AgentContext';
+import { getUserFacingErrorMessage } from '../utils/errorMessages';
 
 const createAiAgentLogger =
     (debugLoggingEnabled: boolean) => (context: string, message: string) => {
@@ -62,7 +63,7 @@ const getAgentTelemetryConfig = (
             threadUuid,
             promptUuid,
         },
-    } as const);
+    }) as const;
 
 const getAgentTools = (
     args: AiAgentArgs,
@@ -81,6 +82,7 @@ const getAgentTools = (
     });
 
     const findFields = getFindFields({
+        getExplore: dependencies.getExplore,
         findFields: dependencies.findFields,
         updateProgress: dependencies.updateProgress,
         pageSize: args.findFieldsPageSize,
@@ -91,9 +93,15 @@ const getAgentTools = (
         siteUrl: args.siteUrl,
     });
 
+    const getDashboardCharts = getGetDashboardCharts({
+        getDashboardCharts: dependencies.getDashboardCharts,
+        siteUrl: args.siteUrl,
+        pageSize: args.getDashboardChartsPageSize,
+    });
+
     const runQuery = getRunQuery({
         updateProgress: dependencies.updateProgress,
-        runMiniMetricQuery: dependencies.runMiniMetricQuery,
+        runAsyncQuery: dependencies.runAsyncQuery,
         getPrompt: dependencies.getPrompt,
         sendFile: dependencies.sendFile,
         createOrUpdateArtifact: dependencies.createOrUpdateArtifact,
@@ -120,6 +128,7 @@ const getAgentTools = (
 
     const tools = {
         findContent,
+        getDashboardCharts,
         findExplores,
         findFields,
         runQuery,
@@ -331,12 +340,24 @@ export const generateAgentResponse = async ({
 
         return result.text;
     } catch (error) {
+        const errorMessage =
+            error instanceof Error ? error.message : 'Unknown error';
+
         Logger.error(
-            `[AiAgent][Generate Agent Response] Error during agent response generation: ${
-                error instanceof Error ? error.message : 'Unknown error'
-            }`,
+            `[AiAgent][Generate Agent Response] Error during agent response generation: ${errorMessage}`,
         );
         Sentry.captureException(error);
+
+        const userFacingMessage = getUserFacingErrorMessage(
+            error,
+            'Something went wrong while generating the response. Please try again.',
+        );
+
+        await dependencies.updatePrompt({
+            promptUuid: args.promptUuid,
+            errorMessage: userFacingMessage,
+        });
+
         throw error;
     }
 };
@@ -347,7 +368,8 @@ export const streamAgentResponse = async ({
 }: {
     args: AiStreamAgentResponseArgs;
     dependencies: AiAgentDependencies;
-}) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+}): Promise<StreamTextResult<any, Output.Output>> => {
     const logger = createAiAgentLogger(args.debugLoggingEnabled);
     logger(
         'Stream Agent Response',
@@ -502,39 +524,19 @@ export const streamAgentResponse = async ({
                 }
             },
             onStepFinish: (step) => {
-                const reasoningsToStore = step.reasoning
-                    .map((reasoning) => {
-                        if (
-                            reasoning.text &&
-                            reasoning.text.length > 0 &&
-                            'providerMetadata' in reasoning &&
-                            typeof reasoning.providerMetadata === 'object' &&
-                            reasoning.providerMetadata !== null &&
-                            'openai' in reasoning.providerMetadata &&
-                            typeof reasoning.providerMetadata.openai ===
-                                'object' &&
-                            reasoning.providerMetadata.openai !== null &&
-                            'itemId' in reasoning.providerMetadata.openai &&
-                            typeof reasoning.providerMetadata.openai.itemId ===
-                                'string'
-                        ) {
-                            return {
-                                reasoningId:
-                                    reasoning.providerMetadata.openai.itemId,
-                                text: reasoning.text,
-                            };
-                        }
-                        return null;
-                    })
-                    .filter((r) => r !== null);
-
-                if (reasoningsToStore.length > 0) {
+                if (step.reasoningText && step.reasoningText.length > 0) {
                     logger(
                         'On Step Finish',
-                        `Storing ${reasoningsToStore.length} reasoning parts for Prompt UUID ${args.promptUuid}`,
+                        `Storing reasoning text for Prompt UUID ${args.promptUuid}`,
                     );
                     void dependencies
-                        .storeReasoning(args.promptUuid, reasoningsToStore)
+                        .storeReasoning(args.promptUuid, [
+                            {
+                                // TODO :: this works for now, but we need to find a better way to capture the reasoning id from `providerMetadata`
+                                reasoningId: crypto.randomUUID(),
+                                text: step.reasoningText,
+                            },
+                        ])
                         .catch((error) => {
                             Logger.error(
                                 'On Step Finish',
@@ -595,17 +597,28 @@ export const streamAgentResponse = async ({
                 delayInMs: 20,
                 chunking: 'line',
             }),
-            onError: (error) => {
+            onError: ({ error }) => {
                 console.error(error);
+                const errorMessage =
+                    error instanceof Error ? error.message : 'Unknown error';
+
                 Logger.error(
-                    `[AiAgent][Stream Agent Response] Error during streaming: ${
-                        error instanceof Error ? error.message : 'Unknown error'
-                    }`,
+                    `[AiAgent][Stream Agent Response] Error during streaming: ${errorMessage}`,
                 );
                 Sentry.captureException(error, {
                     tags: {
                         errorType: 'AiAgentStreamError',
                     },
+                });
+
+                const userFacingMessage = getUserFacingErrorMessage(
+                    error,
+                    'Something went wrong while streaming the response. Please try again.',
+                );
+
+                void dependencies.updatePrompt({
+                    promptUuid: args.promptUuid,
+                    errorMessage: userFacingMessage,
                 });
             },
             experimental_telemetry: getAgentTelemetryConfig(
@@ -617,16 +630,28 @@ export const streamAgentResponse = async ({
         logger('Stream Agent Response', 'Returning stream result.');
         return result;
     } catch (error) {
+        const errorMessage =
+            error instanceof Error ? error.message : 'Unknown error';
+
         Logger.error(
-            `[AiAgent][Stream Agent Response] Fatal error before stream could start: ${
-                error instanceof Error ? error.message : 'Unknown error'
-            }`,
+            `[AiAgent][Stream Agent Response] Fatal error before stream could start: ${errorMessage}`,
         );
         Sentry.captureException(error, {
             tags: {
                 errorType: 'AiAgentStreamError',
             },
         });
+
+        const userFacingMessage = getUserFacingErrorMessage(
+            error,
+            'Something went wrong while processing your request. Please try again.',
+        );
+
+        await dependencies.updatePrompt({
+            promptUuid: args.promptUuid,
+            errorMessage: userFacingMessage,
+        });
+
         throw error;
     }
 };

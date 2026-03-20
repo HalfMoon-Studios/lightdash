@@ -37,12 +37,12 @@ type SelectSavedSql = Pick<
     | 'last_viewed_at'
 > &
     Pick<DbSavedSqlVersion, 'sql' | 'limit' | 'config' | 'chart_kind'> &
-    Pick<DbSpace, 'space_uuid'> &
+    Pick<DbSpace, 'space_uuid' | 'path'> &
     Pick<DbProject, 'project_uuid'> &
     Pick<DbOrganization, 'organization_uuid'> & {
         updated_at: Date;
         spaceName: string;
-        space_is_private: boolean;
+        space_inherit_parent_permissions: boolean;
         dashboardName: string | null;
         created_by_user_uuid: string | null;
         created_by_user_first_name: string | null;
@@ -63,7 +63,7 @@ export class SavedSqlModel {
         SqlChart,
         'space'
     > & {
-        space: Pick<SpaceSummary, 'uuid' | 'name' | 'isPrivate'>;
+        space: Pick<SpaceSummary, 'uuid' | 'name'>;
     } {
         return {
             savedSqlUuid: row.saved_sql_uuid,
@@ -95,7 +95,6 @@ export class SavedSqlModel {
             space: {
                 uuid: row.space_uuid,
                 name: row.spaceName,
-                isPrivate: row.space_is_private,
             },
             project: {
                 projectUuid: row.project_uuid,
@@ -117,16 +116,19 @@ export class SavedSqlModel {
 
     async find(options: {
         uuid?: string;
-        slug?: string;
+        slugs?: string[];
         projectUuid?: string;
+        deleted?: boolean;
     }) {
         return this.database
             .from(SavedSqlTableName)
-            .leftJoin(
-                DashboardsTableName,
-                `${DashboardsTableName}.dashboard_uuid`,
-                `${SavedSqlTableName}.dashboard_uuid`,
-            )
+            .leftJoin(DashboardsTableName, function nonDeletedDashboardJoin() {
+                this.on(
+                    `${DashboardsTableName}.dashboard_uuid`,
+                    '=',
+                    `${SavedSqlTableName}.dashboard_uuid`,
+                ).andOnNull(`${DashboardsTableName}.deleted_at`);
+            })
             .innerJoin(SpaceTableName, function spaceJoin() {
                 this.on(
                     `${SpaceTableName}.space_id`,
@@ -189,9 +191,18 @@ export class SavedSqlModel {
                 `updatedByUser.last_name as last_version_updated_by_user_last_name`,
                 `${SpaceTableName}.space_uuid`,
                 `${SpaceTableName}.name as spaceName`,
-                `${SpaceTableName}.is_private as space_is_private`,
+                `${SpaceTableName}.inherit_parent_permissions as space_inherit_parent_permissions`,
+                `${SpaceTableName}.path`,
             ])
             .where((builder) => {
+                if (options.deleted) {
+                    void builder.whereNotNull(
+                        `${SavedSqlTableName}.deleted_at`,
+                    );
+                } else {
+                    void builder.whereNull(`${SavedSqlTableName}.deleted_at`);
+                }
+
                 if (options.uuid) {
                     void builder.where(
                         `${SavedSqlTableName}.saved_sql_uuid`,
@@ -199,10 +210,10 @@ export class SavedSqlModel {
                     );
                 }
 
-                if (options.slug) {
-                    void builder.where(
+                if (options.slugs && options.slugs.length > 0) {
+                    void builder.whereIn(
                         `${SavedSqlTableName}.slug`,
-                        options.slug,
+                        options.slugs,
                     );
                 }
 
@@ -231,8 +242,16 @@ export class SavedSqlModel {
             .orderBy(`${SavedSqlVersionsTableName}.created_at`, 'desc');
     }
 
-    async getBySlug(projectUuid: string, slug: string) {
-        const results = await this.find({ slug, projectUuid });
+    async getBySlug(
+        projectUuid: string,
+        slug: string,
+        options?: { deleted?: boolean },
+    ) {
+        const results = await this.find({
+            slugs: [slug],
+            projectUuid,
+            deleted: options?.deleted,
+        });
         const [result] = results;
         if (!result) {
             throw new NotFoundError('Saved sql not found');
@@ -240,7 +259,10 @@ export class SavedSqlModel {
         return SavedSqlModel.convertSelectSavedSql(result);
     }
 
-    async getByUuid(uuid: string, options: { projectUuid?: string }) {
+    async getByUuid(
+        uuid: string,
+        options: { projectUuid?: string; deleted?: boolean },
+    ) {
         const results = await this.find({ uuid, ...options });
         const [result] = results;
         if (!result) {
@@ -292,21 +314,22 @@ export class SavedSqlModel {
         savedSqlVersionUuid: string;
     }> {
         return this.database.transaction(async (trx) => {
+            // Use provided slug or generate one from the name
+            const finalSlug =
+                data.slug ??
+                (await generateUniqueSlug(trx, SavedSqlTableName, data.name));
+
             const [{ saved_sql_uuid: savedSqlUuid, slug }] = await trx(
                 SavedSqlTableName,
             ).insert(
                 {
-                    slug: await generateUniqueSlug(
-                        trx,
-                        SavedSqlTableName,
-                        data.name,
-                    ),
+                    slug: finalSlug,
                     name: data.name,
                     description: data.description,
                     created_by_user_uuid: userUuid,
                     project_uuid: projectUuid,
                     space_uuid: data.spaceUuid,
-                    dashboard_uuid: null,
+                    dashboard_uuid: null, // TODO: if we start using dashboard_uuid, implement cascade soft delete in DashboardModel (like saved_queries)
                 },
                 ['saved_sql_uuid', 'slug'],
             );
@@ -355,6 +378,38 @@ export class SavedSqlModel {
     async delete(uuid: string) {
         await this.database(SavedSqlTableName)
             .where('saved_sql_uuid', uuid)
+            .delete();
+    }
+
+    async softDelete(savedSqlUuid: string, userUuid: string): Promise<void> {
+        const updateCount = await this.database(SavedSqlTableName)
+            .update({
+                deleted_at: new Date(),
+                deleted_by_user_uuid: userUuid,
+            })
+            .where('saved_sql_uuid', savedSqlUuid)
+            .whereNull('deleted_at');
+        if (updateCount !== 1) {
+            throw new NotFoundError('Saved sql not found');
+        }
+    }
+
+    async restore(savedSqlUuid: string): Promise<void> {
+        const updateCount = await this.database(SavedSqlTableName)
+            .update({
+                deleted_at: null,
+                deleted_by_user_uuid: null,
+            })
+            .where('saved_sql_uuid', savedSqlUuid)
+            .whereNotNull('deleted_at');
+        if (updateCount !== 1) {
+            throw new NotFoundError('Saved sql not found');
+        }
+    }
+
+    async permanentDelete(savedSqlUuid: string): Promise<void> {
+        await this.database(SavedSqlTableName)
+            .where('saved_sql_uuid', savedSqlUuid)
             .delete();
     }
 

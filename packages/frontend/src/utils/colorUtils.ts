@@ -6,15 +6,6 @@ import {
 import Color from 'colorjs.io';
 import { DARK_MODE_COLORS } from '../mantineTheme';
 
-export const readableColor = (backgroundColor: string) => {
-    if (!isHexCodeColor(backgroundColor)) {
-        return 'black';
-    }
-    const onWhite = Math.abs(Color.contrastAPCA('white', backgroundColor));
-    const onBlack = Math.abs(Color.contrastAPCA('black', backgroundColor));
-    return onWhite > onBlack ? 'white' : 'black';
-};
-
 /**
  * Replaces 'problematic' colors in dark mode for better visibility
  */
@@ -112,4 +103,58 @@ export const getColorFromRange = (
     const percentage = (value - min) / (max - min);
 
     return interpolateColor(percentage).toString({ format: 'hex' });
+};
+
+/**
+ * Interpolates a color from an array of colors based on a normalized value (0-1).
+ * Uses piecewise linear interpolation between adjacent color stops.
+ */
+export const interpolateMultiColor = (colors: string[], t: number): string => {
+    if (colors.length === 0) return '#888888';
+    if (colors.length === 1) return colors[0];
+
+    // Clamp t to [0, 1]
+    const clampedT = Math.max(0, Math.min(1, t));
+
+    // Find which segment we're in
+    const segmentCount = colors.length - 1;
+    const segmentIndex = Math.min(
+        Math.floor(clampedT * segmentCount),
+        segmentCount - 1,
+    );
+
+    // Get local t within the segment (0-1)
+    const segmentStart = segmentIndex / segmentCount;
+    const segmentEnd = (segmentIndex + 1) / segmentCount;
+    const localT = (clampedT - segmentStart) / (segmentEnd - segmentStart);
+
+    // Interpolate between the two colors in this segment
+    const startColor = new Color(colors[segmentIndex]);
+    const endColor = new Color(colors[segmentIndex + 1]);
+    // Using oklab for perceptually uniform gradients (better for data visualization)
+    const range = Color.range(startColor, endColor, { space: 'oklab' });
+
+    return range(localT).toString({ format: 'hex' });
+};
+
+/**
+ * Creates a color scale function that maps values in a domain to colors.
+ * Similar to D3's scaleLinear but uses colorjs.io for interpolation.
+ */
+export const createMultiColorScale = (
+    min: number,
+    max: number,
+    colors: string[],
+): ((value: number) => string) => {
+    if (colors.length === 0) return () => '#888888';
+    if (colors.length === 1) return () => colors[0];
+    if (max === min) return () => colors[Math.floor(colors.length / 2)];
+
+    return (value: number): string => {
+        // Clamp value to domain
+        const clampedValue = Math.max(min, Math.min(max, value));
+        // Normalize to 0-1
+        const t = (clampedValue - min) / (max - min);
+        return interpolateMultiColor(colors, t);
+    };
 };

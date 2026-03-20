@@ -129,12 +129,46 @@ export class MyNewService extends BaseService {
 
 Common service dependencies:
 
--   Models: For data persistence (UserModel, ProjectModel, etc.)
--   Config: Application configuration (lightdashConfig)
--   Analytics: For tracking events (analytics)
--   Other services: For complex operations that span multiple domains
+- Models: For data persistence (UserModel, ProjectModel, etc.)
+- Config: Application configuration (lightdashConfig)
+- Analytics: For tracking events (analytics)
+- Other services: For complex operations that span multiple domains
 
 </importantToKnow>
+
+## SoftDeletableService Pattern
+
+Services that support soft delete (`SpaceService`, `DashboardService`, `SavedChartService`, `SavedSqlService`, `SchedulerService`) implement the `SoftDeletableService` interface with four methods:
+
+- `delete()` — entry point: checks perms, tracks `*.deleted` analytics, delegates to `softDelete()` or `permanentDelete()` with `{ bypassPermissions: true }`
+- `softDelete()` — marks record as deleted in DB
+- `restore()` — clears `deleted_at`
+- `permanentDelete()` — removes record from DB
+
+**Key rules:**
+
+- Only `delete()` tracks analytics — `softDelete()`/`permanentDelete()` do not, to avoid duplicate tracking
+- `bypassPermissions: true` skips permission checks and entity fetch (caller already handled both)
+- Feature flag `lightdashConfig.softDelete.enabled` controls whether `delete()` routes to `softDelete()` or `permanentDelete()`
+
+### Cascade Order (service-level, not DB CASCADE)
+
+Soft delete and restore cascade through service calls:
+
+```
+Space
+├── Child spaces (recursive)
+├── Dashboards
+│   ├── Dashboard-scoped (space_id IS NULL) charts (saved_queries)
+│   │   └── Schedulers
+│   └── Schedulers
+├── Charts (saved_queries)
+│   └── Schedulers
+└── SQL charts (saved_sql)
+    └── Schedulers
+```
+
+Permanent delete relies on DB CASCADE for cleanup (schedulers FK to charts/dashboards).
 
 <links>
 - Service architecture overview: @/packages/backend/src/services/ServiceRepository.ts

@@ -1,24 +1,36 @@
 import {
     CustomFormatType,
-    NumberSeparator,
     getCustomFormat,
+    getEffectiveItemType,
     getItemId,
+    getItemMap,
     hasFormatting,
+    isDimension,
+    isMetric,
+    NumberSeparator,
     type CustomFormat,
+    type Dimension,
     type Metric,
 } from '@lightdash/common';
-import { Button, Group, Modal, Stack, Title } from '@mantine/core';
+import { Button } from '@mantine-8/core';
 import { useForm } from '@mantine/form';
+import { IconEraser, IconPencil } from '@tabler/icons-react';
 import isEqual from 'lodash/isEqual';
-import { memo, useCallback, useEffect } from 'react';
+import { memo, useCallback, useEffect, useMemo } from 'react';
 import { type ValueOf } from 'type-fest';
 import {
     explorerActions,
+    selectAdditionalMetrics,
     selectFormatModal,
     selectMetricQuery,
+    selectTableCalculations,
+    selectTableName,
     useExplorerDispatch,
     useExplorerSelector,
 } from '../../../features/explorer/store';
+import { useExplore } from '../../../hooks/useExplore';
+import MantineIcon from '../../common/MantineIcon';
+import MantineModal from '../../common/MantineModal';
 import { FormatForm } from '../FormatForm';
 
 const DEFAULT_FORMAT: CustomFormat = {
@@ -31,11 +43,36 @@ const DEFAULT_FORMAT: CustomFormat = {
     suffix: undefined,
 };
 
+// Returns a fresh copy to avoid the module-level constant being frozen by Immer
+// when passed through Redux. klona (used by Mantine form) preserves frozen
+// property descriptors, causing "Cannot assign to read only property" errors.
+const getDefaultFormat = (): CustomFormat => ({ ...DEFAULT_FORMAT });
+
 export const FormatModal = memo(() => {
     const dispatch = useExplorerDispatch();
-    const { isOpen, metric } = useExplorerSelector(selectFormatModal);
+    const { isOpen, item } = useExplorerSelector(selectFormatModal);
     const metricQuery = useExplorerSelector(selectMetricQuery);
     const metricOverrides = metricQuery.metricOverrides;
+    const dimensionOverrides = metricQuery.dimensionOverrides;
+    const additionalMetrics = useExplorerSelector(selectAdditionalMetrics);
+    const tableCalculations = useExplorerSelector(selectTableCalculations);
+    const tableName = useExplorerSelector(selectTableName);
+
+    // Get explore data to determine effective item type for formatting
+    const { data: exploreData } = useExplore(tableName, {
+        refetchOnMount: false,
+    });
+
+    const itemsMap = useMemo(() => {
+        if (exploreData) {
+            return getItemMap(
+                exploreData,
+                additionalMetrics,
+                tableCalculations,
+            );
+        }
+        return undefined;
+    }, [exploreData, additionalMetrics, tableCalculations]);
 
     const toggleModal = useCallback(() => {
         dispatch(explorerActions.toggleFormatModal());
@@ -48,32 +85,42 @@ export const FormatModal = memo(() => {
         [dispatch],
     );
 
+    const updateDimensionFormat = useCallback(
+        (payload: { dimension: Dimension; formatOptions: CustomFormat }) => {
+            dispatch(explorerActions.updateDimensionFormat(payload));
+        },
+        [dispatch],
+    );
+
     const form = useForm<{ format: CustomFormat }>({
         validateInputOnChange: true,
         initialValues: {
-            format: DEFAULT_FORMAT,
+            format: getDefaultFormat(),
         },
     });
 
     const { setFieldValue } = form;
 
     useEffect(() => {
-        if (metric) {
-            let metricFormat = hasFormatting(metric)
-                ? getCustomFormat(metric)
+        if (item) {
+            const itemFormat = hasFormatting(item)
+                ? getCustomFormat(item)
                 : undefined;
-            const override = metricOverrides
-                ? metricOverrides[getItemId(metric)]
-                : undefined;
-            if (metricFormat || override) {
+
+            // Get the appropriate override based on item type
+            const override = isDimension(item)
+                ? dimensionOverrides?.[getItemId(item)]
+                : metricOverrides?.[getItemId(item)];
+
+            if (itemFormat || override) {
                 setFieldValue('format', {
                     ...DEFAULT_FORMAT,
-                    ...metricFormat,
+                    ...itemFormat,
                     ...override?.formatOptions,
                 });
             }
         }
-    }, [metricOverrides, metric, setFieldValue]);
+    }, [metricOverrides, dimensionOverrides, item, setFieldValue]);
 
     const handleClose = useCallback(() => {
         form.reset();
@@ -81,8 +128,16 @@ export const FormatModal = memo(() => {
     }, [form, toggleModal]);
 
     const handleOnSubmit = form.onSubmit((values) => {
-        if (!metric) return;
-        updateMetricFormat({ metric, formatOptions: values.format });
+        if (!item) return;
+        if (isMetric(item)) {
+            updateMetricFormat({ metric: item, formatOptions: values.format });
+        } else if (isDimension(item)) {
+            updateDimensionFormat({
+                dimension: item,
+                formatOptions: values.format,
+            });
+        }
+        dispatch(explorerActions.requestQueryExecution());
         handleClose();
     });
 
@@ -94,46 +149,56 @@ export const FormatModal = memo(() => {
         value: ValueOf<CustomFormat>,
     ) => form.setFieldValue(`format.${path}`, value);
 
-    if (!isOpen) {
+    const modalTitle = useMemo(() => {
+        if (isDimension(item)) {
+            return 'Format dimension';
+        }
+        if (isMetric(item)) {
+            return 'Format metric';
+        }
+        return 'Format field';
+    }, [item]);
+
+    if (!isOpen || !item) {
         return null;
     }
 
-    return metric ? (
-        <Modal
+    return (
+        <MantineModal
             size="xl"
-            onClick={(e) => e.stopPropagation()}
-            opened={isOpen}
+            opened
+            icon={IconPencil}
             onClose={handleClose}
-            title={<Title order={4}>Format metric</Title>}
+            title={modalTitle}
+            actions={
+                <Button type="submit" form="format-field-form">
+                    Save changes
+                </Button>
+            }
+            leftActions={
+                !isEqual(form.values.format, DEFAULT_FORMAT) ? (
+                    <Button
+                        variant="default"
+                        leftSection={<MantineIcon icon={IconEraser} />}
+                        onClick={() =>
+                            form.setValues({
+                                format: getDefaultFormat(),
+                            })
+                        }
+                    >
+                        Reset
+                    </Button>
+                ) : undefined
+            }
         >
-            <form onSubmit={handleOnSubmit}>
-                <Stack>
-                    <FormatForm
-                        formatInputProps={getFormatInputProps}
-                        format={form.values.format}
-                        setFormatFieldValue={setFormatFieldValue}
-                    />
-
-                    <Group position="right" spacing="xs">
-                        {!isEqual(form.values.format, DEFAULT_FORMAT) && (
-                            <Button
-                                variant="default"
-                                onClick={() =>
-                                    form.setValues({
-                                        format: DEFAULT_FORMAT,
-                                    })
-                                }
-                            >
-                                Reset
-                            </Button>
-                        )}
-
-                        <Button display="block" type="submit">
-                            Save changes
-                        </Button>
-                    </Group>
-                </Stack>
+            <form id="format-field-form" onSubmit={handleOnSubmit}>
+                <FormatForm
+                    formatInputProps={getFormatInputProps}
+                    format={form.values.format}
+                    setFormatFieldValue={setFormatFieldValue}
+                    itemType={getEffectiveItemType(item, itemsMap)}
+                />
             </form>
-        </Modal>
-    ) : null;
+        </MantineModal>
+    );
 });

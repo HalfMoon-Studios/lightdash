@@ -14,8 +14,8 @@ import {
     useAppDispatch as useVizDispatch,
     useAppSelector as useVizSelector,
 } from '../../../features/sqlRunner/store/hooks';
-import { Config } from '../../VisualizationConfigs/common/Config';
 import MantineIcon from '../../common/MantineIcon';
+import { Config } from '../../VisualizationConfigs/common/Config';
 import { FieldReferenceSelect } from '../FieldReferenceSelect';
 import { type BarChartActionsType } from '../store/barChartSlice';
 import { type LineChartActionsType } from '../store/lineChartSlice';
@@ -52,9 +52,7 @@ const YFieldsAxisConfig: FC<{
                     <Config.Section>
                         <Group spacing="xs">
                             <FieldReferenceSelect
-                                sx={{
-                                    flex: 1,
-                                }}
+                                flex={1}
                                 data={yLayoutOptions.map((y) => ({
                                     value: y.reference,
                                     label: y.reference,
@@ -144,9 +142,7 @@ const XFieldAxisConfig = ({
     return (
         <Group spacing="xs">
             <FieldReferenceSelect
-                sx={{
-                    flex: 1,
-                }}
+                flex={1}
                 data={xLayoutOptions.map((x) => ({
                     value: x.reference,
                     label: x.reference,
@@ -292,16 +288,23 @@ export const CartesianChartFieldConfiguration = ({
         cartesianChartSelectors.getErrors(state, selectedChartType),
     );
 
+    const filteredXLayoutOptions = xLayoutOptions?.filter(
+        (option) => option.reference !== groupByField?.reference,
+    );
+    const filteredGroupByOptions = groupByLayoutOptions?.filter(
+        (option) => option.reference !== xAxisField?.reference,
+    );
+
     return (
         <Stack spacing="xl" mt="sm">
             <Config>
                 <Config.Section>
                     <Config.Heading>{`X-axis`}</Config.Heading>
-                    {xLayoutOptions && (
+                    {filteredXLayoutOptions && (
                         <XFieldAxisConfig
                             columns={columns}
                             field={xAxisField}
-                            xLayoutOptions={xLayoutOptions}
+                            xLayoutOptions={filteredXLayoutOptions}
                             actions={actions}
                             error={errors?.indexFieldError}
                         />
@@ -352,7 +355,7 @@ export const CartesianChartFieldConfiguration = ({
                     <GroupByFieldAxisConfig
                         columns={columns}
                         field={groupByField}
-                        groupByOptions={groupByLayoutOptions}
+                        groupByOptions={filteredGroupByOptions}
                         actions={actions}
                         error={errors?.groupByFieldError}
                     />

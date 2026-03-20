@@ -1,7 +1,7 @@
 import { subject } from '@casl/ability';
 import {
-    ProjectType,
     assertUnreachable,
+    ProjectType,
     type OrganizationProject,
 } from '@lightdash/common';
 import {
@@ -278,7 +278,7 @@ const ProjectManagementPanel: FC = () => {
                 </Can>
             </Group>
 
-            <SettingsCard sx={{ overflow: 'hidden' }} shadow="none" p={0}>
+            <SettingsCard style={{ overflow: 'hidden' }} shadow="none" p={0}>
                 <Group position="apart">
                     <Tabs
                         classNames={tableTabStyles.classes}

@@ -128,13 +128,17 @@ export const spaceEntry: SpaceTable['base'] = {
     slug: 'space-name',
 
     name: 'space name',
-    is_private: false,
     created_at: new Date(),
     project_id: 0,
     organization_uuid: 'organizationUuid',
     search_vector: '',
     parent_space_uuid: null,
     path: 'space-name',
+    inherit_parent_permissions: true,
+    is_default_user_space: false,
+
+    deleted_at: null,
+    deleted_by_user_uuid: null,
 };
 export const savedChartEntry: SavedChartTable['base'] = {
     saved_query_id: 0,
@@ -152,6 +156,8 @@ export const savedChartEntry: SavedChartTable['base'] = {
     search_vector: '',
     views_count: 0,
     first_viewed_at: null,
+    deleted_at: null,
+    deleted_by_user_uuid: null,
 };
 
 export const dashboardEntry: DashboardTable['base'] = {
@@ -166,10 +172,14 @@ export const dashboardEntry: DashboardTable['base'] = {
     search_vector: '',
     views_count: 0,
     first_viewed_at: null,
+
+    deleted_at: null,
+    deleted_by_user_uuid: null,
 };
 
 export const dashboardVersionEntry: DashboardVersionTable['base'] = {
     dashboard_version_id: 0,
+    dashboard_version_uuid: 'dashboard-version-uuid',
     dashboard_id: 0,
     created_at: new Date(),
     updated_by_user_uuid: 'userUuid',
@@ -199,6 +209,7 @@ export const dashboardWithVersionEntry: GetDashboardQuery = {
 
     description: dashboardEntry.description,
     dashboard_version_id: dashboardVersionEntry.dashboard_version_id,
+    dashboard_version_uuid: dashboardVersionEntry.dashboard_version_uuid,
     created_at: dashboardVersionEntry.created_at,
     user_uuid: 'userUuid',
     first_name: 'firstName',
@@ -238,6 +249,7 @@ export const markdownTileEntry = {
     type: DashboardTileTypes.MARKDOWN,
     title: 'my markdown title',
     content: 'my markdown content',
+    hide_frame: false,
 };
 
 export const dashboardChartTileEntry: GetChartTileQuery = {
@@ -251,6 +263,7 @@ export const expectedDashboard: DashboardDAO = {
     organizationUuid: 'organizationUuid',
     projectUuid: projectEntry.project_uuid,
     dashboardVersionId: dashboardVersionEntry.dashboard_version_id,
+    versionUuid: dashboardVersionEntry.dashboard_version_uuid,
     uuid: dashboardEntry.dashboard_uuid,
     name: dashboardEntry.name,
     slug: `name`,
@@ -291,6 +304,7 @@ export const expectedDashboard: DashboardDAO = {
                 title: markdownTileEntry.title,
                 content: markdownTileEntry.content,
                 hideTitle: false,
+                hideFrame: false,
             },
             x: dashboardTileEntry.x_offset,
             y: dashboardTileEntry.y_offset,

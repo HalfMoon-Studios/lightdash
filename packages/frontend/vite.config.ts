@@ -7,13 +7,13 @@ import svgrPlugin from 'vite-plugin-svgr';
 import { defineConfig } from 'vitest/config';
 
 const FE_PORT = process.env.FE_PORT ? parseInt(process.env.FE_PORT) : 3000;
+const FE_HOST = process.env.FE_HOST;
 const BE_PORT = process.env.PORT ? parseInt(process.env.PORT) : 8080;
 
 export default defineConfig({
     publicDir: 'public',
     define: {
         __APP_VERSION__: JSON.stringify(process.env.npm_package_version),
-        REACT_SCAN_ENABLED: process.env.REACT_SCAN_ENABLED ?? true,
         REACT_QUERY_DEVTOOLS_ENABLED:
             process.env.REACT_QUERY_DEVTOOLS_ENABLED ?? true,
     },
@@ -26,7 +26,10 @@ export default defineConfig({
         }),
         monacoEditorPlugin({
             forceBuildCDN: true,
-            languageWorkers: ['json'],
+            languageWorkers: ['editorWorkerService', 'json', 'html'],
+            customWorkers: [
+                { label: 'yaml', entry: 'monaco-yaml/yaml.worker.js' },
+            ],
         }),
         sentryVitePlugin({
             telemetry: false,
@@ -45,6 +48,7 @@ export default defineConfig({
     ],
     optimizeDeps: {
         exclude: ['@lightdash/common'],
+        include: ['react-vega'],
     },
     resolve: {
         alias:
@@ -75,7 +79,6 @@ export default defineConfig({
                         'react',
                         'react-dom',
                         'react-router',
-                        'react-hook-form',
                         'react-use',
                         // TODO: removed because of PNPM
                         // 'react-draggable',
@@ -123,8 +126,12 @@ export default defineConfig({
         environment: 'jsdom',
         setupFiles: './src/testing/vitest.setup.ts',
         env: {
-            VITE_REACT_SCAN_ENABLED: 'false',
             VITE_REACT_QUERY_DEVTOOLS_ENABLED: 'false',
+        },
+        poolOptions: {
+            forks: {
+                maxForks: '50%',
+            },
         },
     },
     server: {
@@ -135,7 +142,9 @@ export default defineConfig({
         },
         allowedHosts: [
             'lightdash-dev', // for local development with docker
-            '.lightdash.dev', // for cloudflared tunnels
+            'host.docker.internal', // for headless browser in docker (scheduled deliveries)
+            '.lightdash.dev', // for cloudflared tunnels,
+            ...(FE_HOST ? [FE_HOST] : []),
         ],
         watch: {
             ignored: ['!**/node_modules/@lightdash/common/**'],

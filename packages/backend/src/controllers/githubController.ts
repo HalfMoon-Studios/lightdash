@@ -4,10 +4,12 @@ import {
     GitRepo,
 } from '@lightdash/common';
 import {
+    Body,
     Delete,
     Get,
     Middlewares,
     OperationId,
+    Post,
     Query,
     Request,
     Route,
@@ -32,7 +34,7 @@ import { BaseController } from './baseController';
 export class GithubInstallController extends BaseController {
     /**
      * Install the Lightdash GitHub App and link to an organization
-     *
+     * @summary Install GitHub App
      * @param redirect The url to redirect to after installation
      * @param req express request
      */
@@ -56,6 +58,10 @@ export class GithubInstallController extends BaseController {
         this.setHeader('Location', context.installUrl);
     }
 
+    /**
+     * Get GitHub App configuration for the organization
+     * @summary Get GitHub App configuration
+     */
     @Middlewares([isAuthenticated, unauthorisedInDemo])
     @SuccessResponse('200')
     @Get('/config')
@@ -78,7 +84,7 @@ export class GithubInstallController extends BaseController {
 
     /**
      * Callback URL for GitHub App Authorization also used for GitHub App Installation with combined Authorization
-     *
+     * @summary GitHub OAuth callback
      * @param req {express.Request} express request
      * @param code {string} authorization code from GitHub
      * @param state {string} oauth state parameter
@@ -112,6 +118,10 @@ export class GithubInstallController extends BaseController {
         this.setHeader('Location', redirectUrl);
     }
 
+    /**
+     * Uninstall the GitHub App from the organization
+     * @summary Uninstall GitHub App
+     */
     @Middlewares([isAuthenticated, unauthorisedInDemo])
     @Delete('/uninstall')
     @OperationId('uninstallGithubAppForOrganization')
@@ -129,6 +139,10 @@ export class GithubInstallController extends BaseController {
         };
     }
 
+    /**
+     * List GitHub repositories accessible via the installed app
+     * @summary List GitHub repositories
+     */
     @Middlewares([isAuthenticated, unauthorisedInDemo])
     @SuccessResponse('200')
     @Get('/repos/list')
@@ -144,6 +158,47 @@ export class GithubInstallController extends BaseController {
             results: await this.services
                 .getGithubAppService()
                 .getRepos(req.user!),
+        };
+    }
+
+    /**
+     * Create a new GitHub repository via the installed app
+     * @summary Create GitHub repository
+     */
+    @Middlewares([isAuthenticated, unauthorisedInDemo])
+    @SuccessResponse('201', 'Created')
+    @Post('/repos')
+    @OperationId('createGithubRepository')
+    async createGithubRepository(
+        @Request() req: express.Request,
+        @Body()
+        body: {
+            name: string;
+            description?: string;
+            isPrivate?: boolean;
+        },
+    ): Promise<{
+        status: 'ok';
+        results: {
+            owner: string;
+            repo: string;
+            fullName: string;
+            defaultBranch: string;
+        };
+    }> {
+        const result = await this.services
+            .getGithubAppService()
+            .createRepository(
+                req.user!,
+                body.name,
+                body.description,
+                body.isPrivate,
+            );
+
+        this.setStatus(201);
+        return {
+            status: 'ok',
+            results: result,
         };
     }
 }

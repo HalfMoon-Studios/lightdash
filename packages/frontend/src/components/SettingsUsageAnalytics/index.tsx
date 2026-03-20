@@ -1,9 +1,9 @@
 import { FeatureFlags } from '@lightdash/common';
-import { Card, Group, Stack, Text } from '@mantine/core';
+import { Card, Group, Stack, Text } from '@mantine-8/core';
 import { IconArchive, IconLayoutDashboard } from '@tabler/icons-react';
 import { type FC } from 'react';
 import { Link } from 'react-router';
-import { useFeatureFlagEnabled } from '../../hooks/useFeatureFlagEnabled';
+import { useClientFeatureFlag } from '../../hooks/useServerOrClientFeatureFlag';
 import MantineIcon from '../common/MantineIcon';
 
 interface ProjectUserAccessProps {
@@ -13,18 +13,18 @@ interface ProjectUserAccessProps {
 const SettingsUsageAnalytics: FC<ProjectUserAccessProps> = ({
     projectUuid,
 }) => {
-    const isUnusedContentDashboardEnabled = useFeatureFlagEnabled(
+    const isUnusedContentDashboardEnabled = useClientFeatureFlag(
         FeatureFlags.UnusedContentDashboard,
     );
 
     return (
         <>
-            <Text color="dimmed">
+            <Text c="dimmed">
                 Lightdash curated dashboards that show usage and performance
                 information about your project.
             </Text>
 
-            <Stack spacing="md">
+            <Stack gap="md">
                 <Card
                     component={Link}
                     shadow="sm"

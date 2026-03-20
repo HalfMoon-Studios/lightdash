@@ -7,6 +7,7 @@ import {
     ChartKind,
     ChartType,
     DbtProjectType,
+    getRequestMethod,
     LightdashInstallType,
     LightdashMode,
     LightdashPage,
@@ -23,11 +24,11 @@ import {
     TableSelectionType,
     ValidateProjectPayload,
     WarehouseTypes,
-    getRequestMethod,
 } from '@lightdash/common';
 import Analytics, {
     Track as AnalyticsTrack,
 } from '@rudderstack/rudder-sdk-node';
+import { EventEmitter } from 'events';
 import { Request } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { LightdashConfig } from '../config/parseConfig';
@@ -421,6 +422,15 @@ type DeleteSavedChartEvent = BaseTrack & {
     properties: {
         projectId: string;
         savedQueryId: string;
+        softDelete: boolean;
+    };
+};
+
+type RestoredSavedChartEvent = BaseTrack & {
+    event: 'saved_chart.restored';
+    properties: {
+        projectId: string;
+        savedQueryId: string;
     };
 };
 
@@ -447,6 +457,24 @@ type RollbackChartVersionEvent = BaseTrack & {
     properties: {
         projectId: string;
         savedQueryId: string;
+        versionId: string;
+    };
+};
+
+type DashboardHistoryEvent = BaseTrack & {
+    event: 'dashboard_history.view';
+    properties: {
+        projectId: string;
+        dashboardId: string;
+        versionCount: number;
+    };
+};
+
+type RollbackDashboardVersionEvent = BaseTrack & {
+    event: 'dashboard_version.rollback';
+    properties: {
+        projectId: string;
+        dashboardId: string;
         versionId: string;
     };
 };
@@ -620,6 +648,16 @@ type DeletedDashboardEvent = BaseTrack & {
     properties: {
         projectId: string;
         dashboardId: string;
+        softDelete: boolean;
+    };
+};
+
+type RestoredDashboardEvent = BaseTrack & {
+    event: 'dashboard.restored';
+    userId: string;
+    properties: {
+        projectId: string;
+        dashboardId: string;
     };
 };
 
@@ -690,7 +728,7 @@ type SpaceEvent = BaseTrack & {
         name: string;
         spaceId: string;
         projectId: string;
-        isPrivate: boolean;
+        inheritParentPermissions: boolean;
         userAccessCount: number;
         isNested: boolean;
     };
@@ -705,6 +743,16 @@ type SpaceDeleted = BaseTrack & {
         spaceId: string;
         projectId: string;
         isNested: boolean;
+        softDelete: boolean;
+    };
+};
+
+type SpaceRestored = BaseTrack & {
+    event: 'space.restored';
+    properties: {
+        name: string;
+        spaceId: string;
+        projectId: string;
     };
 };
 
@@ -853,6 +901,17 @@ type DeleteSqlChartEvent = BaseTrack & {
         chartId: string;
         projectId: string;
         organizationId: string;
+        softDelete: boolean;
+    };
+};
+
+type RestoredSqlChartEvent = BaseTrack & {
+    event: 'sql_chart.restored';
+    userId: string;
+    properties: {
+        chartId: string;
+        projectId: string;
+        organizationId: string;
     };
 };
 
@@ -930,6 +989,17 @@ type PinnedListUpdated = BaseTrack & {
     };
 };
 
+type FavoriteToggled = BaseTrack & {
+    event: 'favorite.toggled';
+    userId: string;
+    properties: {
+        projectId: string;
+        organizationId: string;
+        contentType: string;
+        isFavorite: boolean;
+    };
+};
+
 export type SchedulerUpsertEvent = BaseTrack & {
     event: 'scheduler.created' | 'scheduler.updated';
     userId: string;
@@ -944,7 +1014,7 @@ export type SchedulerUpsertEvent = BaseTrack & {
         format: SchedulerFormat;
         targets: Array<{
             schedulerTargetId: string;
-            type: 'slack' | 'email' | 'msteams';
+            type: 'slack' | 'email' | 'msteams' | 'googlechat';
         }>;
         timeZone: string | undefined;
         includeLinks: boolean;
@@ -975,6 +1045,18 @@ export type SchedulerDeleteEvent = BaseTrack & {
         schedulerId: string;
         resourceType: 'dashboard' | 'chart';
         resourceId: string;
+        softDelete: boolean;
+    };
+};
+
+export type SchedulerRestoredEvent = BaseTrack & {
+    event: 'scheduler.restored';
+    properties: {
+        projectId: string;
+        organizationId: string;
+        schedulerId: string;
+        resourceType: 'dashboard' | 'chart';
+        resourceId: string;
     };
 };
 
@@ -988,9 +1070,13 @@ export type SchedulerJobEvent = BaseTrack & {
     anonymousId: string;
     properties: {
         jobId: string;
+        organizationId: string;
+        projectId: string;
         schedulerId: string | undefined;
+        groupId: string | undefined;
         sendNow?: boolean;
         isThresholdAlert?: boolean;
+        error?: string;
     };
 };
 
@@ -1003,13 +1089,22 @@ export type SchedulerNotificationJobEvent = BaseTrack & {
     anonymousId: string;
     properties: {
         jobId: string;
+        organizationId: string;
+        projectId: string;
         schedulerId?: string;
+        schedulerTargetId?: string;
+        groupId: string | undefined;
         resourceType?: 'dashboard' | 'chart';
-        type: 'slack' | 'email' | 'gsheets' | 'msteams';
+        type: 'slack' | 'email' | 'gsheets' | 'msteams' | 'googlechat';
         format?: SchedulerFormat;
         withPdf?: boolean;
         sendNow: boolean;
         isThresholdAlert?: boolean;
+        targetCount?: number;
+        succeeded?: number;
+        failed?: number;
+        partialFailure?: boolean;
+        error?: string;
     };
 };
 
@@ -1206,6 +1301,31 @@ export type WriteBackErrorEvent = BaseTrack & {
         projectId: string;
         context: QueryExecutionContext;
         error: string;
+    };
+};
+
+export type SourceCodeEvent = BaseTrack & {
+    event: 'source_code.viewed' | 'source_code.pull_request_created';
+    userId: string;
+    properties: {
+        organizationId: string;
+        projectId: string;
+        exploreName?: string;
+        filePath: string;
+        fileSize: number;
+        gitProvider: DbtProjectType.GITHUB | DbtProjectType.GITLAB;
+    };
+};
+
+export type SourceCodeBranchPullRequestEvent = BaseTrack & {
+    event: 'source_code.branch_pull_request_created';
+    userId: string;
+    properties: {
+        organizationId: string;
+        projectId: string;
+        branch: string;
+        baseBranch: string;
+        gitProvider: DbtProjectType.GITHUB | DbtProjectType.GITLAB;
     };
 };
 
@@ -1448,6 +1568,25 @@ export type AiAgentArtifactsRetrievedEvent = BaseTrack & {
     };
 };
 
+export type SchedulerOwnershipReassignedEvent = BaseTrack & {
+    event: 'scheduler.ownership_reassigned';
+    properties: {
+        organizationId: string;
+        projectId: string;
+        schedulerUuids: string[];
+        newOwnerUserUuid: string;
+    };
+};
+
+export type ImpersonationEvent = BaseTrack & {
+    event: 'user.impersonation_started' | 'user.impersonation_stopped';
+    properties: {
+        adminUserUuid: string;
+        targetUserUuid: string;
+        organizationUuid: string;
+    };
+};
+
 type TypedEvent =
     | TrackSimpleEvent
     | CreateUserEvent
@@ -1466,11 +1605,14 @@ type TypedEvent =
     | ModeDashboardChartEvent
     | UpdateSavedChartEvent
     | DeleteSavedChartEvent
+    | RestoredSavedChartEvent
     | CreateSavedChartEvent
     | ChartHistoryEvent
     | ViewChartVersionEvent
     | RollbackChartVersionEvent
     | CreateSavedChartVersionEvent
+    | DashboardHistoryEvent
+    | RollbackDashboardVersionEvent
     | ProjectErrorEvent
     | ApiErrorEvent
     | ProjectEvent
@@ -1478,6 +1620,7 @@ type TypedEvent =
     | ProjectCompiledEvent
     | UpdatedDashboardEvent
     | DeletedDashboardEvent
+    | RestoredDashboardEvent
     | CreateDashboardOrVersionEvent
     | ProjectTablesConfigurationEvent
     | CreateOrganizationEvent
@@ -1495,6 +1638,7 @@ type TypedEvent =
     | ProjectSearch
     | SpaceEvent
     | SpaceDeleted
+    | SpaceRestored
     | DashboardUpdateMultiple
     | SavedChartUpdateMultiple
     | FieldValueSearch
@@ -1507,9 +1651,11 @@ type TypedEvent =
     | AnalyticsDashboardView
     | SchedulerUpsertEvent
     | SchedulerDeleteEvent
+    | SchedulerRestoredEvent
     | SchedulerJobEvent
     | SchedulerNotificationJobEvent
     | PinnedListUpdated
+    | FavoriteToggled
     | DownloadCsv
     | SchedulerDashboardView
     | Validation
@@ -1525,12 +1671,15 @@ type TypedEvent =
     | CreateSqlChartEvent
     | UpdateSqlChartEvent
     | DeleteSqlChartEvent
+    | RestoredSqlChartEvent
     | CreateSqlChartVersionEvent
     | CommentsEvent
     | VirtualViewEvent
     | GithubInstallEvent
     | WriteBackEvent
     | WriteBackErrorEvent
+    | SourceCodeEvent
+    | SourceCodeBranchPullRequestEvent
     | SchedulerTimezoneUpdateEvent
     | CreateTagEvent
     | CategoriesAppliedEvent
@@ -1548,7 +1697,9 @@ type TypedEvent =
     | McpToolCallEvent
     | AiAgentToolCallEvent
     | AiAgentArtifactVersionVerifiedEvent
-    | AiAgentArtifactsRetrievedEvent;
+    | AiAgentArtifactsRetrievedEvent
+    | SchedulerOwnershipReassignedEvent
+    | ImpersonationEvent;
 
 type UntypedEvent<T extends BaseTrack> = Omit<BaseTrack, 'event'> &
     T & {
@@ -1560,6 +1711,7 @@ type LightdashAnalyticsArguments = {
     writeKey: string;
     dataPlaneUrl: string;
     options?: ConstructorParameters<typeof Analytics>[1];
+    eventEmitter?: EventEmitter;
 };
 
 export class LightdashAnalytics extends Analytics {
@@ -1567,15 +1719,19 @@ export class LightdashAnalytics extends Analytics {
 
     private readonly lightdashContext: Record<string, AnyType>;
 
+    private readonly eventEmitter?: EventEmitter;
+
     constructor({
         lightdashConfig,
         writeKey,
         dataPlaneUrl,
         options,
+        eventEmitter,
     }: LightdashAnalyticsArguments) {
         super(writeKey, { ...options, dataPlaneUrl });
 
         this.lightdashConfig = lightdashConfig;
+        this.eventEmitter = eventEmitter;
         this.lightdashContext = {
             app: {
                 namespace: 'lightdash',
@@ -1583,7 +1739,8 @@ export class LightdashAnalytics extends Analytics {
                 version: VERSION,
                 mode: lightdashConfig.mode,
                 siteUrl:
-                    lightdashConfig.mode === LightdashMode.CLOUD_BETA
+                    lightdashConfig.mode === LightdashMode.CLOUD_BETA ||
+                    lightdashConfig.mode === LightdashMode.DEMO
                         ? lightdashConfig.siteUrl
                         : null,
                 installId: process.env.LIGHTDASH_INSTALL_ID || uuidv4(),
@@ -1606,6 +1763,16 @@ export class LightdashAnalytics extends Analytics {
     }
 
     track<T extends BaseTrack>(payload: TypedEvent | UntypedEvent<T>) {
+        if (
+            this.lightdashConfig.prometheus.enabled &&
+            this.lightdashConfig.prometheus.eventMetricsEnabled
+        ) {
+            this.eventEmitter?.emit(
+                `analytics.track.${payload.event}`,
+                payload,
+            );
+        }
+
         if (!this.lightdashConfig.rudder.writeKey) return; // Tracking disabled
         if (isUserUpdatedEvent(payload)) {
             const basicEventProperties = {

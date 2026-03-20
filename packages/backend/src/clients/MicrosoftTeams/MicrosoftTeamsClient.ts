@@ -1,10 +1,13 @@
 import {
     AnyType,
+    assertUnreachable,
     friendlyName,
     MissingConfigError,
     MsTeamsError,
     operatorActionValue,
+    PartialFailureType,
     ThresholdOptions,
+    type PartialFailure,
 } from '@lightdash/common';
 import { LightdashConfig } from '../../config/parseConfig';
 import Logger from '../../logging/logger';
@@ -37,11 +40,15 @@ export class MicrosoftTeamsClient {
         }
         const response = await fetch(webhookUrl, {
             method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
             body: JSON.stringify(payload),
         });
 
-        const responseText = await response.text();
-        if (response.status !== 200 || responseText.includes('error')) {
+        // Accept any 2xx status: legacy webhooks return 200, Power Automate Workflows return 202
+        if (!response.ok) {
+            const responseText = await response.text();
             Logger.error(
                 `Microsoft teams webhook returned an error: ${response.status} ${responseText}`,
             );
@@ -286,7 +293,7 @@ export class MicrosoftTeamsClient {
         ctaUrl: string;
         csvUrls: AttachmentUrl[];
         footer: string;
-        failures?: { chartName: string; error: string }[];
+        failures?: PartialFailure[];
     }): Promise<void> {
         if (!this.lightdashConfig.microsoftTeams.enabled) {
             throw new MissingConfigError('Microsoft Teams is not enabled');
@@ -329,12 +336,30 @@ export class MicrosoftTeamsClient {
                                 wrap: true,
                                 spacing: 'Small',
                             },
-                            ...failures.map((f) => ({
-                                type: 'TextBlock',
-                                text: `- **${f.chartName}:** ${f.error}`,
-                                wrap: true,
-                                spacing: 'None',
-                            })),
+                            ...failures.map((f) => {
+                                switch (f.type) {
+                                    case PartialFailureType.DASHBOARD_CHART:
+                                    case PartialFailureType.DASHBOARD_SQL_CHART:
+                                        return {
+                                            type: 'TextBlock',
+                                            text: `- **${f.chartName}:** ${f.error}`,
+                                            wrap: true,
+                                            spacing: 'None',
+                                        };
+                                    case PartialFailureType.MISSING_TARGETS:
+                                        return {
+                                            type: 'TextBlock',
+                                            text: `- **No targets found for this scheduled delivery**`,
+                                            wrap: true,
+                                            spacing: 'None',
+                                        };
+                                    default:
+                                        return assertUnreachable(
+                                            f,
+                                            'Unknown partial failure type',
+                                        );
+                                }
+                            }),
                         ],
                     },
                 ];
@@ -352,12 +377,30 @@ export class MicrosoftTeamsClient {
                             color: 'Warning',
                             wrap: true,
                         },
-                        ...failures.map((f) => ({
-                            type: 'TextBlock',
-                            text: `- **${f.chartName}:** ${f.error}`,
-                            wrap: true,
-                            spacing: 'None',
-                        })),
+                        ...failures.map((f) => {
+                            switch (f.type) {
+                                case PartialFailureType.DASHBOARD_CHART:
+                                case PartialFailureType.DASHBOARD_SQL_CHART:
+                                    return {
+                                        type: 'TextBlock',
+                                        text: `- **${f.chartName}:** ${f.error}`,
+                                        wrap: true,
+                                        spacing: 'None',
+                                    };
+                                case PartialFailureType.MISSING_TARGETS:
+                                    return {
+                                        type: 'TextBlock',
+                                        text: `- **No targets found for this scheduled delivery**`,
+                                        wrap: true,
+                                        spacing: 'None',
+                                    };
+                                default:
+                                    return assertUnreachable(
+                                        f,
+                                        'Unknown partial failure type',
+                                    );
+                            }
+                        }),
                     ],
                 },
             ];

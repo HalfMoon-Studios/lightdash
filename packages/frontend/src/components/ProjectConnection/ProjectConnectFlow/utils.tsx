@@ -1,14 +1,9 @@
 import { assertUnreachable, WarehouseTypes } from '@lightdash/common';
 import { Avatar } from '@mantine/core';
 import { IconDots } from '@tabler/icons-react';
-import MantineIcon from '../../common/MantineIcon';
-import {
-    OtherWarehouse,
-    type SelectedWarehouse,
-    type WarehouseLabel,
-} from './types';
-
+import MantineIcon, { type MantineIconSize } from '../../common/MantineIcon';
 // assets
+import Athena from './Assets/athena.svg';
 import BigQuery from './Assets/bigquery.svg';
 import ClickHouse from './Assets/clickhouse.svg';
 import Databricks from './Assets/databricks.svg';
@@ -16,6 +11,11 @@ import PostgressLogo from './Assets/postgresql.svg';
 import Redshift from './Assets/redshift.svg';
 import Snowflake from './Assets/snowflake.svg';
 import Trino from './Assets/trino.svg';
+import {
+    OtherWarehouse,
+    type SelectedWarehouse,
+    type WarehouseLabel,
+} from './types';
 
 export const WarehouseTypeLabels: WarehouseLabel[] = [
     {
@@ -61,6 +61,12 @@ export const WarehouseTypeLabels: WarehouseLabel[] = [
         image: ClickHouse,
     },
     {
+        label: 'Athena',
+        key: WarehouseTypes.ATHENA,
+        iconType: 'image',
+        image: Athena,
+    },
+    {
         label: 'Other',
         key: OtherWarehouse.Other,
         iconType: 'icon',
@@ -72,7 +78,10 @@ export const getWarehouseLabel = (key?: SelectedWarehouse) => {
     return WarehouseTypeLabels.find((w) => w.key === key)?.label ?? null;
 };
 
-export const getWarehouseIcon = (key?: SelectedWarehouse, size = 'md') => {
+export const getWarehouseIcon = (
+    key?: SelectedWarehouse,
+    size: MantineIconSize = 'md',
+) => {
     const item = WarehouseTypeLabels.find((w) => w.key === key);
     if (!item) return null;
 

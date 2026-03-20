@@ -6,7 +6,11 @@ import {
     type GroupingState,
 } from '@tanstack/react-table';
 import React, { useEffect, useMemo, useState, type FC } from 'react';
-import { DEFAULT_PAGE_SIZE, ROW_NUMBER_COLUMN_ID } from './constants';
+import {
+    DEFAULT_PAGE_SIZE,
+    FROZEN_COLUMN_BACKGROUND,
+    ROW_NUMBER_COLUMN_ID,
+} from './constants';
 import Context from './context';
 import { getGroupedRowModelLightdash } from './getGroupedRowModelLightdash';
 import { type ProviderProps, type TableColumn } from './types';
@@ -82,23 +86,31 @@ export const TableProvider: FC<React.PropsWithChildren<ProviderProps>> = ({
         () => columns.filter((col) => col.meta?.frozen),
         [columns],
     );
-    const frozenColumnWidth = 100; // TODO this should be dynamic
+    const defaultFrozenColumnWidth = 100;
     const stickyColumns = useMemo(() => {
-        return frozenColumns.map((col, i) => ({
-            ...col,
-            meta: {
-                ...col.meta,
-                className: `sticky-column ${
-                    i === frozenColumns.length - 1 ? 'last-sticky-column' : ''
-                }`,
-                style: {
-                    maxWidth: frozenColumnWidth,
-                    minWidth: frozenColumnWidth,
-                    left: rowColumnWidth + i * frozenColumnWidth,
+        let cumulativeLeft = rowColumnWidth;
+        return frozenColumns.map((col, i) => {
+            const colWidth = col.meta?.width ?? defaultFrozenColumnWidth;
+            const left = cumulativeLeft;
+            cumulativeLeft += colWidth;
+            return {
+                ...col,
+                meta: {
+                    ...col.meta,
+                    className: `sticky-column ${
+                        i === frozenColumns.length - 1
+                            ? 'last-sticky-column'
+                            : ''
+                    }`,
+                    style: {
+                        maxWidth: colWidth,
+                        minWidth: colWidth,
+                        left,
+                    },
                 },
-            },
-        }));
-    }, [frozenColumns, frozenColumnWidth, rowColumnWidth]);
+            };
+        });
+    }, [frozenColumns, rowColumnWidth]);
 
     const otherColumns = useMemo(
         () => columns.filter((col) => !col.meta?.frozen),
@@ -116,7 +128,7 @@ export const TableProvider: FC<React.PropsWithChildren<ProviderProps>> = ({
                 style: {
                     maxWidth: rowColumnWidth,
                     minWidth: rowColumnWidth,
-                    backgroundColor: 'white',
+                    backgroundColor: FROZEN_COLUMN_BACKGROUND,
                 },
             },
         };

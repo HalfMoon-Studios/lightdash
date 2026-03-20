@@ -1,451 +1,193 @@
 import {
-    assertUnreachable,
     isChartValidationError,
-    RenameType,
+    isFixableDashboardValidationError,
+    ValidationErrorType,
     type ValidationErrorChartResponse,
-    type ValidationResponse,
+    type ValidationErrorDashboardResponse,
+    type ValidationSourceType,
 } from '@lightdash/common';
-import {
-    Anchor,
-    Box,
-    Button,
-    Checkbox,
-    Code,
-    Group,
-    Highlight,
-    Loader,
-    Modal,
-    Paper,
-    Radio,
-    Select,
-    Stack,
-    Text,
-    TextInput,
-    Title,
-    Tooltip,
-    useMantineTheme,
-} from '@mantine/core';
-import { useForm } from '@mantine/form';
+import { Button, Group, Loader, Paper, Text } from '@mantine-8/core';
+import { useDebouncedValue } from '@mantine/hooks';
 import { IconCheck } from '@tabler/icons-react';
-import { useMemo, useState, type FC } from 'react';
-import { useExplores } from '../../hooks/useExplores';
-import { useSavedQuery } from '../../hooks/useSavedQuery';
+import { useCallback, useMemo, useState, type FC } from 'react';
+import { useLocation, useNavigate } from 'react-router';
+import useSearchParams from '../../hooks/useSearchParams';
 import {
-    useValidation,
+    usePaginatedValidation,
+    usePinnedValidation,
     useValidationMutation,
 } from '../../hooks/validation/useValidation';
 import useApp from '../../providers/App/useApp';
-import { formatTime } from '../SchedulersView/SchedulersViewUtils';
 import MantineIcon from '../common/MantineIcon';
 import { ValidatorTable } from './ValidatorTable';
-import {
-    useFieldsForChart,
-    useRenameChart,
-} from './ValidatorTable/hooks/useRenameResource';
-import { getLinkToResource } from './utils/utils';
-
-const MIN_ROWS_TO_ENABLE_SCROLLING = 6;
-
-const FixValidationErrorModal: FC<{
-    validationError: ValidationErrorChartResponse | undefined; // At the moment we can only fix chart errors
-    allValidationErrors: ValidationResponse[] | undefined;
-    onClose: () => void;
-}> = ({ validationError, allValidationErrors, onClose }) => {
-    const { mutate: renameChart } = useRenameChart();
-
-    const chartUuid = validationError?.chartUuid;
-    const { data: fields, isError: isErrorFields } = useFieldsForChart(
-        validationError?.projectUuid,
-        chartUuid,
-    );
-    const { data: savedQuery } = useSavedQuery({ id: chartUuid });
-    const { data: explores } = useExplores(validationError?.projectUuid, true);
-    const [oldName, setOldName] = useState<string | undefined>();
-    const [newName, setNewName] = useState('');
-    const [fixAll, setFixAll] = useState(false);
-    const [renameType, setRenameType] = useState<RenameType>(RenameType.FIELD);
-    const form = useForm<{}>();
-
-    const [search, setSearch] = useState('');
-
-    const fieldOptions = useMemo(
-        () =>
-            Object.entries(fields?.fields || {})
-                .sort(([groupA], [groupB]) => groupA.localeCompare(groupB)) // Sort groups alphabetically
-                .flatMap(([group, items]) =>
-                    items.map((item) => ({
-                        value: item,
-                        label: item,
-                        group,
-                    })),
-                ),
-        [fields],
-    );
-
-    // Check how many occurrences of the same error there are in the rest of validation errors
-    const totalOcurrences: number = useMemo(() => {
-        if (
-            !validationError ||
-            !allValidationErrors ||
-            allValidationErrors.length === 0
-        )
-            return 0;
-
-        if (renameType === RenameType.FIELD) {
-            return allValidationErrors.filter(
-                (e) =>
-                    isChartValidationError(e) &&
-                    e.fieldName === validationError?.fieldName,
-            ).length;
-        } else if (renameType === RenameType.MODEL) {
-            const tableName = oldName ?? savedQuery?.tableName;
-
-            return allValidationErrors.filter(
-                (e) =>
-                    isChartValidationError(e) &&
-                    (e.fieldName || '').startsWith(tableName ?? ''),
-            ).length;
-        } else {
-            return assertUnreachable(
-                renameType,
-                `Unexpected rename type ${renameType}`,
-            );
-        }
-    }, [validationError, allValidationErrors, renameType, savedQuery, oldName]);
-
-    const fieldName = validationError?.fieldName;
-
-    // Check if the field belongs to the chart's base table
-    const fieldBaseTableNameCandidate = useMemo(() => {
-        if (!fieldName || !savedQuery?.tableName) return '';
-        if (fieldName.startsWith(savedQuery?.tableName ?? ''))
-            return savedQuery?.tableName;
-        return fieldName.split('_')[0];
-    }, [fieldName, savedQuery?.tableName]);
-
-    const isFieldFromBaseTable =
-        fieldBaseTableNameCandidate === savedQuery?.tableName;
-
-    if (!validationError) {
-        return null;
-    }
-
-    const handleClose = () => {
-        setOldName(undefined);
-        setRenameType(RenameType.FIELD);
-        setNewName('');
-        setFixAll(false);
-        form.reset();
-        onClose();
-    };
-
-    const handleConfirm = form.onSubmit(() => {
-        renameChart({
-            from: oldName || fieldName || '',
-            to: newName,
-            chartUuid: validationError.chartUuid!,
-            fixAll,
-            projectUuid: validationError.projectUuid!,
-            resourceUrl: getLinkToResource(
-                validationError,
-                validationError.projectUuid,
-            ),
-            type: renameType,
-        });
-
-        form.reset();
-        handleClose();
-    });
-
-    return (
-        <Modal
-            size="lg"
-            title={<Title order={4}>Fix validation error</Title>}
-            opened={!!validationError}
-            onClose={handleClose}
-            styles={() => ({
-                content: { maxHeight: 'fit-content !important' },
-            })}
-        >
-            <Text>
-                Fix{' '}
-                <Text span fw={500}>
-                    {validationError.source}
-                </Text>{' '}
-                error:
-                <Anchor
-                    href={getLinkToResource(
-                        validationError,
-                        validationError.projectUuid,
-                    )}
-                    target="_blank"
-                >
-                    <Text span fw={500}>
-                        {' '}
-                        {validationError?.name}
-                    </Text>
-                </Anchor>
-            </Text>
-
-            <Text mt="xs" mb="xs" color="ldGray.7" size="xs">
-                You can rename the missing dimension by renaming the affected
-                field or model using the drop down below.
-            </Text>
-
-            <form onSubmit={handleConfirm}>
-                <Radio.Group
-                    mt="xs"
-                    mb="xs"
-                    defaultValue={RenameType.FIELD}
-                    onChange={(e) => {
-                        const type = e as RenameType;
-                        setRenameType(type);
-
-                        switch (type) {
-                            case RenameType.FIELD:
-                                setOldName(fieldName);
-                                break;
-                            case RenameType.MODEL:
-                                setOldName(fieldBaseTableNameCandidate);
-                                break;
-                            default:
-                                assertUnreachable(
-                                    type,
-                                    `Unexpected rename type ${type}`,
-                                );
-                        }
-                    }}
-                >
-                    <Group>
-                        <Radio value={RenameType.FIELD} label="Field" />
-                        <Radio value={RenameType.MODEL} label="Model" />
-                    </Group>
-                </Radio.Group>
-                {renameType === RenameType.FIELD ? (
-                    <Stack>
-                        <TextInput
-                            disabled
-                            label="Old field"
-                            defaultValue={fieldName}
-                            value={oldName}
-                        />
-                        <Tooltip
-                            withinPortal
-                            disabled={!isErrorFields}
-                            label={`Could not find any fields on explore ${savedQuery?.tableName}. Perhaps you want to replace the model instead?`}
-                        >
-                            <div>
-                                <Select
-                                    itemComponent={({ label, ...others }) => (
-                                        <Highlight
-                                            highlight={search}
-                                            {...others}
-                                            highlightColor="yellow"
-                                        >
-                                            {label}
-                                        </Highlight>
-                                    )}
-                                    onSearchChange={setSearch}
-                                    searchValue={search}
-                                    data={fieldOptions}
-                                    required
-                                    disabled={isErrorFields}
-                                    searchable
-                                    withinPortal
-                                    label="New field"
-                                    placeholder={`Select a field to rename to`}
-                                    onChange={(e) => {
-                                        if (e) setNewName(e);
-                                    }}
-                                />
-                            </div>
-                        </Tooltip>
-                    </Stack>
-                ) : renameType === RenameType.MODEL ? (
-                    <Stack>
-                        <TextInput
-                            disabled={isFieldFromBaseTable}
-                            label="Old model"
-                            placeholder={
-                                isFieldFromBaseTable
-                                    ? undefined
-                                    : 'Enter the table name (e.g., customers)'
-                            }
-                            value={oldName}
-                            onChange={(e) => setOldName(e.currentTarget.value)}
-                        />
-                        {!isFieldFromBaseTable && (
-                            <Text size="xs" c="dimmed">
-                                The field <Code>{fieldName}</Code> doesn't
-                                belong to the base model for chart:{' '}
-                                <Code>{savedQuery?.tableName}</Code>. Enter the
-                                correct old model name to point the field to the
-                                correct model.
-                            </Text>
-                        )}
-                        <Select
-                            searchValue={search}
-                            onSearchChange={setSearch}
-                            itemComponent={({ label, ...others }) => (
-                                <Highlight
-                                    highlight={search}
-                                    {...others}
-                                    highlightColor="yellow"
-                                >
-                                    {label}
-                                </Highlight>
-                            )}
-                            data={explores?.map((e) => e.name) || []}
-                            required
-                            searchable
-                            withinPortal
-                            label="New model"
-                            placeholder={`Select a model to rename to`}
-                            onChange={(e) => {
-                                if (e) setNewName(e);
-                            }}
-                        />
-                    </Stack>
-                ) : (
-                    assertUnreachable(
-                        renameType,
-                        `Unexpected rename type ${renameType}`,
-                    )
-                )}
-                {totalOcurrences > 1 ? (
-                    <Tooltip
-                        withinPortal
-                        label="Check this to rename all occurrences of this field in other charts and dashboards."
-                    >
-                        <Group display={'inline-block'}>
-                            <Checkbox
-                                mt="xs"
-                                size="xs"
-                                label={`Fix all occurrences (${totalOcurrences})`}
-                                checked={fixAll}
-                                onChange={(e) =>
-                                    setFixAll(e.currentTarget.checked)
-                                }
-                            />
-                        </Group>
-                    </Tooltip>
-                ) : (
-                    <Text mt="xs" size="xs" color="ldGray.7">
-                        This {renameType} is not used in any other charts.
-                    </Text>
-                )}
-                <Group position="right" mt="sm">
-                    <Button variant="outline" onClick={handleClose}>
-                        Cancel
-                    </Button>
-
-                    <Button type="submit" disabled={newName === ''}>
-                        Rename
-                    </Button>
-                </Group>
-            </form>
-        </Modal>
-    );
-};
+import { ChartConfigurationErrorModal } from './ValidatorTable/ChartConfigurationErrorModal';
+import { FixDashboardFilterModal } from './ValidatorTable/FixDashboardFilterModal';
+import { FixValidationErrorModal } from './ValidatorTable/FixValidationErrorModal';
 
 export const SettingsValidator: FC<{ projectUuid: string }> = ({
     projectUuid,
 }) => {
-    const theme = useMantineTheme();
     const [isValidating, setIsValidating] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [debouncedSearch] = useDebouncedValue(searchQuery, 300);
+    const [sourceTypeFilter, setSourceTypeFilter] = useState<
+        ValidationSourceType[]
+    >([]);
+    const [showConfigWarnings, setShowConfigWarnings] = useState(false);
+
+    const targetValidationId = useSearchParams('validationId');
+    const navigate = useNavigate();
+    const { pathname } = useLocation();
 
     const { user } = useApp();
-    const { data, isLoading } = useValidation(projectUuid, user, true); // Note: Users that land on this page can always manage validations
+
+    const { data: pinnedValidation } = usePinnedValidation(
+        projectUuid,
+        targetValidationId ? Number(targetValidationId) : null,
+    );
+
+    const handleUnpin = useCallback(() => {
+        void navigate({ pathname }, { replace: true });
+    }, [navigate, pathname]);
+
+    const { data, isLoading, isFetching, isError, fetchNextPage } =
+        usePaginatedValidation(projectUuid, user, {
+            pageSize: 20,
+            searchQuery: debouncedSearch || undefined,
+            sourceTypes:
+                sourceTypeFilter.length > 0 ? sourceTypeFilter : undefined,
+            includeChartConfigWarnings: showConfigWarnings,
+        });
+
     const { mutate: validateProject } = useValidationMutation(
         projectUuid,
         () => setIsValidating(false),
         () => setIsValidating(false),
     );
+
     const [selectedValidationError, setSelectedValidationError] =
         useState<ValidationErrorChartResponse>();
+    const [selectedConfigError, setSelectedConfigError] =
+        useState<ValidationErrorChartResponse>();
+    const [selectedDashboardError, setSelectedDashboardError] =
+        useState<ValidationErrorDashboardResponse>();
+
+    const flatData = useMemo(
+        () => data?.pages.flatMap((page) => page.data) ?? [],
+        [data],
+    );
+
+    const deduplicatedData = useMemo(() => {
+        if (!pinnedValidation) return flatData;
+        return flatData.filter(
+            (item) => item.validationId !== pinnedValidation.validationId,
+        );
+    }, [flatData, pinnedValidation]);
+
+    const totalDBRowCount = data?.pages?.[0]?.pagination?.totalResults ?? 0;
+
+    const lastValidatedAt = useMemo(() => {
+        if (!flatData.length) return null;
+        return flatData.reduce<Date | null>((max, item) => {
+            const date = new Date(item.createdAt);
+            return max === null || date > max ? date : max;
+        }, null);
+    }, [flatData]);
+
+    // Check if filters are active to determine if we should always show the table
+    const hasActiveFilters =
+        searchQuery !== '' || sourceTypeFilter.length > 0 || showConfigWarnings;
+
     return (
         <>
             <FixValidationErrorModal
                 validationError={selectedValidationError}
-                allValidationErrors={data}
+                allValidationErrors={flatData}
                 onClose={() => {
                     setSelectedValidationError(undefined);
                 }}
             />
-            <Text color="dimmed">
-                Use the project validator to check what content is broken in
-                your project.
-            </Text>
+            <FixDashboardFilterModal
+                validationError={selectedDashboardError}
+                allValidationErrors={flatData}
+                onClose={() => {
+                    setSelectedDashboardError(undefined);
+                }}
+            />
+            <ChartConfigurationErrorModal
+                validationError={selectedConfigError}
+                onClose={() => {
+                    setSelectedConfigError(undefined);
+                }}
+            />
+            <Group gap="md" justify="space-between" mb="md">
+                <Text c="dimmed">
+                    Use the project validator to check what content is broken in
+                    your project.
+                </Text>
+                <Button
+                    size="xs"
+                    onClick={() => {
+                        setIsValidating(true);
+                        validateProject();
+                    }}
+                    loading={isValidating}
+                >
+                    Run validation
+                </Button>
+            </Group>
 
-            <Paper withBorder shadow="sm">
-                <Group
-                    position="apart"
-                    p="md"
-                    sx={{
-                        borderBottomWidth: 1,
-                        borderBottomStyle: 'solid',
-                        borderBottomColor: theme.colors.ldGray[3],
+            {isLoading ? (
+                <Paper withBorder shadow="sm">
+                    <Group justify="center" gap="xs" p="md">
+                        <Loader color="gray" />
+                    </Group>
+                </Paper>
+            ) : flatData.length > 0 || pinnedValidation || hasActiveFilters ? (
+                <ValidatorTable
+                    data={deduplicatedData}
+                    projectUuid={projectUuid}
+                    onSelectValidationError={(validationError) => {
+                        if (isChartValidationError(validationError)) {
+                            if (
+                                validationError.errorType ===
+                                ValidationErrorType.ChartConfiguration
+                            ) {
+                                setSelectedConfigError(validationError);
+                            } else {
+                                setSelectedValidationError(validationError);
+                            }
+                        } else if (
+                            isFixableDashboardValidationError(validationError)
+                        ) {
+                            setSelectedDashboardError(validationError);
+                        }
                     }}
-                >
-                    <Text fw={500} fz="xs" c="ldGray.6">
-                        {!!data?.length
-                            ? `Last validated at: ${formatTime(
-                                  data[0].createdAt,
-                              )}`
-                            : null}
-                    </Text>
-                    <Button
-                        onClick={() => {
-                            setIsValidating(true);
-                            validateProject();
-                        }}
-                        loading={isValidating}
-                    >
-                        Run validation
-                    </Button>
-                </Group>
-                <Box
-                    sx={{
-                        overflowY:
-                            data && data.length > MIN_ROWS_TO_ENABLE_SCROLLING
-                                ? 'scroll'
-                                : 'auto',
-                        maxHeight:
-                            data && data.length > MIN_ROWS_TO_ENABLE_SCROLLING
-                                ? '500px'
-                                : 'auto',
-                    }}
-                >
-                    {isLoading ? (
-                        <Group position="center" spacing="xs" p="md">
-                            <Loader color="gray" />
-                        </Group>
-                    ) : !!data?.length ? (
-                        <>
-                            <ValidatorTable
-                                data={data}
-                                projectUuid={projectUuid}
-                                onSelectValidationError={(validationError) => {
-                                    if (
-                                        isChartValidationError(validationError)
-                                    ) {
-                                        setSelectedValidationError(
-                                            validationError,
-                                        );
-                                    }
-                                }}
-                            />
-                        </>
-                    ) : (
-                        <Group position="center" spacing="xs" p="md">
-                            <MantineIcon icon={IconCheck} color="green" />
-                            <Text fw={500} c="ldGray.7">
-                                No validation errors found
-                            </Text>
-                        </Group>
-                    )}
-                </Box>
-            </Paper>
+                    isFetching={isFetching}
+                    isLoading={isLoading}
+                    isError={isError}
+                    totalDBRowCount={totalDBRowCount}
+                    fetchNextPage={fetchNextPage}
+                    pinnedValidation={pinnedValidation}
+                    onUnpin={handleUnpin}
+                    searchQuery={searchQuery}
+                    setSearchQuery={setSearchQuery}
+                    sourceTypeFilter={sourceTypeFilter}
+                    setSourceTypeFilter={setSourceTypeFilter}
+                    showConfigWarnings={showConfigWarnings}
+                    setShowConfigWarnings={setShowConfigWarnings}
+                    lastValidatedAt={lastValidatedAt}
+                />
+            ) : (
+                <Paper withBorder shadow="sm">
+                    <Group justify="center" gap="xs" p="md">
+                        <MantineIcon icon={IconCheck} color="green" />
+                        <Text fw={500} c="ldGray.7">
+                            No validation errors found
+                        </Text>
+                    </Group>
+                </Paper>
+            )}
         </>
     );
 };

@@ -56,6 +56,7 @@ import AgentChatDebugDrawer from './AgentChatDebugDrawer';
 import { AiArtifactInline } from './AiArtifactInline';
 import { AiArtifactButton } from './ArtifactButton/AiArtifactButton';
 import { ContentLink } from './ContentLink';
+import { MessageModelIndicator } from './MessageModelIndicator';
 import { rehypeAiAgentContentLinks } from './rehypeContentLinks';
 import { AiChartToolCalls } from './ToolCalls/AiChartToolCalls';
 import { AiProposeChangeToolCall } from './ToolCalls/AiProposeChangeToolCall';
@@ -75,13 +76,14 @@ const AssistantBubbleContent: FC<{
     const mdStyle = useMdEditorStyle();
 
     const isPending = message.status === 'pending';
+    const hasError = message.status === 'error';
     const hasNoResponse = !isStreaming && !message.message && !isPending;
-    const shouldShowRetry = hasNoResponse;
+    const shouldShowRetry = hasError || hasNoResponse;
 
     const baseMessageContent =
         isStreaming && streamingState
             ? streamingState.content
-            : message.message ?? '';
+            : (message.message ?? '');
 
     const referencedArtifactsMarkdown =
         !isStreaming &&
@@ -109,21 +111,18 @@ const AssistantBubbleContent: FC<{
     );
 
     const toolCalls = isStreaming
-        ? streamingState?.toolCalls ?? []
+        ? (streamingState?.toolCalls ?? [])
         : message.toolCalls;
 
     return (
         <>
             {shouldShowRetry && (
                 <Paper
-                    withBorder
+                    variant="dotted"
                     radius="md"
                     pr="md"
                     shadow="none"
                     bg="ldGray.0"
-                    style={{
-                        borderStyle: 'dashed',
-                    }}
                 >
                     <Group gap="xs" align="center" justify="space-between">
                         <Alert
@@ -142,8 +141,8 @@ const AssistantBubbleContent: FC<{
                                     Something went wrong
                                 </Text>
                                 <Text size="xs" c="dimmed">
-                                    Failed to generate response. Please try
-                                    again.
+                                    {message.errorMessage ||
+                                        'Failed to generate response. Please try again.'}
                                 </Text>
                             </Stack>
                         </Alert>
@@ -567,6 +566,12 @@ export const AssistantBubble: FC<Props> = memo(
                                 <MantineIcon icon={IconBug} />
                             </ActionIcon>
                         )}
+
+                        <MessageModelIndicator
+                            projectUuid={projectUuid}
+                            agentUuid={agentUuid}
+                            modelConfig={message.modelConfig}
+                        />
                     </Group>
                 )}
 

@@ -14,6 +14,7 @@ import {
     AnyType,
     BigqueryAuthenticationType,
     BigqueryDataset,
+    BigqueryProject,
     CreateBigqueryCredentials,
     DimensionType,
     getErrorMessage,
@@ -22,6 +23,7 @@ import {
     PartitionColumn,
     PartitionType,
     SupportedDbtAdapter,
+    TimeIntervalUnit,
     WarehouseConnectionError,
     WarehouseQueryError,
     WarehouseResults,
@@ -178,6 +180,43 @@ export class BigquerySqlBuilder extends WarehouseBaseSqlBuilder {
                 .replaceAll('\0', '')
         );
     }
+
+    castToTimestamp(date: Date): string {
+        // BigQuery uses TIMESTAMP function with ISO 8601 format
+        return `TIMESTAMP('${date.toISOString()}')`;
+    }
+
+    getIntervalSql(value: number, unit: TimeIntervalUnit): string {
+        // BigQuery uses INTERVAL with value and keyword unit (no quotes)
+        const unitStr = BigquerySqlBuilder.intervalUnitsSingular[unit];
+        return `INTERVAL ${value} ${unitStr}`;
+    }
+
+    getTimestampDiffSeconds(
+        startTimestampSql: string,
+        endTimestampSql: string,
+    ): string {
+        // BigQuery uses TIMESTAMP_DIFF function
+        return `TIMESTAMP_DIFF(${endTimestampSql}, ${startTimestampSql}, SECOND)`;
+    }
+
+    getMedianSql(valueSql: string): string {
+        // BigQuery uses APPROX_QUANTILES for median
+        return `APPROX_QUANTILES(${valueSql}, 100)[OFFSET(50)]`;
+    }
+
+    buildArray(elements: string[]): string {
+        // BigQuery array construction syntax
+        return `[${elements.join(', ')}]`;
+    }
+
+    buildArrayAgg(expression: string, orderBy?: string): string {
+        // BigQuery uses ARRAY_AGG function
+        if (orderBy) {
+            return `ARRAY_AGG(${expression} ORDER BY ${orderBy})`;
+        }
+        return `ARRAY_AGG(${expression})`;
+    }
 }
 
 export class BigqueryWarehouseClient extends WarehouseBaseClient<CreateBigqueryCredentials> {
@@ -298,7 +337,9 @@ export class BigqueryWarehouseClient extends WarehouseBaseClient<CreateBigqueryC
 
     private async streamResults(
         job: Job,
-        streamCallback: (data: WarehouseResults['rows'][number]) => void,
+        streamCallback: (
+            data: WarehouseResults['rows'][number],
+        ) => void | Promise<void>,
         options: QueryResultsOptions = {},
     ) {
         return new Promise<void>((resolve, reject) => {
@@ -306,13 +347,21 @@ export class BigqueryWarehouseClient extends WarehouseBaseClient<CreateBigqueryC
                 job.getQueryResultsStream(options),
                 new Transform({
                     objectMode: true,
-                    transform(chunk, _encoding, callback) {
-                        const chunkParsed = parseRow(chunk);
-                        streamCallback(chunkParsed);
-                        callback();
+                    async transform(chunk, _encoding, callback) {
+                        try {
+                            const chunkParsed = parseRow(chunk);
+                            await streamCallback(chunkParsed);
+                            callback();
+                        } catch (err) {
+                            if (err instanceof Error) {
+                                callback(err);
+                            } else {
+                                callback(new Error(String(err)));
+                            }
+                        }
                     },
                 }),
-                async (err) => {
+                (err: NodeJS.ErrnoException | null) => {
                     if (err) {
                         reject(err);
                     }
@@ -324,7 +373,7 @@ export class BigqueryWarehouseClient extends WarehouseBaseClient<CreateBigqueryC
 
     async streamQuery(
         query: string,
-        streamCallback: (data: WarehouseResults) => void,
+        streamCallback: (data: WarehouseResults) => void | Promise<void>,
         options: {
             values?: AnyType[];
             tags?: Record<string, string>;
@@ -604,7 +653,7 @@ export class BigqueryWarehouseClient extends WarehouseBaseClient<CreateBigqueryC
 
     async executeAsyncQuery(
         { sql, tags }: WarehouseExecuteAsyncQueryArgs,
-        resultsStreamCallback: (
+        resultsStreamCallback?: (
             rows: WarehouseResults['rows'],
             fields: WarehouseResults['fields'],
         ) => void,
@@ -638,9 +687,11 @@ export class BigqueryWarehouseClient extends WarehouseBaseClient<CreateBigqueryC
                 BigqueryWarehouseClient.getFieldsFromResponse(resultsMetadata);
 
             // If a callback is provided, stream the results to the callback
-            await this.streamResults(job, (row) =>
-                resultsStreamCallback([row], fields),
-            );
+            if (resultsStreamCallback) {
+                await this.streamResults(job, (row) =>
+                    resultsStreamCallback([row], fields),
+                );
+            }
 
             return {
                 queryId: job.id,
@@ -695,5 +746,65 @@ export class BigqueryWarehouseClient extends WarehouseBaseClient<CreateBigqueryC
             datasetId: d.id!,
         }));
         return databases;
+    }
+
+    static async getProjects(accessToken: string): Promise<BigqueryProject[]> {
+        // Use BigQuery REST API directly instead of the SDK because:
+        // - The SDK requires a projectId to instantiate, but we need to list all accessible projects first
+        // - getDatabases above uses the SDK because it already has a projectId to query datasets within
+        // https://cloud.google.com/bigquery/docs/reference/rest/v2/projects/list
+        const fetchPage = async (
+            pageToken?: string,
+        ): Promise<BigqueryProject[]> => {
+            const url = new URL(
+                'https://bigquery.googleapis.com/bigquery/v2/projects',
+            );
+            url.searchParams.set('maxResults', '1000');
+            if (pageToken) {
+                url.searchParams.set('pageToken', pageToken);
+            }
+
+            const response = await fetch(url.toString(), {
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                },
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                // Log full error for debugging but return sanitized message to user
+                // eslint-disable-next-line no-console
+                console.error(
+                    `BigQuery projects API error (HTTP ${response.status}): ${errorText}`,
+                );
+                throw new WarehouseConnectionError(
+                    `Failed to list BigQuery projects (HTTP ${response.status})`,
+                );
+            }
+
+            const data = (await response.json()) as {
+                projects?: Array<{
+                    id: string;
+                    friendlyName?: string;
+                }>;
+                nextPageToken?: string;
+            };
+
+            const projects: BigqueryProject[] = (data.projects ?? []).map(
+                (p) => ({
+                    projectId: p.id,
+                    friendlyName: p.friendlyName ?? null,
+                }),
+            );
+
+            if (data.nextPageToken) {
+                const nextPageProjects = await fetchPage(data.nextPageToken);
+                return [...projects, ...nextPageProjects];
+            }
+
+            return projects;
+        };
+
+        return fetchPage();
     }
 }

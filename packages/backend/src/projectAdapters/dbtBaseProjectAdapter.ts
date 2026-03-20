@@ -1,34 +1,35 @@
 import {
     AnyType,
-    DEFAULT_SPOTLIGHT_CONFIG,
+    attachTypesToModels,
+    convertExplores,
     DbtManifestVersion,
     DbtMetric,
     DbtModelNode,
     DbtPackages,
     DbtRawModelNode,
+    DEFAULT_SPOTLIGHT_CONFIG,
     Explore,
     ExploreError,
-    InlineError,
-    InlineErrorType,
-    ManifestValidator,
-    MissingCatalogEntryError,
-    NotFoundError,
-    ParseError,
-    SupportedDbtAdapter,
-    SupportedDbtVersions,
-    attachTypesToModels,
-    convertExplores,
     friendlyName,
     getCompiledModels,
     getDbtManifestVersion,
     getModelsFromManifest,
     getSchemaStructureFromDbtModels,
+    InlineError,
+    InlineErrorType,
     isSupportedDbtAdapter,
     loadLightdashProjectConfig,
+    ManifestValidator,
+    MissingCatalogEntryError,
     normaliseModelDatabase,
+    NotFoundError,
+    ParseError,
+    SupportedDbtAdapter,
+    SupportedDbtVersions,
     type LightdashProjectConfig,
 } from '@lightdash/common';
 import { WarehouseClient } from '@lightdash/warehouses';
+import * as Sentry from '@sentry/node';
 import fs from 'fs/promises';
 import path from 'path';
 import { LightdashAnalytics } from '../analytics/LightdashAnalytics';
@@ -147,6 +148,7 @@ export class DbtBaseProjectAdapter implements ProjectAdapter {
     public async compileAllExplores(
         trackingParams?: TrackingParams,
         loadSources: boolean = false,
+        allowPartialCompilation: boolean = false,
     ): Promise<(Explore | ExploreError)[]> {
         Logger.debug('Install dependencies');
         // Install dependencies for dbt and fetch the manifest - may raise error meaning no explores compile
@@ -154,7 +156,8 @@ export class DbtBaseProjectAdapter implements ProjectAdapter {
             await this.dbtClient.installDeps();
         }
         Logger.debug('Get dbt manifest');
-        const { manifest } = await this.dbtClient.getDbtManifest();
+        const { manifest, selectedModelIds } =
+            await this.dbtClient.getDbtManifest();
         // Type of the target warehouse
         if (!isSupportedDbtAdapter(manifest.metadata)) {
             throw new ParseError(
@@ -162,31 +165,35 @@ export class DbtBaseProjectAdapter implements ProjectAdapter {
                 {},
             );
         }
-        let models: DbtRawModelNode[] = [];
 
-        if (this.dbtClient.getSelector()) {
+        if (selectedModelIds) {
             Logger.info(
-                `Manifest generated with selector "${this.dbtClient.getSelector()}"`,
+                `Manifest generated with selector, matched ${selectedModelIds.length} model(s)`,
             );
-            // If selector is provided, we use compile to get the models that match the selector
-            const manifestModels = getModelsFromManifest(manifest);
-            Logger.info(`Manifest models ${manifestModels.length}`);
-            const compiledModels = getCompiledModels(manifestModels, undefined);
-            Logger.info(`Compiled models ${compiledModels.length}`);
-            models = compiledModels.filter(
-                (node: AnyType) => node.resource_type === 'model' && node.meta, // check that node.meta exists
-            ) as DbtRawModelNode[];
-            Logger.info(`Filtered models ${models.length}`);
-        } else {
-            const nodes = Object.values(manifest.nodes);
-            Logger.info(`Manifest models ${nodes.length}`);
-            // If selector is not provided, we use all the models from the manifest
-            // models with invalid metadata will compile to failed Explores
-            models = nodes.filter(
-                (node: AnyType) => node.resource_type === 'model' && node.meta, // check that node.meta exists
-            ) as DbtRawModelNode[];
-            Logger.info(`Filtered models ${models.length}`);
         }
+
+        const models = Sentry.startSpan(
+            { op: 'dbt', name: 'filterManifestModels' },
+            () => {
+                const startTime = Date.now();
+                const manifestModels = getModelsFromManifest(manifest);
+                Logger.info(`Manifest models ${manifestModels.length}`);
+                const compiledModels = getCompiledModels(
+                    manifestModels,
+                    selectedModelIds,
+                );
+                Logger.info(`Compiled models ${compiledModels.length}`);
+                const filtered = compiledModels.filter(
+                    (node: AnyType) =>
+                        node.resource_type === 'model' && node.meta,
+                ) as DbtRawModelNode[];
+                const elapsed = Date.now() - startTime;
+                Logger.info(
+                    `Filtered to ${filtered.length} model(s) in ${elapsed}ms`,
+                );
+                return filtered;
+            },
+        );
 
         const adapterType = manifest.metadata.adapter_type;
 
@@ -218,9 +225,8 @@ export class DbtBaseProjectAdapter implements ProjectAdapter {
                 : Object.values(manifest.metrics),
         );
 
-        const lightdashProjectConfig = await this.getLightdashProjectConfig(
-            trackingParams,
-        );
+        const lightdashProjectConfig =
+            await this.getLightdashProjectConfig(trackingParams);
 
         // Be lazy and try to attach types to the remaining models without refreshing the catalog
         try {
@@ -251,6 +257,7 @@ export class DbtBaseProjectAdapter implements ProjectAdapter {
                 this.warehouseClient,
                 lightdashProjectConfig,
                 disableTimestampConversion,
+                allowPartialCompilation,
             );
             Logger.info('Finished compiling explores');
             return [...lazyExplores, ...failedExplores];
@@ -265,9 +272,8 @@ export class DbtBaseProjectAdapter implements ProjectAdapter {
                     `Fetching table metadata for ${modelCatalog.length} tables`,
                 );
 
-                const warehouseCatalog = await this.warehouseClient.getCatalog(
-                    modelCatalog,
-                );
+                const warehouseCatalog =
+                    await this.warehouseClient.getCatalog(modelCatalog);
                 await this.cachedWarehouse?.onWarehouseCatalogChange(
                     warehouseCatalog,
                 );
@@ -296,6 +302,7 @@ export class DbtBaseProjectAdapter implements ProjectAdapter {
                     this.warehouseClient,
                     lightdashProjectConfig,
                     disableTimestampConversion,
+                    allowPartialCompilation,
                 );
                 Logger.info(
                     'Finished compiling explores after missing catalog error',

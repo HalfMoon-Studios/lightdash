@@ -1,11 +1,11 @@
 import {
+    assertUnreachable,
     DimensionType,
     FieldType,
     SqlRunnerFieldType,
     VIZ_DEFAULT_AGGREGATION,
     VizAggregationOptions,
     VizIndexType,
-    assertUnreachable,
     type IResultsRunner,
     type PivotChartData,
     type RawResultRow,
@@ -95,6 +95,12 @@ export class BaseResultsRunner implements IResultsRunner {
         );
 
         this.queryClient = createQueryClient();
+    }
+
+    invalidatePivotCache(): void {
+        void this.queryClient.invalidateQueries({
+            queryKey: ['transformedData'],
+        });
     }
 
     async getPivotedVisualizationData(

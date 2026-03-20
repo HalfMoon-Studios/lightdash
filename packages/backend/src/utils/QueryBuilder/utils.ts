@@ -6,7 +6,6 @@ import {
     CompiledDimension,
     CompiledExploreJoin,
     CompiledMetric,
-    CompiledMetricQuery,
     CompiledTable,
     CustomBinDimension,
     CustomDimension,
@@ -16,13 +15,13 @@ import {
     FieldId,
     FieldReferenceError,
     ForbiddenError,
+    getCustomGroupOrderSql,
+    getCustomGroupSelectSql,
     getCustomRangeSelectSql,
     getDateDimension,
-    getDimensions,
-    getFieldQuoteChar,
+    getDimensionMapFromTables,
     getFixedWidthBinSelectSql,
     getItemId,
-    getMetrics,
     getSqlForTruncatedDate,
     IntrinsicUserAttributes,
     isCompiledCustomSqlDimension,
@@ -30,37 +29,40 @@ import {
     MetricType,
     parseAllReferences,
     QueryWarning,
-    SortField,
     SupportedDbtAdapter,
     UserAttributeValueMap,
-    WarehouseClient,
     WeekDay,
     type WarehouseSqlBuilder,
 } from '@lightdash/common';
 import { intersection, isArray } from 'lodash';
 import { hasUserAttribute } from '../../services/UserAttributesService/UserAttributeUtils';
 
-export const getDimensionFromId = (
-    dimId: FieldId,
-    explore: Explore,
-    adapterType: SupportedDbtAdapter,
-    startOfWeek: WeekDay | null | undefined,
-    checkUnfilteredTables: boolean = true,
-): CompiledDimension => {
-    const dimensions = getDimensions(explore);
-    const dimension = dimensions.find((d) => getItemId(d) === dimId);
+export const getDimensionFromId = ({
+    dimId,
+    dimensions,
+    dimensionsWithoutAccess,
+    adapterType,
+    startOfWeek,
+}: {
+    dimId: FieldId;
+    dimensions: Record<string, CompiledDimension>;
+    dimensionsWithoutAccess?: Record<string, CompiledDimension>;
+    adapterType: SupportedDbtAdapter;
+    startOfWeek: WeekDay | null | undefined;
+}): CompiledDimension => {
+    const dimension = dimensions[dimId];
 
     if (!dimension) {
         const { baseDimensionId, newTimeFrame } = getDateDimension(dimId);
 
         if (baseDimensionId) {
-            const baseField = getDimensionFromId(
-                baseDimensionId,
-                explore,
+            const baseField = getDimensionFromId({
+                dimId: baseDimensionId,
+                dimensions,
+                dimensionsWithoutAccess,
                 adapterType,
                 startOfWeek,
-                checkUnfilteredTables,
-            );
+            });
             if (baseField && newTimeFrame)
                 return {
                     ...baseField,
@@ -75,20 +77,9 @@ export const getDimensionFromId = (
                 };
         }
 
-        // At this point, we couldn't find the dimension with the given id in the explore
-        // it is possible that the explore is a joined table and is filtered by user_attributes
-        // So we check if the dimension exists in the unfiltered tables
-        if (
-            checkUnfilteredTables &&
-            explore.unfilteredTables &&
-            getDimensionFromId(
-                dimId,
-                { ...explore, tables: explore.unfilteredTables },
-                adapterType,
-                startOfWeek,
-                false,
-            )
-        ) {
+        // At this point, we couldn't find the dimension with the given id
+        // it is possible that the it references a dimension that the user doesn't have access to
+        if (dimensionsWithoutAccess && dimensionsWithoutAccess[dimId]) {
             throw new AuthorizationError(
                 "You don't have authorization to access this explore",
             );
@@ -100,42 +91,34 @@ export const getDimensionFromId = (
     return dimension;
 };
 
-export const getDimensionFromFilterTargetId = (
-    filterTargetId: FieldId,
-    explore: Explore,
-    compiledCustomDimensions: CompiledCustomSqlDimension[],
-    adapterType: SupportedDbtAdapter,
-    startOfWeek: WeekDay | null | undefined,
-): CompiledDimension | CompiledCustomSqlDimension => {
+export const getDimensionFromFilterTargetId = ({
+    filterTargetId,
+    dimensions,
+    dimensionsWithoutAccess,
+    compiledCustomDimensions,
+    adapterType,
+    startOfWeek,
+}: {
+    filterTargetId: FieldId;
+    dimensions: Record<string, CompiledDimension>;
+    dimensionsWithoutAccess?: Record<string, CompiledDimension>;
+    compiledCustomDimensions: CompiledCustomSqlDimension[];
+    adapterType: SupportedDbtAdapter;
+    startOfWeek: WeekDay | null | undefined;
+}): CompiledDimension | CompiledCustomSqlDimension => {
     const dim = compiledCustomDimensions.find(
         (cd) => getItemId(cd) === filterTargetId,
     );
     if (dim && isCompiledCustomSqlDimension(dim)) {
         return dim;
     }
-    return getDimensionFromId(
-        filterTargetId,
-        explore,
+    return getDimensionFromId({
+        dimId: filterTargetId,
+        dimensions,
+        dimensionsWithoutAccess,
         adapterType,
         startOfWeek,
-    );
-};
-
-export const getMetricFromId = (
-    metricId: FieldId,
-    explore: Explore,
-    compiledMetricQuery: CompiledMetricQuery,
-) => {
-    const metrics = [
-        ...getMetrics(explore),
-        ...(compiledMetricQuery.compiledAdditionalMetrics || []),
-    ];
-    const metric = metrics.find((m) => getItemId(m) === metricId);
-    if (metric === undefined)
-        throw new FieldReferenceError(
-            `Tried to reference metric with unknown field id: ${metricId}`,
-        );
-    return metric;
+    });
 };
 
 const getWrapChars = (wrapChar: string): [string, string] => {
@@ -576,14 +559,12 @@ export const getCustomBinDimensionSql = ({
     customDimensions,
     intrinsicUserAttributes,
     userAttributes = {},
-    sorts = [],
 }: {
     warehouseSqlBuilder: WarehouseSqlBuilder;
     explore: Explore;
     customDimensions: CustomBinDimension[] | undefined;
     intrinsicUserAttributes: IntrinsicUserAttributes;
     userAttributes: UserAttributeValueMap | undefined;
-    sorts: SortField[] | undefined;
 }):
     | {
           ctes: string[];
@@ -603,19 +584,25 @@ export const getCustomBinDimensionSql = ({
 
     const adapterType: SupportedDbtAdapter =
         warehouseSqlBuilder.getAdapterType();
+    const dimensions = getDimensionMapFromTables(explore.tables);
+    const dimensionsWithoutAccess = getDimensionMapFromTables(
+        explore.unfilteredTables ?? {},
+    );
     const ctes = customDimensions.reduce<string[]>((acc, customDimension) => {
         switch (customDimension.binType) {
             case BinType.FIXED_WIDTH:
             case BinType.CUSTOM_RANGE:
+            case BinType.CUSTOM_GROUP:
                 // No need for cte
                 return acc;
             case BinType.FIXED_NUMBER:
-                const dimension = getDimensionFromId(
-                    customDimension.dimensionId,
-                    explore,
+                const dimension = getDimensionFromId({
+                    dimId: customDimension.dimensionId,
+                    dimensions,
+                    dimensionsWithoutAccess,
                     adapterType,
                     startOfWeek,
-                );
+                });
                 const baseTable = replaceUserAttributesRaw(
                     explore.tables[customDimension.table].sqlTable,
                     intrinsicUserAttributes,
@@ -626,38 +613,37 @@ export const getCustomBinDimensionSql = ({
                         FLOOR(MIN(${dimension.compiledSql})) AS min_id,
                         CEIL(MAX(${dimension.compiledSql})) AS max_id,
                         FLOOR((MAX(${dimension.compiledSql}) - MIN(${
-                    dimension.compiledSql
-                })) / ${customDimension.binNumber}) AS bin_width
+                            dimension.compiledSql
+                        })) / ${customDimension.binNumber}) AS bin_width
                     FROM ${baseTable} AS ${fieldQuoteChar}${
-                    customDimension.table
-                }${fieldQuoteChar}
+                        customDimension.table
+                    }${fieldQuoteChar}
                 )`;
 
                 return [...acc, cte];
             default:
-                assertUnreachable(
-                    customDimension.binType,
-                    `Unknown bin type on cte: ${customDimension.binType}`,
+                return assertUnreachable(
+                    customDimension,
+                    `Unknown bin type on cte`,
                 );
         }
-        return acc;
     }, []);
 
     const joins = customDimensions.reduce<string[]>((acc, customDimension) => {
         switch (customDimension.binType) {
             case BinType.CUSTOM_RANGE:
             case BinType.FIXED_WIDTH:
+            case BinType.CUSTOM_GROUP:
                 // No need for cte
                 return acc;
             case BinType.FIXED_NUMBER:
                 return [...acc, getCteReference(customDimension)];
             default:
-                assertUnreachable(
-                    customDimension.binType,
-                    `Unknown bin type on join: ${customDimension.binType}`,
+                return assertUnreachable(
+                    customDimension,
+                    `Unknown bin type on join`,
                 );
         }
-        return acc;
     }, []);
 
     const tables = customDimensions.map(
@@ -667,12 +653,13 @@ export const getCustomBinDimensionSql = ({
     const selects: Record<string, string> = {};
 
     customDimensions.forEach((customDimension) => {
-        const dimension = getDimensionFromId(
-            customDimension.dimensionId,
-            explore,
+        const dimension = getDimensionFromId({
+            dimId: customDimension.dimensionId,
+            dimensions,
+            dimensionsWithoutAccess,
             adapterType,
             startOfWeek,
-        );
+        });
         // Check required attribute permission for parent dimension
         assertValidDimensionRequiredAttribute(
             dimension,
@@ -686,46 +673,27 @@ export const getCustomBinDimensionSql = ({
         const quotedDimensionOrder = `${fieldQuoteChar}${orderDimensionId}${fieldQuoteChar}`;
         const cte = `${getCteReference(customDimension)}`;
 
-        // If a custom dimension is sorted, we need to generate a special SQL select that returns a number
-        // and not the range as a string
-        const isSorted =
-            sorts.length > 0 &&
-            sorts.find(
-                (sortField) => getItemId(customDimension) === sortField.fieldId,
-            );
+        // Always generate the `_order` column alongside the bin dimension label.
+        // Table calculation templates reference `{field}_order` for ORDER BY/PARTITION BY
+        // regardless of whether the bin dimension has a query-level sort.
         const quoteChar = warehouseSqlBuilder.getStringQuoteChar();
         const dash = `${quoteChar} - ${quoteChar}`;
 
         switch (customDimension.binType) {
             case BinType.FIXED_WIDTH:
-                if (!customDimension.binWidth) {
-                    throw new Error(
-                        `Undefined binWidth for custom dimension ${BinType.FIXED_WIDTH} `,
-                    );
-                }
-
                 const width = customDimension.binWidth;
                 const widthSql = `${getFixedWidthBinSelectSql({
-                    binWidth: customDimension.binWidth || 1,
+                    binWidth: customDimension.binWidth,
                     baseDimensionSql: dimension.compiledSql,
                     warehouseSqlBuilder,
                 })} AS ${quotedDimensionName}`;
 
                 selects[dimensionId] = widthSql;
 
-                if (isSorted) {
-                    selects[
-                        orderDimensionId
-                    ] = `FLOOR(${dimension.compiledSql} / ${width}) * ${width} AS ${quotedDimensionOrder}`;
-                }
+                selects[orderDimensionId] =
+                    `FLOOR(${dimension.compiledSql} / ${width}) * ${width} AS ${quotedDimensionOrder}`;
                 break;
             case BinType.FIXED_NUMBER:
-                if (!customDimension.binNumber) {
-                    throw new Error(
-                        `Undefined binNumber for custom dimension ${BinType.FIXED_NUMBER} `,
-                    );
-                }
-
                 if (customDimension.binNumber <= 1) {
                     // Edge case, bin number with only one bucket does not need a CASE statement
                     selects[dimensionId] = `${warehouseSqlBuilder.concatString(
@@ -746,7 +714,7 @@ export const getCustomBinDimensionSql = ({
                 const binWhens = Array.from(
                     Array(customDimension.binNumber).keys(),
                 ).map((i) => {
-                    if (i !== customDimension.binNumber! - 1) {
+                    if (i !== customDimension.binNumber - 1) {
                         return `WHEN ${dimension.compiledSql} >= ${from(
                             i,
                         )} AND ${dimension.compiledSql} < ${to(
@@ -775,76 +743,78 @@ export const getCustomBinDimensionSql = ({
                     END
                     AS ${quotedDimensionName}`;
 
-                if (isSorted) {
-                    const sortBinWhens = Array.from(
-                        Array(customDimension.binNumber).keys(),
-                    ).map((i) => {
-                        if (i !== customDimension.binNumber! - 1) {
-                            return `WHEN ${dimension.compiledSql} >= ${from(
-                                i,
-                            )} AND ${dimension.compiledSql} < ${to(
-                                i,
-                            )} THEN ${i}`;
-                        }
-                        return `ELSE ${i}`;
-                    });
+                const sortBinWhens = Array.from(
+                    Array(customDimension.binNumber).keys(),
+                ).map((i) => {
+                    if (i !== customDimension.binNumber - 1) {
+                        return `WHEN ${dimension.compiledSql} >= ${from(
+                            i,
+                        )} AND ${dimension.compiledSql} < ${to(i)} THEN ${i}`;
+                    }
+                    return `ELSE ${i}`;
+                });
 
-                    const sortWhens = [
-                        `WHEN ${dimension.compiledSql} IS NULL THEN ${customDimension.binNumber}`,
-                        ...sortBinWhens,
-                    ];
+                const sortWhens = [
+                    `WHEN ${dimension.compiledSql} IS NULL THEN ${customDimension.binNumber}`,
+                    ...sortBinWhens,
+                ];
 
-                    selects[orderDimensionId] = `CASE
+                selects[orderDimensionId] = `CASE
                         ${sortWhens.join('\n')}
                         END
                         AS ${quotedDimensionOrder}`;
-                }
                 break;
             case BinType.CUSTOM_RANGE:
-                if (!customDimension.customRange) {
-                    throw new Error(
-                        `Undefined customRange for custom dimension ${BinType.CUSTOM_RANGE} `,
-                    );
-                }
-
                 const customRangeSql = `${getCustomRangeSelectSql({
-                    binRanges: customDimension.customRange || [],
+                    binRanges: customDimension.customRange,
                     baseDimensionSql: dimension.compiledSql,
                     warehouseSqlBuilder,
                 })} AS ${quotedDimensionName}`;
 
                 selects[dimensionId] = customRangeSql;
 
-                if (isSorted) {
-                    const sortedRangeWhens = customDimension.customRange.map(
-                        (range, i) => {
-                            if (range.from === undefined) {
-                                return `WHEN ${dimension.compiledSql} < ${range.to} THEN ${i}`;
-                            }
-                            if (range.to === undefined) {
-                                return `ELSE ${i}`;
-                            }
+                const sortedRangeWhens = customDimension.customRange.map(
+                    (range, i) => {
+                        if (range.from === undefined) {
+                            return `WHEN ${dimension.compiledSql} < ${range.to} THEN ${i}`;
+                        }
+                        if (range.to === undefined) {
+                            return `ELSE ${i}`;
+                        }
 
-                            return `WHEN ${dimension.compiledSql} >= ${range.from} AND ${dimension.compiledSql} < ${range.to} THEN ${i}`;
-                        },
-                    );
+                        return `WHEN ${dimension.compiledSql} >= ${range.from} AND ${dimension.compiledSql} < ${range.to} THEN ${i}`;
+                    },
+                );
 
-                    const sortedWhens = [
-                        `WHEN ${dimension.compiledSql} IS NULL THEN ${customDimension.customRange.length}`,
-                        ...sortedRangeWhens,
-                    ];
+                const sortedWhens = [
+                    `WHEN ${dimension.compiledSql} IS NULL THEN ${customDimension.customRange.length}`,
+                    ...sortedRangeWhens,
+                ];
 
-                    selects[orderDimensionId] = `CASE
+                selects[orderDimensionId] = `CASE
                     ${sortedWhens.join('\n')}
                     END
                     AS ${quotedDimensionOrder}`;
-                }
+                break;
+
+            case BinType.CUSTOM_GROUP:
+                selects[dimensionId] = `${getCustomGroupSelectSql({
+                    binGroups: customDimension.customGroups,
+                    baseDimensionSql: dimension.compiledSql,
+                    warehouseSqlBuilder,
+                })} AS ${quotedDimensionName}`;
+
+                selects[orderDimensionId] = `${getCustomGroupOrderSql({
+                    binGroups: customDimension.customGroups,
+                    baseDimensionSql: dimension.compiledSql,
+                    warehouseSqlBuilder,
+                })} AS ${quotedDimensionOrder}`;
                 break;
 
             default:
                 assertUnreachable(
-                    customDimension.binType,
-                    `Unknown bin type on select: ${customDimension.binType}`,
+                    customDimension,
+                    `Unknown bin type on select`,
                 );
         }
     });
@@ -900,9 +870,13 @@ export const getJoinedTables = (
  * Determines if a metric type is "inflation-proof" (not affected by join inflation)
  */
 export const isInflationProofMetric = (metricType: MetricType): boolean =>
-    [MetricType.COUNT_DISTINCT, MetricType.MIN, MetricType.MAX].includes(
-        metricType,
-    );
+    [
+        MetricType.COUNT_DISTINCT,
+        MetricType.SUM_DISTINCT,
+        MetricType.AVERAGE_DISTINCT,
+        MetricType.MIN,
+        MetricType.MAX,
+    ].includes(metricType);
 
 const findTablesWithInflationFromJoin = (join: CompiledExploreJoin) => {
     const tablesWithInflation = new Set<string>();

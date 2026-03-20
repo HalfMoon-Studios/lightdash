@@ -1,17 +1,31 @@
-:global(iframe[src*='headwayapp.co']) {
-    color-scheme: light dark;
-}
+.badge {
+    pointer-events: none;
 
-/* Switch to dark mode when Mantine color scheme is dark */
-[data-mantine-color-scheme='dark'] :global(.HW_widget),
-[data-mantine-color-scheme='dark'] :global(.HW_frame_cont),
-[data-mantine-color-scheme='dark'] :global(iframe[src*='headwayapp.co']) {
-    filter: invert(0.9) hue-rotate(180deg);
-}
+    :global(.HW_badge) {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        top: 4px;
+        left: 12px;
+        width: 12px;
+        height: 12px;
+        font-size: var(--mantine-font-size-xs);
+        background: var(--mantine-color-red-8);
+    }
 
-/* Prevent double inversion on images within the inverted iframe */
-[data-mantine-color-scheme='dark'] :global(.HW_widget img),
-[data-mantine-color-scheme='dark'] :global(.HW_frame_cont img),
-[data-mantine-color-scheme='dark'] :global(iframe[src*='headwayapp.co'] img) {
-    filter: invert(0.9) hue-rotate(180deg);
+    :global(.HW_badge.HW_softHidden) {
+        background: transparent !important;
+    }
+
+    :global(.HW_badge.HW_bounce) {
+        animation: none !important;
+    }
+
+    :global(.HW_badge.HW_shake) {
+        animation: none !important;
+    }
+
+    :global(.HW_badge.HW_wobble) {
+        animation: none !important;
+    }
 }

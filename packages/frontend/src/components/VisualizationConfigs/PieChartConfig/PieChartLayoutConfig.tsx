@@ -10,9 +10,9 @@ import {
     type TableCalculation,
 } from '@lightdash/common';
 import { Box, Group, SegmentedControl, Stack, Tooltip } from '@mantine/core';
+import FieldSelect from '../../common/FieldSelect';
 import { isPieVisualizationConfig } from '../../LightdashVisualization/types';
 import { useVisualizationContext } from '../../LightdashVisualization/useVisualizationContext';
-import FieldSelect from '../../common/FieldSelect';
 import { AddButton } from '../common/AddButton';
 import { Config } from '../common/Config';
 
@@ -55,8 +55,8 @@ export const Layout: React.FC = () => {
                                 dimensions.length === 0
                                     ? 'You must select at least one dimension to create a pie chart'
                                     : dimensions.length === groupFieldIds.length
-                                    ? 'To add more groups you need to add more dimensions to your query'
-                                    : undefined
+                                      ? 'To add more groups you need to add more dimensions to your query'
+                                      : undefined
                             }
                             withinPortal
                         >

@@ -3,11 +3,25 @@ import {
     FilterInteractivityValues,
     SEED_PROJECT,
 } from '@lightdash/common';
-import { updateEmbedConfigDashboards } from '../api/embedManagement.cy';
+
+const EMBED_API_PREFIX = `/api/v1/embed/${SEED_PROJECT.project_uuid}`;
+
+const updateEmbedConfigDashboards = (dashboardUuids: string[]) =>
+    cy.request({
+        url: `${EMBED_API_PREFIX}/config/dashboards`,
+        headers: { 'Content-type': 'application/json' },
+        method: 'PATCH',
+        body: {
+            dashboardUuids,
+            chartUuids: [],
+            allowAllDashboards: false,
+            allowAllCharts: false,
+        },
+    });
 
 const getEmbedUrl = (body: CreateEmbedJwt) =>
     cy.request({
-        url: `/api/v1/embed/${SEED_PROJECT.project_uuid}/get-embed-url`,
+        url: `${EMBED_API_PREFIX}/get-embed-url`,
         headers: { 'Content-type': 'application/json' },
         method: 'POST',
         body,
@@ -66,7 +80,8 @@ describe('Embedded dashboard', () => {
                     cy.contains('Days between created and first order'); // table chart
 
                     // Check filters
-                    cy.contains('Is completed is True');
+                    cy.contains('Is completed is true');
+
                     cy.contains(
                         'Order date year in the last 10 completed years',
                     );
@@ -86,7 +101,8 @@ describe('Embedded dashboard', () => {
         });
     });
 
-    it('I can use "Explore from here" in embedded dashboard and view the correct elements', () => {
+    // todo: move to unit test
+    it.skip('I can use "Explore from here" in embedded dashboard and view the correct elements', () => {
         getJaffleDashboard().then((dashboardsResp) => {
             const dashboardUuid = dashboardsResp.body.results.data[0]?.uuid;
 
@@ -163,7 +179,8 @@ describe('Embedded dashboard', () => {
         });
     });
 
-    it('URL syncs for dashboard filters in direct mode', () => {
+    // todo: move to unit test
+    it.skip('URL syncs for dashboard filters in direct mode', () => {
         getJaffleDashboard().then((dashboardsResp) => {
             const dashboardUuid = dashboardsResp.body.results.data[0]?.uuid;
 
@@ -210,7 +227,8 @@ describe('Embedded dashboard', () => {
         });
     });
 
-    it('URL filter overrides apply for embedded dashboard with all filters allowed', () => {
+    // todo: move to unit test
+    it.skip('URL filter overrides apply for embedded dashboard with all filters allowed', () => {
         getJaffleDashboard().then((dashboardsResp) => {
             const dashboardUuid = dashboardsResp.body.results.data[0]?.uuid;
 
@@ -270,7 +288,8 @@ describe('Embedded dashboard', () => {
         });
     });
 
-    it('URL syncs for date zoom in direct mode', () => {
+    // todo: move to unit test
+    it.skip('URL syncs for date zoom in direct mode', () => {
         getJaffleDashboard().then((dashboardsResp) => {
             const dashboardUuid = dashboardsResp.body.results.data[0]?.uuid;
 

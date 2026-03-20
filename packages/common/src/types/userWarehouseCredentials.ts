@@ -1,4 +1,9 @@
+import { z } from 'zod';
 import {
+    DatabricksAuthenticationType,
+    SnowflakeAuthenticationType,
+    WarehouseTypes,
+    type CreateAthenaCredentials,
     type CreateBigqueryCredentials,
     type CreateClickhouseCredentials,
     type CreateDatabricksCredentials,
@@ -6,7 +11,14 @@ import {
     type CreateRedshiftCredentials,
     type CreateSnowflakeCredentials,
     type CreateTrinoCredentials,
+    type ProjectType,
 } from './projects';
+
+export type UserWarehouseCredentialsProject = {
+    projectUuid: string;
+    name: string;
+    type: ProjectType;
+};
 
 export type UserWarehouseCredentials = {
     uuid: string;
@@ -24,7 +36,9 @@ export type UserWarehouseCredentials = {
               'type' | 'user'
           >
         | Pick<CreateBigqueryCredentials, 'type'>
-        | Pick<CreateDatabricksCredentials, 'type'>;
+        | Pick<CreateDatabricksCredentials, 'type'>
+        | Pick<CreateAthenaCredentials, 'type'>;
+    project: UserWarehouseCredentialsProject | null;
 };
 
 export type UserWarehouseCredentialsWithSecrets = Pick<
@@ -36,7 +50,11 @@ export type UserWarehouseCredentialsWithSecrets = Pick<
         | Pick<CreatePostgresCredentials, 'type' | 'user' | 'password'>
         | Pick<
               CreateSnowflakeCredentials,
-              'type' | 'user' | 'password' | 'authenticationType' | 'token'
+              | 'type'
+              | 'user'
+              | 'password'
+              | 'authenticationType'
+              | 'refreshToken'
           >
         | Pick<CreateTrinoCredentials, 'type' | 'user' | 'password'>
         | Pick<CreateClickhouseCredentials, 'type' | 'user' | 'password'>
@@ -50,17 +68,50 @@ export type UserWarehouseCredentialsWithSecrets = Pick<
               | 'personalAccessToken'
               | 'authenticationType'
               | 'refreshToken'
-              | 'token'
           > &
               Partial<
                   Pick<
                       CreateDatabricksCredentials,
-                      'database' | 'serverHostName' | 'httpPath'
+                      | 'database'
+                      | 'serverHostName'
+                      | 'httpPath'
+                      | 'oauthClientId'
                   >
-              >);
+              >)
+        | Pick<
+              CreateAthenaCredentials,
+              'type' | 'accessKeyId' | 'secretAccessKey'
+          >;
 };
 
 export type UpsertUserWarehouseCredentials = {
     name: string;
     credentials: UserWarehouseCredentialsWithSecrets['credentials'];
 };
+
+// Zod schema for validating Snowflake SSO user warehouse credentials
+// Requires refreshToken and disallows token field
+export const snowflakeSsoUserCredentialsSchema = z
+    .object({
+        type: z.literal(WarehouseTypes.SNOWFLAKE),
+        user: z.string().optional(),
+        password: z.string().optional(),
+        authenticationType: z.literal(SnowflakeAuthenticationType.SSO),
+        refreshToken: z.string(),
+    })
+    .strict();
+
+// Zod schema for validating Databricks OAuth U2M user warehouse credentials
+// Requires refreshToken and allows optional compatibility fields
+export const databricksOauthU2mUserCredentialsSchema = z
+    .object({
+        type: z.literal(WarehouseTypes.DATABRICKS),
+        authenticationType: z.literal(DatabricksAuthenticationType.OAUTH_U2M),
+        refreshToken: z.string(),
+        oauthClientId: z.string().optional(),
+        personalAccessToken: z.string().optional(),
+        database: z.string().optional(),
+        serverHostName: z.string().optional(),
+        httpPath: z.string().optional(),
+    })
+    .strict();

@@ -114,18 +114,22 @@ export const getLastCommit = async ({
     owner,
     repo,
     branch,
+    installationId,
     token,
 }: {
     owner: string;
     repo: string;
     branch: string;
-    token: string;
+    installationId?: string;
+    token?: string;
 }) => {
-    const { octokit, headers } = getOctokitRestForUser(token);
+    const { octokit, headers } = getOctokit(installationId, token);
+    // GitHub API uses `sha` param to filter by branch
+    // @see https://docs.github.com/en/rest/commits/commits#list-commits
     const response = await octokit.rest.repos.listCommits({
         owner,
         repo,
-        ref: branch,
+        sha: branch,
         headers,
     });
 
@@ -137,6 +141,7 @@ export const getFileContent = async ({
     owner,
     repo,
     branch,
+    installationId,
     token,
     hostDomain,
 }: {
@@ -144,11 +149,14 @@ export const getFileContent = async ({
     owner: string;
     repo: string;
     branch: string;
-    token: string;
+    installationId?: string;
+    token?: string;
     hostDomain?: string;
 }) => {
-    const { octokit, headers } = getOctokitRestForUser(token);
+    const { octokit, headers } = getOctokit(installationId, token);
     try {
+        // GitHub API uses `ref` param for branch/tag/commit
+        // @see https://docs.github.com/en/rest/repos/contents#get-repository-content
         const response = await octokit.rest.repos.getContent({
             owner,
             repo,
@@ -183,6 +191,7 @@ export const createBranch = async ({
     repo,
     sha,
     branch,
+    installationId,
     token,
     hostDomain,
 }: {
@@ -190,12 +199,15 @@ export const createBranch = async ({
     repo: string;
     sha: string;
     branch: string;
-    token: string;
+    installationId?: string;
+    token?: string;
     hostDomain?: string;
 }): Promise<Awaited<ReturnType<OctokitRest['rest']['git']['createRef']>>> => {
-    const { octokit, headers } = getOctokitRestForUser(token);
+    const { octokit, headers } = getOctokit(installationId, token);
 
     try {
+        // GitHub API uses `ref` as fully qualified reference (refs/heads/...)
+        // @see https://docs.github.com/en/rest/git/refs#create-a-reference
         const response = await octokit.rest.git.createRef({
             owner,
             repo,
@@ -230,6 +242,7 @@ export const updateFile = async ({
     fileSha,
     branch,
     message,
+    installationId,
     token,
 }: {
     owner: string;
@@ -239,14 +252,17 @@ export const updateFile = async ({
     fileSha: string;
     branch: string;
     message: string;
-    token: string;
+    installationId?: string;
+    token?: string;
 }): Promise<
     Awaited<
         ReturnType<OctokitRest['rest']['repos']['createOrUpdateFileContents']>
     >
 > => {
-    const { octokit, headers } = getOctokitRestForUser(token);
+    const { octokit, headers } = getOctokit(installationId, token);
     try {
+        // GitHub API uses `branch` param for target branch
+        // @see https://docs.github.com/en/rest/repos/contents#create-or-update-file-contents
         const response = await octokit.rest.repos.createOrUpdateFileContents({
             owner,
             repo,
@@ -278,6 +294,7 @@ export const createFile = async ({
     content,
     branch,
     message,
+    installationId,
     token,
 }: {
     owner: string;
@@ -286,15 +303,18 @@ export const createFile = async ({
     content: string;
     branch: string;
     message: string;
-    token: string;
+    installationId?: string;
+    token?: string;
 }): Promise<
     Awaited<
         ReturnType<OctokitRest['rest']['repos']['createOrUpdateFileContents']>
     >
 > => {
-    const { octokit, headers } = getOctokitRestForUser(token);
+    const { octokit, headers } = getOctokit(installationId, token);
 
     try {
+        // GitHub API uses `branch` param for target branch
+        // @see https://docs.github.com/en/rest/repos/contents#create-or-update-file-contents
         const response = await octokit.rest.repos.createOrUpdateFileContents({
             owner,
             repo,
@@ -352,23 +372,27 @@ export const checkFileDoesNotExist = async ({
     owner,
     repo,
     path,
+    installationId,
     token,
     branch,
 }: {
     owner: string;
     repo: string;
     path: string;
-    token: string;
+    installationId?: string;
+    token?: string;
     branch: string;
 }): Promise<boolean> => {
-    const { octokit, headers } = getOctokitRestForUser(token);
+    const { octokit, headers } = getOctokit(installationId, token);
 
     try {
+        // GitHub API uses `ref` param for branch/tag/commit
+        // @see https://docs.github.com/en/rest/repos/contents#get-repository-content
         await octokit.rest.repos.getContent({
             owner,
             repo,
             path,
-            branch,
+            ref: branch,
             headers,
         });
         throw new AlreadyExistsError(`File "${path}" already exists in Github`);
@@ -407,5 +431,191 @@ export const getBranches = async ({
     } catch (e) {
         console.error(e);
         throw new UnexpectedGitError(getErrorMessage(e));
+    }
+};
+
+export const createRepository = async ({
+    installationId,
+    name,
+    description,
+    isPrivate = true,
+}: {
+    installationId: string;
+    name: string;
+    description?: string;
+    isPrivate?: boolean;
+}): Promise<{
+    owner: string;
+    repo: string;
+    fullName: string;
+    defaultBranch: string;
+}> => {
+    const octokit = getOctokitRestForApp(installationId);
+
+    try {
+        // Get the installation to find the account (org or user)
+        const { data: installation } = await octokit.rest.apps.getInstallation({
+            installation_id: parseInt(installationId, 10),
+        });
+
+        const { account } = installation;
+        if (!account || !('login' in account)) {
+            throw new ParameterError(
+                'Could not determine repository owner from installation',
+            );
+        }
+
+        const owner = account.login;
+
+        // Determine if the installation is for an org or user
+        // Check if the account has a 'type' property (User/Org accounts have it)
+        const accountType = 'type' in account ? account.type : undefined;
+
+        let repo;
+        if (accountType === 'Organization') {
+            // Create repo in the org account
+            const response = await octokit.rest.repos.createInOrg({
+                org: owner,
+                name,
+                description: description || 'Lightdash dbt project',
+                private: isPrivate,
+                auto_init: true, // Creates with README so it's not empty
+            });
+            repo = response.data;
+        } else {
+            // Create repo for user account
+            const response =
+                await octokit.rest.repos.createForAuthenticatedUser({
+                    name,
+                    description: description || 'Lightdash dbt project',
+                    private: isPrivate,
+                    auto_init: true,
+                });
+            repo = response.data;
+        }
+
+        return {
+            owner: repo.owner.login,
+            repo: repo.name,
+            fullName: repo.full_name,
+            defaultBranch: repo.default_branch,
+        };
+    } catch (e) {
+        if (
+            e instanceof Error &&
+            'status' in e &&
+            (e as { status: number }).status === 422
+        ) {
+            throw new AlreadyExistsError(`Repository "${name}" already exists`);
+        }
+        throw new UnexpectedGitError(getErrorMessage(e));
+    }
+};
+
+export const getDirectoryContents = async ({
+    owner,
+    repo,
+    branch,
+    path,
+    installationId,
+    token,
+}: {
+    owner: string;
+    repo: string;
+    branch: string;
+    path: string;
+    installationId?: string;
+    token?: string;
+}): Promise<
+    Array<{
+        name: string;
+        path: string;
+        type: string;
+        size: number;
+        sha: string;
+    }>
+> => {
+    const { octokit, headers } = getOctokit(installationId, token);
+    try {
+        const response = await octokit.rest.repos.getContent({
+            owner,
+            repo,
+            path: path || '',
+            ref: branch,
+            headers,
+        });
+
+        if (!Array.isArray(response.data)) {
+            throw new ParameterError('Path is not a directory');
+        }
+
+        return response.data.map((item) => ({
+            name: item.name,
+            path: item.path,
+            type: item.type,
+            size: item.size ?? 0,
+            sha: item.sha,
+        }));
+    } catch (error) {
+        if (
+            error instanceof Error &&
+            `status` in error &&
+            error.status === 404
+        ) {
+            throw new NotFoundError(`Directory ${path} not found in GitHub`);
+        }
+        if (error instanceof ParameterError) {
+            throw error;
+        }
+        throw new UnexpectedGitError(getErrorMessage(error));
+    }
+};
+
+export const deleteFile = async ({
+    owner,
+    repo,
+    path,
+    sha,
+    branch,
+    message,
+    installationId,
+    token,
+}: {
+    owner: string;
+    repo: string;
+    path: string;
+    sha: string;
+    branch: string;
+    message: string;
+    installationId?: string;
+    token?: string;
+}): Promise<
+    Awaited<ReturnType<OctokitRest['rest']['repos']['deleteFile']>>
+> => {
+    const { octokit, headers } = getOctokit(installationId, token);
+    try {
+        const response = await octokit.rest.repos.deleteFile({
+            owner,
+            repo,
+            path,
+            sha,
+            branch,
+            message,
+            headers,
+            committer: {
+                name: 'Lightdash',
+                email: 'developers@lightdash.com',
+            },
+        });
+        return response;
+    } catch (error) {
+        if (
+            error instanceof Error &&
+            `status` in error &&
+            error.status === 404
+        ) {
+            throw new NotFoundError(`File ${path} not found in GitHub`);
+        }
+        throw new UnexpectedGitError(getErrorMessage(error));
     }
 };

@@ -75,11 +75,12 @@ describe('roleToScopeMapping', () => {
             // Should have interactive viewer scopes
             expect(scopes).toContain('view:UnderlyingData');
             expect(scopes).toContain('manage:Explore');
+            expect(scopes).toContain('create:ScheduledDeliveries');
+            expect(scopes).toContain('manage:ScheduledDeliveries@self');
 
             // Should have editor-specific scopes
             expect(scopes).toContain('create:Space');
             expect(scopes).toContain('manage:DashboardComments');
-            expect(scopes).toContain('manage:ScheduledDeliveries');
         });
 
         it('should have more scopes for higher roles', () => {
@@ -127,7 +128,7 @@ describe('roleToScopeMapping', () => {
 
             // Define scopes that should be equivalent to an editor role
             // Based on projectMemberAbility.ts, an editor can:
-            // - Do everything interactive_viewer can do (view content, export, create deliveries)
+            // - Do everything interactive_viewer can do (view content, export, create deliveries & manage own deliveries)
             // - Create spaces
             // - Manage non-private spaces, jobs, pinned items, scheduled deliveries, dashboard comments, tags
             // NOTE: Adding manage:Project to enable managing non-private spaces
@@ -138,6 +139,7 @@ describe('roleToScopeMapping', () => {
                 'view:Space',
                 'view:Project',
                 'create:ScheduledDeliveries',
+                'manage:ScheduledDeliveries@self',
                 'view:Job',
                 'create:Job',
                 'manage:Explore',
@@ -149,7 +151,6 @@ describe('roleToScopeMapping', () => {
                 'manage:Project', // Required for managing non-private spaces
                 'manage:Job',
                 'manage:PinnedItems',
-                'manage:ScheduledDeliveries',
                 'manage:DashboardComments',
                 'manage:Tags',
             ];
@@ -183,7 +184,7 @@ describe('roleToScopeMapping', () => {
                     resource: {
                         organizationUuid: 'org-uuid-test',
                         projectUuid: PROJECT_EDITOR.projectUuid,
-                        isPrivate: false,
+                        inheritsFromOrgOrProject: true,
                     },
                 },
                 {
@@ -192,7 +193,7 @@ describe('roleToScopeMapping', () => {
                     resource: {
                         organizationUuid: 'org-uuid-test',
                         projectUuid: PROJECT_EDITOR.projectUuid,
-                        isPrivate: false,
+                        inheritsFromOrgOrProject: true,
                     },
                 },
                 {
@@ -201,7 +202,7 @@ describe('roleToScopeMapping', () => {
                     resource: {
                         organizationUuid: 'org-uuid-test',
                         projectUuid: PROJECT_EDITOR.projectUuid,
-                        isPrivate: false,
+                        inheritsFromOrgOrProject: true,
                     },
                 },
 
@@ -222,7 +223,7 @@ describe('roleToScopeMapping', () => {
                     resource: {
                         organizationUuid: 'org-uuid-test',
                         projectUuid: PROJECT_EDITOR.projectUuid,
-                        isPrivate: false,
+                        inheritsFromOrgOrProject: true,
                     },
                 },
                 {
@@ -373,7 +374,7 @@ describe('roleToScopeMapping', () => {
                 resource: {
                     organizationUuid: 'org-uuid-test',
                     projectUuid: 'test-project-uuid',
-                    isPrivate: false,
+                    inheritsFromOrgOrProject: true,
                 },
             },
             {
@@ -390,7 +391,7 @@ describe('roleToScopeMapping', () => {
                 resource: {
                     organizationUuid: 'org-uuid-test',
                     projectUuid: 'test-project-uuid',
-                    isPrivate: false,
+                    inheritsFromOrgOrProject: true,
                 },
             },
             {
@@ -492,7 +493,7 @@ describe('roleToScopeMapping', () => {
                 resource: {
                     organizationUuid: 'org-uuid-test',
                     projectUuid: 'project-uuid-test',
-                    isPrivate: false,
+                    inheritsFromOrgOrProject: true,
                 },
             },
             {
@@ -509,7 +510,7 @@ describe('roleToScopeMapping', () => {
                 resource: {
                     organizationUuid: 'org-uuid-test',
                     projectUuid: 'project-uuid-test',
-                    isPrivate: false,
+                    inheritsFromOrgOrProject: true,
                 },
             },
             {

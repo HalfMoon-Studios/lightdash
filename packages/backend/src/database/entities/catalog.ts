@@ -1,7 +1,7 @@
 import {
+    assertUnreachable,
     CatalogItemIcon,
     CatalogType,
-    assertUnreachable,
     type CatalogItem,
 } from '@lightdash/common';
 import { Knex } from 'knex';
@@ -18,6 +18,7 @@ export type DbCatalog = {
     embedding_vector?: string;
     field_type?: string;
     required_attributes: Record<string, string | string[]> | null;
+    any_attributes: Record<string, string | string[]> | null;
     chart_usage: number | null;
     icon: CatalogItemIcon | null;
     table_name: string;
@@ -25,6 +26,8 @@ export type DbCatalog = {
     yaml_tags: string[] | null;
     ai_hints: string[] | null;
     joined_tables: string[] | null;
+    owner_user_uuid: string | null;
+    has_time_dimension: boolean;
 };
 
 export type DbCatalogIn = Pick<
@@ -37,12 +40,15 @@ export type DbCatalogIn = Pick<
     | 'type'
     | 'field_type'
     | 'required_attributes'
+    | 'any_attributes'
     | 'chart_usage'
     | 'table_name'
     | 'spotlight_show'
     | 'yaml_tags'
     | 'ai_hints'
     | 'joined_tables'
+    | 'owner_user_uuid'
+    | 'has_time_dimension'
 >;
 export type DbCatalogRemove = Pick<DbCatalog, 'project_uuid' | 'name'>;
 export type DbCatalogUpdate = Partial<
@@ -64,8 +70,9 @@ export type CatalogTable = Knex.CompositeTableType<
 >;
 
 // Utility to get the column name in the `catalog` table from a `CatalogItem` property
+// Also accepts 'tableLabel' and 'owner' which are only in CatalogField but needed for sorting/filtering
 export function getDbCatalogColumnFromCatalogProperty(
-    property: keyof CatalogItem,
+    property: keyof CatalogItem | 'tableLabel' | 'owner',
 ): keyof DbCatalog {
     switch (property) {
         case 'name':
@@ -80,12 +87,18 @@ export function getDbCatalogColumnFromCatalogProperty(
             return 'chart_usage';
         case 'requiredAttributes':
             return 'required_attributes';
+        case 'anyAttributes':
+            return 'any_attributes';
         case 'catalogSearchUuid':
             return 'catalog_search_uuid';
         case 'aiHints':
             return 'ai_hints';
         case 'icon':
             return 'icon';
+        case 'tableLabel':
+            return 'table_name';
+        case 'owner':
+            return 'owner_user_uuid';
         case 'searchRank':
         case 'categories':
         case 'tags':
@@ -131,6 +144,8 @@ export type DbMetricsTreeEdge = {
     target_metric_catalog_search_uuid: string;
     created_at: Date;
     created_by_user_uuid: string | null;
+    project_uuid: string;
+    source: 'yaml' | 'ui';
 };
 
 export type DbMetricsTreeEdgeIn = Pick<
@@ -138,6 +153,8 @@ export type DbMetricsTreeEdgeIn = Pick<
     | 'source_metric_catalog_search_uuid'
     | 'target_metric_catalog_search_uuid'
     | 'created_by_user_uuid'
+    | 'project_uuid'
+    | 'source'
 >;
 
 export type DbMetricsTreeEdgeDelete = Pick<
@@ -151,3 +168,108 @@ export type MetricsTreeEdgesTable = Knex.CompositeTableType<
 >;
 
 export const MetricsTreeEdgesTableName = 'metrics_tree_edges';
+
+// --- Metrics Trees ---
+
+export const MetricsTreesTableName = 'metrics_trees';
+
+export type DbMetricsTree = {
+    metrics_tree_uuid: string;
+    project_uuid: string;
+    slug: string;
+    name: string;
+    description: string | null;
+    source: 'yaml' | 'ui';
+    created_by_user_uuid: string | null;
+    updated_by_user_uuid: string | null;
+    created_at: Date;
+    updated_at: Date;
+    generation: number;
+};
+
+export type DbMetricsTreeIn = Pick<
+    DbMetricsTree,
+    | 'project_uuid'
+    | 'slug'
+    | 'name'
+    | 'description'
+    | 'source'
+    | 'created_by_user_uuid'
+>;
+
+export type DbMetricsTreeUpdate = Pick<
+    DbMetricsTree,
+    | 'name'
+    | 'description'
+    | 'updated_at'
+    | 'updated_by_user_uuid'
+    | 'generation'
+>;
+
+export type MetricsTreesTable = Knex.CompositeTableType<
+    DbMetricsTree,
+    DbMetricsTreeIn,
+    Partial<DbMetricsTreeUpdate>
+>;
+
+// --- Metrics Tree Nodes ---
+
+export const MetricsTreeNodesTableName = 'metrics_tree_nodes';
+
+export type DbMetricsTreeNode = {
+    metrics_tree_uuid: string;
+    catalog_search_uuid: string;
+    x_position: number | null;
+    y_position: number | null;
+    source: 'yaml' | 'ui';
+    created_at: Date;
+    updated_at: Date;
+};
+
+export type DbMetricsTreeNodeIn = Pick<
+    DbMetricsTreeNode,
+    | 'metrics_tree_uuid'
+    | 'catalog_search_uuid'
+    | 'x_position'
+    | 'y_position'
+    | 'source'
+> &
+    Partial<Pick<DbMetricsTreeNode, 'created_at'>>;
+
+export type DbMetricsTreeNodeUpdate = Pick<
+    DbMetricsTreeNode,
+    'x_position' | 'y_position'
+>;
+
+export type MetricsTreeNodesTable = Knex.CompositeTableType<
+    DbMetricsTreeNode,
+    DbMetricsTreeNodeIn,
+    Partial<DbMetricsTreeNodeUpdate>
+>;
+
+// --- Metrics Tree Locks ---
+
+export const MetricsTreeLocksTableName = 'metrics_tree_locks';
+
+export type DbMetricsTreeLock = {
+    metrics_tree_uuid: string;
+    locked_by_user_uuid: string;
+    acquired_at: Date;
+    last_heartbeat_at: Date;
+};
+
+export type DbMetricsTreeLockIn = Pick<
+    DbMetricsTreeLock,
+    'metrics_tree_uuid' | 'locked_by_user_uuid'
+>;
+
+export type DbMetricsTreeLockUpdate = Pick<
+    DbMetricsTreeLock,
+    'locked_by_user_uuid' | 'acquired_at' | 'last_heartbeat_at'
+>;
+
+export type MetricsTreeLocksTable = Knex.CompositeTableType<
+    DbMetricsTreeLock,
+    DbMetricsTreeLockIn,
+    Partial<DbMetricsTreeLockUpdate>
+>;

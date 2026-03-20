@@ -1,28 +1,26 @@
+import {
+    ApiKeyAccount,
+    ForbiddenError,
+    getErrorMessage,
+    LightdashError,
+    MissingConfigError,
+    OauthAccount,
+    ServiceAcctAccount,
+    UserAttributeValueMap,
+} from '@lightdash/common';
 // eslint-disable-next-line import/extensions
 import { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 // eslint-disable-next-line import/extensions
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import express, { type Router } from 'express';
 import { IncomingMessage } from 'http';
-
-import {
-    ApiKeyAccount,
-    ForbiddenError,
-    getErrorMessage,
-    LightdashError,
-    LightdashSessionUser,
-    MissingConfigError,
-    NotImplementedError,
-    OauthAccount,
-    OauthAuth,
-} from '@lightdash/common';
 import {
     allowApiKeyAuthentication,
     allowOauthAuthentication,
-    isAuthenticated,
 } from '../controllers/authentication';
 import { ExtraContext, McpService } from '../ee/services/McpService/McpService';
 import Logger from '../logging/logger';
+import { userAttributeOverridesSchema } from '../services/UserAttributesService/UserAttributeUtils';
 
 const mcpRouter: Router = express.Router({ mergeParams: true });
 
@@ -34,9 +32,46 @@ function getMcpService(req: express.Request): McpService {
     }
 }
 
+const MCP_USER_ATTRIBUTE_HEADER = 'X-Lightdash-User-Attributes';
+
+/**
+ * Extracts user attribute overrides from the X-Lightdash-User-Attributes header.
+ * Header value should be a JSON object with string or string[] values.
+ * Example: {"organizer_id": "123"} or {"organizer_id": ["123", "456"]}
+ */
+function extractUserAttributesFromHeader(
+    req: express.Request,
+): UserAttributeValueMap | undefined {
+    const headerValue = req.headers[MCP_USER_ATTRIBUTE_HEADER.toLowerCase()];
+    if (!headerValue || typeof headerValue !== 'string') {
+        return undefined;
+    }
+
+    try {
+        const parsed = JSON.parse(headerValue);
+        const result = userAttributeOverridesSchema.safeParse(parsed);
+
+        if (!result.success) {
+            Logger.warn(
+                `Invalid ${MCP_USER_ATTRIBUTE_HEADER} header: ${result.error.message}`,
+            );
+            return undefined;
+        }
+
+        return Object.keys(result.data).length > 0 ? result.data : undefined;
+    } catch (e) {
+        Logger.warn(
+            `Failed to parse ${MCP_USER_ATTRIBUTE_HEADER} header: ${getErrorMessage(
+                e,
+            )}`,
+        );
+        return undefined;
+    }
+}
+
 /*
 MCP servers MUST use the HTTP header WWW-Authenticate when returning a 401 Unauthorized to indicate
-the location of the resource server metadata URL as described in RFC9728 Section 5.1 “WWW-Authenticate Response”.
+the location of the resource server metadata URL as described in RFC9728 Section 5.1 "WWW-Authenticate Response".
 https://www.rfc-editor.org/rfc/rfc9728#section-5.1
 */
 const returnHeaderIfUnauthenticated = (
@@ -77,8 +112,6 @@ mcpRouter.all(
                 throw new ForbiddenError('MCP is not enabled');
             }
 
-            const mcpServer = mcpService.getServer();
-
             if (req.method === 'GET') {
                 // Handle SSE transport for MCP
                 res.writeHead(200, {
@@ -105,12 +138,19 @@ mcpRouter.all(
             }
 
             if (req.method === 'POST') {
-                // Handle Streamable HTTP transport
+                // SDK 1.26.0 requires a new server+transport per request in stateless mode
+                // to prevent cross-client response data leaks (CVE-2026-25536)
+                // See: https://github.com/advisories/GHSA-345p-7cg4-v4c7
+                const mcpServer = mcpService.createServer();
                 const transport = new StreamableHTTPServerTransport({
                     enableJsonResponse: true,
                     sessionIdGenerator: undefined,
                 });
                 await mcpServer.connect(transport);
+
+                // Extract user attributes from header (for row-level security)
+                const headerUserAttributes =
+                    extractUserAttributesFromHeader(req);
 
                 // Add auth info to request for the transport
                 // The token details is loaded on the authentication middleware allowOauthAuthentication
@@ -123,6 +163,7 @@ mcpRouter.all(
                     const extra: ExtraContext = {
                         user: req.user,
                         account: oauthAuth,
+                        headerUserAttributes,
                     };
                     authReq.auth = {
                         token: oauthAuth.authentication.token,
@@ -137,10 +178,27 @@ mcpRouter.all(
                     const extra: ExtraContext = {
                         user: req.user,
                         account: apiKeyAuth,
+                        headerUserAttributes,
                     };
                     authReq.auth = {
                         token: apiKeyAuth.authentication.source,
                         clientId: 'API key', // hardcoded client and scopes for PAT authentication
+                        scopes: ['mcp:read', 'mcp:write'],
+                        extra,
+                    };
+                }
+
+                if (req.user && req.account?.isServiceAccount()) {
+                    const serviceAccountAuth =
+                        req.account as ServiceAcctAccount;
+                    const extra: ExtraContext = {
+                        user: req.user,
+                        account: serviceAccountAuth,
+                        headerUserAttributes,
+                    };
+                    authReq.auth = {
+                        token: serviceAccountAuth.authentication.source,
+                        clientId: 'Service account', // hardcoded client and scopes for Service Account authentication
                         scopes: ['mcp:read', 'mcp:write'],
                         extra,
                     };

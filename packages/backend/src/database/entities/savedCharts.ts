@@ -1,5 +1,6 @@
 import {
     AnyType,
+    BinGroup,
     BinRange,
     ChartConfig,
     ChartKind,
@@ -7,11 +8,11 @@ import {
     CompactOrAlias,
     CustomFormat,
     DBFieldTypes,
+    DimensionOverrides,
     DimensionType,
     MetricFilterRule,
     MetricOverrides,
     MetricType,
-    PeriodOverPeriodComparison,
     TableCalculationTemplate,
     TableCalculationType,
 } from '@lightdash/common';
@@ -61,6 +62,8 @@ export type SavedChartTable = Knex.CompositeTableType<
             | 'slug'
             | 'views_count'
             | 'first_viewed_at'
+            | 'deleted_at'
+            | 'deleted_by_user_uuid'
         >
     >
 >;
@@ -80,6 +83,8 @@ export type DbSavedChart = {
     slug: string;
     views_count: number;
     first_viewed_at: Date | null;
+    deleted_at: Date | null;
+    deleted_by_user_uuid: string | null;
 };
 
 export type DbSavedChartVersion = {
@@ -90,6 +95,7 @@ export type DbSavedChartVersion = {
     filters: AnyType;
     row_limit: number;
     metric_overrides: MetricOverrides | null; // JSONB
+    dimension_overrides: DimensionOverrides | null; // JSONB
     chart_type: ChartType;
     saved_query_id: number;
     chart_config: ChartConfig['config'] | null;
@@ -97,7 +103,6 @@ export type DbSavedChartVersion = {
     parameters: AnyType | null; // JSONB
     updated_by_user_uuid: string | null;
     timezone: string | null;
-    period_over_period_config: PeriodOverPeriodComparison | null; // JSONB
 };
 
 export type SavedChartVersionsTable = Knex.CompositeTableType<
@@ -112,13 +117,13 @@ export type CreateDbSavedChartVersion = Pick<
     | 'filters'
     | 'row_limit'
     | 'metric_overrides'
+    | 'dimension_overrides'
     | 'chart_type'
     | 'pivot_dimensions'
     | 'chart_config'
     | 'parameters'
     | 'updated_by_user_uuid'
     | 'timezone'
-    | 'period_over_period_config'
 >;
 
 type DbSavedChartVersionField = {
@@ -200,13 +205,17 @@ export type DbSavedChartCustomDimension = {
     bin_number: number | null;
     bin_width: number | null;
     custom_range: BinRange[] | null; // JSONB
+    custom_groups: BinGroup[] | null; // JSONB
     order: number;
 };
 export type DbSavedChartCustomDimensionInsert = Omit<
     DbSavedChartCustomDimension,
-    'saved_queries_version_custom_dimension_id' | 'custom_range'
+    | 'saved_queries_version_custom_dimension_id'
+    | 'custom_range'
+    | 'custom_groups'
 > & {
     custom_range: string | null;
+    custom_groups: string | null;
 };
 
 export type SavedChartCustomDimensionsTable = Knex.CompositeTableType<
@@ -229,11 +238,18 @@ export type DbSavedChartAdditionalMetric = {
     compact?: CompactOrAlias;
     format?: string;
     percentile?: number;
+    distinct_keys?: string | null; // JSONB array of dimension references
     saved_queries_version_id: number;
     filters: MetricFilterRule[] | null; // JSONB
     base_dimension_name: string | null;
     uuid: string;
     format_options?: CustomFormat | null; // JSONB
+    // PoP metadata (optional)
+    generation_type?: string | null;
+    base_metric_id?: string | null;
+    time_dimension_id?: string | null;
+    granularity?: string | null;
+    period_offset?: number | null;
 };
 export type DbSavedChartAdditionalMetricInsert = Omit<
     DbSavedChartAdditionalMetric,
@@ -270,9 +286,15 @@ export type DBFilteredAdditionalMetrics = Pick<
             | 'compact'
             | 'format'
             | 'percentile'
+            | 'distinct_keys'
             | 'filters'
             | 'base_dimension_name'
             | 'format_options'
+            | 'generation_type'
+            | 'base_metric_id'
+            | 'time_dimension_id'
+            | 'granularity'
+            | 'period_offset'
         >
     >;
 

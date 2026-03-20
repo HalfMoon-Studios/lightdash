@@ -12,26 +12,29 @@ import { IconArrowDownRight, IconArrowUpRight } from '@tabler/icons-react';
 import clamp from 'lodash/clamp';
 import {
     forwardRef,
+    useEffect,
     useMemo,
+    useRef,
     type FC,
     type HTMLAttributes,
     type ReactNode,
 } from 'react';
-import useEmbed from '../../ee/providers/Embed/useEmbed';
+import { DEFAULT_ROW_HEIGHT } from '../../features/dashboardTabs/gridUtils';
+import { useContextMenuPermissions } from '../../hooks/useContextMenuPermissions';
+import { useAccount } from '../../hooks/user/useAccount';
 import { useResizeObserver } from '../../hooks/useResizeObserver';
-import { useAbilityContext } from '../../providers/Ability/useAbilityContext';
-import { DEFAULT_ROW_HEIGHT } from '../DashboardTabs/gridUtils';
+import LoadingChart from '../common/LoadingChart';
+import MantineIcon from '../common/MantineIcon';
 import { isBigNumberVisualizationConfig } from '../LightdashVisualization/types';
 import { useVisualizationContext } from '../LightdashVisualization/useVisualizationContext';
-import { EmptyChart, LoadingChart } from '../SimpleChart';
-import MantineIcon from '../common/MantineIcon';
+import { EmptyChart } from '../SimpleChart';
 import BigNumberContextMenu from './BigNumberContextMenu';
 import styles from './SimpleStatistic.module.css';
 
 interface SimpleStatisticsProps extends HTMLAttributes<HTMLDivElement> {
     minimal?: boolean;
-    isTitleHidden?: boolean;
-    isDashboard?: boolean;
+    onScreenshotReady?: () => void;
+    onScreenshotError?: () => void;
 }
 
 const BOX_MIN_WIDTH = 150;
@@ -82,7 +85,6 @@ const BigNumberText: FC<
     return (
         <Text
             ref={ref}
-            c="foreground.0"
             ta="center"
             fw={500}
             {...textProps}
@@ -123,10 +125,15 @@ const getTrendPillClass = (
 
 const SimpleStatistic: FC<SimpleStatisticsProps> = ({
     minimal = false,
+    onScreenshotReady,
+    onScreenshotError,
     ...wrapperProps
 }) => {
-    const ability = useAbilityContext();
-    const { embedToken } = useEmbed();
+    const { data: account } = useAccount();
+    const { shouldShowMenu, canViewUnderlyingData, canDrillInto } =
+        useContextMenuPermissions({
+            minimal,
+        });
 
     const { resultsData, isLoading, visualizationConfig } =
         useVisualizationContext();
@@ -134,6 +141,27 @@ const SimpleStatistic: FC<SimpleStatisticsProps> = ({
     const isBigNumber = isBigNumberVisualizationConfig(visualizationConfig);
 
     const [setRef, observerElementSize] = useResizeObserver();
+
+    const hasSignaledScreenshotReady = useRef(false);
+
+    useEffect(() => {
+        if (hasSignaledScreenshotReady.current) return;
+        if (!onScreenshotReady && !onScreenshotError) return;
+
+        if (!isLoading && isBigNumber && resultsData?.rows.length) {
+            onScreenshotReady?.();
+            hasSignaledScreenshotReady.current = true;
+        } else if (!isLoading && (!isBigNumber || !resultsData?.rows.length)) {
+            onScreenshotReady?.();
+            hasSignaledScreenshotReady.current = true;
+        }
+    }, [
+        isLoading,
+        isBigNumber,
+        resultsData?.rows.length,
+        onScreenshotReady,
+        onScreenshotError,
+    ]);
 
     const {
         valueFontSize,
@@ -217,12 +245,13 @@ const SimpleStatistic: FC<SimpleStatisticsProps> = ({
 
     const {
         bigNumber,
+        bigNumberTextColor,
         showBigNumberLabel,
-        bigNumberLabel,
+        resolvedBigNumberLabel,
         defaultLabel,
         showComparison,
         comparisonTooltip,
-        comparisonLabel,
+        resolvedComparisonLabel,
         comparisonValue,
         comparisonDiff,
     } = visualizationConfig.chartConfig;
@@ -237,8 +266,8 @@ const SimpleStatistic: FC<SimpleStatisticsProps> = ({
     if (isLoading) return <LoadingChart />;
 
     const shouldHideContextMenu =
-        (minimal && !embedToken) ||
-        (embedToken && ability.cannot('view', 'UnderlyingData'));
+        !shouldShowMenu ||
+        (account?.authentication.type === 'jwt' && !canViewUnderlyingData);
 
     return validData ? (
         <Center
@@ -253,28 +282,35 @@ const SimpleStatistic: FC<SimpleStatisticsProps> = ({
                 setRef(elem);
             }}
             {...wrapperProps}
-            styles={{
-                root: {
-                    // TODO: remove this once Inter is the default font
-                    fontFamily:
-                        'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-                },
-            }}
         >
             <Flex style={{ flexShrink: 1 }} justify="center" align="center">
                 {shouldHideContextMenu ? (
-                    <BigNumberText fz={valueFontSize} fw={600} isHeading>
+                    <BigNumberText
+                        fz={valueFontSize}
+                        fw={600}
+                        isHeading
+                        data-testid="big-number-value"
+                        style={{ '--big-number-color': bigNumberTextColor }}
+                        className={styles.bigNumberText}
+                    >
                         {bigNumber}
                     </BigNumberText>
                 ) : (
-                    <BigNumberContextMenu>
+                    <BigNumberContextMenu
+                        isMinimal={minimal}
+                        canDrillInto={canDrillInto}
+                        canViewUnderlyingData={canViewUnderlyingData}
+                    >
                         <BigNumberText
                             fz={valueFontSize}
                             fw={600}
                             isHeading
+                            data-testid="big-number-value"
                             style={{
                                 cursor: 'pointer',
+                                '--big-number-color': bigNumberTextColor,
                             }}
+                            className={styles.bigNumberText}
                         >
                             {bigNumber}
                         </BigNumberText>
@@ -291,10 +327,11 @@ const SimpleStatistic: FC<SimpleStatisticsProps> = ({
                 >
                     <Tooltip
                         withinPortal
-                        label={bigNumberLabel || defaultLabel}
+                        label={resolvedBigNumberLabel || defaultLabel}
                         disabled={
-                            !(bigNumberLabel || defaultLabel) ||
-                            (bigNumberLabel || defaultLabel || '').length < 40
+                            !(resolvedBigNumberLabel || defaultLabel) ||
+                            (resolvedBigNumberLabel || defaultLabel || '')
+                                .length < 40
                         }
                     >
                         <Text
@@ -308,7 +345,7 @@ const SimpleStatistic: FC<SimpleStatisticsProps> = ({
                                 lineHeight: '120%',
                             }}
                         >
-                            {bigNumberLabel || defaultLabel}
+                            {resolvedBigNumberLabel || defaultLabel}
                         </Text>
                     </Tooltip>
                 </Flex>
@@ -371,11 +408,11 @@ const SimpleStatistic: FC<SimpleStatisticsProps> = ({
                         </Group>
                     </Tooltip>
 
-                    {comparisonLabel && availableHeight > 70 ? (
+                    {resolvedComparisonLabel && availableHeight > 70 ? (
                         <Tooltip
                             withinPortal
-                            label={comparisonLabel}
-                            disabled={comparisonLabel.length < 30}
+                            label={resolvedComparisonLabel}
+                            disabled={resolvedComparisonLabel.length < 30}
                         >
                             <BigNumberText
                                 span
@@ -384,7 +421,7 @@ const SimpleStatistic: FC<SimpleStatisticsProps> = ({
                                 fw={400}
                                 lineClamp={1}
                             >
-                                {comparisonLabel}
+                                {resolvedComparisonLabel}
                             </BigNumberText>
                         </Tooltip>
                     ) : null}

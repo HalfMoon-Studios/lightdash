@@ -1,8 +1,10 @@
 import {
+    ConditionalFormattingColorApplyTo,
     getConditionalFormattingColor,
     getConditionalFormattingConfig,
     getConditionalFormattingDescription,
     getItemId,
+    getReadableTextColor,
     isNumericItem,
     type ConditionalFormattingRowFields,
     type ResultRow,
@@ -19,15 +21,18 @@ import {
 import { IconChevronDown, IconChevronRight } from '@tabler/icons-react';
 import { flexRender, type Row } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import React, { useEffect, useMemo, type FC } from 'react';
+import React, { useCallback, useEffect, useMemo, type FC } from 'react';
 import {
     getColorFromRange,
-    readableColor,
     transformColorsForDarkMode,
 } from '../../../../utils/colorUtils';
 import { getConditionalRuleLabelFromItem } from '../../Filters/FilterInputs/utils';
 import MantineIcon from '../../MantineIcon';
-import { ROW_HEIGHT_PX, SMALL_TEXT_LENGTH } from '../constants';
+import {
+    FROZEN_COLUMN_BACKGROUND,
+    ROW_HEIGHT_PX,
+    SMALL_TEXT_LENGTH,
+} from '../constants';
 import { Tr } from '../Table.styles';
 import { type TableContext } from '../types';
 import { useTableContext } from '../useTableContext';
@@ -54,8 +59,9 @@ export const VirtualizedArea: FC<{ cellCount: number; padding: number }> = ({
 
 interface TableRowProps {
     index: number;
+    virtualIndex: number;
     row: Row<ResultRow>;
-
+    measureElement: (node: HTMLElement | null) => void;
     cellContextMenu?: TableContext['cellContextMenu'];
     conditionalFormattings: TableContext['conditionalFormattings'];
     minMaxMap: TableContext['minMaxMap'];
@@ -65,6 +71,8 @@ interface TableRowProps {
 const TableRow: FC<TableRowProps> = ({
     row,
     index,
+    virtualIndex,
+    measureElement,
     cellContextMenu,
     conditionalFormattings,
     minMaxMap,
@@ -93,7 +101,7 @@ const TableRow: FC<TableRowProps> = ({
     );
 
     return (
-        <Tr $index={index}>
+        <Tr $index={index} ref={measureElement} data-index={virtualIndex}>
             {row.getVisibleCells().map((cell) => {
                 const meta = cell.column.columnDef.meta;
                 const field = meta?.item;
@@ -108,7 +116,7 @@ const TableRow: FC<TableRowProps> = ({
                         rowFields,
                     });
 
-                const conditionalFormattingColor =
+                const conditionalFormattingResult =
                     getConditionalFormattingColor({
                         field,
                         value: cellValue?.value?.raw,
@@ -127,12 +135,16 @@ const TableRow: FC<TableRowProps> = ({
                         },
                     });
 
-                // Frozen/locked rows should have a white background, unless there is a conditional formatting color
+                const applyToText =
+                    conditionalFormattingResult?.applyTo ===
+                    ConditionalFormattingColorApplyTo.TEXT;
+
+                // Frozen/locked rows should have a fixed background, unless there is a conditional formatting color applied to cell
                 let backgroundColor: string | undefined;
-                if (conditionalFormattingColor) {
-                    backgroundColor = conditionalFormattingColor;
+                if (conditionalFormattingResult && !applyToText) {
+                    backgroundColor = conditionalFormattingResult.color;
                 } else if (meta?.frozen) {
-                    backgroundColor = 'white';
+                    backgroundColor = FROZEN_COLUMN_BACKGROUND;
                 }
 
                 const tooltipContent = getConditionalFormattingDescription(
@@ -143,11 +155,16 @@ const TableRow: FC<TableRowProps> = ({
                 );
 
                 const toggleExpander = row.getToggleExpandedHandler();
-                // When conditional formatting is applied, always use calculated contrast color
-                // to ensure text remains readable regardless of light/dark mode
-                const fontColor = conditionalFormattingColor
-                    ? readableColor(conditionalFormattingColor)
-                    : undefined;
+                // When conditional formatting is applied to cell, use calculated contrast color
+                // When applied to text, use the formatting color directly
+                let fontColor: string | undefined;
+                if (conditionalFormattingResult) {
+                    fontColor = applyToText
+                        ? conditionalFormattingResult.color
+                        : getReadableTextColor(
+                              conditionalFormattingResult.color,
+                          );
+                }
 
                 const suppressContextMenu =
                     cell.getIsPlaceholder() || cell.getIsAggregated();
@@ -162,7 +179,14 @@ const TableRow: FC<TableRowProps> = ({
                         className={meta?.className}
                         index={index}
                         cell={cell}
-                        isNumericItem={isNumericItem(meta?.item)}
+                        isNumericItem={
+                            isNumericItem(meta?.item) &&
+                            !(
+                                meta?.item &&
+                                'richText' in meta.item &&
+                                meta.item.richText
+                            )
+                        }
                         hasData={!!meta?.item}
                         cellContextMenu={
                             suppressContextMenu ? undefined : cellContextMenu
@@ -286,14 +310,14 @@ const VirtualizedTableBody: FC<{
     ]);
 
     const virtualRows = rowVirtualizer.getVirtualItems();
-    const paddingTop =
-        virtualRows.length > 0 ? virtualRows?.[0]?.start || 0 : 0;
-    const paddingBottom =
-        virtualRows.length > 0
-            ? rowVirtualizer.getTotalSize() -
-              (virtualRows?.[virtualRows.length - 1]?.end || 0)
-            : 0;
     const cellsCount = rows[0]?.getVisibleCells().length || 0;
+
+    const measureElement = useCallback(
+        (node: HTMLElement | null) => {
+            rowVirtualizer.measureElement(node);
+        },
+        [rowVirtualizer],
+    );
 
     const skeletonRows = useMemo(() => {
         const tableColumnsCount = table.getAllColumns().length;
@@ -318,6 +342,15 @@ const VirtualizedTableBody: FC<{
         });
     }, [table]);
 
+    // Use before/after padding rows to maintain correct total scroll height
+    // while only rendering visible rows
+    const paddingTop = virtualRows.length > 0 ? virtualRows[0]?.start || 0 : 0;
+    const paddingBottom =
+        virtualRows.length > 0
+            ? rowVirtualizer.getTotalSize() -
+              (virtualRows[virtualRows.length - 1]?.end || 0)
+            : 0;
+
     return (
         <tbody>
             {paddingTop > 0 && (
@@ -326,7 +359,8 @@ const VirtualizedTableBody: FC<{
 
             {virtualRows.length === 0 && isFetchingRows
                 ? skeletonRows
-                : virtualRows.map(({ index }) => {
+                : virtualRows.map((virtualRow) => {
+                      const { index } = virtualRow;
                       // If this is the last row and we're loading, show the loader
                       if (
                           isFetchingRows &&
@@ -334,7 +368,11 @@ const VirtualizedTableBody: FC<{
                           isInfiniteScrollEnabled
                       ) {
                           return (
-                              <tr key={index}>
+                              <tr
+                                  key={index}
+                                  data-index={virtualRow.index}
+                                  ref={measureElement}
+                              >
                                   <td
                                       colSpan={
                                           table.getVisibleFlatColumns().length
@@ -359,6 +397,8 @@ const VirtualizedTableBody: FC<{
                               minimal={minimal}
                               key={index}
                               index={index}
+                              virtualIndex={virtualRow.index}
+                              measureElement={measureElement}
                               row={rows[index]}
                               cellContextMenu={cellContextMenu}
                               conditionalFormattings={conditionalFormattings}

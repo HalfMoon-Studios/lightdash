@@ -4,7 +4,7 @@ import {
     CreateWarehouseCredentials,
     DbtProjectConfig,
     isGitProjectType,
-    NotExistsError,
+    NotFoundError,
     OrganizationMemberRole,
     ParameterError,
     ProjectType,
@@ -299,7 +299,7 @@ export class InstanceConfigurationService extends BaseService {
             const sessionUser =
                 await this.userModel.findSessionUserByPrimaryEmail(adminEmail);
             if (!sessionUser) {
-                throw new NotExistsError(`User ${adminEmail} not found`);
+                throw new NotFoundError(`User ${adminEmail} not found`);
             }
             // Revoke other existing PATs for the admin.
             await this.personalAccessTokenModel.deleteAllTokensForUser(
@@ -392,9 +392,8 @@ export class InstanceConfigurationService extends BaseService {
                 `Update instance: Updating configuration for project ${projectUuid}`,
             );
 
-            const project = await this.projectModel.getWithSensitiveFields(
-                projectUuid,
-            );
+            const project =
+                await this.projectModel.getWithSensitiveFields(projectUuid);
 
             const { warehouseConnection, dbtConnection } = project;
 
@@ -460,20 +459,46 @@ export class InstanceConfigurationService extends BaseService {
     }
 
     private async getSingleOrg() {
+        const configOrgUuid =
+            this.lightdashConfig.updateSetup?.organizationUuid;
+
+        if (configOrgUuid) {
+            const orgUuids = await this.organizationModel.getOrgUuids();
+            if (!orgUuids.includes(configOrgUuid)) {
+                throw new ParameterError(
+                    `Organization with UUID "${configOrgUuid}" (from LD_SETUP_ORGANIZATION_UUID) not found`,
+                );
+            }
+            return configOrgUuid;
+        }
+
         const orgUuids = await this.organizationModel.getOrgUuids();
         if (orgUuids.length !== 1) {
             throw new ParameterError(
-                `There must be exactly 1 organization to update instance configuration, remove all the LD_SETUP* env variables or keep only one organization to continue`,
+                `There must be exactly 1 organization to update instance configuration. Set LD_SETUP_ORGANIZATION_UUID to target a specific organization, remove all the LD_SETUP* env variables, or keep only one organization to continue`,
             );
         }
         return orgUuids[0];
     }
 
     private async getSingleProject() {
+        const configProjectUuid = this.lightdashConfig.updateSetup?.projectUuid;
+
+        if (configProjectUuid) {
+            const projectUuids =
+                await this.projectModel.getDefaultProjectUuids();
+            if (!projectUuids.includes(configProjectUuid)) {
+                throw new ParameterError(
+                    `Project with UUID "${configProjectUuid}" (from LD_SETUP_PROJECT_UUID) not found`,
+                );
+            }
+            return configProjectUuid;
+        }
+
         const projectUuids = await this.projectModel.getDefaultProjectUuids();
         if (projectUuids.length !== 1) {
             throw new ParameterError(
-                `There must be exactly 1 project to update instance configuration, remove all the LD_SETUP* env variables or keep only one project to continue`,
+                `There must be exactly 1 project to update instance configuration. Set LD_SETUP_PROJECT_UUID to target a specific project, remove all the LD_SETUP* env variables, or keep only one project to continue`,
             );
         }
         return projectUuids[0];

@@ -5,34 +5,92 @@ import type {
     DashboardAsCodeLanguageMap,
     DashboardChartTileProperties,
     DashboardFilterRule,
-    DashboardFilters,
+    DashboardHeadingTileProperties,
     DashboardLoomTileProperties,
     DashboardMarkdownTileProperties,
     DashboardTile,
+    FilterRule,
+    MetricQuery,
     PromotionChanges,
     SavedChart,
+    SqlChart,
 } from '..';
 
 export const currentVersion = 1;
+
+export enum ContentAsCodeType {
+    CHART = 'chart',
+    DASHBOARD = 'dashboard',
+    SQL_CHART = 'sql_chart',
+}
+
+/**
+ * Permissive filter types for chart-as-code uploads where `id` may be omitted.
+ * Filter IDs are auto-generated during upsert if absent.
+ * After normalization these become the strict runtime types (FilterGroup, Filters).
+ */
+export type FilterRuleInput = Omit<FilterRule, 'id'> & { id?: string };
+export type OrFilterGroupInput = {
+    id?: string;
+    or: Array<FilterGroupItemInput>;
+};
+export type AndFilterGroupInput = {
+    id?: string;
+    and: Array<FilterGroupItemInput>;
+};
+export type FilterGroupInput = OrFilterGroupInput | AndFilterGroupInput;
+export type FilterGroupItemInput = FilterGroupInput | FilterRuleInput;
+export type FiltersInput = {
+    dimensions?: FilterGroupInput;
+    metrics?: FilterGroupInput;
+    tableCalculations?: FilterGroupInput;
+};
+
 // We want to only use properties that can be modified by the user
 // We'll be using slug to access these charts, so uuids are not included
 // These are not linked to a project or org, so projectUuid is not included
-export type ChartAsCode = Pick<
-    SavedChart,
-    | 'name'
-    | 'description'
-    | 'tableName'
-    | 'metricQuery'
-    | 'chartConfig'
-    | 'tableConfig'
-    | 'pivotConfig'
-    | 'slug'
-    | 'updatedAt' // Not modifiable by user, but useful to know if it has been updated
+export type ChartAsCode = Omit<
+    Pick<
+        SavedChart,
+        | 'name'
+        | 'description'
+        | 'tableName'
+        | 'metricQuery'
+        | 'chartConfig'
+        | 'pivotConfig'
+        | 'slug'
+        | 'parameters'
+    >,
+    'metricQuery'
 > & {
+    metricQuery: Omit<MetricQuery, 'filters'> & { filters: FiltersInput };
+    /** Not modifiable by user, but useful to know if it has been updated. Defaults to now if omitted. */
+    updatedAt?: Date;
+    /** Table configuration. Defaults to empty column order if omitted. */
+    tableConfig?: { columnOrder: string[] };
+    /** Slug of the dashboard this chart belongs to (if any) */
     dashboardSlug: string | undefined;
+    /** Schema version for this chart configuration */
     version: number;
-    spaceSlug: string; // Charts within dashboards will be pointing to spaceSlug of the dashboard by design
-    downloadedAt?: Date; // Not modifiable by user, but useful to know if it has been updated
+    /** Content type discriminator */
+    contentType?: ContentAsCodeType.CHART;
+    /** Slug of the space containing this chart */
+    spaceSlug: string;
+    /** Timestamp when this chart was downloaded from Lightdash */
+    downloadedAt?: Date;
+};
+
+// SQL Charts are stored separately from regular saved charts
+// They have SQL queries instead of metricQuery/tableName
+export type SqlChartAsCode = Pick<
+    SqlChart,
+    'name' | 'description' | 'slug' | 'sql' | 'limit' | 'config' | 'chartKind'
+> & {
+    version: number;
+    contentType?: ContentAsCodeType.SQL_CHART;
+    spaceSlug: string;
+    updatedAt?: Date;
+    downloadedAt?: Date;
 };
 
 export type ApiChartAsCodeListResponse = {
@@ -59,6 +117,21 @@ export type ApiChartAsCodeUpsertResponse = {
     results: PromotionChanges;
 };
 
+export type ApiSqlChartAsCodeUpsertResponse = {
+    status: 'ok';
+    results: PromotionChanges;
+};
+
+export type ApiSqlChartAsCodeListResponse = {
+    status: 'ok';
+    results: {
+        sqlCharts: SqlChartAsCode[];
+        missingIds: string[];
+        total: number;
+        offset: number;
+    };
+};
+
 export type DashboardTileAsCode = Omit<DashboardTile, 'properties' | 'uuid'> & {
     uuid: DashboardTile['uuid'] | undefined; // Allows us to remove the uuid from the object
     tileSlug: string | undefined;
@@ -68,7 +141,8 @@ export type DashboardTileAsCode = Omit<DashboardTile, 'properties' | 'uuid'> & {
               'title' | 'hideTitle' | 'chartSlug' | 'chartName'
           >
         | DashboardMarkdownTileProperties['properties']
-        | DashboardLoomTileProperties['properties'];
+        | DashboardLoomTileProperties['properties']
+        | DashboardHeadingTileProperties['properties'];
 };
 
 export type DashboardTileWithSlug = DashboardTile & {
@@ -77,14 +151,19 @@ export type DashboardTileWithSlug = DashboardTile & {
 
 export type DashboardAsCode = Pick<
     Dashboard,
-    'name' | 'description' | 'updatedAt' | 'tabs' | 'slug'
+    'name' | 'description' | 'tabs' | 'slug' | 'config'
 > & {
+    /** Not modifiable by user, but useful to know if it has been updated. Defaults to now if omitted. */
+    updatedAt?: Date;
     tiles: DashboardTileAsCode[];
     version: number;
+    contentType?: ContentAsCodeType.DASHBOARD;
     spaceSlug: string;
     downloadedAt?: Date;
-    filters: Omit<DashboardFilters, 'dimensions'> & {
-        dimensions: Omit<DashboardFilterRule, 'id'>[];
+    filters?: {
+        dimensions?: Omit<DashboardFilterRule, 'id'>[];
+        metrics?: DashboardFilterRule[];
+        tableCalculations?: DashboardFilterRule[];
     };
 };
 

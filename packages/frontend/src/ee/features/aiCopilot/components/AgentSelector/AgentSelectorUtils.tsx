@@ -1,5 +1,5 @@
 import { type AiAgent } from '@lightdash/common';
-import { type ComboboxItem, Group, Text } from '@mantine-8/core';
+import { Group, Text, type ComboboxItem } from '@mantine-8/core';
 import { IconCheck } from '@tabler/icons-react';
 import { LightdashUserAvatar } from '../../../../../components/Avatar';
 import MantineIcon from '../../../../../components/common/MantineIcon';
@@ -38,5 +38,5 @@ export const getAgentOptions = (agents: Agent[]) =>
                 label: name,
                 value: uuid,
                 imageUrl: imageUrl,
-            } satisfies AgentSelectOption),
+            }) satisfies AgentSelectOption,
     );

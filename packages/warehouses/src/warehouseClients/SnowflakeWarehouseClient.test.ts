@@ -1,4 +1,4 @@
-import { DimensionType, type ResultRow } from '@lightdash/common';
+import { CreateSnowflakeCredentials, DimensionType } from '@lightdash/common';
 import { createConnection } from 'snowflake-sdk';
 import { Readable } from 'stream';
 import {
@@ -182,6 +182,41 @@ describe('SnowflakeErrorParsing', () => {
         expect(result.message).toBe('Access denied for MY_TABLE in MY_SCHEMA');
     });
 
+    it('should extract schema name from Schema-level errors', () => {
+        process.env.SNOWFLAKE_UNAUTHORIZED_ERROR_MESSAGE =
+            "You don't have access to the {snowflakeTable} table. Please go to 'analytics_{snowflakeSchema}' in sailpoint and request access";
+
+        const error = {
+            message:
+                "SQL compilation error: Schema 'ANALYTICS_DB.RPT_VERIFICATION' does not exist or not authorized.",
+            code: 'COMPILATION',
+            data: { type: 'COMPILATION' },
+        };
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const result = warehouse.parseError(error as any);
+
+        expect(result.message).toBe(
+            "You don't have access to the RPT_VERIFICATION table. Please go to 'analytics_RPT_VERIFICATION' in sailpoint and request access",
+        );
+    });
+
+    it('should handle Schema errors with different formats', () => {
+        process.env.SNOWFLAKE_UNAUTHORIZED_ERROR_MESSAGE =
+            'Access denied for {snowflakeTable} in {snowflakeSchema}';
+
+        const error = {
+            message: "Schema 'DB.MY_SCHEMA' does not exist or not authorized.",
+            code: 'COMPILATION',
+            data: { type: 'COMPILATION' },
+        };
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const result = warehouse.parseError(error as any);
+
+        expect(result.message).toBe('Access denied for MY_SCHEMA in MY_SCHEMA');
+    });
+
     it('should handle errors without table information gracefully', () => {
         process.env.SNOWFLAKE_UNAUTHORIZED_ERROR_MESSAGE =
             "You don't have access to the {snowflakeTable} table. Please go to 'analytics_{snowflakeSchema}' in sailpoint and request access";
@@ -200,5 +235,107 @@ describe('SnowflakeErrorParsing', () => {
         expect(result.message).toBe(
             "You don't have access to the {snowflakeTable} table. Please go to 'analytics_{snowflakeSchema}' in sailpoint and request access",
         );
+    });
+});
+
+describe('SnowflakeWarehouseClient.parseError - warehouse access errors', () => {
+    let warehouse: SnowflakeWarehouseClient;
+
+    beforeEach(() => {
+        const mockConnectionOptions = {
+            account: 'test-account',
+            user: 'test-user',
+            password: 'test-password',
+            warehouse: 'TEST_WAREHOUSE',
+            database: 'test-database',
+        };
+
+        warehouse = new SnowflakeWarehouseClient(
+            mockConnectionOptions as CreateSnowflakeCredentials,
+        );
+    });
+
+    afterEach(() => {
+        const originalEnv = process.env.SNOWFLAKE_WAREHOUSE_ERROR_MESSAGE;
+        if (originalEnv !== undefined) {
+            process.env.SNOWFLAKE_WAREHOUSE_ERROR_MESSAGE = originalEnv;
+        } else {
+            delete process.env.SNOWFLAKE_WAREHOUSE_ERROR_MESSAGE;
+        }
+    });
+
+    it('should return custom warehouse error message when SNOWFLAKE_WAREHOUSE_ERROR_MESSAGE is set', () => {
+        // Set environment variable
+        process.env.SNOWFLAKE_WAREHOUSE_ERROR_MESSAGE =
+            "You don't have access to warehouse {warehouseName}. Please reach out to your admin.";
+
+        const error = {
+            message:
+                "No active warehouse selected in the current session. Select an active warehouse with the 'use warehouse' command",
+            code: 'SESSION_ERROR',
+            data: { type: 'SESSION_ERROR' },
+        };
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const result = warehouse.parseError(error as any);
+
+        expect(result.message).toBe(
+            "You don't have access to warehouse TEST_WAREHOUSE. Please reach out to your admin.",
+        );
+    });
+
+    it('should return original warehouse error message when SNOWFLAKE_WAREHOUSE_ERROR_MESSAGE is not set', () => {
+        // Ensure environment variable is not set
+        delete process.env.SNOWFLAKE_WAREHOUSE_ERROR_MESSAGE;
+
+        const error = {
+            message:
+                "No active warehouse selected in the current session. Select an active warehouse with the 'use warehouse' command",
+            code: 'SESSION_ERROR',
+            data: { type: 'SESSION_ERROR' },
+        };
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const result = warehouse.parseError(error as any);
+
+        expect(result.message).toBe(
+            "No active warehouse selected in the current session. Select an active warehouse with the 'use warehouse' command",
+        );
+    });
+
+    it('should handle warehouse errors without warehouse name replacement when template has no placeholder', () => {
+        process.env.SNOWFLAKE_WAREHOUSE_ERROR_MESSAGE =
+            'You do not have warehouse access. Please contact your administrator.';
+
+        const error = {
+            message:
+                "No active warehouse selected in the current session. Select an active warehouse with the 'use warehouse' command",
+            code: 'SESSION_ERROR',
+            data: { type: 'SESSION_ERROR' },
+        };
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const result = warehouse.parseError(error as any);
+
+        expect(result.message).toBe(
+            'You do not have warehouse access. Please contact your administrator.',
+        );
+    });
+
+    it('should return original error message for non-warehouse access errors', () => {
+        // Set environment variable
+        process.env.SNOWFLAKE_WAREHOUSE_ERROR_MESSAGE =
+            "You don't have access to warehouse {warehouseName}. Please reach out to your admin.";
+
+        const error = {
+            message: 'Some other SQL error',
+            code: 'COMPILATION',
+            data: { type: 'COMPILATION' },
+        };
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const result = warehouse.parseError(error as any);
+
+        expect(result.message).toBe('Some other SQL error');
     });
 });

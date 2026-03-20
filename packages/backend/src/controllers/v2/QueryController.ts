@@ -54,7 +54,7 @@ export type ApiGetAsyncQueryResultsResponse = {
 
 @Route('/api/v2/projects/{projectUuid}/query')
 @Response<ApiErrorPayload>('default', 'Error')
-@Tags('Query')
+@Tags('v2', 'Query')
 export class QueryController extends BaseController {
     /**
      * Retrieves paginated results from a previously executed async query using its UUID
@@ -152,8 +152,9 @@ export class QueryController extends BaseController {
             additionalMetrics: body.query.additionalMetrics,
             customDimensions: body.query.customDimensions,
             timezone: body.query.timezone,
+            pivotDimensions: body.query.pivotDimensions,
             metricOverrides: body.query.metricOverrides,
-            periodOverPeriod: body.query.periodOverPeriod,
+            dimensionOverrides: body.query.dimensionOverrides,
         };
 
         const results = await this.services
@@ -299,6 +300,7 @@ export class QueryController extends BaseController {
                 dateZoom: body.dateZoom,
                 limit: body.limit,
                 parameters: body.parameters,
+                sorts: body.sorts,
             });
 
         return {

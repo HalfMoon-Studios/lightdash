@@ -9,6 +9,7 @@ import {
     type ResultRow,
 } from '@lightdash/common';
 import { Text } from '@mantine/core';
+import { captureException } from '@sentry/react';
 import type { CellContext } from '@tanstack/react-table';
 import {
     TableHeaderBoldLabel,
@@ -27,6 +28,7 @@ type Args = {
     selectedItemIds: string[];
     isColumnVisible: (key: string) => boolean;
     isColumnFrozen: (key: string) => boolean;
+    getColumnWidth: (key: string) => number | undefined;
     showTableNames: boolean;
     getFieldLabelOverride: (key: string) => string | undefined;
     columnOrder: string[];
@@ -63,8 +65,14 @@ export function getGroupingValuesAndSubtotalKey(
 export function getSubtotalValueFromGroup(
     subtotal: Record<string, number> | undefined,
     columnId: string,
-) {
-    const subtotalColumnIds = Object.keys(subtotal ?? {});
+): number | null | undefined {
+    // No matching subtotal record exists (no data for this combination)
+    // Return undefined so formatItemValue will show '-'
+    if (subtotal === undefined) {
+        return undefined;
+    }
+
+    const subtotalColumnIds = Object.keys(subtotal);
 
     // If the subtotal column is not in the subtotalsGroup, return null
     // This is needed to prevent showing '-' when processing a value for the last grouped dimension column which is not taken into account for subtotals
@@ -73,7 +81,9 @@ export function getSubtotalValueFromGroup(
         return null;
     }
 
-    return subtotal?.[columnId];
+    // Convert null to undefined so formatItemValue shows '-' instead of '∅'
+    // SQL returns null when all aggregated values are null (no data)
+    return subtotal[columnId] ?? undefined;
 }
 
 const getImageSize = (item: ItemsMap[string] | undefined) => {
@@ -93,11 +103,24 @@ const getImageSize = (item: ItemsMap[string] | undefined) => {
     return {};
 };
 
+const getColumnWidthMeta = (width: number | undefined) => {
+    if (width === undefined) return {};
+    return {
+        width,
+        style: {
+            width,
+            minWidth: width,
+            maxWidth: width,
+        },
+    };
+};
+
 const getDataAndColumns = ({
     itemsMap,
     selectedItemIds,
     isColumnVisible,
     isColumnFrozen,
+    getColumnWidth,
     showTableNames,
     getFieldLabelOverride,
     columnOrder,
@@ -105,10 +128,26 @@ const getDataAndColumns = ({
     groupedSubtotals,
     parameters,
 }: Args): Array<TableHeader | TableColumn> => {
-    return columnOrder.reduce<Array<TableHeader | TableColumn>>(
+    // Deduplicate columnOrder to prevent duplicate columns if the same field appears multiple times
+    const uniqueColumnOrder = [...new Set(columnOrder)];
+
+    if (uniqueColumnOrder.length !== columnOrder.length) {
+        console.warn(
+            'Duplicate columns in columnOrder',
+            columnOrder,
+            uniqueColumnOrder,
+        );
+        captureException(new Error('Duplicate columns in columnOrder'), {
+            level: 'error',
+            tags: { errorType: 'duplicateColumns' },
+            extra: { columnOrder, uniqueColumnOrder },
+        });
+    }
+
+    return uniqueColumnOrder.reduce<Array<TableHeader | TableColumn>>(
         (acc, itemId) => {
             const item = itemsMap[itemId] as
-                | typeof itemsMap[number]
+                | (typeof itemsMap)[number]
                 | undefined;
 
             if (!selectedItemIds.includes(itemId)) {
@@ -164,10 +203,12 @@ const getDataAndColumns = ({
                             : null,
                     meta: {
                         item,
+                        labelOverride: headerOverride,
                         isVisible: isColumnVisible(itemId),
                         frozen: isColumnFrozen(itemId),
                         // For image columns with explicit width: set fixed width constraints
                         ...getImageSize(item),
+                        ...getColumnWidthMeta(getColumnWidth(itemId)),
                     },
                     // Some features work in the TanStack Table demos but not here, for unknown reasons.
                     // For example, setting grouping value here does not work. The workaround is to use

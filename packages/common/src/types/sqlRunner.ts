@@ -249,7 +249,7 @@ export type SqlChart = {
         LightdashUser,
         'userUuid' | 'firstName' | 'lastName'
     > | null;
-    space: Pick<SpaceSummary, 'uuid' | 'name' | 'isPrivate' | 'userAccess'>;
+    space: Pick<SpaceSummary, 'uuid' | 'name' | 'userAccess'>;
     dashboard: Pick<Dashboard, 'uuid' | 'name'> | null;
     project: Pick<Project, 'projectUuid'>;
     organization: Pick<Organization, 'organizationUuid'>;
@@ -265,6 +265,7 @@ export type CreateSqlChart = {
     limit: number;
     config: AllVizChartConfig;
     spaceUuid: string;
+    slug?: string; // Optional: force a specific slug (used by content-as-code)
 };
 
 export type UpdateUnversionedSqlChart = {

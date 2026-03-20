@@ -15,6 +15,7 @@ export const DashboardTileChartTableName = 'dashboard_tile_charts';
 export const DashboardTileSqlChartTableName = 'dashboard_tile_sql_charts';
 export const DashboardTileMarkdownsTableName = 'dashboard_tile_markdowns';
 export const DashboardTileLoomsTableName = 'dashboard_tile_looms';
+export const DashboardTileHeadingsTableName = 'dashboard_tile_headings';
 export const DashboardTabsTableName = 'dashboard_tabs';
 
 export type DbDashboard = {
@@ -28,10 +29,13 @@ export type DbDashboard = {
     slug: string;
     views_count: number;
     first_viewed_at: Date | null;
+    deleted_at: Date | null;
+    deleted_by_user_uuid: string | null;
 };
 
 type DbDashboardVersion = {
     dashboard_version_id: number;
+    dashboard_version_uuid: string;
     dashboard_id: number;
     created_at: Date;
     updated_by_user_uuid: string | undefined;
@@ -55,7 +59,7 @@ type DbCreateDashboardTile = {
     y_offset: number;
     height: number;
     width: number;
-    tab_uuid: string | undefined;
+    tab_uuid: string | null | undefined;
 };
 
 type DbDashboardTile = Required<DbCreateDashboardTile>;
@@ -80,13 +84,19 @@ export type DashboardTable = Knex.CompositeTableType<
             | 'first_viewed_at'
             | 'space_id'
             | 'slug'
+            | 'deleted_at'
+            | 'deleted_by_user_uuid'
         >
     >
 >;
 
 export type DashboardVersionTable = Knex.CompositeTableType<
     DbDashboardVersion,
-    Pick<DbDashboardVersion, 'dashboard_id' | 'updated_by_user_uuid' | 'config'>
+    Pick<
+        DbDashboardVersion,
+        'dashboard_id' | 'updated_by_user_uuid' | 'config'
+    > &
+        Partial<Pick<DbDashboardVersion, 'dashboard_version_uuid'>>
 >;
 
 export type DashboardViewTable = Knex.CompositeTableType<
@@ -120,10 +130,21 @@ type DbDashboardTileMarkdowns = {
     dashboard_tile_uuid: string;
     title: string;
     content: string;
+    hide_frame: boolean | null;
 };
 
 export type DashboardTileMarkdownsTable =
     Knex.CompositeTableType<DbDashboardTileMarkdowns>;
+
+type DbDashboardTileHeadings = {
+    dashboard_version_id: number;
+    dashboard_tile_uuid: string;
+    text: string;
+    show_divider: boolean | null;
+};
+
+export type DashboardTileHeadingsTable =
+    Knex.CompositeTableType<DbDashboardTileHeadings>;
 
 export type DbDashboardTabs = {
     name: string;

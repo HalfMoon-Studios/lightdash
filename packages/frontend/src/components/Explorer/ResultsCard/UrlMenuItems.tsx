@@ -11,7 +11,7 @@ import {
     type ResultValue,
     type TableCalculation,
 } from '@lightdash/common';
-import { Box, Menu, Tooltip } from '@mantine/core';
+import { Box, Menu, Tooltip } from '@mantine-8/core';
 import { IconExclamationCircle, IconLink } from '@tabler/icons-react';
 import { type Cell } from '@tanstack/react-table';
 import { useMemo, type FC } from 'react';
@@ -27,7 +27,7 @@ const UrlMenuItem: FC<{
     row: Record<string, Record<string, ResultValue>>;
     showError?: boolean;
 }> = ({ urlConfig, itemsMap, itemIdsInRow, value, row, showError = true }) => {
-    const tracking = useTracking(true);
+    const tracking = useTracking({ failSilently: true });
     const [url, renderError] = useMemo(() => {
         let parsedUrl: string | undefined = undefined;
         let errorMessage: string | undefined = undefined;
@@ -89,7 +89,7 @@ const UrlMenuItem: FC<{
         >
             <Box>
                 <Menu.Item
-                    icon={<MantineIcon icon={IconLink} />}
+                    leftSection={<MantineIcon icon={IconLink} />}
                     rightSection={
                         error && (
                             <Box ml="sm">

@@ -1,17 +1,18 @@
 import {
+    assertUnreachable,
+    QueryExecutionContext,
+    QueryHistoryStatus,
+    sleep,
     type ApiError,
     type ApiExecuteAsyncMetricQueryResults,
     type ApiGetAsyncQueryResults,
     type ApiQueryResults,
-    assertUnreachable,
     type DateZoom,
     type ExecuteAsyncUnderlyingDataRequestParams,
     type MetricQuery,
     type ParametersValuesMap,
-    QueryExecutionContext,
-    QueryHistoryStatus,
     type ResultRow,
-    sleep,
+    type SortField,
 } from '@lightdash/common';
 import { useQuery } from '@tanstack/react-query';
 import { lightdashApi } from '../api';
@@ -51,6 +52,8 @@ export const getUnderlyingDataResults = async (
     while (
         !currentPage ||
         currentPage.status === QueryHistoryStatus.PENDING ||
+        currentPage.status === QueryHistoryStatus.QUEUED ||
+        currentPage.status === QueryHistoryStatus.EXECUTING ||
         (currentPage.status === QueryHistoryStatus.READY &&
             currentPage.nextPage)
     ) {
@@ -91,6 +94,7 @@ export const getUnderlyingDataResults = async (
                     },
                 };
             case QueryHistoryStatus.ERROR:
+            case QueryHistoryStatus.EXPIRED:
                 throw <ApiError>{
                     status: 'error',
                     error: {
@@ -104,6 +108,8 @@ export const getUnderlyingDataResults = async (
                 allRows = allRows.concat(currentPage.rows);
                 break;
             case QueryHistoryStatus.PENDING:
+            case QueryHistoryStatus.QUEUED:
+            case QueryHistoryStatus.EXECUTING:
                 await sleep(backoffMs);
                 // Implement backoff: 250ms -> 500ms -> 1000ms (then stay at 1000ms)
                 if (backoffMs < 1000) {
@@ -138,6 +144,7 @@ export const useUnderlyingDataResults = (
     underlyingDataItemId?: string,
     dateZoom?: DateZoom,
     parameters?: ParametersValuesMap,
+    sorts?: SortField[],
 ) => {
     const projectUuid = useProjectUuid();
 
@@ -150,6 +157,7 @@ export const useUnderlyingDataResults = (
             filters,
             dateZoom,
             parameters,
+            sorts,
         ],
         enabled: Boolean(projectUuid) && Boolean(underlyingDataSourceQueryUuid),
         queryFn: () => {
@@ -162,6 +170,7 @@ export const useUnderlyingDataResults = (
                     underlyingDataItemId,
                     filters: convertDateFilters(filters),
                     dateZoom,
+                    sorts,
                 },
                 undefined,
                 parameters,

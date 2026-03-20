@@ -1,12 +1,12 @@
 import {
     CustomFormatType,
     DimensionType,
-    MetricType,
     friendlyName,
     isAdditionalMetric,
     isCustomBinDimension,
     isCustomDimension,
     isDimension,
+    MetricType,
     snakeCaseName,
     type AdditionalMetric,
     type CustomDimension,
@@ -14,8 +14,8 @@ import {
     type Dimension,
     type Explore,
     type FilterRule,
-    type MetricFilterRule,
     type getFilterableDimensionsFromItemsMap,
+    type MetricFilterRule,
 } from '@lightdash/common';
 import { type MetricFilterRuleWithFieldId } from '../FilterForm';
 
@@ -190,8 +190,8 @@ export const prepareCustomMetricData = ({
                 item.baseDimensionName
                 ? item.baseDimensionName
                 : isCustomDimension(item)
-                ? item.id // Custom dimensions have ids instead of names
-                : item.name,
+                  ? item.id // Custom dimensions have ids instead of names
+                  : item.name,
         ),
         ...(isEditingCustomMetric &&
             label &&

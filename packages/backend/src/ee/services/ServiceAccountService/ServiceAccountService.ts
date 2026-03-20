@@ -12,7 +12,6 @@ import {
     SessionUser,
     UnexpectedDatabaseError,
 } from '@lightdash/common';
-
 import { LightdashAnalytics } from '../../../analytics/LightdashAnalytics';
 import { LightdashConfig } from '../../../config/parseConfig';
 import { BaseService } from '../../../services/BaseService';
@@ -119,9 +118,8 @@ export class ServiceAccountService extends BaseService {
             ServiceAccountService.throwForbiddenErrorOnNoPermission(user);
             const organizationUuid = user.organizationUuid as string;
             // get by uuid to check if token exists
-            const token = await this.serviceAccountModel.getTokenbyUuid(
-                tokenUuid,
-            );
+            const token =
+                await this.serviceAccountModel.getTokenbyUuid(tokenUuid);
             if (!token) {
                 throw new NotFoundError(
                     `Token with UUID ${tokenUuid} not found`,
@@ -175,9 +173,8 @@ export class ServiceAccountService extends BaseService {
         }
 
         // get by uuid to check if token exists
-        const existingToken = await this.serviceAccountModel.getTokenbyUuid(
-            tokenUuid,
-        );
+        const existingToken =
+            await this.serviceAccountModel.getTokenbyUuid(tokenUuid);
         if (!existingToken) {
             throw new NotFoundError(`Token with UUID ${tokenUuid} not found`);
         }
@@ -226,9 +223,8 @@ export class ServiceAccountService extends BaseService {
         ServiceAccountService.throwForbiddenErrorOnNoPermission(user);
 
         // get by uuid to check if token exists
-        const existingToken = await this.serviceAccountModel.getTokenbyUuid(
-            tokenUuid,
-        );
+        const existingToken =
+            await this.serviceAccountModel.getTokenbyUuid(tokenUuid);
         if (!existingToken) {
             throw new NotFoundError(`Token with UUID ${tokenUuid} not found`);
         }

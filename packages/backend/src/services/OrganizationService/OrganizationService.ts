@@ -7,6 +7,7 @@ import {
     CreateColorPalette,
     CreateGroup,
     CreateOrganization,
+    FeatureFlags,
     ForbiddenError,
     Group,
     GroupWithMembers,
@@ -14,7 +15,7 @@ import {
     KnexPaginateArgs,
     KnexPaginatedData,
     LightdashMode,
-    NotExistsError,
+    NotFoundError,
     OnbordingRecord,
     Organization,
     OrganizationColorPalette,
@@ -35,6 +36,7 @@ import {
 import { groupBy } from 'lodash';
 import { LightdashAnalytics } from '../../analytics/LightdashAnalytics';
 import { LightdashConfig } from '../../config/parseConfig';
+import { FeatureFlagModel } from '../../models/FeatureFlagModel/FeatureFlagModel';
 import { GroupsModel } from '../../models/GroupsModel';
 import { OnboardingModel } from '../../models/OnboardingModel/OnboardingModel';
 import { OrganizationAllowedEmailDomainsModel } from '../../models/OrganizationAllowedEmailDomainsModel';
@@ -42,6 +44,7 @@ import { OrganizationMemberProfileModel } from '../../models/OrganizationMemberP
 import { OrganizationModel } from '../../models/OrganizationModel';
 import { ProjectModel } from '../../models/ProjectModel/ProjectModel';
 import { UserModel } from '../../models/UserModel';
+import { wrapSentryTransaction } from '../../utils';
 import { BaseService } from '../BaseService';
 
 type OrganizationServiceArguments = {
@@ -54,6 +57,7 @@ type OrganizationServiceArguments = {
     userModel: UserModel;
     groupsModel: GroupsModel;
     organizationAllowedEmailDomainsModel: OrganizationAllowedEmailDomainsModel;
+    featureFlagModel: FeatureFlagModel;
 };
 
 export class OrganizationService extends BaseService {
@@ -75,6 +79,8 @@ export class OrganizationService extends BaseService {
 
     private readonly groupsModel: GroupsModel;
 
+    private readonly featureFlagModel: FeatureFlagModel;
+
     constructor({
         lightdashConfig,
         analytics,
@@ -85,6 +91,7 @@ export class OrganizationService extends BaseService {
         userModel,
         groupsModel,
         organizationAllowedEmailDomainsModel,
+        featureFlagModel,
     }: OrganizationServiceArguments) {
         super();
         this.lightdashConfig = lightdashConfig;
@@ -97,6 +104,7 @@ export class OrganizationService extends BaseService {
         this.organizationAllowedEmailDomainsModel =
             organizationAllowedEmailDomainsModel;
         this.groupsModel = groupsModel;
+        this.featureFlagModel = featureFlagModel;
     }
 
     async get(account: Account): Promise<Organization> {
@@ -134,7 +142,7 @@ export class OrganizationService extends BaseService {
             throw new ForbiddenError();
         }
         if (organizationUuid === undefined) {
-            throw new NotExistsError('Organization not found');
+            throw new NotFoundError('Organization not found');
         }
         if (data.name) {
             validateOrganizationNameOrThrow(data.name);
@@ -217,6 +225,7 @@ export class OrganizationService extends BaseService {
         paginateArgs?: KnexPaginateArgs,
         searchQuery?: string,
         projectUuid?: string,
+        googleOidcOnly?: boolean,
     ): Promise<KnexPaginatedData<OrganizationMemberProfile[]>> {
         const { organizationUuid } = user;
 
@@ -229,7 +238,7 @@ export class OrganizationService extends BaseService {
             throw new ForbiddenError();
         }
         if (organizationUuid === undefined) {
-            throw new NotExistsError('Organization not found');
+            throw new NotFoundError('Organization not found');
         }
 
         const { pagination, data: organizationMembers } = includeGroups
@@ -238,11 +247,13 @@ export class OrganizationService extends BaseService {
                   includeGroups,
                   paginateArgs,
                   searchQuery,
+                  googleOidcOnly,
               )
             : await this.organizationMemberProfileModel.getOrganizationMembers({
                   organizationUuid,
                   paginateArgs,
                   searchQuery,
+                  googleOidcOnly,
               });
 
         let members = organizationMembers.filter((member) =>
@@ -289,10 +300,14 @@ export class OrganizationService extends BaseService {
     async getProjects(account: Account): Promise<OrganizationProject[]> {
         const { organizationUuid } = account.organization;
         if (organizationUuid === undefined) {
-            throw new NotExistsError('Organization not found');
+            throw new NotFoundError('Organization not found');
         }
-        const projects = await this.projectModel.getAllByOrganizationUuid(
-            organizationUuid,
+
+        const projects = await wrapSentryTransaction(
+            'OrganizationService.getProjects.getAllByOrganizationUuid',
+            { organizationUuid },
+            async () =>
+                this.projectModel.getAllByOrganizationUuid(organizationUuid),
         );
 
         return projects.filter((project) =>
@@ -309,7 +324,7 @@ export class OrganizationService extends BaseService {
     async getOnboarding(user: SessionUser): Promise<OnbordingRecord> {
         const { organizationUuid } = user;
         if (organizationUuid === undefined) {
-            throw new NotExistsError('Organization not found');
+            throw new NotFoundError('Organization not found');
         }
         return this.onboardingModel.getByOrganizationUuid(organizationUuid);
     }
@@ -320,7 +335,7 @@ export class OrganizationService extends BaseService {
         }
         const { shownSuccessAt } = await this.getOnboarding(user);
         if (shownSuccessAt) {
-            throw new NotExistsError('Can not override "shown success" date');
+            throw new NotFoundError('Can not override "shown success" date');
         }
         return this.onboardingModel.update(user.organizationUuid, {
             shownSuccessAt: new Date(),
@@ -410,9 +425,8 @@ export class OrganizationService extends BaseService {
             );
         }
         if (data.role !== undefined) {
-            const organization = await this.organizationModel.get(
-                organizationUuid,
-            );
+            const organization =
+                await this.organizationModel.get(organizationUuid);
             this.analytics.track({
                 userId: authenticatedUser.userUuid,
                 event: 'permission.updated',
@@ -442,7 +456,7 @@ export class OrganizationService extends BaseService {
     ): Promise<AllowedEmailDomains> {
         const { organizationUuid } = user;
         if (organizationUuid === undefined) {
-            throw new NotExistsError('Organization not found');
+            throw new NotFoundError('Organization not found');
         }
 
         const allowedEmailDomains =
@@ -466,7 +480,7 @@ export class OrganizationService extends BaseService {
     ): Promise<AllowedEmailDomains> {
         const { organizationUuid } = user;
         if (organizationUuid === undefined) {
-            throw new NotExistsError('Organization not found');
+            throw new NotFoundError('Organization not found');
         }
 
         if (
@@ -670,7 +684,7 @@ export class OrganizationService extends BaseService {
         user: SessionUser,
     ): Promise<OrganizationColorPaletteWithIsActive[]> {
         if (!user.organizationUuid) {
-            throw new NotExistsError('Organization not found');
+            throw new NotFoundError('Organization not found');
         }
 
         return this.organizationModel.getColorPalettes(user.organizationUuid);
@@ -750,5 +764,59 @@ export class OrganizationService extends BaseService {
         );
 
         return palette;
+    }
+
+    async getImpersonationEnabled(user: SessionUser): Promise<boolean> {
+        const { organizationUuid } = user;
+        if (
+            user.ability.cannot(
+                'update',
+                subject('Organization', { organizationUuid }),
+            )
+        ) {
+            throw new ForbiddenError();
+        }
+        if (organizationUuid === undefined) {
+            throw new NotFoundError('Organization not found');
+        }
+        const flag = await this.featureFlagModel.get({
+            user,
+            featureFlagId: FeatureFlags.UserImpersonation,
+        });
+        if (!flag.enabled) {
+            return false;
+        }
+        return this.organizationModel.getImpersonationEnabled(organizationUuid);
+    }
+
+    async updateImpersonationEnabled(
+        user: SessionUser,
+        enabled: boolean,
+    ): Promise<void> {
+        const { organizationUuid } = user;
+        if (
+            user.ability.cannot(
+                'update',
+                subject('Organization', { organizationUuid }),
+            )
+        ) {
+            throw new ForbiddenError();
+        }
+        if (organizationUuid === undefined) {
+            throw new NotFoundError('Organization not found');
+        }
+        const flag = await this.featureFlagModel.get({
+            user,
+            featureFlagId: FeatureFlags.UserImpersonation,
+        });
+        if (!flag.enabled) {
+            throw new ForbiddenError(
+                'User impersonation is not enabled for this instance',
+            );
+        }
+        await this.organizationModel.updateImpersonationEnabled(
+            organizationUuid,
+            enabled,
+        );
     }
 }

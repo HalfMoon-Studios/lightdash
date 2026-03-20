@@ -61,12 +61,14 @@ export type FindFieldFn = (
     args: KnexPaginateArgs & {
         table: ToolFindFieldsArgs['table'];
         fieldSearchQuery: ToolFindFieldsArgs['fieldSearchQueries'][number];
+        explore: Explore;
     },
 ) => Promise<{
     fields: CatalogField[];
     pagination: Pagination | undefined;
-    explore?: Explore;
 }>;
+
+export type GetExploreFn = (args: { table: string }) => Promise<Explore>;
 
 export type FindContentFn = (args: {
     searchQuery: ToolFindContentArgs['searchQueries'][number];
@@ -74,13 +76,27 @@ export type FindContentFn = (args: {
     content: (AllChartsSearchResult | DashboardSearchResult)[];
 }>;
 
+export type GetDashboardChartsFn = (args: {
+    dashboardUuid: string;
+    page: number;
+    pageSize: number;
+}) => Promise<{
+    dashboardName: string;
+    charts: DashboardSearchResult['charts'];
+    pagination: {
+        page: number;
+        pageSize: number;
+        totalResults: number;
+        totalPageCount: number;
+    };
+}>;
+
 export type UpdateProgressFn = (progress: string) => Promise<void>;
 
 export type GetPromptFn = () => Promise<SlackPrompt | AiWebAppPrompt>;
 
-export type RunMiniMetricQueryFn = (
+export type RunAsyncQueryFn = (
     metricQuery: AiMetricQueryWithFilters,
-    maxLimit: number,
     additionalMetrics?: AdditionalMetric[],
 ) => Promise<{
     rows: Record<string, AnyType>[];

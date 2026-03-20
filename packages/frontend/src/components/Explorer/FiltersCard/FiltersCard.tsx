@@ -1,6 +1,6 @@
 import {
-    FilterOperator,
     countTotalFilterRules,
+    FilterOperator,
     getItemId,
     getTotalFilterRules,
     getVisibleFields,
@@ -11,7 +11,7 @@ import {
     type FilterRule,
     type Filters,
 } from '@lightdash/common';
-import { Badge, Text, Tooltip } from '@mantine/core';
+import { Badge, Text, Tooltip } from '@mantine-8/core';
 import {
     memo,
     useCallback,
@@ -28,6 +28,7 @@ import {
     selectIsEditMode,
     selectIsFiltersExpanded,
     selectMetricQuery,
+    selectParameters,
     selectTableCalculations,
     selectTableName,
     useExplorerDispatch,
@@ -54,6 +55,7 @@ const FiltersCard: FC = memo(() => {
     const tableCalculations = useExplorerSelector(selectTableCalculations);
     const filters = useExplorerSelector(selectFilters);
     const isEditMode = useExplorerSelector(selectIsEditMode);
+    const parameterValues = useExplorerSelector(selectParameters);
     const dispatch = useExplorerDispatch();
 
     const tableName = useExplorerSelector(selectTableName);
@@ -286,20 +288,17 @@ const FiltersCard: FC = memo(() => {
                         >
                             <Badge
                                 color="gray"
-                                sx={{
-                                    textTransform: 'unset',
-                                }}
+                                variant="light"
+                                tt="none"
+                                fw={500}
                             >
-                                {totalActiveFilters}{' '}
-                                <Text span fw={500}>
-                                    active filter
-                                    {totalActiveFilters === 1 ? '' : 's'}
-                                </Text>
+                                {totalActiveFilters} active filter
+                                {totalActiveFilters === 1 ? '' : 's'}
                             </Badge>
                         </Tooltip>
                     ) : null}
                     {totalActiveFilters > 0 && filterIsOpen && !isEditMode ? (
-                        <Text color="gray">
+                        <Text c="gray">
                             You must be in 'edit' or 'explore' mode to change
                             the filters
                         </Text>
@@ -319,6 +318,7 @@ const FiltersCard: FC = memo(() => {
                         withinPortal: true,
                     }}
                     baseTable={data?.baseTable}
+                    parameterValues={parameterValues}
                 >
                     <FiltersForm
                         isEditMode={isEditMode}

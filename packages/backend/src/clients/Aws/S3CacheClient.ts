@@ -1,6 +1,7 @@
 import {
     GetObjectCommand,
     HeadObjectCommand,
+    NoSuchKey,
     NotFound,
     PutObjectCommand,
     PutObjectCommandInput,
@@ -9,6 +10,7 @@ import {
 import {
     getErrorMessage,
     MissingConfigError,
+    ResultsExpiredError,
     S3Error,
 } from '@lightdash/common';
 import * as Sentry from '@sentry/node';
@@ -19,14 +21,15 @@ import { S3BaseClient } from './S3BaseClient';
 
 export type S3CacheClientArguments = {
     lightdashConfig: LightdashConfig;
+    s3Config?: LightdashConfig['results']['s3'];
 };
 
 export class S3CacheClient extends S3BaseClient {
     configuration: LightdashConfig['results']['s3'];
 
-    constructor({ lightdashConfig }: S3CacheClientArguments) {
-        super(lightdashConfig.results.s3);
-        this.configuration = lightdashConfig.results.s3;
+    constructor({ lightdashConfig, s3Config }: S3CacheClientArguments) {
+        super(s3Config ?? lightdashConfig.results.s3);
+        this.configuration = s3Config ?? lightdashConfig.results.s3;
 
         if (this.s3) {
             Logger.debug('Initialized S3 results cache client');
@@ -156,6 +159,11 @@ export class S3CacheClient extends S3BaseClient {
                 });
                 return await this.s3.send(command);
             } catch (error) {
+                if (error instanceof NoSuchKey || error instanceof NotFound) {
+                    Logger.debug(`S3 key not found: ${key}.${extension}`);
+                    throw new ResultsExpiredError();
+                }
+
                 if (error instanceof S3ServiceException) {
                     Logger.error(
                         `Failed to get results from s3. ${error.name} - ${error.message}`,

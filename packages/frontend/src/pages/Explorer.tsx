@@ -1,9 +1,8 @@
 import { subject } from '@casl/ability';
+import { useHotkeys } from '@mantine/hooks';
 import { memo, useCallback, useState } from 'react';
 import { Provider } from 'react-redux';
 import { useNavigate, useParams } from 'react-router';
-
-import { useHotkeys } from '@mantine/hooks';
 import Page from '../components/common/Page/Page';
 import Explorer from '../components/Explorer';
 import ExploreSideBar from '../components/Explorer/ExploreSideBar/index';
@@ -22,7 +21,6 @@ import {
     useExplorerRoute,
     useExplorerUrlState,
 } from '../hooks/useExplorerRoute';
-import { ProfilerWrapper } from '../perf/ProfilerWrapper';
 import useApp from '../providers/App/useApp';
 import { defaultState } from '../providers/Explorer/defaultState';
 
@@ -60,9 +58,7 @@ const ExplorerContent = memo(() => {
             withFullHeight
             withPaddedContent
         >
-            <ProfilerWrapper id="Explorer">
-                <Explorer />
-            </ProfilerWrapper>
+            <Explorer />
         </Page>
     );
 });

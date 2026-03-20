@@ -1,25 +1,19 @@
 import {
+    assertUnreachable,
     DashboardFilterValidationErrorType,
     friendlyName,
     isChartValidationError,
     isDashboardValidationError,
     isTableValidationError,
+    ValidationErrorType,
     type ValidationResponse,
 } from '@lightdash/common';
-import { Mark, Stack, Text } from '@mantine/core';
+import { Mark, Stack, Text } from '@mantine-8/core';
 import { type FC } from 'react';
+import classes from './ErrorMessage.module.css';
 
 const CustomMark: FC<React.PropsWithChildren<{}>> = ({ children }) => (
-    <Mark
-        color="gray"
-        px={2}
-        fw={500}
-        fz="xs"
-        sx={{
-            textTransform: 'none',
-            borderRadius: '2px',
-        }}
-    >
+    <Mark color="gray" px={2} fw={500} fz={11} className={classes.mark}>
         {children}
     </Mark>
 );
@@ -28,8 +22,20 @@ const ErrorMessageByType: FC<{
     validationError: ValidationResponse;
 }> = ({ validationError }) => {
     if (isChartValidationError(validationError)) {
+        // Handle chart configuration errors (unused dimensions)
+        if (
+            validationError.errorType === ValidationErrorType.ChartConfiguration
+        ) {
+            return (
+                <Text fz={11}>
+                    <CustomMark>{validationError.fieldName}</CustomMark>
+                    {': '}
+                    {validationError.error}
+                </Text>
+            );
+        }
         return (
-            <Text>
+            <Text fz={11}>
                 <CustomMark>{validationError.fieldName}</CustomMark> no longer
                 exists
             </Text>
@@ -42,7 +48,7 @@ const ErrorMessageByType: FC<{
             switch (validationError.dashboardFilterErrorType) {
                 case DashboardFilterValidationErrorType.TableNotUsedByAnyChart:
                     return (
-                        <Text>
+                        <Text fz={11}>
                             <CustomMark>{validationError.fieldName}</CustomMark>{' '}
                             references table{' '}
                             <CustomMark>{validationError.tableName}</CustomMark>{' '}
@@ -51,28 +57,39 @@ const ErrorMessageByType: FC<{
                     );
                 case DashboardFilterValidationErrorType.FieldDoesNotExist:
                     return (
-                        <Text>
+                        <Text fz={11}>
                             <CustomMark>{validationError.fieldName}</CustomMark>{' '}
                             no longer exists
                         </Text>
                     );
                 case DashboardFilterValidationErrorType.TableDoesNotExist:
                     return (
-                        <Text>
+                        <Text fz={11}>
                             Table{' '}
                             <CustomMark>{validationError.tableName}</CustomMark>{' '}
                             no longer exists
                         </Text>
                     );
+                case DashboardFilterValidationErrorType.FieldTableMismatch:
+                    return (
+                        <Text fz={11}>
+                            <CustomMark>{validationError.fieldName}</CustomMark>{' '}
+                            does not match table{' '}
+                            <CustomMark>{validationError.tableName}</CustomMark>
+                        </Text>
+                    );
                 default:
-                    return <Text>{validationError.error}</Text>;
+                    return assertUnreachable(
+                        validationError.dashboardFilterErrorType,
+                        `Unexpected dashboard filter error type`,
+                    );
             }
         }
 
         // Handle broken chart errors
         if (validationError.chartName) {
             return (
-                <Text>
+                <Text fz={11}>
                     <CustomMark>{validationError.chartName}</CustomMark> is
                     broken
                 </Text>
@@ -80,11 +97,11 @@ const ErrorMessageByType: FC<{
         }
 
         // Fallback for unexpected cases
-        return <Text>{validationError.error}</Text>;
+        return <Text fz={11}>{validationError.error}</Text>;
     }
 
     if (isTableValidationError(validationError) && validationError) {
-        return <Text>{validationError.error}</Text>;
+        return <Text fz={11}>{validationError.error}</Text>;
     }
 
     return null;
@@ -93,13 +110,17 @@ const ErrorMessageByType: FC<{
 export const ErrorMessage: FC<{ validationError: ValidationResponse }> = ({
     validationError,
 }) => {
+    const isWarning =
+        isChartValidationError(validationError) &&
+        validationError.errorType === ValidationErrorType.ChartConfiguration;
+
     return (
-        <Stack spacing={4}>
-            <Text fw={600} color="red.6" fz={11}>
+        <Stack gap={4}>
+            <Text fw={600} c={isWarning ? 'orange.6' : 'red.6'} fz={10}>
                 {validationError.errorType
                     ? friendlyName(validationError.errorType)
                     : ''}{' '}
-                error
+                {isWarning ? 'warning' : 'error'}
             </Text>
             <ErrorMessageByType validationError={validationError} />
         </Stack>

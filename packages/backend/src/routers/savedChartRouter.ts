@@ -18,6 +18,12 @@ savedChartRouter.get(
             .get(
                 getObjectValue(req.params, 'savedQueryUuidOrSlug'),
                 req.account!,
+                {
+                    projectUuid:
+                        typeof req.query.projectUuid === 'string'
+                            ? req.query.projectUuid
+                            : undefined,
+                },
             )
             .then((results) => {
                 res.json({
@@ -154,49 +160,5 @@ savedChartRouter.post(
                 });
             })
             .catch(next);
-    },
-);
-
-savedChartRouter.get(
-    '/:savedQueryUuid/schedulers',
-    allowApiKeyAuthentication,
-    isAuthenticated,
-    async (req, res, next) => {
-        try {
-            res.json({
-                status: 'ok',
-                results: await req.services
-                    .getSavedChartService()
-                    .getSchedulers(
-                        req.user!,
-                        getObjectValue(req.params, 'savedQueryUuid'),
-                    ),
-            });
-        } catch (e) {
-            next(e);
-        }
-    },
-);
-
-savedChartRouter.post(
-    '/:savedQueryUuid/schedulers',
-    allowApiKeyAuthentication,
-    isAuthenticated,
-    unauthorisedInDemo,
-    async (req, res, next) => {
-        try {
-            res.json({
-                status: 'ok',
-                results: await req.services
-                    .getSavedChartService()
-                    .createScheduler(
-                        req.user!,
-                        getObjectValue(req.params, 'savedQueryUuid'),
-                        req.body,
-                    ),
-            });
-        } catch (e) {
-            next(e);
-        }
     },
 );

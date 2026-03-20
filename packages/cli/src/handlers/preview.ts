@@ -1,6 +1,7 @@
 import * as core from '@actions/core';
 import {
     CreateProjectTableConfiguration,
+    getErrorMessage,
     Project,
     ProjectType,
 } from '@lightdash/common';
@@ -14,6 +15,7 @@ import { LightdashAnalytics } from '../analytics/analytics';
 import { getConfig, setPreviewProject, unsetPreviewProject } from '../config';
 import { getDbtContext } from '../dbt/context';
 import GlobalState from '../globalState';
+import { CliProjectType, detectProjectType } from '../lightdash/projectType';
 import * as styles from '../styles';
 import { compile } from './compile';
 import { createProject } from './createProject';
@@ -33,6 +35,11 @@ type PreviewHandlerOptions = DbtCompileOptions & {
     tableConfiguration: CreateProjectTableConfiguration;
     skipCopyContent?: boolean;
     organizationCredentials?: string;
+    assumeYes?: boolean;
+    warehouseCredentials?: boolean;
+    useBatchedDeploy?: boolean;
+    batchSize?: string;
+    parallelBatches?: string;
 };
 
 type StopPreviewHandlerOptions = {
@@ -67,6 +74,7 @@ const deletePreviewProject = async (
 const cleanupProject = async (
     executionId: string,
     projectUuid: string,
+    previewStartTime?: number,
 ): Promise<void> => {
     const teardownSpinner = GlobalState.startSpinner(`  Cleaning up`);
 
@@ -77,12 +85,15 @@ const cleanupProject = async (
             properties: {
                 executionId,
                 projectId: projectUuid,
+                durationMs: previewStartTime
+                    ? Date.now() - previewStartTime
+                    : 0,
             },
         });
         teardownSpinner.succeed(`  Cleaned up`);
     } catch (e) {
-        console.error('Error during cleanup:', e);
-        teardownSpinner.fail(`  Cleanup failed`);
+        // console.error(styles.error(`Error during cleanup: ${getErrorMessage(e)}`));
+        teardownSpinner.fail(`  Cleanup failed: ${getErrorMessage(e)}`);
     }
 };
 
@@ -117,6 +128,18 @@ export const previewHandler = async (
     GlobalState.setVerbose(options.verbose);
     const executionId = uuidv4();
     await checkLightdashVersion();
+
+    // Detect project type
+    const absoluteProjectPath = path.resolve(options.projectDir);
+    const projectTypeConfig = await detectProjectType({
+        projectDir: options.projectDir,
+        userOptions: {
+            warehouseCredentials: options.warehouseCredentials,
+            skipDbtCompile: options.skipDbtCompile,
+            skipWarehouseCatalog: options.skipWarehouseCatalog,
+        },
+    });
+
     let name = options?.name;
     if (name === undefined) {
         name = uniqueNamesGenerator({
@@ -219,6 +242,7 @@ export const previewHandler = async (
                     ? config.context.project
                     : undefined,
             copyContent: !options.skipCopyContent && upstreamProjectValid,
+            warehouseCredentials: projectTypeConfig.warehouseCredentials,
         });
 
         project = results?.project;
@@ -246,6 +270,7 @@ export const previewHandler = async (
         return;
     }
 
+    const previewStartTime = Date.now();
     await LightdashAnalytics.track({
         event: 'preview.started',
         properties: {
@@ -263,7 +288,11 @@ export const previewHandler = async (
         await setPreviewProject(project.projectUuid, name);
 
         process.on('SIGINT', async () => {
-            await cleanupProject(executionId, project!.projectUuid);
+            await cleanupProject(
+                executionId,
+                project!.projectUuid,
+                previewStartTime,
+            );
 
             process.exit(0);
         });
@@ -289,44 +318,54 @@ export const previewHandler = async (
             properties: {
                 executionId,
                 projectId: project.projectUuid,
+                durationMs: Date.now() - previewStartTime,
             },
         });
-
-        const absoluteProjectPath = path.resolve(options.projectDir);
-        const context = await getDbtContext({
-            projectDir: absoluteProjectPath,
-            targetPath: options.targetPath,
-        });
-        const manifestFilePath = path.join(context.targetDir, 'manifest.json');
 
         const pressToShutdown = GlobalState.startSpinner(
             `  Press [ENTER] to shutdown preview...`,
         );
 
-        const watcher = chokidar
-            .watch(manifestFilePath)
-            .on('change', async () => {
-                pressToShutdown.stop();
-
-                console.error(
-                    `${styles.title(
-                        '↻',
-                    )}   Detected changes on dbt project. Updating preview`,
-                );
-                watcher.unwatch(manifestFilePath);
-                // Deploying will change manifest.json too, so we need to stop watching the file until it is deployed
-                if (project) {
-                    await deploy(await compile(options), {
-                        ...options,
-                        projectUuid: project.projectUuid,
-                    });
-                }
-
-                console.error(`${styles.success('✔')}   Preview updated \n`);
-                pressToShutdown.start();
-
-                watcher.add(manifestFilePath);
+        // Only set up dbt manifest file watching for dbt projects
+        // YAML-only projects don't have a manifest.json to watch
+        let watcher: chokidar.FSWatcher | undefined;
+        if (projectTypeConfig.type === CliProjectType.Dbt) {
+            const context = await getDbtContext({
+                projectDir: absoluteProjectPath,
+                targetPath: options.targetPath,
             });
+            const manifestFilePath = path.join(
+                context.targetDir,
+                'manifest.json',
+            );
+
+            watcher = chokidar
+                .watch(manifestFilePath)
+                .on('change', async () => {
+                    pressToShutdown.stop();
+
+                    console.error(
+                        `${styles.title(
+                            '↻',
+                        )}   Detected changes on dbt project. Updating preview`,
+                    );
+                    watcher!.unwatch(manifestFilePath);
+                    // Deploying will change manifest.json too, so we need to stop watching the file until it is deployed
+                    if (project) {
+                        await deploy(await compile(options), {
+                            ...options,
+                            projectUuid: project.projectUuid,
+                        });
+                    }
+
+                    console.error(
+                        `${styles.success('✔')}   Preview updated \n`,
+                    );
+                    pressToShutdown.start();
+
+                    watcher!.add(manifestFilePath);
+                });
+        }
 
         await inquirer.prompt([
             {
@@ -337,8 +376,13 @@ export const previewHandler = async (
             },
         ]);
         pressToShutdown.clear();
+
+        // Clean up watcher if it was created
+        if (watcher) {
+            await watcher.close();
+        }
     } catch (e) {
-        spinner.fail('Error creating developer preview');
+        spinner.fail(`Error creating developer preview: ${getErrorMessage(e)}`);
 
         await deletePreviewProject(project.projectUuid);
         await unsetPreviewProject();
@@ -354,7 +398,7 @@ export const previewHandler = async (
         throw e;
     }
 
-    await cleanupProject(executionId, project.projectUuid);
+    await cleanupProject(executionId, project.projectUuid, previewStartTime);
 };
 
 export const startPreviewHandler = async (
@@ -368,10 +412,33 @@ export const startPreviewHandler = async (
         return;
     }
 
+    // Detect project type
+    const projectTypeConfig = await detectProjectType({
+        projectDir: options.projectDir,
+        userOptions: {
+            warehouseCredentials: options.warehouseCredentials,
+            skipDbtCompile: options.skipDbtCompile,
+            skipWarehouseCatalog: options.skipWarehouseCatalog,
+        },
+    });
+
     const projectName = options.name;
+    const config = await getConfig();
+
+    // Log current source project info if copying content
+    if (!options.skipCopyContent && config.context?.project) {
+        console.error(
+            `\n${styles.success('Source project for content:')} ${styles.bold(
+                config.context.projectName || config.context.project,
+            )}\n`,
+        );
+    }
 
     const previewProject = await getPreviewProject(projectName);
     if (previewProject) {
+        console.error(
+            `\n${styles.success('Updating preview project:')} ${styles.bold(projectName)}\n`,
+        );
         await setPreviewProject(previewProject.projectUuid, projectName);
         await LightdashAnalytics.track({
             event: 'start_preview.update',
@@ -383,7 +450,6 @@ export const startPreviewHandler = async (
         });
 
         // Update
-        console.error(`Updating project preview ${projectName}`);
         const explores = await compile(options);
         await deploy(explores, {
             ...options,
@@ -396,7 +462,9 @@ export const startPreviewHandler = async (
             core.setOutput('project_uuid', previewProject.projectUuid);
         }
     } else {
-        const config = await getConfig();
+        console.error(
+            `\n${styles.success('Creating preview project:')} ${styles.bold(projectName)}\n`,
+        );
 
         if (!config.context?.project) {
             console.error(
@@ -421,13 +489,13 @@ export const startPreviewHandler = async (
         }
 
         // Create
-        console.error(`Creating new project preview ${projectName}`);
         const results = await createProject({
             ...options,
             name: projectName,
             type: ProjectType.PREVIEW,
             upstreamProjectUuid: config.context?.project,
             copyContent: !options.skipCopyContent,
+            warehouseCredentials: projectTypeConfig.warehouseCredentials,
         });
 
         const project = results?.project;

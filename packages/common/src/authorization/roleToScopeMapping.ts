@@ -38,6 +38,7 @@ const BASE_ROLE_SCOPES = {
         'manage:Explore',
         'manage:ChangeCsvResults',
         'create:ScheduledDeliveries',
+        'manage:ScheduledDeliveries@self',
         'create:DashboardComments',
         'manage:GoogleSheets',
 
@@ -57,7 +58,6 @@ const BASE_ROLE_SCOPES = {
         'manage:Space@public', // For non-private spaces
         'manage:Job',
         'manage:PinnedItems',
-        'manage:ScheduledDeliveries',
         'manage:DashboardComments',
         'manage:Tags',
 
@@ -68,15 +68,21 @@ const BASE_ROLE_SCOPES = {
 
     [ProjectMemberRole.DEVELOPER]: [
         // Developer-specific permissions
+        'manage:PreAggregation',
         'manage:VirtualView',
         'manage:CustomSql',
         'manage:SqlRunner',
         'manage:Validation',
         'manage:CompileProject',
-        'create:Project', // Preview projects
+        'manage:DeployProject',
+        'manage:DeployProject@self',
+        'create:Project@preview', // Preview projects
         'delete:Project@self', // Preview projects created by user
         'update:Project',
+        'update:Project@self',
         'view:JobStatus', // All jobs in project
+        'view:SourceCode',
+        'manage:SourceCode',
 
         // Enterprise scopes
         'manage:SpotlightTableConfig',
@@ -93,8 +99,10 @@ const BASE_ROLE_SCOPES = {
         'manage:Space', // All spaces
         'manage:Project', // Required for managing non-private spaces
         'manage:SavedChart', // All saved charts
+        'manage:DeletedContent', // Soft-deleted content management
         'view:AiAgentThread', // All threads in project
         'manage:AiAgentThread', // All threads in project
+        'manage:ScheduledDeliveries',
     ],
 } as const;
 
@@ -160,6 +168,7 @@ export const getNonEnterpriseScopesForRole = (
         'manage:AiAgentThread',
         'manage:ContentAsCode',
         'manage:PersonalAccessToken',
+        'manage:PreAggregation',
     ]);
 
     return PROJECT_ROLE_TO_SCOPES_MAP[role].filter(

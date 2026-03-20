@@ -22,6 +22,9 @@ export const lightdashConfigWithNoSMTP: Pick<
         csvCellsLimit: 100,
         timezone: undefined,
         useSqlPivotResults: false,
+        showExecutionTime: false,
+
+        retryQueryOnTransientErrors: false,
     },
 };
 
@@ -40,6 +43,7 @@ const smtpBase: SmtpConfig = {
         email: 'email',
     },
     allowInvalidCertificate: false,
+    inlineImageCid: false,
 };
 
 export const lightdashConfigWithBasicSMTP: Pick<
@@ -57,6 +61,9 @@ export const lightdashConfigWithBasicSMTP: Pick<
         csvCellsLimit: 100,
         timezone: undefined,
         useSqlPivotResults: false,
+        showExecutionTime: false,
+
+        retryQueryOnTransientErrors: false,
     },
 };
 
@@ -80,6 +87,9 @@ export const lightdashConfigWithOauth2SMTP: Pick<
         csvCellsLimit: 100,
         timezone: undefined,
         useSqlPivotResults: false,
+        showExecutionTime: false,
+
+        retryQueryOnTransientErrors: false,
     },
 };
 
@@ -99,6 +109,9 @@ export const lightdashConfigWithSecurePortSMTP: Pick<
         csvCellsLimit: 100,
         timezone: undefined,
         useSqlPivotResults: false,
+        showExecutionTime: false,
+
+        retryQueryOnTransientErrors: false,
     },
 };
 

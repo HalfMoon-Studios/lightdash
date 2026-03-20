@@ -16,6 +16,7 @@ import {
     type ResultsPaginationArgs,
     type RunQueryTags,
     type SortField,
+    type UserAttributeValueMap,
 } from '@lightdash/common';
 
 export type CommonAsyncQueryArgs = {
@@ -24,6 +25,7 @@ export type CommonAsyncQueryArgs = {
     invalidateCache?: boolean;
     context: QueryExecutionContext;
     parameters?: ParametersValuesMap;
+    userAttributeOverrides?: UserAttributeValueMap;
 };
 
 export type GetAsyncQueryResultsArgs = Omit<
@@ -47,6 +49,7 @@ export type DownloadAsyncQueryResultsArgs = Omit<
     hiddenFields?: string[];
     pivotConfig?: PivotConfig;
     attachmentDownloadName?: string;
+    expirationSecondsOverride?: number;
 };
 
 export type ScheduleDownloadAsyncQueryResultsArgs = Omit<
@@ -84,12 +87,21 @@ export type ExecuteAsyncUnderlyingDataQueryArgs = CommonAsyncQueryArgs & {
     filters: Filters;
     underlyingDataItemId?: string;
     dateZoom?: DateZoom;
-    limit?: number;
+    limit?: number | null;
+    sorts?: SortField[];
 };
 
 export type ExecuteAsyncQueryReturn = {
     queryUuid: string;
     cacheMetadata: CacheMetadata;
+};
+
+export type PreAggregationRouteMode = 'required' | 'opportunistic';
+
+export type PreAggregationRoute = {
+    sourceExploreName: string;
+    preAggregateName: string;
+    mode: PreAggregationRouteMode;
 };
 
 export type ExecuteAsyncSqlQueryArgs = CommonAsyncQueryArgs & {
@@ -144,14 +156,13 @@ export const isExecuteAsyncSqlChartByUuid = (
 ): args is ExecuteAsyncSqlChartByUuidArgs => 'savedSqlUuid' in args;
 
 export type RunAsyncWarehouseQueryArgs = {
-    userId: string;
-    // Is the user in the database?
-    isRegisteredUser: boolean;
     projectUuid: string;
+    userUuid: string;
+    queryUuid: string;
+    isRegisteredUser: boolean;
+    isServiceAccount?: boolean;
     queryTags: RunQueryTags;
-    query: string;
     fieldsMap: ItemsMap;
-    queryHistoryUuid: string;
     cacheKey: string;
     warehouseCredentialsOverrides?: {
         snowflakeVirtualWarehouse?: string;
@@ -159,9 +170,14 @@ export type RunAsyncWarehouseQueryArgs = {
     };
     pivotConfiguration?: PivotConfiguration;
     originalColumns?: ResultColumns;
-    /**
-     * Set of metric field IDs that have period-over-period comparison enabled.
-     * Used to add popMetadata to the corresponding ResultColumns.
-     */
-    popEnabledMetrics?: Set<string>;
+    query: string;
+    queryCreatedAt: Date;
+};
+
+export type RunAsyncPreAggregateQueryArgs = Omit<
+    RunAsyncWarehouseQueryArgs,
+    'query'
+> & {
+    preAggregateQuery: string;
+    warehouseQuery: string;
 };

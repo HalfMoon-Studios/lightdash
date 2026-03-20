@@ -1,4 +1,5 @@
 import { subject } from '@casl/ability';
+import useEmbed from '../../ee/providers/Embed/useEmbed';
 import useApp from '../../providers/App/useApp';
 import { useSpaceSummaries } from '../useSpaces';
 
@@ -8,11 +9,15 @@ const useCreateInAnySpaceAccess = (
     options?: { enabled?: boolean },
 ): boolean => {
     const { user } = useApp();
+    const { embedToken } = useEmbed();
+
+    const isEmbedMode = !!embedToken;
+
     const spaces = useSpaceSummaries(projectUuid, true, {
-        enabled: options?.enabled && !!projectUuid,
+        enabled: !!projectUuid && !isEmbedMode && (options?.enabled ?? true),
     });
 
-    if (!projectUuid) {
+    if (!projectUuid || isEmbedMode) {
         return false;
     }
 
@@ -25,7 +30,9 @@ const useCreateInAnySpaceAccess = (
             subject(subjectName, {
                 organizationUuid: user.data.organizationUuid,
                 projectUuid,
-                access: spaces.data.map((space) => space.userAccess),
+                access: spaces.data
+                    .map((space) => space.userAccess)
+                    .filter((a) => a !== undefined),
             }),
         )
     );

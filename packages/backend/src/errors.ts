@@ -1,6 +1,8 @@
 import {
     getErrorMessage,
+    isUnrecoverableSlackError,
     LightdashError,
+    PayloadTooLargeError,
     ScimError,
     SlackError,
     UnexpectedServerError,
@@ -34,6 +36,13 @@ export const errorHandler = (error: Error): LightdashError => {
             data: error.fields,
         });
     }
+    // Handle PayloadTooLargeError from body-parser/express
+    if (
+        error.name === 'PayloadTooLargeError' ||
+        (error.message && error.message.includes('request entity too large'))
+    ) {
+        return new PayloadTooLargeError();
+    }
     if (error instanceof LightdashError) {
         return error;
     }
@@ -57,6 +66,11 @@ export const scimErrorHandler = (
 };
 export const slackErrorHandler = (e: unknown, context: string) => {
     Logger.error(`${context}: ${getErrorMessage(e)}`);
+
+    // Don't report unrecoverable errors to Sentry (expected for broken installations)
+    if (isUnrecoverableSlackError(e)) {
+        return;
+    }
 
     if (
         typeof e === 'object' &&

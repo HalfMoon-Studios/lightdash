@@ -1,4 +1,5 @@
 import { type WeekDay } from '../utils/timeFrames';
+import { type ProjectDefaults } from './lightdashProjectConfig';
 import { type ProjectGroupAccess } from './projectGroupAccess';
 
 export enum ProjectType {
@@ -25,6 +26,7 @@ export enum WarehouseTypes {
     DATABRICKS = 'databricks',
     TRINO = 'trino',
     CLICKHOUSE = 'clickhouse',
+    ATHENA = 'athena',
 }
 
 export type SshTunnelConfiguration = {
@@ -72,9 +74,11 @@ export const sensitiveCredentialsFieldNames = [
     'refreshToken',
     'oauthClientId',
     'oauthClientSecret',
+    'accessKeyId',
+    'secretAccessKey',
 ] as const;
 export type SensitiveCredentialsFieldNames =
-    typeof sensitiveCredentialsFieldNames[number];
+    (typeof sensitiveCredentialsFieldNames)[number];
 export type BigqueryCredentials = Omit<
     CreateBigqueryCredentials,
     SensitiveCredentialsFieldNames
@@ -84,6 +88,11 @@ export enum DatabricksAuthenticationType {
     PERSONAL_ACCESS_TOKEN = 'personal_access_token',
     OAUTH_M2M = 'oauth_m2m',
     OAUTH_U2M = 'oauth_u2m',
+}
+
+export enum AthenaAuthenticationType {
+    ACCESS_KEY = 'access_key',
+    IAM_ROLE = 'iam_role',
 }
 
 export type CreateDatabricksCredentials = {
@@ -175,6 +184,31 @@ export type ClickhouseCredentials = Omit<
     CreateClickhouseCredentials,
     SensitiveCredentialsFieldNames
 >;
+
+export type CreateAthenaCredentials = {
+    type: WarehouseTypes.ATHENA;
+    region: string;
+    database: string;
+    schema: string;
+    s3StagingDir: string;
+    s3DataDir?: string;
+    authenticationType?: AthenaAuthenticationType;
+    accessKeyId?: string;
+    secretAccessKey?: string;
+    assumeRoleArn?: string;
+    assumeRoleExternalId?: string;
+    workGroup?: string;
+    threads?: number;
+    numRetries?: number;
+    requireUserCredentials?: boolean;
+    startOfWeek?: WeekDay | null;
+};
+
+export type AthenaCredentials = Omit<
+    CreateAthenaCredentials,
+    SensitiveCredentialsFieldNames
+>;
+
 export type CreateRedshiftCredentials = SshTunnelConfiguration & {
     type: WarehouseTypes.REDSHIFT;
     host: string;
@@ -202,6 +236,7 @@ export enum SnowflakeAuthenticationType {
     PRIVATE_KEY = 'private_key',
     SSO = 'sso',
     EXTERNAL_BROWSER = 'external_browser',
+    NONE = 'none',
 }
 
 export type CreateSnowflakeCredentials = {
@@ -226,6 +261,7 @@ export type CreateSnowflakeCredentials = {
     startOfWeek?: WeekDay | null;
     quotedIdentifiersIgnoreCase?: boolean;
     disableTimestampConversion?: boolean; // Disable timestamp conversion to UTC - only disable if all timestamp values are already in UTC
+    timeoutSeconds?: number;
     override?: boolean;
     organizationWarehouseCredentialsUuid?: string;
 };
@@ -240,7 +276,8 @@ export type CreateWarehouseCredentials =
     | CreateSnowflakeCredentials
     | CreateDatabricksCredentials
     | CreateTrinoCredentials
-    | CreateClickhouseCredentials;
+    | CreateClickhouseCredentials
+    | CreateAthenaCredentials;
 export type WarehouseCredentials =
     | SnowflakeCredentials
     | RedshiftCredentials
@@ -248,7 +285,8 @@ export type WarehouseCredentials =
     | BigqueryCredentials
     | DatabricksCredentials
     | TrinoCredentials
-    | ClickhouseCredentials;
+    | ClickhouseCredentials
+    | AthenaCredentials;
 
 export type CreatePostgresLikeCredentials =
     | CreateRedshiftCredentials
@@ -283,6 +321,10 @@ export const mergeWarehouseCredentials = <T extends CreateWarehouseCredentials>(
 ): T => {
     // If types don't match, return newCredentials as-is (can't merge different warehouse types)
     if (baseCredentials.type !== newCredentials.type) {
+        // eslint-disable-next-line no-console
+        console.info(
+            `Skipping merge of warehouse credentials due to differing types: ${baseCredentials.type} and ${newCredentials.type}`,
+        );
         return newCredentials;
     }
 
@@ -291,17 +333,36 @@ export const mergeWarehouseCredentials = <T extends CreateWarehouseCredentials>(
     if (
         baseCredentials.type === WarehouseTypes.SNOWFLAKE &&
         newCredentials.type === WarehouseTypes.SNOWFLAKE &&
-        baseCredentials.warehouse !== newCredentials.warehouse
+        baseCredentials.warehouse.toLowerCase().trim() !==
+            newCredentials.warehouse.toLowerCase().trim()
     ) {
+        // eslint-disable-next-line no-console
+        console.info(
+            `Skipping merge of Snowflake credentials due to differing warehouse names: ${baseCredentials.warehouse} and ${newCredentials.warehouse}`,
+        );
         return newCredentials;
     }
 
+    // Only add non sensitive fields from base credentials to avoid conflicts with authentication methods
+    const keysToExclude = [
+        ...sensitiveCredentialsFieldNames,
+        'authenticationType',
+    ];
+    const filteredBaseCredentials = Object.fromEntries(
+        Object.entries(baseCredentials).filter(
+            ([key]) =>
+                !keysToExclude.includes(key as SensitiveCredentialsFieldNames),
+        ),
+    );
     // We will use new credentials for connection, this might contain new authentication method
     // do not include all baseCredentials here, to avoid conflicts on authentication (that will cause a mix of serviceaccounts/sso/passwords)
     const merged = {
+        ...filteredBaseCredentials, // We copy most of the base config from the parent project, including advanced settings
         ...newCredentials,
         // Keep requireUserCredentials from base credentials, since this is a security setting and should not be overridden
-        requireUserCredentials: baseCredentials.requireUserCredentials,
+        requireUserCredentials:
+            baseCredentials.requireUserCredentials ||
+            newCredentials.requireUserCredentials,
     };
 
     return merged as T;
@@ -324,6 +385,7 @@ export enum SupportedDbtVersions {
     V1_8 = 'v1.8',
     V1_9 = 'v1.9',
     V1_10 = 'v1.10',
+    V1_11 = 'v1.11',
 }
 
 // Make it an enum to avoid TSOA errors
@@ -478,7 +540,9 @@ export const maybeOverrideDbtConnection = <T extends DbtProjectConfig>(
         ...(isGitProjectType(connection) && overrides.branch
             ? { branch: overrides.branch }
             : undefined),
-        ...(!isRemoteType(connection) && overrides.environment
+        ...(!isRemoteType(connection) &&
+        overrides.environment &&
+        overrides.environment.length > 0
             ? { environment: overrides.environment }
             : undefined),
     };
@@ -495,8 +559,11 @@ export type Project = {
     upstreamProjectUuid?: string;
     dbtVersion: DbtVersionOption;
     schedulerTimezone: string;
+    queryTimezone: string | null;
     createdByUserUuid: string | null;
     organizationWarehouseCredentialsUuid?: string;
+    hasDefaultUserSpaces: boolean;
+    projectDefaults?: ProjectDefaults;
 };
 
 export type ProjectSummary = Pick<
@@ -532,4 +599,8 @@ export type PreviewContentMapping = {
 
 export type UpdateSchedulerSettings = {
     schedulerTimezone: string;
+};
+
+export type UpdateQueryTimezoneSettings = {
+    queryTimezone: string | null;
 };

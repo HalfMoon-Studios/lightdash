@@ -7,7 +7,7 @@ import {
     type Field,
     type TableCalculation,
 } from '@lightdash/common';
-import { Text } from '@mantine/core';
+import { Text } from '@mantine-8/core';
 import { type FC } from 'react';
 
 interface FieldLabelProps {
@@ -24,8 +24,8 @@ const FieldLabel: FC<FieldLabelProps> = ({ item, hideTableName = false }) => {
                 {isCustomDimension(item)
                     ? item.name
                     : isField(item) || isAdditionalMetric(item)
-                    ? item.label
-                    : item.displayName}
+                      ? item.label
+                      : item.displayName}
             </Text>
         </Text>
     );

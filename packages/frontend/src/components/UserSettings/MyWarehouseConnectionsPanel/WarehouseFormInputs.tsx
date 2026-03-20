@@ -2,12 +2,14 @@ import {
     WarehouseTypes,
     type UpsertUserWarehouseCredentials,
 } from '@lightdash/common';
-import { PasswordInput, TextInput } from '@mantine/core';
+import { PasswordInput, TextInput } from '@mantine-8/core';
 import { type UseFormReturnType } from '@mantine/form';
 import { type FC } from 'react';
 import { useGoogleLoginPopup } from '../../../hooks/gdrive/useGdrive';
+import { useDatabricksLoginPopup } from '../../../hooks/useDatabricks';
 import { useSnowflakeLoginPopup } from '../../../hooks/useSnowflake';
 import { BigQuerySSOInput } from '../../ProjectConnection/WarehouseForms/BigQueryForm';
+import { DatabricksSSOInput } from '../../ProjectConnection/WarehouseForms/DatabricksForm';
 import { SnowflakeSSOInput } from '../../ProjectConnection/WarehouseForms/SnowflakeForm';
 
 const BigQueryFormInput: FC<{ onClose: () => void }> = ({ onClose }) => {
@@ -44,11 +46,47 @@ export const SnowflakeFormInput: FC<{ onClose: () => void }> = ({
     );
 };
 
+const DatabricksFormInput: FC<{
+    onClose: () => void;
+    projectUuid?: string;
+    projectName?: string;
+    credentialsName?: string;
+}> = ({ onClose, projectUuid, projectName, credentialsName }) => {
+    const { mutate: openLoginPopup } = useDatabricksLoginPopup({
+        onLogin: async () => {
+            onClose();
+        },
+        projectUuid,
+        projectName,
+        credentialsName,
+    });
+
+    // If this popup happens, it means we don't have warehouse credentials,
+    // (aka isAuthenticated is false), so we need to authenticate
+    return (
+        <DatabricksSSOInput
+            isAuthenticated={false}
+            disabled={false}
+            openLoginPopup={openLoginPopup}
+        />
+    );
+};
+
 export const WarehouseFormInputs: FC<{
     disabled: boolean;
     form: UseFormReturnType<UpsertUserWarehouseCredentials>;
     onClose: () => void;
-}> = ({ form, disabled, onClose }) => {
+    projectUuid?: string;
+    projectName?: string;
+    databricksCredentialsName?: string;
+}> = ({
+    form,
+    disabled,
+    onClose,
+    projectUuid,
+    projectName,
+    databricksCredentialsName,
+}) => {
     switch (form.values.credentials.type) {
         case WarehouseTypes.SNOWFLAKE:
             return <SnowflakeFormInput onClose={onClose} />;
@@ -77,7 +115,14 @@ export const WarehouseFormInputs: FC<{
         case WarehouseTypes.BIGQUERY:
             return <BigQueryFormInput onClose={onClose} />;
         case WarehouseTypes.DATABRICKS:
-            return <>{/* Add personal access token input */}</>;
+            return (
+                <DatabricksFormInput
+                    onClose={onClose}
+                    projectUuid={projectUuid}
+                    projectName={projectName}
+                    credentialsName={databricksCredentialsName}
+                />
+            );
         default:
             return null;
     }

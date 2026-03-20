@@ -9,47 +9,37 @@ import {
 } from '@mantine-8/core';
 import { IconTrash } from '@tabler/icons-react';
 import { memo, type FC } from 'react';
-import {
-    type DestinationType,
-    type useLogsFilters,
-} from '../../features/scheduler/hooks/useLogsFilters';
+import { type useLogsFilters } from '../../features/scheduler/hooks/useLogsFilters';
 import MantineIcon from '../common/MantineIcon';
 import CreatedByFilter from './filters/CreatedByFilter';
 import DestinationFilter from './filters/DestinationFilter';
 import { SearchFilter } from './filters/SearchFilter';
 import StatusFilter from './filters/StatusFilter';
 
-type User = {
-    userUuid: string;
-    name: string;
-};
-
 type Scheduler = {
     schedulerUuid: string;
     name: string;
 };
 
-interface LogsTopToolbarProps
-    extends Pick<
-        ReturnType<typeof useLogsFilters>,
-        | 'search'
-        | 'setSearch'
-        | 'selectedStatuses'
-        | 'setSelectedStatuses'
-        | 'selectedCreatedByUserUuids'
-        | 'setSelectedCreatedByUserUuids'
-        | 'selectedDestinations'
-        | 'setSelectedDestinations'
-        | 'selectedSchedulerUuid'
-        | 'setSelectedSchedulerUuid'
-        | 'hasActiveFilters'
-        | 'resetFilters'
-    > {
+interface LogsTopToolbarProps extends Pick<
+    ReturnType<typeof useLogsFilters>,
+    | 'search'
+    | 'setSearch'
+    | 'selectedStatuses'
+    | 'setSelectedStatuses'
+    | 'selectedCreatedByUserUuids'
+    | 'setSelectedCreatedByUserUuids'
+    | 'selectedDestinations'
+    | 'setSelectedDestinations'
+    | 'selectedSchedulerUuid'
+    | 'setSelectedSchedulerUuid'
+    | 'hasActiveFilters'
+    | 'resetFilters'
+> {
     isFetching: boolean;
     currentResultsCount: number;
-    availableUsers: User[];
-    availableDestinations: DestinationType[];
     availableSchedulers: Scheduler[];
+    projectUuid?: string;
 }
 
 export const LogsTopToolbar: FC<LogsTopToolbarProps> = memo(
@@ -66,9 +56,8 @@ export const LogsTopToolbar: FC<LogsTopToolbarProps> = memo(
         setSelectedSchedulerUuid,
         hasActiveFilters,
         resetFilters,
-        availableUsers,
-        availableDestinations,
         availableSchedulers,
+        projectUuid,
     }) => {
         const theme = useMantineTheme();
 
@@ -122,7 +111,7 @@ export const LogsTopToolbar: FC<LogsTopToolbarProps> = memo(
                     />
 
                     <CreatedByFilter
-                        availableUsers={availableUsers}
+                        projectUuid={projectUuid}
                         selectedCreatedByUserUuids={selectedCreatedByUserUuids}
                         setSelectedCreatedByUserUuids={
                             setSelectedCreatedByUserUuids
@@ -132,7 +121,6 @@ export const LogsTopToolbar: FC<LogsTopToolbarProps> = memo(
                     <DestinationFilter
                         selectedDestinations={selectedDestinations}
                         setSelectedDestinations={setSelectedDestinations}
-                        availableDestinations={availableDestinations}
                     />
                 </Group>
 

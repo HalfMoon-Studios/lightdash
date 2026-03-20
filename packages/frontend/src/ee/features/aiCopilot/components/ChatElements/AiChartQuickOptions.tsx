@@ -3,14 +3,7 @@ import {
     type AiArtifact,
     type SavedChart,
 } from '@lightdash/common';
-import {
-    ActionIcon,
-    Button,
-    Group,
-    Menu,
-    Text,
-    Tooltip,
-} from '@mantine-8/core';
+import { ActionIcon, Button, Menu, Tooltip } from '@mantine-8/core';
 import { useDisclosure } from '@mantine-8/hooks';
 import {
     IconChartBar,
@@ -22,19 +15,20 @@ import {
     IconTableShortcut,
     IconTerminal2,
 } from '@tabler/icons-react';
-import { Fragment, useMemo } from 'react';
+import { Fragment, useCallback, useMemo } from 'react';
 import { Link } from 'react-router';
 import MantineIcon from '../../../../../components/common/MantineIcon';
 import MantineModal from '../../../../../components/common/MantineModal';
 import { SaveToSpaceOrDashboard } from '../../../../../components/common/modal/ChartCreateModal/SaveToSpaceOrDashboard';
 import { useVisualizationContext } from '../../../../../components/LightdashVisualization/useVisualizationContext';
+import { useCreateShareMutation } from '../../../../../hooks/useShare';
 import useApp from '../../../../../providers/App/useApp';
 import useTracking from '../../../../../providers/Tracking/useTracking';
 import { EventName } from '../../../../../types/Events';
+import { getOpenInExploreUrl } from '../../../../../utils/getOpenInExploreUrl';
 import { useSetArtifactVersionVerified } from '../../hooks/useAiAgentArtifacts';
 import { useAiAgentPermission } from '../../hooks/useAiAgentPermission';
 import { useSavePromptQuery } from '../../hooks/useProjectAiAgents';
-import { getOpenInExploreUrl } from '../../utils/getOpenInExploreUrl';
 
 type Props = {
     projectUuid: string;
@@ -122,7 +116,7 @@ export const AiChartQuickOptions = ({
     };
 
     const openInExploreUrl = useMemo(() => {
-        if (isDisabled) return '';
+        if (isDisabled) return undefined;
         return getOpenInExploreUrl({
             metricQuery,
             projectUuid,
@@ -139,7 +133,15 @@ export const AiChartQuickOptions = ({
         pivotDimensions,
     ]);
 
-    const onClickExplore = () => {
+    const { mutateAsync: createShareUrl } = useCreateShareMutation();
+
+    const handleExploreFromHere = useCallback(async () => {
+        if (!openInExploreUrl) return;
+        const shareUrl = await createShareUrl({
+            path: openInExploreUrl.pathname,
+            params: `?${openInExploreUrl.search}`,
+        });
+        window.open(`/share/${shareUrl.nanoid}`, '_blank');
         if (
             user?.data?.userUuid &&
             user?.data?.organizationUuid &&
@@ -160,7 +162,18 @@ export const AiChartQuickOptions = ({
                 },
             });
         }
-    };
+    }, [
+        openInExploreUrl,
+        createShareUrl,
+        user?.data?.userUuid,
+        user?.data?.organizationUuid,
+        projectUuid,
+        agentUuid,
+        metricQuery?.exploreName,
+        track,
+        message.threadUuid,
+        message.uuid,
+    ]);
 
     const handleVerifyToggle = () => {
         if (!artifactData) return;
@@ -197,6 +210,7 @@ export const AiChartQuickOptions = ({
                             ? 'Remove from verified answers'
                             : 'Add to verified answers'
                     }
+                    position="bottom"
                 >
                     <ActionIcon
                         size="xs"
@@ -246,12 +260,9 @@ export const AiChartQuickOptions = ({
                     )}
 
                     <Menu.Item
-                        component={Link}
-                        to={openInExploreUrl}
-                        target="_blank"
                         leftSection={<MantineIcon icon={IconExternalLink} />}
                         disabled={isDisabled}
-                        onClick={onClickExplore}
+                        onClick={handleExploreFromHere}
                     >
                         Explore from here
                     </Menu.Item>
@@ -291,6 +302,9 @@ export const AiChartQuickOptions = ({
                         tableName: metricQuery.exploreName,
                         chartConfig,
                         tableConfig: { columnOrder },
+                        pivotConfig: pivotDimensions?.length
+                            ? { columns: pivotDimensions }
+                            : undefined,
                     }}
                     onConfirm={onSaveChart}
                     onClose={close}
@@ -307,23 +321,13 @@ export const AiChartQuickOptions = ({
                 title="Remove from verified answers"
                 icon={IconCircleCheck}
                 size="sm"
+                description="Are you sure you want to remove this answer from verified answers? It will no longer be used as an example in future Agent responses."
                 actions={
-                    <Group gap="sm">
-                        <Button variant="default" onClick={closeVerifyModal}>
-                            Cancel
-                        </Button>
-                        <Button color="red" onClick={handleConfirmUnverify}>
-                            Confirm
-                        </Button>
-                    </Group>
+                    <Button color="red" onClick={handleConfirmUnverify}>
+                        Confirm
+                    </Button>
                 }
-            >
-                <Text>
-                    Are you sure you want to remove this answer from verified
-                    answers? It will no longer be used as an example in future
-                    Agent responses.
-                </Text>
-            </MantineModal>
+            />
         </Fragment>
     );
 };

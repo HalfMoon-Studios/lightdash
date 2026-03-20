@@ -1,4 +1,5 @@
 import {
+    FilterOperator,
     TableCalculationTemplateType,
     TableSelectionType,
     ValidationTarget,
@@ -6,11 +7,13 @@ import {
 } from '@lightdash/common';
 import { analyticsMock } from '../../analytics/LightdashAnalytics.mock';
 import { DashboardModel } from '../../models/DashboardModel/DashboardModel';
+import { FeatureFlagModel } from '../../models/FeatureFlagModel/FeatureFlagModel';
 import { ProjectModel } from '../../models/ProjectModel/ProjectModel';
 import { SavedChartModel } from '../../models/SavedChartModel';
 import { SpaceModel } from '../../models/SpaceModel';
 import { ValidationModel } from '../../models/ValidationModel/ValidationModel';
 import { SchedulerClient } from '../../scheduler/SchedulerClient';
+import { SpacePermissionService } from '../SpaceService/SpacePermissionService';
 import { ValidationService } from './ValidationService';
 import {
     additionalExplore,
@@ -47,7 +50,6 @@ const validationModel = {
 const dashboardModel = {
     findDashboardsForValidation: jest.fn(async () => [dashboardForValidation]),
 };
-
 describe('validation', () => {
     const validationService = new ValidationService({
         analytics: analyticsMock,
@@ -58,6 +60,8 @@ describe('validation', () => {
         lightdashConfig: config,
         spaceModel: {} as SpaceModel,
         schedulerClient: {} as SchedulerClient,
+        spacePermissionService: {} as SpacePermissionService,
+        featureFlagModel: {} as FeatureFlagModel,
     });
 
     afterEach(() => {
@@ -74,9 +78,8 @@ describe('validation', () => {
             projectModel.findExploresFromCache as jest.Mock
         ).mockImplementationOnce(async () => [exploreWithoutDimension]);
 
-        const errors = await validationService.generateValidation(
-            'projectUuid',
-        );
+        const errors =
+            await validationService.generateValidation('projectUuid');
 
         expect({ ...errors[0], createdAt: undefined }).toEqual({
             createdAt: undefined,
@@ -106,9 +109,8 @@ describe('validation', () => {
             projectModel.findExploresFromCache as jest.Mock
         ).mockImplementationOnce(async () => [exploreWithoutMetric]);
 
-        const errors = await validationService.generateValidation(
-            'projectUuid',
-        );
+        const errors =
+            await validationService.generateValidation('projectUuid');
 
         expect({ ...errors[0], createdAt: undefined }).toEqual({
             createdAt: undefined,
@@ -135,9 +137,8 @@ describe('validation', () => {
             projectModel.findExploresFromCache as jest.Mock
         ).mockImplementationOnce(async () => [exploreError]);
 
-        const errors = await validationService.generateValidation(
-            'projectUuid',
-        );
+        const errors =
+            await validationService.generateValidation('projectUuid');
 
         const tableErrors = errors.filter((ve) => ve.source === 'table');
 
@@ -145,14 +146,14 @@ describe('validation', () => {
             createdAt: undefined,
             name: 'valid_explore',
             modelName: 'valid_explore',
-            error: 'Model "valid_explore" has a dimension reference: ${is_completed} which matches no dimension',
+            error: 'Model "valid_explore" in metric "some_metric" has a dimension reference: ${is_completed} which matches no dimension',
             errorType: 'model',
             projectUuid: 'projectUuid',
             source: 'table',
         });
 
         expect(errors[0]!.error).toEqual(
-            'Model "valid_explore" has a dimension reference: ${is_completed} which matches no dimension',
+            'Model "valid_explore" in metric "some_metric" has a dimension reference: ${is_completed} which matches no dimension',
         );
     });
 
@@ -169,9 +170,8 @@ describe('validation', () => {
                 value: ['another_explore'],
             },
         }));
-        const errors = await validationService.generateValidation(
-            'projectUuid',
-        );
+        const errors =
+            await validationService.generateValidation('projectUuid');
         const tableErrors = errors.filter((ve) => ve.source === 'table');
 
         expect(tableErrors.length).toEqual(0);
@@ -180,13 +180,14 @@ describe('validation', () => {
     it('Should show unselected table errors on joins', async () => {
         (
             projectModel.findExploresFromCache as jest.Mock
-        ).mockImplementationOnce(async () => [
-            exploreError,
-            {
+        ).mockImplementationOnce(async () => ({
+            valid_explore: exploreError,
+            joined_explore: {
                 name: 'joined_explore',
                 joinedTables: [{ table: 'valid_explore' }],
+                tables: {}, // Add tables property to avoid undefined error
             },
-        ]);
+        }));
 
         (
             projectModel.getTablesConfiguration as jest.Mock
@@ -196,9 +197,8 @@ describe('validation', () => {
                 value: ['joined_explore'],
             },
         }));
-        const errors = await validationService.generateValidation(
-            'projectUuid',
-        );
+        const errors =
+            await validationService.generateValidation('projectUuid');
         const tableErrors = errors.filter((ve) => ve.source === 'table');
 
         expect(tableErrors.length).toEqual(1);
@@ -207,24 +207,24 @@ describe('validation', () => {
             createdAt: undefined,
             name: 'valid_explore',
             modelName: 'valid_explore',
-            error: 'Model "valid_explore" has a dimension reference: ${is_completed} which matches no dimension',
+            error: 'Model "valid_explore" in metric "some_metric" has a dimension reference: ${is_completed} which matches no dimension',
             errorType: 'model',
             projectUuid: 'projectUuid',
             source: 'table',
         });
 
         expect(errors[0]!.error).toEqual(
-            'Model "valid_explore" has a dimension reference: ${is_completed} which matches no dimension',
+            'Model "valid_explore" in metric "some_metric" has a dimension reference: ${is_completed} which matches no dimension',
         );
     });
 
     it('Should validate only tables in project', async () => {
         (
             projectModel.findExploresFromCache as jest.Mock
-        ).mockImplementationOnce(async () => [
-            exploreError,
-            exploreWithoutDimension,
-        ]);
+        ).mockImplementationOnce(async () => ({
+            valid_explore: exploreError,
+            explore_without_dimension: exploreWithoutDimension,
+        }));
 
         const errors = await validationService.generateValidation(
             'projectUuid',
@@ -233,7 +233,7 @@ describe('validation', () => {
         );
 
         const expectedErrors: string[] = [
-            'Model "valid_explore" has a dimension reference: ${is_completed} which matches no dimension',
+            'Model "valid_explore" in metric "some_metric" has a dimension reference: ${is_completed} which matches no dimension',
         ];
 
         expect(errors.map((error) => error.error)).toEqual(expectedErrors);
@@ -268,7 +268,7 @@ describe('validation', () => {
         (
             projectModel.findExploresFromCache as jest.Mock
         ).mockImplementationOnce(async () => [
-            exploreError,
+            explore,
             exploreWithoutDimension,
         ]);
 
@@ -290,6 +290,82 @@ describe('validation', () => {
         expect(errors.map((error) => error.error)).toEqual(expectedErrors);
     });
 
+    it('Should validate dashboard filters with table name mismatch', async () => {
+        (
+            dashboardModel.findDashboardsForValidation as jest.Mock
+        ).mockImplementationOnce(async () => [
+            {
+                ...dashboardForValidation,
+                filters: {
+                    dimensions: [
+                        {
+                            id: 'filter-uuid',
+                            target: {
+                                fieldId: 'other_table_field',
+                                tableName: 'table',
+                            },
+                            operator: FilterOperator.EQUALS,
+                            values: [],
+                        },
+                    ],
+                    metrics: [],
+                    tableCalculations: [],
+                },
+            },
+        ]);
+
+        const errors = await validationService.generateValidation(
+            'projectUuid',
+            undefined,
+            new Set([ValidationTarget.DASHBOARDS]),
+        );
+
+        expect(errors.map((error) => error.error)).toContain(
+            "Filter error: the field 'other_table_field' does not match table 'table'",
+        );
+    });
+
+    it('Should validate dashboard tile targets with table name mismatch', async () => {
+        (
+            dashboardModel.findDashboardsForValidation as jest.Mock
+        ).mockImplementationOnce(async () => [
+            {
+                ...dashboardForValidation,
+                filters: {
+                    dimensions: [
+                        {
+                            id: 'filter-uuid',
+                            target: {
+                                fieldId: 'table_field',
+                                tableName: 'table',
+                            },
+                            operator: FilterOperator.EQUALS,
+                            values: [],
+                            tileTargets: {
+                                'tile-uuid': {
+                                    fieldId: 'other_table_field',
+                                    tableName: 'table',
+                                },
+                            },
+                        },
+                    ],
+                    metrics: [],
+                    tableCalculations: [],
+                },
+            },
+        ]);
+
+        const errors = await validationService.generateValidation(
+            'projectUuid',
+            undefined,
+            new Set([ValidationTarget.DASHBOARDS]),
+        );
+
+        expect(errors.map((error) => error.error)).toContain(
+            "Filter error: the field 'other_table_field' does not match table 'table'",
+        );
+    });
+
     it('Should validate only tables and charts in project', async () => {
         (
             projectModel.findExploresFromCache as jest.Mock
@@ -305,7 +381,7 @@ describe('validation', () => {
         );
 
         const expectedErrors: string[] = [
-            'Model "valid_explore" has a dimension reference: ${is_completed} which matches no dimension',
+            'Model "valid_explore" in metric "some_metric" has a dimension reference: ${is_completed} which matches no dimension',
             "Dimension error: the field 'table_dimension' no longer exists",
             "Filter error: the field 'table_dimension' no longer exists",
             "Sorting error: the field 'table_dimension' no longer exists",
@@ -326,9 +402,8 @@ describe('validation', () => {
             chartForValidationWithJoinedField,
         ]);
 
-        const errors = await validationService.generateValidation(
-            'projectUuid',
-        );
+        const errors =
+            await validationService.generateValidation('projectUuid');
 
         expect(errors.length).toEqual(0);
     });

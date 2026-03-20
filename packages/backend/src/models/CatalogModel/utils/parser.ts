@@ -1,6 +1,7 @@
 import {
     CatalogField,
     CatalogItemIcon,
+    CatalogOwner,
     CatalogTable,
     CatalogType,
     CompiledDimension,
@@ -9,6 +10,7 @@ import {
     convertToAiHints,
     Explore,
     getBasicType,
+    isMetric,
     type Tag,
 } from '@lightdash/common';
 import { DbCatalog } from '../../../database/entities/catalog';
@@ -23,9 +25,11 @@ const parseFieldFromMetricOrDimension = (
         tags: string[];
         categories: Pick<Tag, 'tagUuid' | 'color' | 'name' | 'yamlReference'>[];
         requiredAttributes: Record<string, string | string[]> | undefined;
+        anyAttributes: Record<string, string | string[]> | undefined;
         chartUsage: number | undefined;
         icon: CatalogItemIcon | null;
         searchRank?: number;
+        owner: CatalogOwner | null;
     },
 ): CatalogField => ({
     name: field.name,
@@ -40,12 +44,20 @@ const parseFieldFromMetricOrDimension = (
     type: CatalogType.Field,
     aiHints: convertToAiHints(field.aiHint) ?? null,
     requiredAttributes: catalogArgs.requiredAttributes,
+    anyAttributes: catalogArgs.anyAttributes,
     tags: catalogArgs.tags,
     categories: catalogArgs.categories,
     chartUsage: catalogArgs.chartUsage,
     catalogSearchUuid: catalogArgs.catalogSearchUuid,
     icon: catalogArgs.icon,
     searchRank: catalogArgs.searchRank,
+    owner: catalogArgs.owner,
+    ...(isMetric(field) && field.spotlight?.filterBy
+        ? { spotlightFilterBy: field.spotlight.filterBy }
+        : {}),
+    ...(isMetric(field) && field.spotlight?.segmentBy
+        ? { spotlightSegmentBy: field.spotlight.segmentBy }
+        : {}),
 });
 
 export const parseFieldsFromCompiledTable = (
@@ -63,10 +75,12 @@ export const parseFieldsFromCompiledTable = (
             categories: [],
             requiredAttributes:
                 field.requiredAttributes ?? table.requiredAttributes,
+            anyAttributes: field.anyAttributes ?? table.anyAttributes,
             // ! since we're not pulling from the catalog search table these do not exist (keep compatibility with data catalog)
             chartUsage: undefined,
             catalogSearchUuid: '',
             icon: null,
+            owner: null, // Not resolved until indexed
         }),
     );
 };
@@ -79,8 +93,24 @@ export const parseCatalog = (
             'tagUuid' | 'name' | 'color' | 'yamlReference'
         >[];
         search_rank: number;
+        owner_first_name?: string;
+        owner_last_name?: string;
+        owner_email?: string;
     },
-): CatalogTable | CatalogField => {
+): CatalogTable | CatalogField | null => {
+    // Construct owner object from joined user data
+    const owner: CatalogOwner | null =
+        dbCatalog.owner_user_uuid &&
+        dbCatalog.owner_first_name &&
+        dbCatalog.owner_last_name &&
+        dbCatalog.owner_email
+            ? {
+                  userUuid: dbCatalog.owner_user_uuid,
+                  firstName: dbCatalog.owner_first_name,
+                  lastName: dbCatalog.owner_last_name,
+                  email: dbCatalog.owner_email,
+              }
+            : null;
     const baseTable = dbCatalog.explore.tables[dbCatalog.explore.baseTable];
 
     if (dbCatalog.type === CatalogType.Table) {
@@ -92,6 +122,7 @@ export const parseCatalog = (
             description: dbCatalog.description || undefined,
             type: CatalogType.Table,
             requiredAttributes: dbCatalog.required_attributes ?? undefined,
+            anyAttributes: dbCatalog.any_attributes ?? undefined,
             tags: dbCatalog.explore.tags,
             categories: dbCatalog.catalog_tags,
             chartUsage: dbCatalog.chart_usage ?? undefined,
@@ -106,6 +137,13 @@ export const parseCatalog = (
     // This is important for fields from joined tables which may not be in the base table
     const catalogTable = dbCatalog.explore.tables[dbCatalog.table_name];
 
+    if (!catalogTable) {
+        // Table exists in catalog but not in the current explore definition.
+        // This can happen when a joined table is removed from the explore but the catalog
+        // hasn't been fully re-indexed yet. Return null to skip this stale entry.
+        return null;
+    }
+
     const dimensionsAndMetrics = [
         ...Object.values(catalogTable.dimensions),
         ...Object.values(catalogTable.metrics),
@@ -117,9 +155,10 @@ export const parseCatalog = (
         (d) => d.name === dbCatalog.name,
     );
     if (!findField) {
-        throw new Error(
-            `Field ${dbCatalog.name} not found in table ${dbCatalog.table_name} of explore ${dbCatalog.explore.name}`,
-        );
+        // Field exists in catalog but not in the current explore definition.
+        // This can happen when a field is removed from the dbt/YAML model but the catalog
+        // hasn't been fully re-indexed yet. Return null to skip this stale entry.
+        return null;
     }
     return parseFieldFromMetricOrDimension(catalogTable, findField, {
         label: dbCatalog.label,
@@ -128,8 +167,10 @@ export const parseCatalog = (
         tags: dbCatalog.explore.tags,
         categories: dbCatalog.catalog_tags,
         requiredAttributes: dbCatalog.required_attributes ?? undefined,
+        anyAttributes: dbCatalog.any_attributes ?? undefined,
         chartUsage: dbCatalog.chart_usage ?? 0,
         icon: dbCatalog.icon ?? null,
         searchRank: dbCatalog.search_rank,
+        owner,
     });
 };

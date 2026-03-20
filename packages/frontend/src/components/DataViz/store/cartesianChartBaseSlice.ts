@@ -2,10 +2,10 @@
 // Not needed when viewing a cartesian chart on a dashboard
 import {
     ChartKind,
+    isFormat,
     StackType,
     VIZ_DEFAULT_AGGREGATION,
     VizAggregationOptions,
-    isFormat,
     type CartesianChartDisplay,
     type PivotValuesColumn,
     type SortByDirection,
@@ -30,7 +30,7 @@ export type CartesianChartState = {
     chartData:
         | Awaited<
               ReturnType<
-                  typeof prepareAndFetchChartData['fulfilled']
+                  (typeof prepareAndFetchChartData)['fulfilled']
               >['payload']
           >
         | undefined;
@@ -416,6 +416,15 @@ export const cartesianChartConfigSlice = createSlice({
                 };
             }
         },
+        setXAxisDateFormat: (
+            { display },
+            action: PayloadAction<{ dateFormat: string | undefined }>,
+        ) => {
+            if (!display) display = {};
+            if (!display.xAxis) display.xAxis = {};
+            display.xAxis.dateFormat = action.payload.dateFormat;
+        },
+
         setSeriesValueLabelPosition: (
             { fieldConfig, display },
             action: PayloadAction<{

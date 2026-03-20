@@ -8,6 +8,7 @@ import {
     NotFoundError,
     OrganizationMemberRole,
     ParameterError,
+    ProjectMemberRole,
     Role,
     RoleAssignment,
     RoleWithScopes,
@@ -25,6 +26,8 @@ import { OrganizationModel } from '../../models/OrganizationModel';
 import { ProjectModel } from '../../models/ProjectModel/ProjectModel';
 import { RolesModel } from '../../models/RolesModel';
 import { UserModel } from '../../models/UserModel';
+import { wrapSentryTransaction } from '../../utils';
+import { AdminNotificationService } from '../AdminNotificationService/AdminNotificationService';
 import { BaseService } from '../BaseService';
 
 type RolesServiceArguments = {
@@ -36,6 +39,7 @@ type RolesServiceArguments = {
     groupsModel: GroupsModel;
     projectModel: ProjectModel;
     emailClient: EmailClient;
+    adminNotificationService: AdminNotificationService;
 };
 
 export class RolesService extends BaseService {
@@ -55,6 +59,8 @@ export class RolesService extends BaseService {
 
     private readonly emailClient: EmailClient;
 
+    private readonly adminNotificationService: AdminNotificationService;
+
     constructor({
         lightdashConfig,
         analytics,
@@ -64,6 +70,7 @@ export class RolesService extends BaseService {
         groupsModel,
         projectModel,
         emailClient,
+        adminNotificationService,
     }: RolesServiceArguments) {
         super({ serviceName: 'RolesService' });
         this.lightdashConfig = lightdashConfig;
@@ -74,6 +81,7 @@ export class RolesService extends BaseService {
         this.groupsModel = groupsModel;
         this.projectModel = projectModel;
         this.emailClient = emailClient;
+        this.adminNotificationService = adminNotificationService;
     }
 
     /**
@@ -99,8 +107,11 @@ export class RolesService extends BaseService {
         }
 
         // get all projects in organization
-        const projects = await this.projectModel.getAllByOrganizationUuid(
-            organizationUuid,
+        const projects = await wrapSentryTransaction(
+            'RolesService.validateRolesViewAccess.getAllByOrganizationUuid',
+            { organizationUuid },
+            async () =>
+                this.projectModel.getAllByOrganizationUuid(organizationUuid),
         );
 
         const canManageSomeProjects = projects.some((project) =>
@@ -138,7 +149,9 @@ export class RolesService extends BaseService {
                 }),
             )
         ) {
-            throw new ForbiddenError();
+            throw new ForbiddenError(
+                'You do not have permission to manage this organization',
+            );
         }
     }
 
@@ -178,7 +191,9 @@ export class RolesService extends BaseService {
                     }),
                 )
             ) {
-                throw new ForbiddenError();
+                throw new ForbiddenError(
+                    'You do not have permission to manage this project',
+                );
             }
         }
     }
@@ -318,9 +333,8 @@ export class RolesService extends BaseService {
                 );
             }
         });
-        const updatedRole = await this.rolesModel.getRoleWithScopesByUuid(
-            roleUuid,
-        );
+        const updatedRole =
+            await this.rolesModel.getRoleWithScopesByUuid(roleUuid);
 
         // We track add/remove scope analytics in their respective methods
         this.analytics.track({
@@ -350,7 +364,7 @@ export class RolesService extends BaseService {
     // UNIFIED ORGANIZATION ROLE ASSIGNMENTS
     // =====================================
 
-    /* 
+    /*
     At the organization level, we only support system role assignments
     */
     async getOrganizationRoleAssignments(
@@ -392,12 +406,13 @@ export class RolesService extends BaseService {
         }
 
         const user = await this.userModel.getUserDetailsByUuid(userUuid);
+        const previousRole = user.role;
+
         if (user.role === OrganizationMemberRole.ADMIN) {
             // If user is currently an admin, we need to check if there are more admins
             // because every org should have at least one admin
-            const adminUuids = await this.rolesModel.getOrganizationAdmins(
-                orgUuid,
-            );
+            const adminUuids =
+                await this.rolesModel.getOrganizationAdmins(orgUuid);
             if (adminUuids.length === 1) {
                 throw new ParameterError(
                     'Organization must have at least one admin',
@@ -422,6 +437,24 @@ export class RolesService extends BaseService {
                 isSystemRole: true,
             },
         });
+
+        // Safe cast: org-level assignments are validated as system roles above
+        this.adminNotificationService
+            .notifyOrgAdminRoleChange(
+                account,
+                userUuid,
+                orgUuid,
+                previousRole,
+                roleId as OrganizationMemberRole,
+            )
+            .catch((err) => {
+                this.logger.error(
+                    'Failed to send org admin role change notification',
+                    {
+                        error: err,
+                    },
+                );
+            });
 
         // Build response
         return {
@@ -558,10 +591,7 @@ export class RolesService extends BaseService {
     ): Promise<RoleAssignment> {
         const { roleId } = request;
         const project = await this.projectModel.getSummary(projectUuid);
-        RolesService.validateOrganizationAccess(
-            account,
-            project.organizationUuid,
-        );
+
         await this.validateProjectAccess(account, projectUuid);
         const role = await this.rolesModel.getRoleWithScopesByUuid(roleId);
 
@@ -634,6 +664,24 @@ export class RolesService extends BaseService {
                 isSystemRole: isSystemRole(roleId),
             },
         });
+
+        const previousProjectRole = userProjectRole[0]?.role ?? null;
+        const newProjectRole = isSystemRole(roleId) ? roleId : null;
+        this.adminNotificationService
+            .notifyProjectAdminRoleChange({
+                account,
+                targetUserUuid: userUuid,
+                projectUuid,
+                organizationUuid: project.organizationUuid,
+                previousRole: previousProjectRole,
+                newRole: newProjectRole,
+            })
+            .catch((err) => {
+                this.logger.error(
+                    'Failed to send project admin role change notification',
+                    { error: err },
+                );
+            });
 
         return {
             roleId,
@@ -735,6 +783,12 @@ export class RolesService extends BaseService {
                 error instanceof DatabaseError &&
                 error.code === foreignKeyViolation
             ) {
+                this.logger.error('Role deletion blocked by FK constraint', {
+                    roleUuid,
+                    detail: error.detail,
+                    constraint: error.constraint,
+                    table: error.table,
+                });
                 throw new ParameterError('Role cannot be deleted if assigned');
             }
 
@@ -820,9 +874,8 @@ export class RolesService extends BaseService {
 
         const userAccess = await this.rolesModel.getProjectAccess(projectUuid);
 
-        const groupAccess = await this.rolesModel.getGroupProjectAccess(
-            projectUuid,
-        );
+        const groupAccess =
+            await this.rolesModel.getGroupProjectAccess(projectUuid);
 
         return {
             users: userAccess,
@@ -952,9 +1005,8 @@ export class RolesService extends BaseService {
         const { name, description } = duplicateRoleData;
         RolesService.validateRoleName(name);
 
-        const sourceRole = await this.rolesModel.getRoleWithScopesByUuid(
-            roleUuid,
-        );
+        const sourceRole =
+            await this.rolesModel.getRoleWithScopesByUuid(roleUuid);
         if (!sourceRole) {
             throw new NotFoundError(`Role to duplicate: ${roleUuid} not found`);
         }

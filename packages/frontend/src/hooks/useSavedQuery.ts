@@ -5,21 +5,22 @@ import {
     type CreateSavedChart,
     type CreateSavedChartVersion,
     type SavedChart,
-    type UpdateMultipleSavedChart,
     type UpdateSavedChart,
 } from '@lightdash/common';
 import { IconArrowRight } from '@tabler/icons-react';
 import {
     useMutation,
-    type UseMutationOptions,
     useQuery,
     useQueryClient,
+    type UseMutationOptions,
     type UseQueryOptions,
 } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router';
 import { lightdashApi } from '../api';
+import useApp from '../providers/App/useApp';
 import { convertDateFilters } from '../utils/dateFilter';
 import useToaster from './toaster/useToaster';
+import { invalidateContent } from './useContent';
 import useSearchParams from './useSearchParams';
 
 const createSavedQuery = async (
@@ -52,9 +53,10 @@ const duplicateSavedQuery = async (
         body: JSON.stringify(data),
     });
 
-const deleteSavedQuery = async (id: string) =>
+const deleteSavedQuery = async (id: string, projectUuid: string) =>
     lightdashApi<null>({
-        url: `/saved/${id}`,
+        url: `/projects/${projectUuid}/saved/${id}`,
+        version: 'v2',
         method: 'DELETE',
         body: undefined,
     });
@@ -74,9 +76,13 @@ const updateSavedQuery = async (
     });
 };
 
-const getSavedQuery = async (id: string): Promise<SavedChart> =>
+const getSavedQuery = async (
+    id: string,
+    projectUuid: string,
+): Promise<SavedChart> =>
     lightdashApi<SavedChart>({
-        url: `/saved/${id}`,
+        url: `/projects/${projectUuid}/saved/${id}`,
+        version: 'v2',
         method: 'GET',
         body: undefined,
     });
@@ -104,15 +110,23 @@ const addVersionSavedQuery = async ({
 };
 
 interface Args {
-    id?: string;
+    uuidOrSlug?: string;
+    projectUuid?: string;
     useQueryOptions?: UseQueryOptions<SavedChart, ApiError>;
 }
 
-export const useSavedQuery = ({ id, useQueryOptions }: Args = {}) =>
+export const useSavedQuery = ({
+    uuidOrSlug,
+    projectUuid,
+    useQueryOptions,
+}: Args) =>
     useQuery<SavedChart, ApiError>({
-        queryKey: ['saved_query', id],
-        queryFn: () => getSavedQuery(id || ''),
-        enabled: id !== undefined,
+        queryKey: ['saved_query', uuidOrSlug, projectUuid],
+        queryFn: async () => {
+            if (!projectUuid) throw new Error('projectUuid is required');
+            return getSavedQuery(uuidOrSlug || '', projectUuid);
+        },
+        enabled: uuidOrSlug !== undefined && !!projectUuid,
         retry: false,
         ...useQueryOptions,
     });
@@ -193,79 +207,44 @@ export const useChartVersionRollbackMutation = (
     );
 };
 
-export const useSavedQueryDeleteMutation = () => {
+export const useSavedQueryDeleteMutation = (projectUuid?: string) => {
     const queryClient = useQueryClient();
+    const navigate = useNavigate();
+    const { health } = useApp();
+    const isSoftDeleteEnabled = health.data?.softDelete.enabled ?? false;
     const { showToastSuccess, showToastApiError } = useToaster();
     return useMutation<null, ApiError, string>(
         async (data) => {
+            if (!projectUuid) {
+                throw new Error('Project UUID is undefined');
+            }
             queryClient.removeQueries(['savedChartResults', data]);
-            return deleteSavedQuery(data);
+            return deleteSavedQuery(data, projectUuid);
         },
         {
             mutationKey: ['saved_query_create'],
             onSuccess: async () => {
-                await queryClient.invalidateQueries(['spaces']);
-                await queryClient.invalidateQueries(['space']);
-                await queryClient.invalidateQueries(['pinned_items']);
-                await queryClient.invalidateQueries([
-                    'most-popular-and-recently-updated',
-                ]);
-                await queryClient.invalidateQueries(['content']);
+                if (!projectUuid) return;
+                await invalidateContent(queryClient, projectUuid);
+                await queryClient.invalidateQueries(['deletedContent']);
 
                 showToastSuccess({
                     title: `Success! Chart was deleted.`,
+                    action: isSoftDeleteEnabled
+                        ? {
+                              children: 'Go to recently deleted',
+                              icon: IconArrowRight,
+                              onClick: () =>
+                                  navigate(
+                                      `/generalSettings/projectManagement/${projectUuid}/recentlyDeleted`,
+                                  ),
+                          }
+                        : undefined,
                 });
             },
             onError: ({ error }) => {
                 showToastApiError({
                     title: `Failed to delete chart`,
-                    apiError: error,
-                });
-            },
-        },
-    );
-};
-
-const updateMultipleSavedQuery = async (
-    projectUuid: string,
-    data: UpdateMultipleSavedChart[],
-): Promise<SavedChart[]> => {
-    return lightdashApi<SavedChart[]>({
-        url: `/projects/${projectUuid}/saved`,
-        method: 'PATCH',
-        body: JSON.stringify(data),
-    });
-};
-
-export const useUpdateMultipleMutation = (projectUuid: string) => {
-    const queryClient = useQueryClient();
-    const { showToastSuccess, showToastApiError } = useToaster();
-
-    return useMutation<SavedChart[], ApiError, UpdateMultipleSavedChart[]>(
-        (data) => {
-            return updateMultipleSavedQuery(projectUuid, data);
-        },
-        {
-            mutationKey: ['saved_query_multiple_update'],
-            onSuccess: async (data) => {
-                await queryClient.invalidateQueries(['space', projectUuid]);
-                await queryClient.invalidateQueries(['spaces']);
-                await queryClient.invalidateQueries([
-                    'most-popular-and-recently-updated',
-                ]);
-                data.forEach((savedChart) => {
-                    queryClient.setQueryData(
-                        ['saved_query', savedChart.uuid],
-                        savedChart,
-                    );
-                });
-                showToastSuccess({
-                    title: `Success! Charts were updated.`,
-                });
-            },
-            onError: ({ error }) => {
-                showToastApiError({
-                    title: `Failed to save chart`,
                     apiError: error,
                 });
             },

@@ -1,17 +1,17 @@
-import { TimeFrames, formatDate } from '@lightdash/common';
+import { formatDate, TimeFrames } from '@lightdash/common';
 import {
-    type MantineTheme,
     Popover,
     Stack,
-    type Sx,
     Text,
     TextInput,
+    type MantineTheme,
+    type Sx,
 } from '@mantine/core';
 import { MonthPicker, type MonthPickerProps } from '@mantine/dates';
 import { useDisclosure } from '@mantine/hooks';
 import dayjs from 'dayjs';
 import quarterOfYear from 'dayjs/plugin/quarterOfYear';
-import { type FC, useCallback, useState } from 'react';
+import { useCallback, useEffect, useState, type FC } from 'react';
 
 dayjs.extend(quarterOfYear);
 
@@ -35,6 +35,7 @@ const FilterQuarterPicker: FC<Props> = ({
     placeholder = 'Select Quarter',
     disabled,
     popoverProps,
+    autoFocus,
 }) => {
     const [opened, { open, close }] = useDisclosure(false);
 
@@ -58,19 +59,32 @@ const FilterQuarterPicker: FC<Props> = ({
         return quarter ? quarter.months : [0, 1, 2];
     };
 
-    const handleMonthSelect = (date: Date | null) => {
-        if (!date) return;
+    const getStartOfQuarter = useCallback(
+        (date: Date): Date => dayjs(date).startOf('quarter').toDate(),
+        [],
+    );
 
-        // Use dayjs for date handling
-        const dateObj = dayjs(date);
-        const year = dateObj.year();
-        setSelectedYear(year);
+    const handleMonthSelect = useCallback(
+        (date: Date | null) => {
+            if (!date) return;
 
-        const quarterDate = dateObj.startOf('quarter');
+            const startOfQuarter = getStartOfQuarter(date);
+            setSelectedYear(dayjs(startOfQuarter).year());
+            onChange?.(startOfQuarter);
+            close();
+        },
+        [close, onChange, getStartOfQuarter],
+    );
 
-        onChange?.(quarterDate.toDate());
-        close();
-    };
+    // Normalize value to start of quarter if needed
+    useEffect(() => {
+        if (!value) return;
+
+        const startOfQuarter = getStartOfQuarter(value);
+        if (value.getTime() !== startOfQuarter.getTime()) {
+            onChange?.(startOfQuarter);
+        }
+    }, [value, getStartOfQuarter, onChange]);
 
     const getMonthControlProps = useCallback(
         (
@@ -136,6 +150,7 @@ const FilterQuarterPicker: FC<Props> = ({
             <Popover.Target>
                 <TextInput
                     size="xs"
+                    data-autofocus={autoFocus || undefined}
                     onClick={disabled ? undefined : open}
                     placeholder={placeholder}
                     value={

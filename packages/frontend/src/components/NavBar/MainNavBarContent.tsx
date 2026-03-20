@@ -1,14 +1,16 @@
-import { ActionIcon, Box, Button, Group } from '@mantine/core';
+import { ActionIcon, Box, Button, Group } from '@mantine-8/core';
 import { type FC } from 'react';
 import { Link } from 'react-router';
 import { useHasMetricsInCatalog } from '../../features/metricsCatalog/hooks/useMetricsCatalog';
 import Omnibar from '../../features/omnibar';
+import useApp from '../../providers/App/useApp';
 import Logo from '../../svgs/logo-icon.svg?react';
 import { AiAgentsButton } from './AiAgentsButton';
 import BrowseMenu from './BrowseMenu';
 import ExploreMenu from './ExploreMenu';
 import HeadwayMenuItem from './HeadwayMenuItem';
 import HelpMenu from './HelpMenu';
+import classes from './MainNavBarContent.module.css';
 import { MetricsLink } from './MetricsLink';
 import { NotificationsMenu } from './NotificationsMenu';
 import ProjectSwitcher from './ProjectSwitcher';
@@ -32,15 +34,17 @@ export const MainNavBarContent: FC<Props> = ({
     const { data: hasMetrics } = useHasMetricsInCatalog({
         projectUuid: activeProjectUuid,
     });
+    const { health } = useApp();
+    const headwayEnabled = health.data?.headway?.enabled;
 
     return (
         <>
-            <Group align="center" sx={{ flexShrink: 0 }}>
+            <Group align="center" className={classes.leftGroup}>
                 <ActionIcon
                     component={Link}
                     to={homeUrl}
                     title="Home"
-                    size="lg"
+                    className={classes.logoButton}
                 >
                     <Logo />
                 </ActionIcon>
@@ -60,9 +64,9 @@ export const MainNavBarContent: FC<Props> = ({
                 )}
             </Group>
 
-            <Box sx={{ flexGrow: 1 }} />
+            <Box className={classes.spacer} />
 
-            <Group sx={{ flexShrink: 0 }}>
+            <Group className={classes.rightGroup}>
                 <Button.Group>
                     <ThemeSwitcher />
 
@@ -74,9 +78,11 @@ export const MainNavBarContent: FC<Props> = ({
 
                     <HelpMenu />
 
-                    {!isLoadingActiveProject && activeProjectUuid && (
-                        <HeadwayMenuItem projectUuid={activeProjectUuid} />
-                    )}
+                    {headwayEnabled &&
+                        !isLoadingActiveProject &&
+                        activeProjectUuid && (
+                            <HeadwayMenuItem projectUuid={activeProjectUuid} />
+                        )}
 
                     <ProjectSwitcher />
                 </Button.Group>

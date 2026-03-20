@@ -8,16 +8,15 @@ import {
     Stack,
     Text,
     Tooltip,
-} from '@mantine/core';
+} from '@mantine-8/core';
 import { IconCheck, IconCopy, IconDownload } from '@tabler/icons-react';
+import { type PieSeriesOption } from 'echarts';
 import React, { useCallback, useState } from 'react';
+import { copyImageToClipboard } from '../../../utils/copyImageToClipboard';
 import {
     type EChartsInstance,
     type EChartsOption,
 } from '../../EChartsReactWrapper';
-
-import { type PieSeriesOption } from 'echarts';
-import { copyImageToClipboard } from '../../../utils/copyImageToClipboard';
 import MantineIcon from '../MantineIcon';
 import {
     base64SvgToBase64Image,
@@ -29,6 +28,7 @@ import {
 
 type DownloadOptions = {
     getChartInstance: () => EChartsInstance | undefined;
+    chartName?: string;
     unavailableOptions?: DownloadType[];
 };
 
@@ -114,6 +114,7 @@ const getOptionsWorkaround = (
 
 const ChartDownloadOptions: React.FC<DownloadOptions> = ({
     getChartInstance,
+    chartName,
     unavailableOptions,
 }) => {
     const [isCopied, setIsCopied] = useState(false);
@@ -149,11 +150,12 @@ const ChartDownloadOptions: React.FC<DownloadOptions> = ({
                     );
                     break;
                 case DownloadType.SVG:
-                    downloadImage(svgBase64);
+                    downloadImage(svgBase64, chartName);
                     break;
                 case DownloadType.JPEG:
                     downloadImage(
                         await base64SvgToBase64Image(svgBase64, width, 'jpeg'),
+                        chartName,
                     );
                     break;
                 case DownloadType.PNG:
@@ -164,6 +166,7 @@ const ChartDownloadOptions: React.FC<DownloadOptions> = ({
                             'png',
                             isBackgroundTransparent,
                         ),
+                        chartName,
                     );
                     break;
                 case DownloadType.JSON:
@@ -184,7 +187,7 @@ const ChartDownloadOptions: React.FC<DownloadOptions> = ({
                 chartInstance.setOption(originalOptions);
             }
         }
-    }, [getChartInstance, type, isBackgroundTransparent]);
+    }, [getChartInstance, chartName, type, isBackgroundTransparent]);
 
     const onCopyToClipboard = useCallback(async () => {
         setIsCopied(true);
@@ -245,15 +248,15 @@ const ChartDownloadOptions: React.FC<DownloadOptions> = ({
                     ]}
                 />
             )}
-            <Group spacing="xs" position="right">
+            <Group gap="xs" justify="flex-end">
                 <Tooltip
-                    variant="xs"
                     withinPortal
                     color={isCopied ? 'teal' : undefined}
                     label={isCopied ? 'Copied!' : 'Copy to clipboard'}
                 >
                     <ActionIcon
                         size="md"
+                        radius="md"
                         onClick={onCopyToClipboard}
                         variant="default"
                     >
@@ -265,7 +268,7 @@ const ChartDownloadOptions: React.FC<DownloadOptions> = ({
                 </Tooltip>
                 <Button
                     size="xs"
-                    leftIcon={<MantineIcon icon={IconDownload} />}
+                    leftSection={<MantineIcon icon={IconDownload} />}
                     onClick={onDownload}
                 >
                     Download

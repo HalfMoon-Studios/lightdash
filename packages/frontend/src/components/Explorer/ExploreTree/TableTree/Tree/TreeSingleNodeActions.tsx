@@ -14,7 +14,8 @@ import {
     type Dimension,
     type Metric,
 } from '@lightdash/common';
-import { ActionIcon, Box, Menu, Tooltip, type MenuProps } from '@mantine/core';
+import { Menu, type MenuProps } from '@mantine-8/core';
+import { ActionIcon, Box, Tooltip } from '@mantine/core';
 import {
     IconCode,
     IconCopy,
@@ -25,15 +26,15 @@ import {
     IconTrash,
 } from '@tabler/icons-react';
 import { useMemo, type FC } from 'react';
-import { useParams } from 'react-router';
 import { v4 as uuidv4 } from 'uuid';
 import {
     explorerActions,
     useExplorerDispatch,
 } from '../../../../../features/explorer/store';
 import useToaster from '../../../../../hooks/toaster/useToaster';
-import { useFeatureFlagEnabled } from '../../../../../hooks/useFeatureFlagEnabled';
 import { useFilteredFields } from '../../../../../hooks/useFilters';
+import { useProjectUuid } from '../../../../../hooks/useProjectUuid';
+import { useClientFeatureFlag } from '../../../../../hooks/useServerOrClientFeatureFlag';
 import useApp from '../../../../../providers/App/useApp';
 import useTracking from '../../../../../providers/Tracking/useTracking';
 import { EventName } from '../../../../../types/Events';
@@ -58,7 +59,7 @@ const TreeSingleNodeActions: FC<Props> = ({
     hasDescription,
     onViewDescription,
 }) => {
-    const { projectUuid } = useParams<{ projectUuid: string }>();
+    const projectUuid = useProjectUuid();
     const { user } = useApp();
     const { showToastSuccess } = useToaster();
     const { addFilter } = useFilteredFields();
@@ -72,8 +73,12 @@ const TreeSingleNodeActions: FC<Props> = ({
         return isDimension(item) ? getCustomMetricType(item.type) : [];
     }, [item]);
 
-    const isWriteBackCustomBinDimensionsEnabled = useFeatureFlagEnabled(
+    const isWriteBackCustomBinDimensionsEnabled = useClientFeatureFlag(
         FeatureFlags.WriteBackCustomBinDimensions,
+    );
+
+    const isCustomGroupBinsEnabled = useClientFeatureFlag(
+        FeatureFlags.CustomGroupBins,
     );
 
     const duplicateCustomMetric = (customMetric: AdditionalMetric) => {
@@ -127,7 +132,7 @@ const TreeSingleNodeActions: FC<Props> = ({
                 {!isAdditionalMetric(item) && isFilterableField(item) ? (
                     <Menu.Item
                         component="button"
-                        icon={<MantineIcon icon={IconFilter} />}
+                        leftSection={<MantineIcon icon={IconFilter} />}
                         onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
                             e.stopPropagation();
 
@@ -145,7 +150,7 @@ const TreeSingleNodeActions: FC<Props> = ({
                     <>
                         <Menu.Item
                             component="button"
-                            icon={<MantineIcon icon={IconEdit} />}
+                            leftSection={<MantineIcon icon={IconEdit} />}
                             onClick={(
                                 e: React.MouseEvent<HTMLButtonElement>,
                             ) => {
@@ -165,7 +170,7 @@ const TreeSingleNodeActions: FC<Props> = ({
                         </Menu.Item>
                         <Menu.Item
                             component="button"
-                            icon={<MantineIcon icon={IconCopy} />}
+                            leftSection={<MantineIcon icon={IconCopy} />}
                             onClick={(
                                 e: React.MouseEvent<HTMLButtonElement>,
                             ) => {
@@ -184,7 +189,7 @@ const TreeSingleNodeActions: FC<Props> = ({
 
                         <Menu.Item
                             component="button"
-                            icon={<MantineIcon icon={IconCode} />}
+                            leftSection={<MantineIcon icon={IconCode} />}
                             onClick={(
                                 e: React.MouseEvent<HTMLButtonElement>,
                             ) => {
@@ -218,7 +223,7 @@ const TreeSingleNodeActions: FC<Props> = ({
                             color="red"
                             key="custommetric"
                             component="button"
-                            icon={<MantineIcon icon={IconTrash} />}
+                            leftSection={<MantineIcon icon={IconTrash} />}
                             onClick={(
                                 e: React.MouseEvent<HTMLButtonElement>,
                             ) => {
@@ -242,7 +247,7 @@ const TreeSingleNodeActions: FC<Props> = ({
                 {hasDescription && (
                     <Menu.Item
                         component="button"
-                        icon={<MantineIcon icon={IconDots} />}
+                        leftSection={<MantineIcon icon={IconDots} />}
                         onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
                             e.stopPropagation();
                             onViewDescription();
@@ -256,7 +261,7 @@ const TreeSingleNodeActions: FC<Props> = ({
                     <>
                         <Menu.Item
                             component="button"
-                            icon={<MantineIcon icon={IconEdit} />}
+                            leftSection={<MantineIcon icon={IconEdit} />}
                             onClick={(
                                 e: React.MouseEvent<HTMLButtonElement>,
                             ) => {
@@ -273,7 +278,7 @@ const TreeSingleNodeActions: FC<Props> = ({
                         </Menu.Item>
                         <Menu.Item
                             component="button"
-                            icon={<MantineIcon icon={IconCopy} />}
+                            leftSection={<MantineIcon icon={IconCopy} />}
                             onClick={(
                                 e: React.MouseEvent<HTMLButtonElement>,
                             ) => {
@@ -293,7 +298,7 @@ const TreeSingleNodeActions: FC<Props> = ({
                             isWriteBackCustomBinDimensionsEnabled) && (
                             <Menu.Item
                                 component="button"
-                                icon={<MantineIcon icon={IconCode} />}
+                                leftSection={<MantineIcon icon={IconCode} />}
                                 onClick={(
                                     e: React.MouseEvent<HTMLButtonElement>,
                                 ) => {
@@ -328,7 +333,7 @@ const TreeSingleNodeActions: FC<Props> = ({
                         <Menu.Item
                             color="red"
                             component="button"
-                            icon={<MantineIcon icon={IconTrash} />}
+                            leftSection={<MantineIcon icon={IconTrash} />}
                             onClick={(
                                 e: React.MouseEvent<HTMLButtonElement>,
                             ) => {
@@ -386,12 +391,15 @@ const TreeSingleNodeActions: FC<Props> = ({
                     </>
                 ) : null}
 
-                {isDimension(item) && item.type === DimensionType.NUMBER ? (
+                {isDimension(item) &&
+                (item.type === DimensionType.NUMBER ||
+                    (item.type === DimensionType.STRING &&
+                        isCustomGroupBinsEnabled)) ? (
                     <>
                         <Menu.Divider />
                         <Menu.Item
                             component="button"
-                            icon={<MantineIcon icon={IconSparkles} />}
+                            leftSection={<MantineIcon icon={IconSparkles} />}
                             onClick={(
                                 e: React.MouseEvent<HTMLButtonElement>,
                             ) => {

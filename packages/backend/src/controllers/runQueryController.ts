@@ -48,6 +48,7 @@ export type ApiRunQueryResponse = {
 export class RunViewChartQueryController extends BaseController {
     /**
      * Run a query for underlying data results
+     * @summary Run underlying data query
      * @param projectUuid The uuid of the project
      * @param body metricQuery for the chart to run
      * @param exploreId table name
@@ -116,6 +117,7 @@ export class RunViewChartQueryController extends BaseController {
 
     /**
      * Run a query for explore
+     * @summary Run metric query
      * @param projectUuid The uuid of the project
      * @param body metricQuery for the chart to run
      * @param exploreId table name
@@ -165,7 +167,9 @@ export class RunViewChartQueryController extends BaseController {
             additionalMetrics: body.additionalMetrics,
             customDimensions: body.customDimensions,
             timezone: body.timezone,
+            pivotDimensions: body.pivotDimensions,
             metricOverrides: body.metricOverrides,
+            dimensionOverrides: body.dimensionOverrides,
         };
         const results: ApiQueryResults = await this.services
             .getProjectService()

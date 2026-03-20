@@ -1,12 +1,15 @@
 import { type FilterableDimension } from './field';
 import { type DashboardFilters } from './filter';
+import { type KnexPaginatedData } from './knex-paginate';
 import { type DashboardParameters } from './parameters';
 import {
     type ChartKind,
     type CreateSavedChart,
     type SavedChartType,
 } from './savedCharts';
-import { type SpaceShare } from './space';
+import type { SchedulerAndTargets } from './scheduler';
+import { type SpaceAccess } from './space';
+import { type DateGranularity } from './timeFrames';
 import { type UpdatedByUser } from './user';
 import { type ValidationSummary } from './validation';
 
@@ -15,6 +18,7 @@ export enum DashboardTileTypes {
     SQL_CHART = 'sql_chart',
     MARKDOWN = 'markdown',
     LOOM = 'loom',
+    HEADING = 'heading',
 }
 
 type CreateDashboardTileBase = {
@@ -24,7 +28,7 @@ type CreateDashboardTileBase = {
     y: number;
     h: number;
     w: number;
-    tabUuid: string | undefined;
+    tabUuid: string | null | undefined;
 };
 
 type DashboardTileBase = Required<CreateDashboardTileBase>;
@@ -34,6 +38,7 @@ export type DashboardMarkdownTileProperties = {
     properties: {
         title: string;
         content: string;
+        hideFrame?: boolean;
     };
 };
 
@@ -70,6 +75,15 @@ export type DashboardSqlChartTileProperties = {
     };
 };
 
+export type DashboardHeadingTileProperties = {
+    type: DashboardTileTypes.HEADING;
+    properties: {
+        title: undefined;
+        text: string;
+        showDivider?: boolean;
+    };
+};
+
 export type CreateDashboardMarkdownTile = CreateDashboardTileBase &
     DashboardMarkdownTileProperties;
 export type DashboardMarkdownTile = DashboardTileBase &
@@ -89,6 +103,11 @@ export type CreateDashboardSqlChartTile = CreateDashboardTileBase &
 export type DashboardSqlChartTile = DashboardTileBase &
     DashboardSqlChartTileProperties;
 
+export type CreateDashboardHeadingTile = CreateDashboardTileBase &
+    DashboardHeadingTileProperties;
+export type DashboardHeadingTile = DashboardTileBase &
+    DashboardHeadingTileProperties;
+
 export type CreateDashboard = {
     name: string;
     description?: string;
@@ -97,6 +116,7 @@ export type CreateDashboard = {
         | CreateDashboardMarkdownTile
         | CreateDashboardLoomTile
         | CreateDashboardSqlChartTile
+        | CreateDashboardHeadingTile
     >;
     filters?: DashboardFilters;
     parameters?: DashboardParameters;
@@ -111,7 +131,8 @@ export type DashboardTile =
     | DashboardChartTile
     | DashboardMarkdownTile
     | DashboardLoomTile
-    | DashboardSqlChartTile;
+    | DashboardSqlChartTile
+    | DashboardHeadingTile;
 
 export const isDashboardChartTileType = (
     tile: DashboardTile,
@@ -129,6 +150,10 @@ export const isDashboardSqlChartTile = (
     tile: DashboardTileBase,
 ): tile is DashboardSqlChartTile => tile.type === DashboardTileTypes.SQL_CHART;
 
+export const isDashboardHeadingTileType = (
+    tile: DashboardTile,
+): tile is DashboardHeadingTile => tile.type === DashboardTileTypes.HEADING;
+
 export type DashboardTab = {
     uuid: string;
     name: string;
@@ -141,17 +166,24 @@ export type DashboardTabWithUrls = DashboardTab & {
     selfUrl: string;
 };
 
-export type DashboardDAO = Omit<Dashboard, 'isPrivate' | 'access'>;
+export type DashboardDAO = Omit<
+    Dashboard,
+    'inheritsFromOrgOrProject' | 'access'
+>;
 
 export type DashboardConfig = {
     isDateZoomDisabled: boolean;
+    isAddFilterDisabled?: boolean;
     pinnedParameters?: string[];
+    dateZoomGranularities?: (DateGranularity | string)[];
+    defaultDateZoomGranularity?: DateGranularity | string;
 };
 
 export type Dashboard = {
     organizationUuid: string;
     projectUuid: string;
     dashboardVersionId: number;
+    versionUuid: string;
     uuid: string;
     name: string;
     description?: string;
@@ -167,10 +199,16 @@ export type Dashboard = {
     pinnedListUuid: string | null;
     pinnedListOrder: number | null;
     tabs: DashboardTab[];
-    isPrivate: boolean | null;
-    access: SpaceShare[] | null;
+    inheritsFromOrgOrProject: boolean;
+    access: SpaceAccess[] | null;
     slug: string;
     config?: DashboardConfig;
+    deletedAt?: Date;
+    deletedBy?: {
+        userUuid: string;
+        firstName: string;
+        lastName: string;
+    } | null;
 };
 
 export enum DashboardSummaryTone {
@@ -321,4 +359,48 @@ export type CreateDashboardWithCharts = {
 export type ApiCreateDashboardWithChartsResponse = {
     status: 'ok';
     results: Dashboard;
+};
+
+export type ApiDashboardSchedulersResponse = {
+    status: 'ok';
+    results: SchedulerAndTargets[];
+};
+
+export type ApiDashboardResponse = {
+    status: 'ok';
+    results: Dashboard;
+};
+
+export type ApiDashboardPaginatedSchedulersResponse = {
+    status: 'ok';
+    results: KnexPaginatedData<SchedulerAndTargets[]>;
+};
+
+export type ApiCreateDashboardSchedulerResponse = {
+    status: 'ok';
+    results: SchedulerAndTargets;
+};
+
+export type DashboardVersionSummary = {
+    dashboardUuid: string;
+    versionUuid: string;
+    createdAt: Date;
+    createdBy: Pick<
+        UpdatedByUser,
+        'userUuid' | 'firstName' | 'lastName'
+    > | null;
+};
+
+export type DashboardHistory = {
+    history: DashboardVersionSummary[];
+};
+
+export type ApiGetDashboardHistoryResponse = {
+    status: 'ok';
+    results: DashboardHistory;
+};
+
+export type ApiDashboardRollbackResponse = {
+    status: 'ok';
+    results: undefined;
 };

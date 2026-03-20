@@ -2,6 +2,7 @@ import {
     AddSpaceGroupAccess,
     AddSpaceUserAccess,
     ApiErrorPayload,
+    ApiSpaceDeleteImpactResponse,
     ApiSpaceResponse,
     ApiSuccessEmpty,
     CreateSpace,
@@ -36,6 +37,7 @@ import { BaseController } from './baseController';
 export class SpaceController extends BaseController {
     /**
      * Get details for a space in a project
+     * @summary Get space
      * @param projectUuid The uuid of the space's parent project
      * @param spaceUuid The uuid of the space to get
      * @param req
@@ -60,7 +62,33 @@ export class SpaceController extends BaseController {
     }
 
     /**
+     * Get the impact of deleting a space (affected child spaces, charts, dashboards)
+     * @summary Get delete impact
+     * @param projectUuid The uuid of the space's parent project
+     * @param spaceUuid The uuid of the space to check
+     * @param req
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @SuccessResponse('200', 'Success')
+    @Get('{spaceUuid}/delete-impact')
+    @OperationId('GetSpaceDeleteImpact')
+    async getDeleteImpact(
+        @Path() projectUuid: string,
+        @Path() spaceUuid: string,
+        @Request() req: express.Request,
+    ): Promise<ApiSpaceDeleteImpactResponse> {
+        this.setStatus(200);
+        return {
+            status: 'ok',
+            results: await this.services
+                .getSpaceService()
+                .getDeleteImpact(req.user!, spaceUuid),
+        };
+    }
+
+    /**
      * Create a new space inside a project
+     * @summary Create space
      * @param projectUuid The uuid of the space's parent project
      * @param body
      * @param req
@@ -91,6 +119,7 @@ export class SpaceController extends BaseController {
 
     /**
      * Delete a space from a project
+     * @summary Delete space
      * @param projectUuid The uuid of the space's parent project
      * @param spaceUuid The uuid of the space to delete
      * @param req
@@ -109,7 +138,7 @@ export class SpaceController extends BaseController {
         @Request() req: express.Request,
     ): Promise<ApiSuccessEmpty> {
         this.setStatus(200);
-        await this.services.getSpaceService().deleteSpace(req.user!, spaceUuid);
+        await this.services.getSpaceService().delete(req.user!, spaceUuid);
         return {
             status: 'ok',
             results: undefined,
@@ -118,6 +147,7 @@ export class SpaceController extends BaseController {
 
     /**
      * Update a space in a project
+     * @summary Update space
      * @param projectUuid The uuid of the space's parent project
      * @param spaceUuid The uuid of the space to update
      * @param body
@@ -150,6 +180,7 @@ export class SpaceController extends BaseController {
 
     /**
      * Grant a user access to a space
+     * @summary Grant user access to space
      * @param projectUuid The uuid of the space's parent project
      * @parmm spaceUuid The uuid of the space to update
      * @param userUuid The uuid of the user to grant access to
@@ -187,6 +218,7 @@ export class SpaceController extends BaseController {
 
     /**
      * Remove a user's access to a space
+     * @summary Revoke user access to space
      * @param projectUuid The uuid of the space's parent project
      * @param spaceUuid The uuid of the space to update
      * @param userUuid The uuid of the user to revoke access from
@@ -219,6 +251,7 @@ export class SpaceController extends BaseController {
 
     /**
      * Grant a group access to a space
+     * @summary Grant group access to space
      * @param projectUuid The uuid of the space's parent project
      * @param spaceUuid The uuid of the space to update
      * @param groupUuid The uuid of the group to grant access to
@@ -257,6 +290,7 @@ export class SpaceController extends BaseController {
 
     /**
      * Remove a group's access to a space
+     * @summary Revoke group access to space
      * @param projectUuid The uuid of the space's parent project
      * @param spaceUuid The uuid of the space to update
      * @param groupUuid The uuid of the group to revoke access from

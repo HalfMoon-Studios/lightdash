@@ -101,6 +101,9 @@ export const refreshHandler = async (options: RefreshHandlerOptions) => {
     }
     const projectUuid = config.context.project;
 
+    // Log current project info
+    GlobalState.logProjectInfo(config);
+
     const project = await getProject(projectUuid);
 
     if (project.dbtConnection.type === DbtProjectType.NONE) {
@@ -110,6 +113,7 @@ export const refreshHandler = async (options: RefreshHandlerOptions) => {
     }
     const spinner = GlobalState.startSpinner(`  Refreshing dbt project`);
     try {
+        const refreshStartTime = Date.now();
         await LightdashAnalytics.track({
             event: 'refresh.started',
             properties: {
@@ -117,8 +121,8 @@ export const refreshHandler = async (options: RefreshHandlerOptions) => {
                 projectId: projectUuid,
             },
         });
-        const refreshResults = await refreshProject(projectUuid);
 
+        const refreshResults = await refreshProject(projectUuid);
         await getFinalJobState(refreshResults.jobUuid);
 
         await LightdashAnalytics.track({
@@ -126,6 +130,7 @@ export const refreshHandler = async (options: RefreshHandlerOptions) => {
             properties: {
                 executionId,
                 projectId: projectUuid,
+                durationMs: Date.now() - refreshStartTime,
             },
         });
         spinner.stop();

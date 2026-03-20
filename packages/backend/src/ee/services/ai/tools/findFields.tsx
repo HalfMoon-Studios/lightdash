@@ -11,6 +11,7 @@ import {
 import { tool } from 'ai';
 import type {
     FindFieldFn,
+    GetExploreFn,
     UpdateProgressFn,
 } from '../types/aiAgentDependencies';
 import { toModelOutput } from '../utils/toModelOutput';
@@ -18,6 +19,7 @@ import { toolErrorHandler } from '../utils/toolErrorHandler';
 import { xmlBuilder } from '../xmlBuilder';
 
 type Dependencies = {
+    getExplore: GetExploreFn;
     findFields: FindFieldFn;
     updateProgress: UpdateProgressFn;
     pageSize: number;
@@ -97,6 +99,7 @@ const getFieldsText = (
 );
 
 export const getFindFields = ({
+    getExplore,
     findFields,
     updateProgress,
     pageSize,
@@ -108,13 +111,15 @@ export const getFindFields = ({
         execute: async (args) => {
             try {
                 const searchLabels = args.fieldSearchQueries
-                    .map((q) => `\`${q.label}\``)
+                    .map((q) => `"${q.label}"`)
                     .join(', ');
                 await updateProgress(
-                    `🔍 Searching for fields: ${searchLabels}${
-                        args.table ? ` in \`${args.table}\`` : ''
+                    `Searching for fields: ${searchLabels}${
+                        args.table ? ` in "${args.table}"` : ''
                     }...`,
                 );
+
+                const explore = await getExplore({ table: args.table });
 
                 const fieldSearchQueryResults = await Promise.all(
                     args.fieldSearchQueries.map(async (fieldSearchQuery) => {
@@ -123,6 +128,7 @@ export const getFindFields = ({
                             fieldSearchQuery,
                             page: args.page ?? 1,
                             pageSize,
+                            explore,
                         });
                         return {
                             searchQuery: fieldSearchQuery.label,
@@ -130,9 +136,6 @@ export const getFindFields = ({
                         };
                     }),
                 );
-
-                // Use explore from the first result (all should have the same explore for the same table)
-                const explore = fieldSearchQueryResults[0]?.explore;
 
                 const fieldsText = fieldSearchQueryResults
                     .map((fieldSearchQueryResult) =>
@@ -181,5 +184,5 @@ export const getFindFields = ({
                 };
             }
         },
-        toModelOutput: (output) => toModelOutput(output),
+        toModelOutput: ({ output }) => toModelOutput(output),
     });

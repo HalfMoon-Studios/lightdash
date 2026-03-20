@@ -2,11 +2,19 @@ import { subject } from '@casl/ability';
 import {
     convertReplaceableFieldMatchMapToReplaceFieldsMap,
     ExploreType,
+    FeatureFlags,
     findReplaceableCustomMetrics,
     getMetrics,
 } from '@lightdash/common';
-import { ActionIcon, Group, Menu, Stack, Text } from '@mantine/core';
-import { IconDots, IconPencil, IconTrash } from '@tabler/icons-react';
+import { Menu } from '@mantine-8/core';
+import { ActionIcon, Group, HoverCard, Stack, Text } from '@mantine/core';
+import {
+    IconAlertTriangle,
+    IconCode,
+    IconDots,
+    IconPencil,
+    IconTrash,
+} from '@tabler/icons-react';
 import {
     memo,
     useCallback,
@@ -16,7 +24,6 @@ import {
     useTransition,
     type FC,
 } from 'react';
-import { useParams } from 'react-router';
 import {
     explorerActions,
     selectAdditionalMetrics,
@@ -26,11 +33,14 @@ import {
     useExplorerDispatch,
     useExplorerSelector,
 } from '../../../features/explorer/store';
+import { useSourceCodeEditor } from '../../../features/sourceCodeEditor';
 import {
     DeleteVirtualViewModal,
     EditVirtualViewModal,
 } from '../../../features/virtualView';
 import { useExplore } from '../../../hooks/useExplore';
+import { useProjectUuid } from '../../../hooks/useProjectUuid';
+import { useServerFeatureFlag } from '../../../hooks/useServerOrClientFeatureFlag';
 import { Can } from '../../../providers/Ability';
 import useApp from '../../../providers/App/useApp';
 import useTracking from '../../../providers/Tracking/useTracking';
@@ -40,6 +50,8 @@ import PageBreadcrumbs from '../../common/PageBreadcrumbs';
 import ExploreTree from '../ExploreTree';
 import LoadingSkeleton from '../ExploreTree/LoadingSkeleton';
 import { ItemDetailProvider } from '../ExploreTree/TableTree/ItemDetailProvider';
+import WarningsHoverCardContent from '../WarningsHoverCardContent';
+import { useIsGitProject } from '../WriteBackModal/hooks';
 import { VisualizationConfigPortalId } from './constants';
 
 interface ExplorePanelProps {
@@ -54,7 +66,12 @@ const ExplorePanel: FC<ExplorePanelProps> = memo(({ onBack }) => {
         useState(false);
     const [, startTransition] = useTransition();
 
-    const { projectUuid } = useParams<{ projectUuid: string }>();
+    const projectUuid = useProjectUuid();
+    const isGitProject = useIsGitProject(projectUuid ?? '');
+    const { open: openSourceCodeEditor } = useSourceCodeEditor();
+    const { data: editYamlInUiFlag } = useServerFeatureFlag(
+        FeatureFlags.EditYamlInUi,
+    );
 
     const activeTableName = useExplorerSelector(selectTableName);
     const additionalMetrics = useExplorerSelector(selectAdditionalMetrics);
@@ -140,6 +157,11 @@ const ExplorePanel: FC<ExplorePanelProps> = memo(({ onBack }) => {
         setIsDeleteVirtualViewOpen(true);
     }, []);
 
+    const handleViewSourceCode = useCallback(() => {
+        if (!activeTableName) return;
+        openSourceCodeEditor({ explore: activeTableName });
+    }, [openSourceCodeEditor, activeTableName]);
+
     const breadcrumbs = useMemo(() => {
         if (!explore) return [];
         const items = onBack
@@ -182,7 +204,37 @@ const ExplorePanel: FC<ExplorePanelProps> = memo(({ onBack }) => {
                 }}
             >
                 <Group position="apart">
-                    <PageBreadcrumbs size="md" items={breadcrumbs} />
+                    <Group spacing="xs">
+                        <PageBreadcrumbs size="md" items={breadcrumbs} />
+                        {explore.warnings && explore.warnings.length > 0 && (
+                            <HoverCard
+                                withinPortal
+                                position="right"
+                                withArrow
+                                radius="md"
+                                shadow="subtle"
+                            >
+                                <HoverCard.Target>
+                                    <ActionIcon
+                                        variant="subtle"
+                                        color="yellow"
+                                        size="sm"
+                                    >
+                                        <MantineIcon
+                                            icon={IconAlertTriangle}
+                                            color="yellow.9"
+                                        />
+                                    </ActionIcon>
+                                </HoverCard.Target>
+                                <HoverCard.Dropdown maw={400} p="xs">
+                                    <WarningsHoverCardContent
+                                        type="warnings"
+                                        warnings={explore.warnings}
+                                    />
+                                </HoverCard.Dropdown>
+                            </HoverCard>
+                        )}
+                    </Group>
                     {explore.type === ExploreType.VIRTUAL && (
                         <Can
                             I="create"
@@ -199,7 +251,9 @@ const ExplorePanel: FC<ExplorePanelProps> = memo(({ onBack }) => {
                                 </Menu.Target>
                                 <Menu.Dropdown>
                                     <Menu.Item
-                                        icon={<MantineIcon icon={IconPencil} />}
+                                        leftSection={
+                                            <MantineIcon icon={IconPencil} />
+                                        }
                                         onClick={handleEditVirtualView}
                                     >
                                         <Text fz="xs" fw={500}>
@@ -215,7 +269,7 @@ const ExplorePanel: FC<ExplorePanelProps> = memo(({ onBack }) => {
                                         })}
                                     >
                                         <Menu.Item
-                                            icon={
+                                            leftSection={
                                                 <MantineIcon icon={IconTrash} />
                                             }
                                             color="red"
@@ -230,6 +284,39 @@ const ExplorePanel: FC<ExplorePanelProps> = memo(({ onBack }) => {
                             </Menu>
                         </Can>
                     )}
+                    {explore.type !== ExploreType.VIRTUAL &&
+                        isGitProject &&
+                        explore.ymlPath &&
+                        editYamlInUiFlag?.enabled && (
+                            <Can
+                                I="view"
+                                this={subject('SourceCode', {
+                                    organizationUuid:
+                                        user.data?.organizationUuid,
+                                    projectUuid,
+                                })}
+                            >
+                                <Menu withArrow offset={-2}>
+                                    <Menu.Target>
+                                        <ActionIcon variant="transparent">
+                                            <MantineIcon icon={IconDots} />
+                                        </ActionIcon>
+                                    </Menu.Target>
+                                    <Menu.Dropdown>
+                                        <Menu.Item
+                                            leftSection={
+                                                <MantineIcon icon={IconCode} />
+                                            }
+                                            onClick={handleViewSourceCode}
+                                        >
+                                            <Text fz="xs" fw={500}>
+                                                View source code
+                                            </Text>
+                                        </Menu.Item>
+                                    </Menu.Dropdown>
+                                </Menu>
+                            </Can>
+                        )}
                 </Group>
 
                 <ItemDetailProvider>

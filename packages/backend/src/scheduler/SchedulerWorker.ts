@@ -70,7 +70,7 @@ export class SchedulerWorker extends SchedulerTask {
             logger: workerLogger,
             concurrency: this.lightdashConfig.scheduler.concurrency,
             noHandleSignals: true,
-            pollInterval: 1000,
+            pollInterval: this.lightdashConfig.scheduler.pollInterval,
             maxPoolSize,
             parsedCronItems: parseCronItems([
                 {
@@ -91,6 +91,30 @@ export class SchedulerWorker extends SchedulerTask {
                         maxAttempts: 3,
                     },
                 },
+                {
+                    task: SCHEDULER_TASKS.GENERATE_SLACK_CHANNEL_SYNC_JOBS,
+                    pattern: '0 6 * * *', // 6am UTC daily
+                    options: {
+                        backfillPeriod: 24 * 3600 * 1000, // 24 hours in ms
+                        maxAttempts: 3,
+                    },
+                },
+                {
+                    task: SCHEDULER_TASKS.CHECK_FOR_STUCK_JOBS,
+                    pattern: '*/30 * * * *', // Every 30 minutes
+                    options: {
+                        backfillPeriod: 24 * 3600 * 1000, // 24 hours in ms
+                        maxAttempts: 3,
+                    },
+                },
+                {
+                    task: SCHEDULER_TASKS.CLEAN_DEPLOY_SESSIONS,
+                    pattern: '0 * * * *', // Every hour
+                    options: {
+                        backfillPeriod: 2 * 3600 * 1000, // 2 hours in ms
+                        maxAttempts: 3,
+                    },
+                },
             ]),
             taskList: traceTasks(this.getTaskList()),
             events: schedulerWorkerEventEmitter,
@@ -98,7 +122,7 @@ export class SchedulerWorker extends SchedulerTask {
 
         this.isRunning = true;
         // Don't await this! This promise will never resolve, as the worker will keep running until the process is killed
-        this.runner.promise.finally(() => {
+        void this.runner.promise.finally(() => {
             this.isRunning = false;
         });
     }
@@ -182,6 +206,17 @@ export class SchedulerWorker extends SchedulerTask {
                         );
                     }
                 });
+
+                try {
+                    await this.generateDailyPreAggregateMaterializationJobs(
+                        currentDateStartOfDay,
+                    );
+                } catch (error) {
+                    Logger.error(
+                        'Failed to generate pre-aggregate daily materialization jobs',
+                        error,
+                    );
+                }
 
                 // Only throw if all schedulers failed
                 if (failed.length > 0 && successful.length === 0) {
@@ -303,6 +338,44 @@ export class SchedulerWorker extends SchedulerTask {
                     },
                 );
             },
+            [SCHEDULER_TASKS.SEND_GOOGLE_CHAT_NOTIFICATION]: async (
+                payload,
+                helpers,
+            ) => {
+                await tryJobOrTimeout(
+                    SchedulerClient.processJob(
+                        SCHEDULER_TASKS.SEND_GOOGLE_CHAT_NOTIFICATION,
+                        helpers.job.id,
+                        helpers.job.run_at,
+                        payload,
+                        async () => {
+                            await this.sendGoogleChatNotification(
+                                helpers.job.id,
+                                payload,
+                            );
+                        },
+                    ),
+                    helpers.job,
+                    this.lightdashConfig.scheduler.jobTimeout,
+                    async (job, e) => {
+                        await this.schedulerService.logSchedulerJob({
+                            task: SCHEDULER_TASKS.SEND_GOOGLE_CHAT_NOTIFICATION,
+                            schedulerUuid: payload.schedulerUuid,
+                            jobId: job.id,
+                            scheduledTime: job.run_at,
+                            jobGroup: payload.jobGroup,
+                            targetType: 'googlechat',
+                            status: SchedulerJobStatus.ERROR,
+                            details: {
+                                error: getErrorMessage(e),
+                                projectUuid: payload.projectUuid,
+                                organizationUuid: payload.organizationUuid,
+                                createdByUserUuid: payload.userUuid,
+                            },
+                        });
+                    },
+                );
+            },
             [SCHEDULER_TASKS.SEND_EMAIL_NOTIFICATION]: async (
                 payload,
                 helpers,
@@ -330,6 +403,159 @@ export class SchedulerWorker extends SchedulerTask {
                             scheduledTime: job.run_at,
                             jobGroup: payload.jobGroup,
                             targetType: 'email',
+                            status: SchedulerJobStatus.ERROR,
+                            details: {
+                                error: getErrorMessage(e),
+                                projectUuid: payload.projectUuid,
+                                organizationUuid: payload.organizationUuid,
+                                createdByUserUuid: payload.userUuid,
+                            },
+                        });
+                    },
+                );
+            },
+            // Batch notification handlers - one job per delivery type
+            [SCHEDULER_TASKS.SEND_SLACK_BATCH_NOTIFICATION]: async (
+                payload,
+                helpers,
+            ) => {
+                await tryJobOrTimeout(
+                    SchedulerClient.processJob(
+                        SCHEDULER_TASKS.SEND_SLACK_BATCH_NOTIFICATION,
+                        helpers.job.id,
+                        helpers.job.run_at,
+                        payload,
+                        async () => {
+                            await this.sendSlackBatchNotification(
+                                helpers.job.id,
+                                payload,
+                            );
+                        },
+                    ),
+                    helpers.job,
+                    this.lightdashConfig.scheduler.jobTimeout,
+                    async (job, e) => {
+                        await this.schedulerService.logSchedulerJob({
+                            task: SCHEDULER_TASKS.SEND_SLACK_BATCH_NOTIFICATION,
+                            schedulerUuid: payload.schedulerUuid,
+                            jobId: job.id,
+                            scheduledTime: job.run_at,
+                            jobGroup: payload.jobGroup,
+                            targetType: 'slack',
+                            status: SchedulerJobStatus.ERROR,
+                            details: {
+                                error: getErrorMessage(e),
+                                projectUuid: payload.projectUuid,
+                                organizationUuid: payload.organizationUuid,
+                                createdByUserUuid: payload.userUuid,
+                            },
+                        });
+                    },
+                );
+            },
+            [SCHEDULER_TASKS.SEND_EMAIL_BATCH_NOTIFICATION]: async (
+                payload,
+                helpers,
+            ) => {
+                await tryJobOrTimeout(
+                    SchedulerClient.processJob(
+                        SCHEDULER_TASKS.SEND_EMAIL_BATCH_NOTIFICATION,
+                        helpers.job.id,
+                        helpers.job.run_at,
+                        payload,
+                        async () => {
+                            await this.sendEmailBatchNotification(
+                                helpers.job.id,
+                                payload,
+                            );
+                        },
+                    ),
+                    helpers.job,
+                    this.lightdashConfig.scheduler.jobTimeout,
+                    async (job, e) => {
+                        await this.schedulerService.logSchedulerJob({
+                            task: SCHEDULER_TASKS.SEND_EMAIL_BATCH_NOTIFICATION,
+                            schedulerUuid: payload.schedulerUuid,
+                            jobId: job.id,
+                            scheduledTime: job.run_at,
+                            jobGroup: payload.jobGroup,
+                            targetType: 'email',
+                            status: SchedulerJobStatus.ERROR,
+                            details: {
+                                error: getErrorMessage(e),
+                                projectUuid: payload.projectUuid,
+                                organizationUuid: payload.organizationUuid,
+                                createdByUserUuid: payload.userUuid,
+                            },
+                        });
+                    },
+                );
+            },
+            [SCHEDULER_TASKS.SEND_MSTEAMS_BATCH_NOTIFICATION]: async (
+                payload,
+                helpers,
+            ) => {
+                await tryJobOrTimeout(
+                    SchedulerClient.processJob(
+                        SCHEDULER_TASKS.SEND_MSTEAMS_BATCH_NOTIFICATION,
+                        helpers.job.id,
+                        helpers.job.run_at,
+                        payload,
+                        async () => {
+                            await this.sendMsTeamsBatchNotification(
+                                helpers.job.id,
+                                payload,
+                            );
+                        },
+                    ),
+                    helpers.job,
+                    this.lightdashConfig.scheduler.jobTimeout,
+                    async (job, e) => {
+                        await this.schedulerService.logSchedulerJob({
+                            task: SCHEDULER_TASKS.SEND_MSTEAMS_BATCH_NOTIFICATION,
+                            schedulerUuid: payload.schedulerUuid,
+                            jobId: job.id,
+                            scheduledTime: job.run_at,
+                            jobGroup: payload.jobGroup,
+                            targetType: 'msteams',
+                            status: SchedulerJobStatus.ERROR,
+                            details: {
+                                error: getErrorMessage(e),
+                                projectUuid: payload.projectUuid,
+                                organizationUuid: payload.organizationUuid,
+                                createdByUserUuid: payload.userUuid,
+                            },
+                        });
+                    },
+                );
+            },
+            [SCHEDULER_TASKS.SEND_GOOGLE_CHAT_BATCH_NOTIFICATION]: async (
+                payload,
+                helpers,
+            ) => {
+                await tryJobOrTimeout(
+                    SchedulerClient.processJob(
+                        SCHEDULER_TASKS.SEND_GOOGLE_CHAT_BATCH_NOTIFICATION,
+                        helpers.job.id,
+                        helpers.job.run_at,
+                        payload,
+                        async () => {
+                            await this.sendGoogleChatBatchNotification(
+                                helpers.job.id,
+                                payload,
+                            );
+                        },
+                    ),
+                    helpers.job,
+                    this.lightdashConfig.scheduler.jobTimeout,
+                    async (job, e) => {
+                        await this.schedulerService.logSchedulerJob({
+                            task: SCHEDULER_TASKS.SEND_GOOGLE_CHAT_BATCH_NOTIFICATION,
+                            schedulerUuid: payload.schedulerUuid,
+                            jobId: job.id,
+                            scheduledTime: job.run_at,
+                            jobGroup: payload.jobGroup,
+                            targetType: 'googlechat',
                             status: SchedulerJobStatus.ERROR,
                             details: {
                                 error: getErrorMessage(e),
@@ -472,6 +698,45 @@ export class SchedulerWorker extends SchedulerTask {
                             helpers.job.run_at,
                             payload,
                         );
+                    },
+                );
+            },
+            [SCHEDULER_TASKS.MATERIALIZE_PRE_AGGREGATE]: async (
+                payload,
+                helpers,
+            ) => {
+                await tryJobOrTimeout(
+                    SchedulerClient.processJob(
+                        SCHEDULER_TASKS.MATERIALIZE_PRE_AGGREGATE,
+                        helpers.job.id,
+                        helpers.job.run_at,
+                        payload,
+                        async () => {
+                            await this.materializePreAggregate(
+                                helpers.job.id,
+                                helpers.job.run_at,
+                                payload,
+                            );
+                        },
+                    ),
+                    helpers.job,
+                    this.lightdashConfig.scheduler.jobTimeout,
+                    async (job, e) => {
+                        await this.schedulerService.logSchedulerJob({
+                            task: SCHEDULER_TASKS.MATERIALIZE_PRE_AGGREGATE,
+                            jobId: job.id,
+                            scheduledTime: job.run_at,
+                            status: SchedulerJobStatus.ERROR,
+                            details: {
+                                createdByUserUuid: payload.userUuid,
+                                error: getErrorMessage(e),
+                                projectUuid: payload.projectUuid,
+                                organizationUuid: payload.organizationUuid,
+                                preAggregateDefinitionUuid:
+                                    payload.preAggregateDefinitionUuid,
+                                trigger: payload.trigger,
+                            },
+                        });
                     },
                 );
             },
@@ -753,6 +1018,38 @@ export class SchedulerWorker extends SchedulerTask {
                     Logger.error('Error during query history cleanup:', error);
                     throw error;
                 }
+
+                // Also clean up pre-aggregate daily stats (3-day retention)
+                try {
+                    const preAggDeleted =
+                        await this.asyncQueryService.cleanupPreAggregateDailyStats(
+                            3,
+                        );
+                    Logger.info(
+                        `Pre-aggregate daily stats cleanup completed. Records deleted: ${preAggDeleted}`,
+                    );
+                } catch (error) {
+                    Logger.error(
+                        'Error during pre-aggregate daily stats cleanup:',
+                        error,
+                    );
+                    // Don't throw - this is secondary cleanup, don't fail the job
+                }
+            },
+            [SCHEDULER_TASKS.CLEAN_DEPLOY_SESSIONS]: async () => {
+                Logger.info('Starting deploy sessions cleanup job');
+
+                try {
+                    await this.deployService.cleanupOldSessions();
+
+                    Logger.info(`Deploy sessions cleanup completed.`);
+                } catch (error) {
+                    Logger.error(
+                        'Error during deploy sessions cleanup:',
+                        error,
+                    );
+                    throw error;
+                }
             },
             [SCHEDULER_TASKS.DOWNLOAD_ASYNC_QUERY_RESULTS]: async (
                 payload,
@@ -789,6 +1086,79 @@ export class SchedulerWorker extends SchedulerTask {
                         });
                     },
                 );
+            },
+            [SCHEDULER_TASKS.SYNC_SLACK_CHANNELS]: async (payload, helpers) => {
+                await tryJobOrTimeout(
+                    SchedulerClient.processJob(
+                        SCHEDULER_TASKS.SYNC_SLACK_CHANNELS,
+                        helpers.job.id,
+                        helpers.job.run_at,
+                        payload,
+                        async () => {
+                            await this.syncSlackChannels(
+                                helpers.job.id,
+                                payload,
+                            );
+                        },
+                    ),
+                    helpers.job,
+                    this.lightdashConfig.scheduler.jobTimeout,
+                    async (job, e) => {
+                        Logger.error(
+                            `Slack channel sync failed for organization ${
+                                payload.organizationUuid
+                            }: ${getErrorMessage(e)}`,
+                        );
+                    },
+                );
+            },
+            [SCHEDULER_TASKS.GENERATE_SLACK_CHANNEL_SYNC_JOBS]: async (
+                _payload,
+                helpers,
+            ) => {
+                if (!this.slackClient.isEnabled) {
+                    Logger.info(
+                        'Skipping Slack channel sync generation: Slack is not configured',
+                    );
+                    return;
+                }
+
+                Logger.info('Starting daily Slack channel sync job generation');
+
+                // Get all organizations with Slack installations
+                const organizationUuids =
+                    await this.slackClient.getAllOrganizationsWithSlack();
+
+                Logger.info(
+                    `Found ${organizationUuids.length} organizations with Slack installations`,
+                );
+
+                // Queue sync jobs for each organization
+                const results = await Promise.allSettled(
+                    organizationUuids.map(async (organizationUuid) => {
+                        await this.schedulerClient.syncSlackChannelsJob({
+                            organizationUuid,
+                            userUuid: undefined,
+                            projectUuid: undefined,
+                            schedulerUuid: undefined,
+                        });
+                        return organizationUuid;
+                    }),
+                );
+
+                const successful = results.filter(
+                    (r) => r.status === 'fulfilled',
+                ).length;
+                const failed = results.filter(
+                    (r) => r.status === 'rejected',
+                ).length;
+
+                Logger.info(
+                    `Completed generating Slack channel sync jobs: ${successful} successful, ${failed} failed out of ${organizationUuids.length} total`,
+                );
+            },
+            [SCHEDULER_TASKS.CHECK_FOR_STUCK_JOBS]: async () => {
+                await this.schedulerService.checkForStuckJobs();
             },
         };
     }

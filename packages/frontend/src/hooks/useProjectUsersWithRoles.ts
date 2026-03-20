@@ -1,10 +1,10 @@
 import {
-    FeatureFlags,
-    ProjectMemberRole,
     convertOrganizationRoleToProjectRole,
     convertProjectRoleToOrganizationRole,
+    FeatureFlags,
     getHighestProjectRole,
     isGroupWithMembers,
+    ProjectMemberRole,
     type InheritedRoles,
     type KnexPaginateArgs,
     type OrganizationMemberProfile,
@@ -12,10 +12,10 @@ import {
 } from '@lightdash/common';
 import { useMemo } from 'react';
 import { useProjectGroupAccessList } from '../features/projectGroupAccess/hooks/useProjectGroupAccess';
-import { useFeatureFlag } from './useFeatureFlagEnabled';
 import { useOrganizationGroups } from './useOrganizationGroups';
 import { useOrganizationUsers } from './useOrganizationUsers';
 import { useProjectAccess } from './useProjectAccess';
+import { useServerFeatureFlag } from './useServerOrClientFeatureFlag';
 
 export type ProjectUserWithRole = Omit<OrganizationMemberProfile, 'role'> & {
     inheritedRole: InheritedRoles | undefined;
@@ -32,7 +32,7 @@ export const useProjectUsersWithRoles = (
         paginateArgs?: KnexPaginateArgs;
     },
 ) => {
-    const userGroupsFeatureFlagQuery = useFeatureFlag(
+    const userGroupsFeatureFlagQuery = useServerFeatureFlag(
         FeatureFlags.UserGroupsEnabled,
     );
 

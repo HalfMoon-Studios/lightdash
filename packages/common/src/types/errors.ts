@@ -73,17 +73,6 @@ export class AuthorizationError extends LightdashError {
     }
 }
 
-export class NotExistsError extends LightdashError {
-    constructor(message: string) {
-        super({
-            message,
-            name: 'NotExistsError',
-            statusCode: 404,
-            data: {},
-        });
-    }
-}
-
 export class ExpiredError extends LightdashError {
     constructor(message: string) {
         super({
@@ -104,6 +93,20 @@ export class ParameterError extends LightdashError {
             message,
             name: 'ParameterError',
             statusCode: 400,
+            data,
+        });
+    }
+}
+
+export class PayloadTooLargeError extends LightdashError {
+    constructor(
+        message: string = 'Request payload exceeds the maximum allowed size',
+        data: Record<string, AnyType> = {},
+    ) {
+        super({
+            message,
+            name: 'PayloadTooLargeError',
+            statusCode: 413,
             data,
         });
     }
@@ -397,6 +400,20 @@ export class SlackError extends LightdashError {
     }
 }
 
+export class SlackFileUploadError extends LightdashError {
+    constructor(
+        message: string = 'Slack file upload failed',
+        data: { [key: string]: AnyType } = {},
+    ) {
+        super({
+            message,
+            name: 'SlackFileUploadError',
+            statusCode: 400,
+            data,
+        });
+    }
+}
+
 export class MsTeamsError extends LightdashError {
     constructor(
         message: string = 'Microsoft Teams API error occurred',
@@ -405,6 +422,20 @@ export class MsTeamsError extends LightdashError {
         super({
             message,
             name: 'MsTeamsError',
+            statusCode: 400,
+            data,
+        });
+    }
+}
+
+export class GoogleChatError extends LightdashError {
+    constructor(
+        message: string = 'Google Chat API error occurred',
+        data: { [key: string]: AnyType } = {},
+    ) {
+        super({
+            message,
+            name: 'GoogleChatError',
             statusCode: 400,
             data,
         });
@@ -425,6 +456,23 @@ export class UnexpectedGoogleSheetsError extends LightdashError {
     }
 }
 
+/* This specific error will be used in the frontend
+to show a "Re-authenticate" button in the UI for Google Sheets scope issues
+*/
+export class GoogleSheetsScopeError extends LightdashError {
+    constructor(
+        message = 'Unable to validate Google Sheets file. Please re-authenticate with Google to grant the required permissions.',
+        data: { [key: string]: AnyType } = {},
+    ) {
+        super({
+            message,
+            name: 'GoogleSheetsScopeError',
+            statusCode: 403,
+            data,
+        });
+    }
+}
+
 export class GoogleSheetsTransientError extends LightdashError {
     constructor(
         message = 'Unexpected error in Google Sheets API',
@@ -434,6 +482,20 @@ export class GoogleSheetsTransientError extends LightdashError {
             message,
             name: 'GoogleSheetsTransientError',
             statusCode: 500,
+            data,
+        });
+    }
+}
+
+export class GoogleSheetsQuotaError extends LightdashError {
+    constructor(
+        message = 'Google Sheets API quota exceeded. The sync will be retried automatically.',
+        data: { [key: string]: AnyType } = {},
+    ) {
+        super({
+            message,
+            name: 'GoogleSheetsQuotaError',
+            statusCode: 429,
             data,
         });
     }
@@ -501,6 +563,33 @@ export class S3Error extends LightdashError {
     }
 }
 
+export class ResultsExpiredError extends LightdashError {
+    constructor(
+        message = 'Your results have expired. Please refresh the page or re-run the query.',
+    ) {
+        super({
+            message,
+            name: 'ResultsExpiredError',
+            statusCode: 404,
+            data: {},
+        });
+    }
+}
+
+export class ExpiredQueryError extends LightdashError {
+    constructor(
+        message = 'Your query expired while waiting in the queue. Please try again.',
+        data: { [key: string]: AnyType } = {},
+    ) {
+        super({
+            message,
+            name: 'ExpiredQueryError',
+            statusCode: 408,
+            data,
+        });
+    }
+}
+
 export class TimeoutError extends LightdashError {
     constructor(message: string) {
         super({
@@ -545,6 +634,17 @@ export class AiAgentNotFoundError extends LightdashError {
     }
 }
 
+export class AiAgentValidatorError extends LightdashError {
+    constructor(message: string) {
+        super({
+            message,
+            name: 'AiAgentValidatorError',
+            statusCode: 400,
+            data: {},
+        });
+    }
+}
+
 /* This specific error will be used in the frontend
 to show a "reauthenticate" button in the UI
 */
@@ -553,6 +653,20 @@ export class SnowflakeTokenError extends LightdashError {
         super({
             message,
             name: 'SnowflakeTokenError',
+            statusCode: 401,
+            data: {},
+        });
+    }
+}
+
+/* This specific error will be used in the frontend
+to show a "reauthenticate" button in the UI
+*/
+export class DatabricksTokenError extends LightdashError {
+    constructor(message: string) {
+        super({
+            message,
+            name: 'DatabricksTokenError',
             statusCode: 401,
             data: {},
         });
@@ -640,6 +754,34 @@ export class CorruptedExploreError extends LightdashError {
             name: 'CorruptedExploreError',
             statusCode: 500,
             data,
+        });
+    }
+}
+
+export class ChangesetConflictError extends LightdashError {
+    constructor(
+        message: string,
+        data: {
+            entityName: string;
+            entityTableName: string;
+        },
+    ) {
+        super({
+            message,
+            name: 'ChangesetConflictError',
+            statusCode: 409,
+            data,
+        });
+    }
+}
+
+export class InvalidSpaceStateError extends LightdashError {
+    constructor(message: string) {
+        super({
+            message,
+            name: 'InvalidSpaceStateError',
+            statusCode: 500,
+            data: {},
         });
     }
 }

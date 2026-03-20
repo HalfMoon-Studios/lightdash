@@ -35,6 +35,7 @@ export const generateExposuresHandler = async (
         );
     }
 
+    const startTime = Date.now();
     await LightdashAnalytics.track({
         event: 'generate_exposures.started',
         properties: {
@@ -47,6 +48,9 @@ export const generateExposuresHandler = async (
             `This is an experimental feature and may change in future versions`,
         ),
     );
+
+    // Log current project info
+    GlobalState.logProjectInfo(config);
 
     const spinner = GlobalState.startSpinner(
         `  Generating Lightdash exposures .yml for project ${styles.bold(
@@ -113,6 +117,7 @@ export const generateExposuresHandler = async (
             properties: {
                 executionId,
                 countExposures: Object.keys(exposures).length,
+                durationMs: Date.now() - startTime,
             },
         });
     } catch (e: unknown) {

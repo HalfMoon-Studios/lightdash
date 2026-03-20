@@ -1,6 +1,7 @@
 import { OrganizationProject } from '@lightdash/common';
 import inquirer from 'inquirer';
 import { URL } from 'url';
+import { LightdashAnalytics } from '../analytics/analytics';
 import { getConfig, setProject } from '../config';
 import GlobalState from '../globalState';
 import { lightdashApi } from './dbt/apiClient';
@@ -31,8 +32,9 @@ export const setProjectCommand = async (name?: string, uuid?: string) => {
         selectedProject = projects.find(
             (project) => project.name === name || project.projectUuid === uuid,
         );
-
-        // Select project interactively
+    } else if (GlobalState.isNonInteractive()) {
+        GlobalState.debug('> Non-interactive mode: selecting first project');
+        [selectedProject] = projects;
     } else {
         const answers = await inquirer.prompt([
             {
@@ -89,6 +91,22 @@ export const setFirstProject = async () => {
 };
 
 export const setProjectHandler = async (options: SetProjectOptions) => {
+    const startTime = Date.now();
+    let success = true;
     GlobalState.setVerbose(options.verbose);
-    return setProjectCommand(options.name, options.uuid);
+    try {
+        await setProjectCommand(options.name, options.uuid);
+    } catch (e) {
+        success = false;
+        throw e;
+    } finally {
+        await LightdashAnalytics.track({
+            event: 'command.executed',
+            properties: {
+                command: 'set-project',
+                durationMs: Date.now() - startTime,
+                success,
+            },
+        });
+    }
 };

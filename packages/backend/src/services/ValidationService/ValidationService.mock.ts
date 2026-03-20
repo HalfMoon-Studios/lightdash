@@ -2,6 +2,7 @@ import { Ability } from '@casl/ability';
 import {
     AbilityAction,
     AnyType,
+    ChartType,
     DimensionType,
     Explore,
     ExploreError,
@@ -13,8 +14,8 @@ import {
     OrganizationMemberRole,
     SessionUser,
     SupportedDbtAdapter,
-    TableSelectionType,
     TablesConfiguration,
+    TableSelectionType,
     type DashboardFilters,
 } from '@lightdash/common';
 import { LightdashConfig } from '../../config/parseConfig';
@@ -106,6 +107,15 @@ export const chartForValidation: Awaited<
             operator: FilterOperator.ENDS_WITH,
         },
     ],
+    chartType: ChartType.CARTESIAN,
+    chartConfig: {
+        layout: {
+            xField: 'table_dimension',
+            yField: ['table_metric', 'table_calculation'],
+        },
+        eChartsConfig: {},
+    },
+    pivotDimensions: [],
 };
 
 export const chartForValidationWithJoinedField: Awaited<
@@ -116,6 +126,19 @@ export const chartForValidationWithJoinedField: Awaited<
     dimensions: ['table_dimension', 'another_table_dimension'],
     metrics: ['table_metric', 'another_table_metric'],
     sorts: ['another_table_dimension'],
+    // Use both dimensions - one in x-axis, one in pivot
+    chartConfig: {
+        layout: {
+            xField: 'table_dimension',
+            yField: [
+                'table_metric',
+                'another_table_metric',
+                'table_calculation',
+            ],
+        },
+        eChartsConfig: {},
+    },
+    pivotDimensions: ['another_table_dimension'],
 };
 
 export const chartForValidationWithCustomMetricFilters: Awaited<
@@ -142,6 +165,15 @@ export const chartForValidationWithCustomMetricFilters: Awaited<
             operator: FilterOperator.STARTS_WITH,
         },
     ],
+    // Use both dimensions - one in x-axis, one in pivot
+    chartConfig: {
+        layout: {
+            xField: 'table_dimension',
+            yField: ['table_metric', 'table_calculation'],
+        },
+        eChartsConfig: {},
+    },
+    pivotDimensions: ['another_table_dimension'],
 };
 
 export const dashboardForValidation: {
@@ -303,7 +335,7 @@ export const exploreError: ExploreError = {
     errors: [
         {
             message:
-                'Model "valid_explore" has a dimension reference: ${is_completed} which matches no dimension',
+                'Model "valid_explore" in metric "some_metric" has a dimension reference: ${is_completed} which matches no dimension',
             type: InlineErrorType.METADATA_PARSE_ERROR,
         },
     ],

@@ -1,3 +1,4 @@
+import { FeatureFlags } from '@lightdash/common';
 import {
     Badge,
     Button,
@@ -8,27 +9,54 @@ import {
     Text,
     Tooltip,
 } from '@mantine-8/core';
-import { type FC } from 'react';
+import { useMemo, type FC } from 'react';
 import { type DestinationType } from '../../../features/scheduler/hooks/useSchedulerFilters';
+import useHealth from '../../../hooks/health/useHealth';
+import { useGetSlack } from '../../../hooks/slack/useSlack';
+import { useServerFeatureFlag } from '../../../hooks/useServerOrClientFeatureFlag';
 import classes from './FormatFilter.module.css';
 
 interface DestinationFilterProps {
     selectedDestinations: DestinationType[];
     setSelectedDestinations: (destinations: DestinationType[]) => void;
-    availableDestinations: DestinationType[];
 }
 
 const DESTINATION_LABELS: Record<DestinationType, string> = {
     slack: 'Slack',
     email: 'Email',
     msteams: 'MS Teams',
+    googlechat: 'Google Chat',
 };
 
 const DestinationFilter: FC<DestinationFilterProps> = ({
     selectedDestinations,
     setSelectedDestinations,
-    availableDestinations,
 }) => {
+    const health = useHealth();
+    const { data: googleChatFlag } = useServerFeatureFlag(
+        FeatureFlags.GoogleChatEnabled,
+    );
+    const isGoogleChatEnabled = googleChatFlag?.enabled === true;
+    const slack = useGetSlack();
+    const organizationHasSlack = !!slack.data?.organizationUuid;
+
+    // Compute available destinations based on integrations
+    const availableDestinations = useMemo<DestinationType[]>(() => {
+        const destinations: DestinationType[] = [];
+        if (health.data?.hasEmailClient) {
+            destinations.push('email');
+        }
+        if (organizationHasSlack) {
+            destinations.push('slack');
+        }
+        if (health.data?.hasMicrosoftTeams) {
+            destinations.push('msteams');
+        }
+        if (isGoogleChatEnabled) {
+            destinations.push('googlechat');
+        }
+        return destinations;
+    }, [health.data, organizationHasSlack, isGoogleChatEnabled]);
     const hasSelectedDestinations = selectedDestinations.length > 0;
 
     return (
@@ -41,7 +69,7 @@ const DestinationFilter: FC<DestinationFilterProps> = ({
                 >
                     <Button
                         h={32}
-                        c="foreground.0"
+                        c="foreground"
                         fw={500}
                         fz="sm"
                         variant="default"

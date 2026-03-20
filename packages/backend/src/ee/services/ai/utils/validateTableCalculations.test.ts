@@ -1,7 +1,7 @@
 import {
     MetricType,
     WindowFunctionType,
-    type CustomMetricBase,
+    type CustomMetricBaseTransformed,
     type TableCalcsSchema,
 } from '@lightdash/common';
 import { mockOrdersExplore } from './validationExplore.mock';
@@ -85,7 +85,7 @@ describe('validateTableCalculations', () => {
                 },
             ];
 
-            const customMetrics: CustomMetricBase[] = [
+            const customMetrics: CustomMetricBaseTransformed[] = [
                 {
                     name: 'avg_revenue',
                     label: 'Average Revenue',
@@ -216,6 +216,7 @@ describe('validateTableCalculations', () => {
                     displayName: 'Percent Change',
                     fieldId: 'running_total',
                     orderBy: [],
+                    partitionBy: null,
                 },
             ];
 
@@ -246,6 +247,7 @@ describe('validateTableCalculations', () => {
                     displayName: 'Percent Change',
                     fieldId: 'orders_order_count',
                     orderBy: [{ fieldId: 'running_total', order: 'asc' }],
+                    partitionBy: null,
                 },
             ];
 
@@ -350,6 +352,7 @@ describe('validateTableCalculations', () => {
                     displayName: 'Percent Change',
                     fieldId: 'orders_total_revenue',
                     orderBy: [{ fieldId: 'non_existent_field', order: 'asc' }],
+                    partitionBy: null,
                 },
             ];
 
@@ -424,6 +427,7 @@ describe('validateTableCalculations', () => {
                     displayName: 'Percent Change',
                     fieldId: 'orders_total_revenue',
                     orderBy: [{ fieldId: 'orders_order_count', order: 'asc' }],
+                    partitionBy: null,
                 },
             ];
 
@@ -452,6 +456,7 @@ describe('validateTableCalculations', () => {
                     displayName: 'Percent Change',
                     fieldId: 'orders_max_date',
                     orderBy: [],
+                    partitionBy: null,
                 },
             ];
 

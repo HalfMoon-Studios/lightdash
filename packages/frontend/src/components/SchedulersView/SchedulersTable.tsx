@@ -1,6 +1,8 @@
 import {
     assertUnreachable,
     getHumanReadableCronExpression,
+    isEmailTarget,
+    isGoogleChatTarget,
     isMsTeamsTarget,
     isSchedulerGsheetsOptions,
     isSlackTarget,
@@ -31,6 +33,7 @@ import {
     IconRadar,
     IconRun,
     IconTextCaption,
+    IconUser,
 } from '@tabler/icons-react';
 import {
     MantineReactTable,
@@ -50,29 +53,32 @@ import {
 } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { usePaginatedSchedulers } from '../../features/scheduler/hooks/useScheduler';
-import {
-    useSchedulerFilters,
-    type DestinationType,
-} from '../../features/scheduler/hooks/useSchedulerFilters';
-import useHealth from '../../hooks/health/useHealth';
-import { useGetSlack } from '../../hooks/slack/useSlack';
+import { useSchedulerFilters } from '../../features/scheduler/hooks/useSchedulerFilters';
 import { useIsTruncated } from '../../hooks/useIsTruncated';
 import { useProject } from '../../hooks/useProject';
 import GSheetsSvg from '../../svgs/google-sheets.svg?react';
+import GoogleChatSvg from '../../svgs/googlechat.svg?react';
 import SlackSvg from '../../svgs/slack.svg?react';
 import MantineIcon from '../common/MantineIcon';
-import { SchedulerTopToolbar } from './SchedulerTopToolbar';
+import ReassignSchedulerOwnerModal from './ReassignSchedulerOwnerModal';
 import SchedulersViewActionMenu from './SchedulersViewActionMenu';
+import { SchedulersViewTab } from './SchedulersViewConstants';
 import {
     getSchedulerIcon,
     getSchedulerLink,
     type SchedulerItem,
 } from './SchedulersViewUtils';
+import { SchedulerTopToolbar } from './SchedulerTopToolbar';
 
 interface SchedulersTableProps {
-    projectUuid: string;
+    projectUuid?: string;
     getSlackChannelName: (channelId: string) => string | null;
     onSlackChannelIdsChange?: (channelIds: string[]) => void;
+    /**
+     * When true, shows schedulers for the current user only (user scope).
+     * When false, shows all schedulers for the project (project scope).
+     */
+    isUserScope?: boolean;
 }
 
 const fetchSize = 50;
@@ -102,9 +108,9 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
     projectUuid,
     getSlackChannelName,
     onSlackChannelIdsChange,
+    isUserScope = false,
 }) => {
     const theme = useMantineTheme();
-    const { data: project } = useProject(projectUuid);
     const tableContainerRef = useRef<HTMLDivElement>(null);
     const rowVirtualizerInstanceRef =
         useRef<MRT_Virtualizer<HTMLDivElement, HTMLTableRowElement>>(null);
@@ -139,7 +145,6 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
         300,
     );
 
-    // Use infinite query for pagination
     const { data, fetchNextPage, isError, isFetching, isLoading } =
         usePaginatedSchedulers({
             projectUuid,
@@ -149,6 +154,7 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
             sortDirection: debouncedSearchAndFilters.sortDirection,
             filters: debouncedSearchAndFilters.apiFilters,
             includeLatestRun: true,
+            isUserScope,
         });
 
     const flatData = useMemo<SchedulerItem[]>(
@@ -158,30 +164,41 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
 
     const totalDBRowCount = data?.pages?.[0]?.pagination?.totalResults ?? 0;
     const totalFetched = flatData.length;
+    const { data: project } = useProject(projectUuid);
 
     // Temporary workaround to resolve a memoization issue with react-mantine-table.
-    // In certain scenarios, the content fails to render properly even when the data is updated.
-    // This issue may be addressed in a future library update.
     const [tableData, setTableData] = useState<SchedulerItem[]>([]);
     useEffect(() => {
         setTableData(flatData);
     }, [flatData]);
 
-    // Compute available users from loaded schedulers
-    const availableUsers = useMemo(() => {
-        const userMap = new Map<string, { userUuid: string; name: string }>();
-        flatData.forEach((scheduler) => {
-            if (scheduler.createdBy && scheduler.createdByName) {
-                userMap.set(scheduler.createdBy, {
-                    userUuid: scheduler.createdBy,
-                    name: scheduler.createdByName,
-                });
-            }
-        });
-        return Array.from(userMap.values()).sort((a, b) =>
-            a.name.localeCompare(b.name),
-        );
-    }, [flatData]);
+    // Reassign owner modal state
+    const [reassignModalOpen, setReassignModalOpen] = useState(false);
+    const [schedulerUuidsToReassign, setSchedulerUuidsToReassign] = useState<
+        string[]
+    >([]);
+    const [excludedUserUuid, setExcludedUserUuid] = useState<
+        string | undefined
+    >(undefined);
+    const [isBulkReassign, setIsBulkReassign] = useState(false);
+
+    // Single scheduler reassign (from context menu)
+    const handleReassignOwner = useCallback(
+        (schedulerUuid: string, ownerUuid: string | undefined) => {
+            setSchedulerUuidsToReassign([schedulerUuid]);
+            setExcludedUserUuid(ownerUuid);
+            setIsBulkReassign(false);
+            setReassignModalOpen(true);
+        },
+        [],
+    );
+
+    const handleReassignModalClose = useCallback(() => {
+        setReassignModalOpen(false);
+        setSchedulerUuidsToReassign([]);
+        setExcludedUserUuid(undefined);
+        setIsBulkReassign(false);
+    }, []);
 
     // Extract unique Slack channel IDs from loaded schedulers and report them
     useEffect(() => {
@@ -204,7 +221,6 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
             if (containerRefElement) {
                 const { scrollHeight, scrollTop, clientHeight } =
                     containerRefElement;
-                // Fetch more when within 400px of bottom
                 if (
                     scrollHeight - scrollTop - clientHeight < 400 &&
                     !isFetching &&
@@ -219,12 +235,8 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
 
     // Scroll to top when sorting or filters change
     useEffect(() => {
-        if (rowVirtualizerInstanceRef.current) {
-            try {
-                rowVirtualizerInstanceRef.current.scrollToIndex(0);
-            } catch (e) {
-                console.error(e);
-            }
+        if (tableContainerRef.current) {
+            tableContainerRef.current.scrollTop = 0;
         }
     }, [debouncedSearchAndFilters]);
 
@@ -232,25 +244,6 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
     useEffect(() => {
         fetchMoreOnBottomReached(tableContainerRef.current);
     }, [fetchMoreOnBottomReached]);
-
-    const health = useHealth();
-    const slack = useGetSlack();
-    const organizationHasSlack = !!slack.data?.organizationUuid;
-
-    // Compute available destinations based on integrations
-    const availableDestinations = useMemo<DestinationType[]>(() => {
-        const destinations: DestinationType[] = [];
-        if (health.data?.hasEmailClient) {
-            destinations.push('email');
-        }
-        if (organizationHasSlack) {
-            destinations.push('slack');
-        }
-        if (health.data?.hasMicrosoftTeams) {
-            destinations.push('msteams');
-        }
-        return destinations;
-    }, [health.data, organizationHasSlack]);
 
     const sorting = useMemo<MRT_SortingState>(
         () => [{ id: sortField, desc: sortDirection === 'desc' }],
@@ -276,8 +269,8 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
         [sorting, setSorting],
     );
 
-    const columns: MRT_ColumnDef<SchedulerItem>[] = useMemo(
-        () => [
+    const columns: MRT_ColumnDef<SchedulerItem>[] = useMemo(() => {
+        const baseColumns: MRT_ColumnDef<SchedulerItem>[] = [
             {
                 accessorKey: 'name',
                 header: 'Name',
@@ -310,13 +303,18 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
                         }
                     };
 
+                    // For user scope, use projectUuid from the item itself
+                    const itemProjectUuid = isUserScope
+                        ? item.projectUuid
+                        : projectUuid;
+
                     return (
                         <Group wrap="nowrap">
                             {getSchedulerIcon(item)}
                             <Stack gap="two">
                                 <Anchor
                                     component={Link}
-                                    to={getSchedulerLink(item, projectUuid)}
+                                    to={getSchedulerLink(item, itemProjectUuid)}
                                     target="_blank"
                                 >
                                     <Tooltip
@@ -333,17 +331,19 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
                                                         {format()}
                                                     </Text>
                                                 </Text>
-                                                <Text c="ldGray.5" fz="xs">
-                                                    Created by:{' '}
-                                                    <Text
-                                                        c="white"
-                                                        span
-                                                        fz="xs"
-                                                    >
-                                                        {item.createdByName ||
-                                                            'n/a'}
+                                                {!isUserScope && (
+                                                    <Text c="ldGray.5" fz="xs">
+                                                        Created by:{' '}
+                                                        <Text
+                                                            c="white"
+                                                            span
+                                                            fz="xs"
+                                                        >
+                                                            {item.createdByName ||
+                                                                'n/a'}
+                                                        </Text>
                                                     </Text>
-                                                </Text>
+                                                )}
                                             </Stack>
                                         }
                                     >
@@ -391,33 +391,87 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
                     );
                 },
             },
-            {
-                accessorKey: 'lastRunStatus',
-                header: 'Last Run Status',
+        ];
+
+        // Owner column - only for project scope
+        if (!isUserScope) {
+            baseColumns.push({
+                accessorKey: 'createdByName',
+                header: 'Owner',
                 enableSorting: false,
-                size: 160,
+                size: 150,
                 Header: ({ column }) => (
                     <Group gap="two" wrap="nowrap">
-                        <MantineIcon icon={IconRun} color="ldGray.6" />
+                        <MantineIcon icon={IconUser} color="ldGray.6" />
                         {column.columnDef.header}
                     </Group>
                 ),
                 Cell: ({ row }) => {
                     const item = row.original;
-                    const latestRun = item.latestRun;
-
-                    if (!latestRun) {
-                        return (
-                            <Text fz="xs" c="ldGray.6">
-                                No runs yet
-                            </Text>
-                        );
-                    }
-
-                    const statusConfig = getRunStatusConfig(
-                        latestRun.runStatus,
+                    return (
+                        <Text fz="xs" c="ldGray.6">
+                            {item.createdByName || 'Unknown'}
+                        </Text>
                     );
+                },
+            });
+        }
 
+        // Project column - only for user scope
+        if (isUserScope) {
+            baseColumns.push({
+                accessorKey: 'projectName',
+                header: 'Project',
+                enableSorting: false,
+                size: 150,
+                Header: ({ column }) => (
+                    <Group gap="two" wrap="nowrap">
+                        <MantineIcon
+                            icon={IconLayoutDashboard}
+                            color="ldGray.6"
+                        />
+                        {column.columnDef.header}
+                    </Group>
+                ),
+                Cell: ({ row }) => {
+                    const item = row.original;
+                    return (
+                        <Text fz="xs" c="ldGray.6">
+                            {item.projectName || 'Unknown'}
+                        </Text>
+                    );
+                },
+            });
+        }
+
+        // Last Run column
+        baseColumns.push({
+            accessorKey: 'lastRunStatus',
+            header: 'Last Run',
+            enableSorting: false,
+            size: 160,
+            Header: ({ column }) => (
+                <Group gap="two" wrap="nowrap">
+                    <MantineIcon icon={IconRun} color="ldGray.6" />
+                    {column.columnDef.header}
+                </Group>
+            ),
+            Cell: ({ row }) => {
+                const item = row.original;
+                const latestRun = item.latestRun;
+
+                if (!latestRun) {
+                    return (
+                        <Text fz="xs" c="ldGray.6">
+                            No runs yet
+                        </Text>
+                    );
+                }
+
+                const statusConfig = getRunStatusConfig(latestRun.runStatus);
+
+                // For project scope, badge is clickable to view run history
+                if (!isUserScope) {
                     return (
                         <Tooltip
                             label={
@@ -442,7 +496,13 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
                             }
                         >
                             <Badge
+                                component="button"
+                                type="button"
+                                variant="light"
                                 size="sm"
+                                radius="sm"
+                                tt="capitalize"
+                                fw={400}
                                 color={statusConfig.color}
                                 leftSection={
                                     <MantineIcon
@@ -453,7 +513,7 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
                                 style={{ cursor: 'pointer' }}
                                 onClick={() => {
                                     setSearchParams({
-                                        tab: 'run-history',
+                                        tab: SchedulersViewTab.RUN_HISTORY,
                                         schedulerUuid: item.schedulerUuid,
                                     });
                                 }}
@@ -462,72 +522,137 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
                             </Badge>
                         </Tooltip>
                     );
-                },
-            },
-            {
-                accessorKey: 'destinations',
-                header: 'Destinations',
-                enableSorting: false,
-                size: 140,
-                Header: ({ column }) => (
-                    <Group gap="two" wrap="nowrap">
-                        <MantineIcon icon={IconRadar} color="ldGray.6" />
-                        {column.columnDef.header}
-                    </Group>
-                ),
-                Cell: ({ row }) => {
-                    const item = row.original;
-                    const currentTargets = item.targets.filter(
-                        (target) => target.schedulerUuid === item.schedulerUuid,
-                    );
-                    let emails: string[] = [];
-                    let slackChannels: string[] = [];
-                    let msTeamsTargets: string[] = [];
-                    currentTargets.map((t) => {
-                        if (isSlackTarget(t)) {
-                            return slackChannels.push(
-                                getSlackChannelName(t.channel) || t.channel,
-                            );
-                        } else if (isMsTeamsTarget(t)) {
-                            return msTeamsTargets.push(t.webhook);
-                        } else {
-                            return emails.push(t.recipient);
-                        }
-                    });
+                }
 
-                    return (
-                        <Group gap="xxs">
-                            {emails.length > 0 && (
-                                <Tooltip
-                                    label={emails.map((email, i) => (
-                                        <Text fz="xs" key={i}>
-                                            {email}
-                                        </Text>
-                                    ))}
-                                >
+                // For user scope, badge is not clickable
+                return (
+                    <Tooltip
+                        label={
+                            <Stack gap="xxs">
+                                <Text fz="xs">
+                                    Last run:{' '}
+                                    {new Date(
+                                        latestRun.scheduledTime,
+                                    ).toLocaleString()}
+                                </Text>
+                                {latestRun.logCounts && (
+                                    <Text fz="xs" c="ldGray.5">
+                                        {latestRun.logCounts.completed}{' '}
+                                        completed, {latestRun.logCounts.error}{' '}
+                                        failed
+                                    </Text>
+                                )}
+                            </Stack>
+                        }
+                    >
+                        <Badge
+                            variant="light"
+                            size="sm"
+                            radius="sm"
+                            tt="capitalize"
+                            fw={400}
+                            color={statusConfig.color}
+                            leftSection={
+                                <MantineIcon
+                                    icon={statusConfig.icon}
+                                    size="xs"
+                                />
+                            }
+                        >
+                            {statusConfig.label}
+                        </Badge>
+                    </Tooltip>
+                );
+            },
+        });
+
+        // Destinations column
+        baseColumns.push({
+            accessorKey: 'destinations',
+            header: 'Destinations',
+            enableSorting: false,
+            size: 140,
+            Header: ({ column }) => (
+                <Group gap="two" wrap="nowrap">
+                    <MantineIcon icon={IconRadar} color="ldGray.6" />
+                    {column.columnDef.header}
+                </Group>
+            ),
+            Cell: ({ row }) => {
+                const item = row.original;
+                const currentTargets = item.targets.filter(
+                    (target) => target.schedulerUuid === item.schedulerUuid,
+                );
+                let emails: string[] = [];
+                let slackChannels: string[] = [];
+                let msTeamsTargets: string[] = [];
+                let googleChatTargets: string[] = [];
+                currentTargets.map((t) => {
+                    if (isSlackTarget(t)) {
+                        return slackChannels.push(
+                            getSlackChannelName(t.channel) || t.channel,
+                        );
+                    } else if (isGoogleChatTarget(t)) {
+                        return googleChatTargets.push(t.googleChatWebhook);
+                    } else if (isMsTeamsTarget(t)) {
+                        return msTeamsTargets.push(t.webhook);
+                    } else if (isEmailTarget(t)) {
+                        return emails.push(t.recipient);
+                    }
+                    return undefined;
+                });
+
+                return (
+                    <Group gap="xxs">
+                        {emails.length > 0 && (
+                            <Tooltip
+                                label={emails.map((email, i) => (
+                                    <Text fz="xs" key={i}>
+                                        {email}
+                                    </Text>
+                                ))}
+                            >
+                                <Group gap="two">
+                                    <MantineIcon
+                                        icon={IconMail}
+                                        color="ldGray.6"
+                                    />
+                                    <Text fz="xs" c="ldGray.6">
+                                        {slackChannels.length > 0
+                                            ? 'Email,'
+                                            : 'Email'}
+                                    </Text>
+                                </Group>
+                            </Tooltip>
+                        )}
+                        {slackChannels.length > 0 && (
+                            <Tooltip
+                                label={slackChannels.map((channel, i) => (
+                                    <Text fz="xs" key={i}>
+                                        {channel}
+                                    </Text>
+                                ))}
+                            >
+                                <Group gap="two">
+                                    <SlackSvg
+                                        style={{
+                                            margin: '5px 2px',
+                                            width: '12px',
+                                            height: '12px',
+                                            filter: 'grayscale(100%)',
+                                        }}
+                                    />
+                                    <Text fz="xs" c="ldGray.6">
+                                        Slack
+                                    </Text>
+                                </Group>
+                            </Tooltip>
+                        )}
+                        {item.format === SchedulerFormat.GSHEETS &&
+                            isSchedulerGsheetsOptions(item.options) && (
+                                <Tooltip label={item.options.gdriveName}>
                                     <Group gap="two">
-                                        <MantineIcon
-                                            icon={IconMail}
-                                            color="ldGray.6"
-                                        />
-                                        <Text fz="xs" c="ldGray.6">
-                                            {slackChannels.length > 0
-                                                ? 'Email,'
-                                                : 'Email'}
-                                        </Text>
-                                    </Group>
-                                </Tooltip>
-                            )}
-                            {slackChannels.length > 0 && (
-                                <Tooltip
-                                    label={slackChannels.map((channel, i) => (
-                                        <Text fz="xs" key={i}>
-                                            {channel}
-                                        </Text>
-                                    ))}
-                                >
-                                    <Group gap="two">
-                                        <SlackSvg
+                                        <GSheetsSvg
                                             style={{
                                                 margin: '5px 2px',
                                                 width: '12px',
@@ -535,126 +660,154 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
                                                 filter: 'grayscale(100%)',
                                             }}
                                         />
-                                        <Text fz="xs" c="ldGray.6">
-                                            Slack
-                                        </Text>
+                                        <Anchor
+                                            fz="xs"
+                                            c="ldGray.6"
+                                            href={item.options.url}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            style={{
+                                                textDecoration: 'underline',
+                                            }}
+                                        >
+                                            Google Sheets
+                                        </Anchor>
                                     </Group>
                                 </Tooltip>
                             )}
-                            {item.format === SchedulerFormat.GSHEETS &&
-                                isSchedulerGsheetsOptions(item.options) && (
-                                    <Tooltip label={item.options.gdriveName}>
-                                        <Group gap="two">
-                                            <GSheetsSvg
-                                                style={{
-                                                    margin: '5px 2px',
-                                                    width: '12px',
-                                                    height: '12px',
-                                                    filter: 'grayscale(100%)',
-                                                }}
-                                            />
-                                            <Anchor
-                                                fz="xs"
-                                                c="ldGray.6"
-                                                href={item.options.url}
-                                                target="_blank"
-                                                rel="noreferrer"
-                                                style={{
-                                                    textDecoration: 'underline',
-                                                }}
-                                            >
-                                                Google Sheets
-                                            </Anchor>
-                                        </Group>
-                                    </Tooltip>
-                                )}
-                            {item.format !== SchedulerFormat.GSHEETS &&
-                                slackChannels.length === 0 &&
-                                emails.length === 0 && (
-                                    <Text fz="xs" c="ldGray.6">
-                                        No destinations
+                        {googleChatTargets.length > 0 && (
+                            <Tooltip
+                                label={googleChatTargets.map((webhook, i) => (
+                                    <Text fz="xs" key={i}>
+                                        {webhook}
                                     </Text>
-                                )}
-                        </Group>
-                    );
-                },
-            },
-            {
-                accessorKey: 'frequency',
-                header: 'Frequency',
-                enableSorting: false,
-                size: 150,
-                Header: ({ column }) => (
-                    <Group gap="two">
-                        <MantineIcon icon={IconClock} color="ldGray.6" />
-                        {column.columnDef.header}
+                                ))}
+                            >
+                                <Group gap="two">
+                                    <GoogleChatSvg
+                                        style={{
+                                            margin: '5px 2px',
+                                            width: '12px',
+                                            height: '12px',
+                                            filter: 'grayscale(100%)',
+                                        }}
+                                    />
+                                    <Text fz="xs" c="ldGray.6">
+                                        Google Chat
+                                    </Text>
+                                </Group>
+                            </Tooltip>
+                        )}
+                        {item.format !== SchedulerFormat.GSHEETS &&
+                            slackChannels.length === 0 &&
+                            emails.length === 0 &&
+                            msTeamsTargets.length === 0 &&
+                            googleChatTargets.length === 0 && (
+                                <Text fz="xs" c="ldGray.6">
+                                    No destinations
+                                </Text>
+                            )}
                     </Group>
-                ),
-                Cell: ({ row }) => {
-                    const item = row.original;
-                    return (
-                        <Text fz="xs" c="ldGray.6">
-                            {project &&
-                                getHumanReadableCronExpression(
-                                    item.cron,
-                                    item.timezone || project.schedulerTimezone,
-                                )}
-                        </Text>
-                    );
-                },
+                );
             },
+        });
 
-            {
-                accessorKey: 'createdAt',
-                header: 'Created',
-                enableSorting: true,
-                size: 130,
-                Header: ({ column }) => (
-                    <Group gap="two" wrap="nowrap">
-                        <MantineIcon icon={IconClock} color="ldGray.6" />
-                        {column.columnDef.header}
-                    </Group>
-                ),
-                Cell: ({ row }) => {
-                    const item = row.original;
-                    return (
-                        <Text fz="sm" c="ldGray.7">
-                            {new Date(item.createdAt).toLocaleDateString()}
-                        </Text>
-                    );
-                },
+        // Frequency column
+        baseColumns.push({
+            accessorKey: 'frequency',
+            header: 'Frequency',
+            enableSorting: false,
+            size: 150,
+            Header: ({ column }) => (
+                <Group gap="two">
+                    <MantineIcon icon={IconClock} color="ldGray.6" />
+                    {column.columnDef.header}
+                </Group>
+            ),
+            Cell: ({ row }) => {
+                const item = row.original;
+                return (
+                    <Text fz="xs" c="ldGray.6">
+                        {getHumanReadableCronExpression(
+                            item.cron,
+                            item.timezone ||
+                                item.projectSchedulerTimezone ||
+                                project?.schedulerTimezone ||
+                                'UTC',
+                        )}
+                    </Text>
+                );
             },
-            {
-                id: 'actions',
-                header: '',
-                enableSorting: false,
-                size: 50,
-                Cell: ({ row }) => {
-                    const item = row.original;
-                    return (
-                        <Box
-                            component="div"
-                            onClick={(e: React.MouseEvent<HTMLDivElement>) => {
-                                e.stopPropagation();
-                                e.preventDefault();
-                            }}
-                        >
-                            <SchedulersViewActionMenu
-                                item={item}
-                                projectUuid={projectUuid}
-                            />
-                        </Box>
-                    );
-                },
+        });
+
+        // Created column
+        baseColumns.push({
+            accessorKey: 'createdAt',
+            header: 'Created',
+            enableSorting: true,
+            size: 130,
+            Header: ({ column }) => (
+                <Group gap="two" wrap="nowrap">
+                    <MantineIcon icon={IconClock} color="ldGray.6" />
+                    {column.columnDef.header}
+                </Group>
+            ),
+            Cell: ({ row }) => {
+                const item = row.original;
+                return (
+                    <Text fz="xs" c="ldGray.6">
+                        {new Date(item.createdAt).toLocaleDateString()}
+                    </Text>
+                );
             },
-        ],
-        [project, projectUuid, getSlackChannelName, setSearchParams],
-    );
+        });
+
+        // Actions column
+        baseColumns.push({
+            id: 'actions',
+            header: '',
+            enableSorting: false,
+            enableResizing: false,
+            size: 50,
+            Cell: ({ row }) => {
+                const item = row.original;
+                // For user scope, use projectUuid from the item itself
+                const itemProjectUuid = isUserScope
+                    ? item.projectUuid
+                    : projectUuid;
+
+                return (
+                    <Box
+                        component="div"
+                        onClick={(e: React.MouseEvent<HTMLDivElement>) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                        }}
+                    >
+                        <SchedulersViewActionMenu
+                            item={item}
+                            projectUuid={itemProjectUuid}
+                            onReassignOwner={handleReassignOwner}
+                        />
+                    </Box>
+                );
+            },
+        });
+
+        return baseColumns;
+    }, [
+        isUserScope,
+        project,
+        projectUuid,
+        getSlackChannelName,
+        setSearchParams,
+        handleReassignOwner,
+    ]);
 
     const table = useMantineReactTable({
         columns,
         data: tableData,
-        enableColumnResizing: false,
+        enableColumnResizing: true,
         enableRowNumbers: false,
         enablePagination: false,
         enableFilters: false,
@@ -670,6 +823,23 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
         onSortingChange: handleSortingChange,
         enableTopToolbar: true,
         enableBottomToolbar: false,
+        // Row selection only for project scope (bulk reassign)
+        enableRowSelection: !isUserScope,
+        ...(isUserScope
+            ? {}
+            : {
+                  mantineSelectCheckboxProps: { size: 'xs' },
+                  mantineSelectAllCheckboxProps: { size: 'xs' },
+                  displayColumnDefOptions: {
+                      'mrt-row-select': {
+                          size: 20,
+                          minSize: 20,
+                          maxSize: 20,
+                          enableResizing: false,
+                      },
+                  },
+              }),
+        getRowId: (row) => row.schedulerUuid,
         mantinePaperProps: {
             shadow: undefined,
             style: {
@@ -683,6 +853,13 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
         mantineTableHeadRowProps: {
             sx: {
                 boxShadow: 'none',
+                'th > div > div:last-child': {
+                    top: -10,
+                    right: -5,
+                },
+                'th > div > div:last-child > .mantine-Divider-root': {
+                    border: 'none',
+                },
             },
         },
         mantineTableContainerProps: {
@@ -700,13 +877,20 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
                 props.table.getAllColumns().indexOf(props.column) ===
                 props.table.getAllColumns().length - 1;
 
+            const isAnyColumnResizing = props.table
+                .getAllColumns()
+                .some((c) => c.getIsResizing());
+            const canResize = props.column.getCanResize();
+
             return {
                 bg: 'ldGray.0',
                 h: '3xl',
                 pos: 'relative',
                 style: {
                     userSelect: 'none',
+                    justifyContent: 'center',
                     padding: `${theme.spacing.xs} ${theme.spacing.xl}`,
+                    borderTop: `1px solid ${theme.colors.ldGray[2]}`,
                     borderBottom: `1px solid ${theme.colors.ldGray[2]}`,
                     borderRight: props.column.getIsResizing()
                         ? `2px solid ${theme.colors.blue[3]}`
@@ -715,8 +899,17 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
                                   ? 'transparent'
                                   : theme.colors.ldGray[2]
                           }`,
-                    borderTop: 'none',
                     borderLeft: 'none',
+                },
+                sx: {
+                    '&:hover': canResize
+                        ? {
+                              borderRight: !isAnyColumnResizing
+                                  ? `2px solid ${theme.colors.blue[3]} !important`
+                                  : undefined,
+                              transition: `border-right ${theme.other.transitionDuration}ms ${theme.other.transitionTimingFunction}`,
+                          }
+                        : {},
                 },
             };
         },
@@ -732,26 +925,46 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
                 },
             };
         },
-        renderTopToolbar: () => (
-            <SchedulerTopToolbar
-                search={search}
-                setSearch={setSearch}
-                selectedFormats={selectedFormats}
-                setSelectedFormats={setSelectedFormats}
-                selectedResourceType={selectedResourceType}
-                setSelectedResourceType={setSelectedResourceType}
-                selectedCreatedByUserUuids={selectedCreatedByUserUuids}
-                setSelectedCreatedByUserUuids={setSelectedCreatedByUserUuids}
-                selectedDestinations={selectedDestinations}
-                setSelectedDestinations={setSelectedDestinations}
-                isFetching={isFetching || isLoading}
-                currentResultsCount={totalFetched}
-                hasActiveFilters={hasActiveFilters}
-                onClearFilters={resetFilters}
-                availableUsers={availableUsers}
-                availableDestinations={availableDestinations}
-            />
-        ),
+        renderTopToolbar: ({ table: tableInstance }) => {
+            const selectedRows = tableInstance
+                .getFilteredSelectedRowModel()
+                .flatRows.map((row) => row.original);
+
+            const handleBulkReassign = () => {
+                setSchedulerUuidsToReassign(
+                    selectedRows.map((row) => row.schedulerUuid),
+                );
+                setExcludedUserUuid(undefined);
+                setIsBulkReassign(true);
+                setReassignModalOpen(true);
+            };
+
+            return (
+                <SchedulerTopToolbar
+                    projectUuid={projectUuid ?? ''}
+                    search={search}
+                    setSearch={setSearch}
+                    selectedFormats={selectedFormats}
+                    setSelectedFormats={setSelectedFormats}
+                    selectedResourceType={selectedResourceType}
+                    setSelectedResourceType={setSelectedResourceType}
+                    selectedCreatedByUserUuids={selectedCreatedByUserUuids}
+                    setSelectedCreatedByUserUuids={
+                        setSelectedCreatedByUserUuids
+                    }
+                    selectedDestinations={selectedDestinations}
+                    setSelectedDestinations={setSelectedDestinations}
+                    isFetching={isFetching || isLoading}
+                    currentResultsCount={totalFetched}
+                    hasActiveFilters={hasActiveFilters}
+                    onClearFilters={resetFilters}
+                    selectedCount={selectedRows.length}
+                    onBulkReassign={handleBulkReassign}
+                    hideCreatedByFilter={isUserScope}
+                    hideBulkReassign={isUserScope}
+                />
+            );
+        },
         icons: {
             IconArrowsSort: () => (
                 <MantineIcon icon={IconArrowsSort} size="md" color="ldGray.5" />
@@ -774,7 +987,47 @@ const SchedulersTable: FC<SchedulersTableProps> = ({
         },
     });
 
-    return <MantineReactTable table={table} />;
+    const handleReassignSuccess = useCallback(() => {
+        if (isBulkReassign) {
+            table.resetRowSelection();
+        }
+    }, [isBulkReassign, table]);
+
+    // Check if any schedulers being reassigned are GSHEETS format
+    const hasGsheetsSchedulers = useMemo(() => {
+        return schedulerUuidsToReassign.some((uuid) => {
+            const scheduler = flatData.find((s) => s.schedulerUuid === uuid);
+            return scheduler?.format === SchedulerFormat.GSHEETS;
+        });
+    }, [schedulerUuidsToReassign, flatData]);
+
+    const reassignProjectUuid = useMemo(() => {
+        if (projectUuid) return projectUuid;
+        if (schedulerUuidsToReassign.length > 0) {
+            const scheduler = flatData.find(
+                (s) => s.schedulerUuid === schedulerUuidsToReassign[0],
+            );
+            return scheduler?.projectUuid;
+        }
+        return undefined;
+    }, [projectUuid, schedulerUuidsToReassign, flatData]);
+
+    return (
+        <>
+            <MantineReactTable table={table} />
+            {reassignProjectUuid && (
+                <ReassignSchedulerOwnerModal
+                    opened={reassignModalOpen}
+                    onClose={handleReassignModalClose}
+                    projectUuid={reassignProjectUuid}
+                    schedulerUuids={schedulerUuidsToReassign}
+                    excludedUserUuid={excludedUserUuid}
+                    onSuccess={handleReassignSuccess}
+                    hasGsheetsSchedulers={hasGsheetsSchedulers}
+                />
+            )}
+        </>
+    );
 };
 
 export default SchedulersTable;

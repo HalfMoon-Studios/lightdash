@@ -14,22 +14,27 @@ import {
     ApiProjectAccessListResponse,
     ApiProjectResponse,
     ApiSpaceSummaryListResponse,
+    ApiSqlChartAsCodeListResponse,
+    ApiSqlChartAsCodeUpsertResponse,
     ApiSqlQueryResults,
     ApiSuccessEmpty,
+    AuthorizationError,
     CalculateTotalFromQuery,
     ChartAsCode,
     CreateProjectMember,
     DashboardAsCode,
     DbtExposure,
     DbtProjectEnvironmentVariable,
+    getRequestMethod,
+    isDuplicateDashboardParams,
     LightdashRequestMethodHeader,
     ParameterError,
     RequestMethod,
+    SqlChartAsCode,
+    UpdateDefaultUserSpaces,
     UpdateMetadata,
     UpdateProjectMember,
     UserWarehouseCredentials,
-    getRequestMethod,
-    isDuplicateDashboardParams,
     type ApiCalculateSubtotalsResponse,
     type ApiCreateDashboardResponse,
     type ApiCreateDashboardWithChartsResponse,
@@ -45,6 +50,7 @@ import {
     type DuplicateDashboardParams,
     type Tag,
     type UpdateMultipleDashboards,
+    type UpdateQueryTimezoneSettings,
     type UpdateSchedulerSettings,
 } from '@lightdash/common';
 import {
@@ -81,6 +87,7 @@ import { BaseController } from './baseController';
 export class ProjectController extends BaseController {
     /**
      * Get a project of an organiztion
+     * @summary Get project
      */
     @Middlewares([allowApiKeyAuthentication, isAuthenticated])
     @SuccessResponse('200', 'Success')
@@ -101,6 +108,7 @@ export class ProjectController extends BaseController {
 
     /**
      * List all charts in a project
+     * @summary List charts in project
      * @param projectUuid The uuid of the project to get charts for
      * @param req express request
      */
@@ -123,6 +131,7 @@ export class ProjectController extends BaseController {
 
     /**
      * List all charts summaries in a project
+     * @summary List chart summaries in project
      * @param projectUuid The uuid of the project to get charts for
      * @param req express request
      * @param excludeChartsSavedInDashboard Whether to exclude charts that are saved in dashboards
@@ -152,6 +161,7 @@ export class ProjectController extends BaseController {
 
     /**
      * List all spaces in a project
+     * @summary List spaces in project
      * @param projectUuid The uuid of the project to get spaces for
      * @param req express request
      */
@@ -163,18 +173,22 @@ export class ProjectController extends BaseController {
         @Path() projectUuid: string,
         @Request() req: express.Request,
     ): Promise<ApiSpaceSummaryListResponse> {
+        if (!req.user) {
+            throw new AuthorizationError('User session not found');
+        }
         this.setStatus(200);
         return {
             status: 'ok',
             results: await this.services
                 .getProjectService()
-                .getSpaces(req.user!, projectUuid),
+                .getSpaces(req.user, projectUuid),
         };
     }
 
     /**
      * Get access list for a project. This is a list of users that have been explictly granted access to the project.
      * There may be other users that have access to the project via their organization membership.
+     * @summary List project access
      */
     @Middlewares([allowApiKeyAuthentication, isAuthenticated])
     @SuccessResponse('200', 'Success')
@@ -198,6 +212,7 @@ export class ProjectController extends BaseController {
     /**
      * Get a project explicit member's access.
      * There may be users that have access to the project via their organization membership.
+     * @summary Get project member access
      *
      * NOTE:
      * We don't use the API on the frontend. Instead, we can call the API
@@ -225,6 +240,7 @@ export class ProjectController extends BaseController {
 
     /**
      * Grant a user access to a project
+     * @summary Grant project access to user
      */
     @Middlewares([
         allowApiKeyAuthentication,
@@ -252,6 +268,7 @@ export class ProjectController extends BaseController {
 
     /**
      * Update a user's access to a project
+     * @summary Update project access for user
      * @deprecated use ProjectRolesController.UpdateProjectUserRoleAssignment instead
      */
     @Middlewares([
@@ -281,6 +298,7 @@ export class ProjectController extends BaseController {
 
     /**
      * Remove a user's access to a project
+     * @summary Revoke project access for user
      * @deprecated use ProjectRolesController.DeleteProjectUserRoleAssignment instead
      */
     @Middlewares([
@@ -309,6 +327,7 @@ export class ProjectController extends BaseController {
 
     /**
      * List group access for projects
+     * @summary List project group accesses
      */
     @Middlewares([allowApiKeyAuthentication, isAuthenticated])
     @SuccessResponse('200', 'Success')
@@ -330,6 +349,7 @@ export class ProjectController extends BaseController {
 
     /**
      * Run a raw sql query against the project's warehouse connection
+     * @summary Run SQL query
      * @deprecated Use /api/v1/projects/<project id>/sqlRunner/run instead
      * @param projectUuid The uuid of the project to run the query against
      * @param body The query to run
@@ -361,6 +381,7 @@ export class ProjectController extends BaseController {
 
     /**
      * Calculate all metric totals from a metricQuery
+     * @summary Calculate total from query
      * @param projectUuid The uuid of the project to get charts for
      * @param body The metric query to calculate totals for
      * @param req express request
@@ -384,6 +405,10 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Calculate subtotals from a metricQuery
+     * @summary Calculate subtotals from query
+     */
     @Middlewares([allowApiKeyAuthentication, isAuthenticated])
     @SuccessResponse('200', 'Success')
     @Post('{projectUuid}/calculate-subtotals')
@@ -403,6 +428,10 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Get dbt exposures for a project
+     * @summary Get dbt exposures
+     */
     @Middlewares([allowApiKeyAuthentication, isAuthenticated])
     @SuccessResponse('200', 'Success')
     @Get('{projectUuid}/dbt-exposures')
@@ -422,6 +451,10 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Get the user's warehouse credentials preference for a project
+     * @summary Get user warehouse credentials preference
+     */
     @Middlewares([allowApiKeyAuthentication, isAuthenticated])
     @SuccessResponse('200', 'Success')
     @Get('{projectUuid}/user-credentials')
@@ -442,6 +475,34 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Get user warehouse credentials available for a project
+     * @summary List project user warehouse credentials
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @SuccessResponse('200', 'Success')
+    @Get('{projectUuid}/user-warehouse-credentials')
+    @OperationId('getProjectUserWarehouseCredentials')
+    async getProjectUserWarehouseCredentials(
+        @Path() projectUuid: string,
+        @Request() req: express.Request,
+    ): Promise<{
+        status: 'ok';
+        results: UserWarehouseCredentials[];
+    }> {
+        this.setStatus(200);
+        return {
+            status: 'ok',
+            results: await this.services
+                .getProjectService()
+                .getProjectUserWarehouseCredentials(req.user!, projectUuid),
+        };
+    }
+
+    /**
+     * Update the user's warehouse credentials preference for a project
+     * @summary Update user warehouse credentials preference
+     */
     @Middlewares([allowApiKeyAuthentication, isAuthenticated])
     @SuccessResponse('200', 'Success')
     @Patch('{projectUuid}/user-credentials/{userWarehouseCredentialsUuid}')
@@ -465,6 +526,10 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Get all custom metrics in a project
+     * @summary List custom metrics
+     */
     @Middlewares([allowApiKeyAuthentication, isAuthenticated])
     @SuccessResponse('200', 'Success')
     @Get('{projectUuid}/custom-metrics')
@@ -495,6 +560,7 @@ export class ProjectController extends BaseController {
     /**
      * Update project metadata like upstreamProjectUuid
      * we don't trigger a compile, so not for updating warehouse or credentials
+     * @summary Update project metadata
      */
     @Middlewares([
         allowApiKeyAuthentication,
@@ -519,6 +585,38 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Toggle default user spaces for a project.
+     * When enabled, creates personal spaces for all eligible users.
+     * @summary Update default user spaces setting
+     */
+    @Middlewares([
+        allowApiKeyAuthentication,
+        isAuthenticated,
+        unauthorisedInDemo,
+    ])
+    @SuccessResponse('200', 'Success')
+    @Patch('{projectUuid}/hasDefaultUserSpaces')
+    @OperationId('updateDefaultUserSpaces')
+    async updateDefaultUserSpaces(
+        @Path() projectUuid: string,
+        @Body() body: UpdateDefaultUserSpaces,
+        @Request() req: express.Request,
+    ): Promise<ApiSuccessEmpty> {
+        this.setStatus(200);
+        await this.services
+            .getProjectService()
+            .updateDefaultUserSpaces(req.user!, projectUuid, body);
+        return {
+            status: 'ok',
+            results: undefined,
+        };
+    }
+
+    /**
+     * Get all dashboards in a project
+     * @summary List dashboards
+     */
     @Middlewares([allowApiKeyAuthentication, isAuthenticated])
     @SuccessResponse('200', 'Success')
     @Get('{projectUuid}/dashboards')
@@ -546,6 +644,10 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Create a new dashboard in a project
+     * @summary Create dashboard
+     */
     @Middlewares([
         allowApiKeyAuthentication,
         isAuthenticated,
@@ -598,6 +700,10 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Create a new dashboard with embedded charts
+     * @summary Create dashboard with charts
+     */
     @Middlewares([
         allowApiKeyAuthentication,
         isAuthenticated,
@@ -626,6 +732,10 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Update multiple dashboards
+     * @summary Update dashboards
+     */
     @Middlewares([
         allowApiKeyAuthentication,
         isAuthenticated,
@@ -651,6 +761,10 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Create a preview project
+     * @summary Create project preview
+     */
     @Middlewares([
         allowApiKeyAuthentication,
         isAuthenticated,
@@ -686,6 +800,10 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Update scheduler settings for a project
+     * @summary Update scheduler settings
+     */
     @Middlewares([
         allowApiKeyAuthentication,
         isAuthenticated,
@@ -740,6 +858,39 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Update query timezone settings for a project
+     * @summary Update query timezone settings
+     */
+    @Middlewares([
+        allowApiKeyAuthentication,
+        isAuthenticated,
+        unauthorisedInDemo,
+    ])
+    @SuccessResponse('200', 'Updated')
+    @Patch('{projectUuid}/queryTimezoneSettings')
+    @OperationId('updateQueryTimezoneSettings')
+    async updateQueryTimezoneSettings(
+        @Path() projectUuid: string,
+        @Body() body: UpdateQueryTimezoneSettings,
+        @Request() req: express.Request,
+    ): Promise<ApiSuccessEmpty> {
+        this.setStatus(200);
+
+        await this.services
+            .getProjectService()
+            .updateQueryTimezone(req.user!, projectUuid, body.queryTimezone);
+
+        return {
+            status: 'ok',
+            results: undefined,
+        };
+    }
+
+    /**
+     * Create a new tag in a project
+     * @summary Create tag
+     */
     @Middlewares([
         allowApiKeyAuthentication,
         isAuthenticated,
@@ -768,6 +919,10 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Delete a tag from a project
+     * @summary Delete tag
+     */
     @Middlewares([
         allowApiKeyAuthentication,
         isAuthenticated,
@@ -790,6 +945,10 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Update a tag in a project
+     * @summary Update tag
+     */
     @Middlewares([
         allowApiKeyAuthentication,
         isAuthenticated,
@@ -815,6 +974,10 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Replace all YAML-defined tags in a project
+     * @summary Replace YAML tags
+     */
     @Middlewares([allowApiKeyAuthentication, isAuthenticated])
     @SuccessResponse('200', 'Success')
     @Put('{projectUuid}/tags/yaml')
@@ -837,6 +1000,10 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Get all tags in a project
+     * @summary List tags
+     */
     @Middlewares([
         allowApiKeyAuthentication,
         isAuthenticated,
@@ -861,7 +1028,10 @@ export class ProjectController extends BaseController {
         };
     }
 
-    /** Charts as code */
+    /**
+     * Get charts in code representation
+     * @summary List charts as code
+     */
     @Middlewares([allowApiKeyAuthentication, isAuthenticated])
     @SuccessResponse('200', 'Success')
     @Get('{projectUuid}/charts/code')
@@ -882,6 +1052,10 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Get dashboards in code representation
+     * @summary List dashboards as code
+     */
     @Middlewares([allowApiKeyAuthentication, isAuthenticated])
     @SuccessResponse('200', 'Success')
     @Get('{projectUuid}/dashboards/code')
@@ -908,6 +1082,10 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Upsert a chart from code representation
+     * @summary Upsert chart as code
+     */
     @Middlewares([allowApiKeyAuthentication, isAuthenticated])
     @SuccessResponse('200', 'Success')
     @Post('{projectUuid}/charts/{slug}/code')
@@ -916,14 +1094,11 @@ export class ProjectController extends BaseController {
         @Path() projectUuid: string,
         @Path() slug: string,
         @Body()
-        chart: Omit<
-            ChartAsCode,
-            'metricQuery' | 'chartConfig' | 'description'
-        > & {
+        chart: Omit<ChartAsCode, 'chartConfig' | 'description'> & {
             skipSpaceCreate?: boolean;
             publicSpaceCreate?: boolean;
+            force?: boolean;
             chartConfig: AnyType;
-            metricQuery: AnyType;
             description?: string | null; // Allow both undefined and null
         },
         @Request() req: express.Request,
@@ -941,10 +1116,77 @@ export class ProjectController extends BaseController {
                 },
                 chart.skipSpaceCreate,
                 chart.publicSpaceCreate,
+                chart.force,
             ),
         };
     }
 
+    /**
+     * Gets SQL charts in code representation
+     * @summary Get SQL charts as code
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @SuccessResponse('200', 'Success')
+    @Get('{projectUuid}/sqlCharts/code')
+    @OperationId('getSqlChartsAsCode')
+    async getSqlChartsAsCode(
+        @Path() projectUuid: string,
+        @Request() req: express.Request,
+        @Query() ids?: string[],
+        @Query() offset?: number,
+    ): Promise<ApiSqlChartAsCodeListResponse> {
+        this.setStatus(200);
+        return {
+            status: 'ok',
+            results: await this.services
+                .getCoderService()
+                .getSqlCharts(req.user!, projectUuid, ids, offset),
+        };
+    }
+
+    /**
+     * Upserts an SQL chart from code representation
+     * @summary Upsert SQL chart as code
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @SuccessResponse('200', 'Success')
+    @Post('{projectUuid}/sqlCharts/{slug}/code')
+    @OperationId('upsertSqlChartAsCode')
+    async upsertSqlChartAsCode(
+        @Path() projectUuid: string,
+        @Path() slug: string,
+        @Body()
+        sqlChart: Omit<SqlChartAsCode, 'config' | 'description'> & {
+            skipSpaceCreate?: boolean;
+            publicSpaceCreate?: boolean;
+            force?: boolean;
+            config: AnyType;
+            description?: string | null;
+        },
+        @Request() req: express.Request,
+    ): Promise<ApiSqlChartAsCodeUpsertResponse> {
+        this.setStatus(200);
+        return {
+            status: 'ok',
+            results: await this.services.getCoderService().upsertSqlChart(
+                req.user!,
+                projectUuid,
+                slug,
+                {
+                    ...sqlChart,
+                    description: sqlChart.description ?? null,
+                },
+                sqlChart.skipSpaceCreate,
+                sqlChart.publicSpaceCreate,
+                sqlChart.force,
+            ),
+        };
+    }
+
+    /**
+     * Upsert a dashboard from code representation
+     * @summary Upsert dashboard as code
+     */
     @Middlewares([allowApiKeyAuthentication, isAuthenticated])
     @SuccessResponse('200', 'Success')
     @Post('{projectUuid}/dashboards/{slug}/code')
@@ -953,13 +1195,10 @@ export class ProjectController extends BaseController {
         @Path() projectUuid: string,
         @Path() slug: string,
         @Body()
-        dashboard: Omit<
-            DashboardAsCode,
-            'filters' | 'tiles' | 'description'
-        > & {
+        dashboard: Omit<DashboardAsCode, 'tiles' | 'description'> & {
             skipSpaceCreate?: boolean;
             publicSpaceCreate?: boolean;
-            filters: AnyType;
+            force?: boolean;
             tiles: AnyType;
             description?: string | null; // Allow both undefined and null
         }, // Simplify filter type for tsoa
@@ -978,10 +1217,15 @@ export class ProjectController extends BaseController {
                 },
                 dashboard.skipSpaceCreate,
                 dashboard.publicSpaceCreate,
+                dashboard.force,
             ),
         };
     }
 
+    /**
+     * Handle dbt Cloud webhook for job completion
+     * @summary Handle dbt Cloud webhook
+     */
     @Post('{projectUuid}/dbt-cloud/webhook')
     @OperationId('webhook')
     async testWebhook(
@@ -1008,6 +1252,10 @@ export class ProjectController extends BaseController {
         };
     }
 
+    /**
+     * Refresh a project by recompiling dbt
+     * @summary Refresh project
+     */
     @Middlewares([
         allowApiKeyAuthentication,
         isAuthenticated,
@@ -1030,6 +1278,63 @@ export class ProjectController extends BaseController {
         return {
             status: 'ok',
             results,
+        };
+    }
+
+    /**
+     * Refresh all pre-aggregates in a project
+     * @summary Refresh project pre-aggregates
+     */
+    @Middlewares([
+        allowApiKeyAuthentication,
+        isAuthenticated,
+        unauthorisedInDemo,
+    ])
+    @SuccessResponse('200', 'Success')
+    @Post('{projectUuid}/pre-aggregates/refresh')
+    @OperationId('refreshProjectPreAggregates')
+    async refreshPreAggregates(
+        @Path() projectUuid: string,
+        @Request() req: express.Request,
+    ): Promise<ApiSuccess<{ jobIds: string[] }>> {
+        this.setStatus(200);
+        return {
+            status: 'ok',
+            results: await this.services
+                .getProjectService()
+                .refreshPreAggregates(req.user!, projectUuid),
+        };
+    }
+
+    /**
+     * Refresh a single pre-aggregate by its definition name
+     * @summary Refresh pre-aggregate by definition name
+     */
+    @Middlewares([
+        allowApiKeyAuthentication,
+        isAuthenticated,
+        unauthorisedInDemo,
+    ])
+    @SuccessResponse('200', 'Success')
+    @Post(
+        '{projectUuid}/pre-aggregates/definitions/{preAggregateDefinitionName}/refresh',
+    )
+    @OperationId('refreshProjectPreAggregateByDefinitionName')
+    async refreshPreAggregateByDefinitionName(
+        @Path() projectUuid: string,
+        @Path() preAggregateDefinitionName: string,
+        @Request() req: express.Request,
+    ): Promise<ApiSuccess<{ jobIds: string[] }>> {
+        this.setStatus(200);
+        return {
+            status: 'ok',
+            results: await this.services
+                .getProjectService()
+                .refreshPreAggregateByDefinitionName(
+                    req.user!,
+                    projectUuid,
+                    preAggregateDefinitionName,
+                ),
         };
     }
 }

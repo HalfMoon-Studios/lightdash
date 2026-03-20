@@ -72,7 +72,7 @@ export const getIntegerFromEnvironmentVariable = (
     name: string,
 ): number | undefined => {
     const raw = process.env[name];
-    if (raw === undefined) {
+    if (!raw) {
         return undefined;
     }
     const parsed = Number.parseInt(raw, 10);
@@ -88,7 +88,7 @@ export const getFloatFromEnvironmentVariable = (
     name: string,
 ): number | undefined => {
     const raw = process.env[name];
-    if (raw === undefined) {
+    if (!raw) {
         return undefined;
     }
     const parsed = Number.parseFloat(raw);
@@ -442,6 +442,8 @@ export const getUpdateSetupConfig = (): LightdashConfig['updateSetup'] => {
     }
 
     return {
+        organizationUuid: process.env.LD_SETUP_ORGANIZATION_UUID,
+        projectUuid: process.env.LD_SETUP_PROJECT_UUID,
         organization: {
             admin: {
                 email: process.env.LD_SETUP_ADMIN_EMAIL,
@@ -568,6 +570,53 @@ export const parseResultsS3Config = (): LightdashConfig['results']['s3'] => {
     };
 };
 
+export const parsePreAggregateResultsS3Config = ():
+    | Omit<S3Config, 'expirationTime'>
+    | undefined => {
+    const baseS3Config = parseBaseS3Config();
+
+    if (!baseS3Config) {
+        return undefined;
+    }
+
+    const bucket = process.env.PRE_AGGREGATE_RESULTS_S3_BUCKET;
+    const region = process.env.PRE_AGGREGATE_RESULTS_S3_REGION;
+    const accessKey = process.env.PRE_AGGREGATE_RESULTS_S3_ACCESS_KEY;
+    const secretKey = process.env.PRE_AGGREGATE_RESULTS_S3_SECRET_KEY;
+
+    const hasAnyPreAggregateS3Config =
+        bucket || region || accessKey || secretKey;
+
+    if (!hasAnyPreAggregateS3Config) {
+        return undefined;
+    }
+
+    const {
+        endpoint,
+        forcePathStyle,
+        useCredentialsFrom,
+        accessKey: baseAccessKey,
+        secretKey: baseSecretKey,
+    } = baseS3Config;
+
+    if (!endpoint || !bucket || !region) {
+        throw new ParseError(
+            'PRE_AGGREGATE_RESULTS_S3_BUCKET, PRE_AGGREGATE_RESULTS_S3_REGION, and S3_ENDPOINT must be set when configuring pre-aggregate result storage.',
+            {},
+        );
+    }
+
+    return {
+        endpoint,
+        forcePathStyle,
+        bucket,
+        region,
+        accessKey: accessKey || baseAccessKey,
+        secretKey: secretKey || baseSecretKey,
+        useCredentialsFrom,
+    };
+};
+
 const validateTaskList = (tasks: string[], envVarName: string) => {
     const validTasks: SchedulerTaskName[] = [];
     const invalidTasks: string[] = [];
@@ -637,6 +686,37 @@ const parseAndSanitizeSchedulerTasks = (): Array<SchedulerTaskName> => {
     return ALL_TASK_NAMES;
 };
 
+const getBedrockConfig = () => {
+    if (process.env.BEDROCK_API_KEY) {
+        return {
+            apiKey: process.env.BEDROCK_API_KEY,
+            region: process.env.BEDROCK_REGION,
+            modelName:
+                process.env.BEDROCK_MODEL_NAME || DEFAULT_BEDROCK_MODEL_NAME,
+            embeddingModelName: process.env.BEDROCK_EMBEDDING_MODEL,
+            availableModels: getArrayFromCommaSeparatedList(
+                'BEDROCK_AVAILABLE_MODELS',
+            ),
+        } as const;
+    }
+    if (process.env.BEDROCK_ACCESS_KEY_ID) {
+        return {
+            accessKeyId: process.env.BEDROCK_ACCESS_KEY_ID,
+            secretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY,
+            sessionToken: process.env.BEDROCK_SESSION_TOKEN,
+            region: process.env.BEDROCK_REGION,
+            modelName:
+                process.env.BEDROCK_MODEL_NAME || DEFAULT_BEDROCK_MODEL_NAME,
+            embeddingModelName: process.env.BEDROCK_EMBEDDING_MODEL,
+            availableModels: getArrayFromCommaSeparatedList(
+                'BEDROCK_AVAILABLE_MODELS',
+            ),
+        } as const;
+    }
+
+    return undefined;
+};
+
 export const getAiConfig = () => ({
     enabled: process.env.AI_COPILOT_ENABLED === 'true',
     debugLoggingEnabled:
@@ -648,7 +728,9 @@ export const getAiConfig = () => ({
     embeddingEnabled: process.env.AI_EMBEDDING_ENABLED === 'true',
     defaultProvider:
         process.env.AI_DEFAULT_PROVIDER || DEFAULT_DEFAULT_AI_PROVIDER,
-    defaultEmbeddingModelProvider: process.env.AI_DEFAULT_EMBEDDING_PROVIDER,
+    defaultEmbeddingModelProvider:
+        process.env.AI_DEFAULT_EMBEDDING_PROVIDER ||
+        DEFAULT_DEFAULT_AI_PROVIDER,
     providers: {
         azure: process.env.AZURE_AI_API_KEY
             ? {
@@ -656,9 +738,13 @@ export const getAiConfig = () => ({
                   apiKey: process.env.AZURE_AI_API_KEY,
                   apiVersion: process.env.AZURE_AI_API_VERSION,
                   deploymentName: process.env.AZURE_AI_DEPLOYMENT_NAME,
-                  temperature: getFloatFromEnvironmentVariable(
-                      'AZURE_AI_TEMPERATURE',
-                  ),
+                  deploymentSupportsReasoning:
+                      process.env.AZURE_AI_DEPLOYMENT_SUPPORTS_REASONING ===
+                      'true',
+                  embeddingDeploymentName:
+                      process.env.AZURE_EMBEDDING_DEPLOYMENT_NAME,
+                  useDeploymentBasedUrls:
+                      process.env.AZURE_USE_DEPLOYMENT_BASED_URLS !== 'false',
               }
             : undefined,
         openai: process.env.OPENAI_API_KEY
@@ -671,27 +757,26 @@ export const getAiConfig = () => ({
                       process.env.OPENAI_EMBEDDING_MODEL ||
                       DEFAULT_OPENAI_EMBEDDING_MODEL,
                   baseUrl: process.env.OPENAI_BASE_URL,
-                  temperature:
-                      getFloatFromEnvironmentVariable('OPENAI_TEMPERATURE'),
-                  responsesApi: process.env.OPENAI_RESPONSES_API === 'true',
-                  reasoning: {
-                      enabled: process.env.OPENAI_REASONING_ENABLED === 'true',
-                      reasoningSummary: process.env.OPENAI_REASONING_SUMMARY,
-                      reasoningEffort: process.env.OPENAI_REASONING_EFFORT,
-                  },
-              }
-            : undefined,
-        anthropic: process.env.ANTHROPIC_API_KEY
-            ? {
-                  apiKey: process.env.ANTHROPIC_API_KEY,
-                  modelName:
-                      process.env.ANTHROPIC_MODEL_NAME ||
-                      DEFAULT_ANTHROPIC_MODEL_NAME,
-                  temperature: getFloatFromEnvironmentVariable(
-                      'ANTHROPIC_TEMPERATURE',
+                  availableModels: getArrayFromCommaSeparatedList(
+                      'OPENAI_AVAILABLE_MODELS',
                   ),
+                  zeroDataRetention:
+                      process.env.OPENAI_ZERO_DATA_RETENTION === 'true',
               }
             : undefined,
+        anthropic:
+            process.env.ANTHROPIC_API_KEY &&
+            process.env.ANTHROPIC_API_KEY !== 'undefined'
+                ? {
+                      apiKey: process.env.ANTHROPIC_API_KEY,
+                      modelName:
+                          process.env.ANTHROPIC_MODEL_NAME ||
+                          DEFAULT_ANTHROPIC_MODEL_NAME,
+                      availableModels: getArrayFromCommaSeparatedList(
+                          'ANTHROPIC_AVAILABLE_MODELS',
+                      ),
+                  }
+                : undefined,
         openrouter: process.env.OPENROUTER_API_KEY
             ? {
                   apiKey: process.env.OPENROUTER_API_KEY,
@@ -702,28 +787,9 @@ export const getAiConfig = () => ({
                   allowedProviders: getArrayFromCommaSeparatedList(
                       'OPENROUTER_ALLOWED_PROVIDERS',
                   ),
-                  temperature: getFloatFromEnvironmentVariable(
-                      'OPENROUTER_TEMPERATURE',
-                  ),
               }
             : undefined,
-        bedrock:
-            process.env.BEDROCK_API_KEY || process.env.BEDROCK_ACCESS_KEY_ID
-                ? {
-                      apiKey: process.env.BEDROCK_API_KEY,
-                      region: process.env.BEDROCK_REGION,
-                      accessKeyId: process.env.BEDROCK_ACCESS_KEY_ID,
-                      secretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY,
-                      sessionToken: process.env.BEDROCK_SESSION_TOKEN,
-                      modelName:
-                          process.env.BEDROCK_MODEL_NAME ||
-                          DEFAULT_BEDROCK_MODEL_NAME,
-                      embeddingModelName: process.env.BEDROCK_EMBEDDING_MODEL,
-                      temperature: getFloatFromEnvironmentVariable(
-                          'BEDROCK_TEMPERATURE',
-                      ),
-                  }
-                : undefined,
+        bedrock: getBedrockConfig(),
     },
     maxQueryLimit:
         getIntegerFromEnvironmentVariable('AI_COPILOT_MAX_QUERY_LIMIT') ||
@@ -775,8 +841,11 @@ export type LightdashConfig = {
     auth: AuthConfig;
     intercom: IntercomConfig;
     pylon: PylonConfig;
+    headway: HeadwayConfig;
     siteUrl: string;
     staticIp: string;
+    signupUrl: string | undefined;
+    helpMenuUrl: string | undefined;
     lightdashCloudInstance: string | undefined;
     k8s: {
         nodeName: string | undefined;
@@ -791,6 +860,9 @@ export type LightdashConfig = {
         gcDurationBuckets?: number[];
         eventLoopMonitoringPrecision?: number;
         labels?: Object;
+        eventMetricsEnabled: boolean;
+        eventMetricsConfigPath?: string;
+        allQueryMetricsEnabled: boolean;
     };
     database: {
         connectionUri: string | undefined;
@@ -805,12 +877,21 @@ export type LightdashConfig = {
         csvCellsLimit: number;
         timezone: string | undefined;
         maxPageSize: number;
-        useSqlPivotResults: boolean;
+        useSqlPivotResults: boolean | undefined;
+        showExecutionTime: boolean | undefined;
+        retryQueryOnTransientErrors: boolean;
     };
     pivotTable: {
         maxColumnLimit: number;
     };
     chart: {
+        versionHistory: {
+            daysLimit: number;
+        };
+    };
+    dashboard: {
+        maxTilesPerTab: number;
+        maxTabsPerDashboard: number;
         versionHistory: {
             daysLimit: number;
         };
@@ -829,10 +910,17 @@ export type LightdashConfig = {
         cacheStateTimeSeconds: number;
         s3?: Omit<S3Config, 'expirationTime'>;
     };
+    natsWorker: {
+        enabled: boolean;
+        url: string | undefined;
+        workerConcurrency: number;
+        queueTimeoutMs: number;
+    };
     slack?: SlackConfig;
     scheduler: {
         enabled: boolean;
         concurrency: number;
+        pollInterval: number;
         jobTimeout: number;
         screenshotTimeout?: number;
         tasks: Array<SchedulerTaskName>;
@@ -848,7 +936,14 @@ export type LightdashConfig = {
         };
     };
     groups: {
+        enabled: boolean | undefined;
+    };
+    persistentDownloadUrls: {
         enabled: boolean;
+        expirationSeconds: number;
+        expirationSecondsEmail: number | undefined;
+        expirationSecondsSlack: number | undefined;
+        expirationSecondsMsTeams: number | undefined;
     };
     extendedUsageAnalytics: {
         enabled: boolean;
@@ -884,6 +979,12 @@ export type LightdashConfig = {
     organizationWarehouseCredentials: {
         enabled: boolean;
     };
+    athenaWarehouseIamRoleAuth: {
+        enabled: boolean;
+    };
+    saveCredentialsForm: {
+        enabled: boolean;
+    };
     github: {
         appName: string;
         redirectDomain: string;
@@ -897,6 +998,9 @@ export type LightdashConfig = {
         maxDownloads: number;
     };
     microsoftTeams: {
+        enabled: boolean;
+    };
+    googleChat: {
         enabled: boolean;
     };
     googleCloudPlatform: {
@@ -928,6 +1032,8 @@ export type LightdashConfig = {
         dbt: DbtGithubProjectConfig;
     };
     updateSetup?: {
+        organizationUuid?: string;
+        projectUuid?: string;
         organization?: {
             admin: {
                 email?: string;
@@ -970,6 +1076,41 @@ export type LightdashConfig = {
     echarts6: {
         enabled: boolean;
     };
+    editYamlInUi: {
+        enabled: boolean;
+    };
+    /**
+     * When enabled, fields that fail to compile will be marked with a
+     * compilationError instead of causing the entire explore to fail.
+     * This allows users to still access other fields in the explore.
+     */
+    partialCompilation: {
+        enabled: boolean;
+    };
+    funnelBuilder: {
+        enabled: boolean;
+    };
+    maps: {
+        enabled: boolean | undefined;
+    };
+    savedMetricsTree: {
+        enabled: boolean | undefined;
+    };
+    defaultUserSpaces: {
+        enabled: boolean | undefined;
+    };
+    softDelete: {
+        enabled: boolean;
+        retentionDays: number;
+    };
+    preAggregates: {
+        enabled: boolean;
+        parquetEnabled: boolean;
+        s3?: Omit<S3Config, 'expirationTime'>;
+    };
+    userImpersonation: {
+        enabled: boolean | undefined;
+    };
 };
 
 export type SlackConfig = {
@@ -983,12 +1124,19 @@ export type SlackConfig = {
     channelsCachedTime: number;
     supportUrl: string;
     multiAgentChannelEnabled: boolean;
+    /*
+     This is the setting that controls whether we generate image previews for link shares in Slack
+     @default true
+    */
+    linkShareImagePreviewEnabled: boolean;
 };
 export type HeadlessBrowserConfig = {
     host?: string;
     port?: string;
     internalLightdashHost: string;
     browserEndpoint: string;
+    maxScreenshotRetries: number;
+    retryBaseDelayMs: number;
 };
 export type S3Config = {
     region: string;
@@ -1012,6 +1160,10 @@ export type IntercomConfig = {
 type PylonConfig = {
     appId: string;
     identityVerificationSecret?: string;
+};
+
+type HeadwayConfig = {
+    enabled: boolean;
 };
 
 export type RudderConfig = {
@@ -1156,6 +1308,7 @@ export type SmtpConfig = {
         name: string;
         email: string;
     };
+    inlineImageCid: boolean;
 };
 
 const DEFAULT_JOB_TIMEOUT = 1000 * 60 * 10; // 10 minutes
@@ -1226,11 +1379,41 @@ export const parseConfig = (): LightdashConfig => {
         copilotConfig = copilotConfigParse.data;
     }
 
+    const licenseKey = process.env.LIGHTDASH_LICENSE_KEY || null;
+    const preAggregatesEnabled =
+        licenseKey !== null && process.env.PRE_AGGREGATES_ENABLED === 'true';
+    const preAggregatesS3 = parsePreAggregateResultsS3Config();
+    const natsWorkerEnabled = process.env.NATS_ENABLED === 'true';
+    const natsWorkerUrl = process.env.NATS_URL;
+    const natsWorkerConcurrency =
+        getIntegerFromEnvironmentVariable('NATS_WORKER_CONCURRENCY') ?? 1;
+    const natsWorkerQueueTimeoutMs =
+        getIntegerFromEnvironmentVariable('NATS_QUEUE_TIMEOUT_MS') ?? 180000;
+
+    if (preAggregatesEnabled && !preAggregatesS3) {
+        throw new ParseError('Pre-aggregates require S3 configuration', {});
+    }
+    if (natsWorkerEnabled && !natsWorkerUrl) {
+        throw new ParseError('NATS_URL is required when NATS_ENABLED=true', {});
+    }
+    if (natsWorkerConcurrency <= 0) {
+        throw new ParseError(
+            'NATS_WORKER_CONCURRENCY must be greater than 0',
+            {},
+        );
+    }
+    if (natsWorkerQueueTimeoutMs <= 0) {
+        throw new ParseError(
+            'NATS_QUEUE_TIMEOUT_MS must be greater than 0',
+            {},
+        );
+    }
+
     return {
         mode,
         cookieSameSite: iframeEmbeddingEnabled ? 'none' : 'lax',
         license: {
-            licenseKey: process.env.LIGHTDASH_LICENSE_KEY || null,
+            licenseKey,
         },
         security: {
             contentSecurityPolicy: {
@@ -1265,6 +1448,8 @@ export const parseConfig = (): LightdashConfig => {
                       name: process.env.EMAIL_SMTP_SENDER_NAME || 'Lightdash',
                       email: process.env.EMAIL_SMTP_SENDER_EMAIL || '',
                   },
+                  inlineImageCid:
+                      process.env.EMAIL_SMTP_IMAGE_INLINE_CID === 'true',
               }
             : undefined,
         posthog: process.env.POSTHOG_PROJECT_API_KEY
@@ -1305,6 +1490,10 @@ export const parseConfig = (): LightdashConfig => {
             tracesSampleRate:
                 getFloatFromEnvironmentVariable('SENTRY_TRACES_SAMPLE_RATE') ||
                 0.1,
+            queryTracesSampleRate:
+                getFloatFromEnvironmentVariable(
+                    'SENTRY_QUERY_TRACES_SAMPLE_RATE',
+                ) ?? null, // defaults to null (use global tracesSampleRate), set to 1.0 to capture all query traces
             profilesSampleRate:
                 getFloatFromEnvironmentVariable(
                     'SENTRY_PROFILES_SAMPLE_RATE',
@@ -1449,10 +1638,7 @@ export const parseConfig = (): LightdashConfig => {
             },
         },
         intercom: {
-            appId:
-                process.env.INTERCOM_APP_ID === undefined
-                    ? 'zppxyjpp'
-                    : process.env.INTERCOM_APP_ID,
+            appId: process.env.INTERCOM_APP_ID || '',
             apiBase:
                 process.env.INTERCOM_APP_BASE || 'https://api-iam.intercom.io',
         },
@@ -1461,8 +1647,13 @@ export const parseConfig = (): LightdashConfig => {
             identityVerificationSecret:
                 process.env.PYLON_IDENTITY_VERIFICATION_SECRET,
         },
+        headway: {
+            enabled: process.env.HEADWAY_ENABLED !== 'false',
+        },
         siteUrl,
+        helpMenuUrl: process.env.HELP_MENU_URL,
         staticIp: process.env.STATIC_IP || '',
+        signupUrl: process.env.SIGNUP_URL,
         lightdashCloudInstance: process.env.LIGHTDASH_CLOUD_INSTANCE,
         k8s: {
             nodeName: process.env.K8S_NODE_NAME,
@@ -1486,6 +1677,15 @@ export const parseConfig = (): LightdashConfig => {
             labels: getObjectFromEnvironmentVariable(
                 'LIGHTDASH_PROMETHEUS_LABELS',
             ),
+            eventMetricsEnabled:
+                process.env.LIGHTDASH_PROMETHEUS_EVENT_METRICS_ENABLED ===
+                'true', // defaults to false
+            eventMetricsConfigPath:
+                process.env.LIGHTDASH_CUSTOM_METRICS_CONFIG_PATH ||
+                process.env.CUSTOM_METRICS_CONFIG_PATH,
+            allQueryMetricsEnabled:
+                process.env.LIGHTDASH_PROMETHEUS_ALL_QUERY_METRICS_ENABLED ===
+                'true', // defaults to false, tracks execution duration & S3 upload for all queries (not just pre-aggregate)
         },
         allowMultiOrgs: process.env.ALLOW_MULTIPLE_ORGS === 'true',
         maxPayloadSize: process.env.LIGHTDASH_MAX_PAYLOAD || '5mb',
@@ -1507,13 +1707,39 @@ export const parseConfig = (): LightdashConfig => {
                 getIntegerFromEnvironmentVariable(
                     'LIGHTDASH_QUERY_MAX_PAGE_SIZE',
                 ) || 2500, // Defaults to default limit * 5
-            useSqlPivotResults: process.env.USE_SQL_PIVOT_RESULTS === 'true',
+            useSqlPivotResults: process.env.USE_SQL_PIVOT_RESULTS
+                ? process.env.USE_SQL_PIVOT_RESULTS !== 'false'
+                : undefined,
+            showExecutionTime: process.env.SHOW_EXECUTION_TIME
+                ? process.env.SHOW_EXECUTION_TIME === 'true'
+                : undefined,
+            retryQueryOnTransientErrors: process.env
+                .LIGHTDASH_QUERY_RETRY_ON_TRANSIENT_ERRORS
+                ? process.env.LIGHTDASH_QUERY_RETRY_ON_TRANSIENT_ERRORS ===
+                  'true'
+                : false,
         },
         chart: {
             versionHistory: {
                 daysLimit:
                     getIntegerFromEnvironmentVariable(
                         'LIGHTDASH_CHART_VERSION_HISTORY_DAYS_LIMIT',
+                    ) || 3,
+            },
+        },
+        dashboard: {
+            maxTilesPerTab:
+                getIntegerFromEnvironmentVariable(
+                    'LIGHTDASH_DASHBOARD_MAX_TILES_PER_TAB',
+                ) || 50,
+            maxTabsPerDashboard:
+                getIntegerFromEnvironmentVariable(
+                    'LIGHTDASH_DASHBOARD_MAX_TABS_PER_DASHBOARD',
+                ) || 20,
+            versionHistory: {
+                daysLimit:
+                    getIntegerFromEnvironmentVariable(
+                        'LIGHTDASH_DASHBOARD_VERSION_HISTORY_DAYS_LIMIT',
                     ) || 3,
             },
         },
@@ -1529,6 +1755,14 @@ export const parseConfig = (): LightdashConfig => {
             internalLightdashHost:
                 process.env.INTERNAL_LIGHTDASH_HOST || siteUrl,
             browserEndpoint,
+            maxScreenshotRetries: parseInt(
+                process.env.HEADLESS_BROWSER_MAX_SCREENSHOT_RETRIES || '5',
+                10,
+            ),
+            retryBaseDelayMs: parseInt(
+                process.env.HEADLESS_BROWSER_RETRY_BASE_DELAY_MS || '3000',
+                10,
+            ),
         },
         s3: parseBaseS3Config(),
         results: {
@@ -1540,6 +1774,12 @@ export const parseConfig = (): LightdashConfig => {
                 10,
             ),
             s3: parseResultsS3Config(),
+        },
+        natsWorker: {
+            enabled: natsWorkerEnabled,
+            url: natsWorkerUrl,
+            workerConcurrency: natsWorkerConcurrency,
+            queueTimeoutMs: natsWorkerQueueTimeoutMs,
         },
         slack: {
             signingSecret: process.env.SLACK_SIGNING_SECRET,
@@ -1556,10 +1796,15 @@ export const parseConfig = (): LightdashConfig => {
             supportUrl: process.env.SLACK_SUPPORT_URL || '',
             multiAgentChannelEnabled:
                 process.env.SLACK_MULTI_AGENT_CHANNEL_ENABLED === 'true',
+            linkShareImagePreviewEnabled:
+                process.env.SLACK_LINK_SHARE_IMAGE_PREVIEW_ENABLED !== 'false',
         },
         scheduler: {
             enabled: process.env.SCHEDULER_ENABLED !== 'false',
             concurrency: parseInt(process.env.SCHEDULER_CONCURRENCY || '3', 10),
+            pollInterval:
+                getIntegerFromEnvironmentVariable('SCHEDULER_POLL_INTERVAL') ||
+                1000,
             jobTimeout: process.env.SCHEDULER_JOB_TIMEOUT
                 ? parseInt(process.env.SCHEDULER_JOB_TIMEOUT, 10)
                 : DEFAULT_JOB_TIMEOUT,
@@ -1594,7 +1839,25 @@ export const parseConfig = (): LightdashConfig => {
             },
         },
         groups: {
-            enabled: process.env.GROUPS_ENABLED === 'true',
+            enabled: process.env.GROUPS_ENABLED
+                ? process.env.GROUPS_ENABLED === 'true'
+                : undefined,
+        },
+        persistentDownloadUrls: {
+            enabled: process.env.PERSISTENT_DOWNLOAD_URLS_ENABLED === 'true',
+            expirationSeconds:
+                getIntegerFromEnvironmentVariable(
+                    'PERSISTENT_DOWNLOAD_URL_EXPIRATION_SECONDS',
+                ) ?? 259200, // 3 days, matches S3_EXPIRATION_TIME default
+            expirationSecondsEmail: getIntegerFromEnvironmentVariable(
+                'PERSISTENT_DOWNLOAD_URL_EXPIRATION_SECONDS_EMAIL',
+            ),
+            expirationSecondsSlack: getIntegerFromEnvironmentVariable(
+                'PERSISTENT_DOWNLOAD_URL_EXPIRATION_SECONDS_SLACK',
+            ),
+            expirationSecondsMsTeams: getIntegerFromEnvironmentVariable(
+                'PERSISTENT_DOWNLOAD_URL_EXPIRATION_SECONDS_MSTEAMS',
+            ),
         },
         extendedUsageAnalytics: {
             enabled: process.env.EXTENDED_USAGE_ANALYTICS === 'true',
@@ -1678,6 +1941,12 @@ export const parseConfig = (): LightdashConfig => {
                 process.env.ORGANIZATION_WAREHOUSE_CREDENTIALS_ENABLED ===
                 'true',
         },
+        athenaWarehouseIamRoleAuth: {
+            enabled: process.env.ATHENA_WAREHOUSE_IAM_ROLE_AUTH === 'true',
+        },
+        saveCredentialsForm: {
+            enabled: process.env.SAVE_CREDENTIALS_FORM_ENABLED === 'true',
+        },
         github: {
             appName: process.env.GITHUB_APP_NAME || 'lightdash-app-dev',
             redirectDomain:
@@ -1706,6 +1975,9 @@ export const parseConfig = (): LightdashConfig => {
         microsoftTeams: {
             enabled: process.env.MICROSOFT_TEAMS_ENABLED === 'true',
         },
+        googleChat: {
+            enabled: process.env.GOOGLE_CHAT_ENABLED === 'true',
+        },
         googleCloudPlatform: {
             projectId: process.env.GOOGLE_CLOUD_PROJECT_ID,
         },
@@ -1723,6 +1995,54 @@ export const parseConfig = (): LightdashConfig => {
         },
         echarts6: {
             enabled: process.env.ECHARTS_V6_ENABLED === 'true',
+        },
+        editYamlInUi: {
+            enabled: process.env.EDIT_YAML_IN_UI_ENABLED === 'true',
+        },
+        partialCompilation: {
+            enabled: process.env.PARTIAL_COMPILATION_ENABLED !== 'false',
+        },
+        funnelBuilder: {
+            enabled:
+                process.env.FUNNEL_BUILDER_ENABLED === 'true' ||
+                lightdashMode === LightdashMode.PR,
+        },
+        maps: {
+            enabled:
+                process.env.LIGHTDASH_MAPS_ENABLED === 'true'
+                    ? true
+                    : undefined,
+        },
+        savedMetricsTree: {
+            enabled:
+                process.env.SAVED_METRICS_TREE_ENABLED === 'true'
+                    ? true
+                    : undefined,
+        },
+        defaultUserSpaces: {
+            enabled:
+                process.env.LIGHTDASH_DEFAULT_USER_SPACES_ENABLED === 'true'
+                    ? true
+                    : undefined,
+        },
+        softDelete: {
+            enabled: process.env.SOFT_DELETE_ENABLED === 'true',
+            retentionDays:
+                getIntegerFromEnvironmentVariable(
+                    'SOFT_DELETE_RETENTION_DAYS',
+                ) ?? 30,
+        },
+        preAggregates: {
+            enabled: preAggregatesEnabled,
+            parquetEnabled:
+                process.env.PRE_AGGREGATES_PARQUET_ENABLED === 'true',
+            s3: preAggregatesS3,
+        },
+        userImpersonation: {
+            enabled:
+                process.env.USER_IMPERSONATION_ENABLED === 'true'
+                    ? true
+                    : undefined,
         },
     };
 };

@@ -1,3 +1,4 @@
+import { DimensionType, FieldType } from '@lightdash/common';
 import { GoogleDriveClient } from './GoogleDriveClient';
 
 describe('GoogleDriveClient', () => {
@@ -55,6 +56,88 @@ describe('GoogleDriveClient', () => {
                     BigInt('9223372036854775807'),
                 ),
             ).toEqual('string');
+        });
+
+        test('should truncate string values that exceed Google Sheets character limit', () => {
+            // String shorter than limit should not be truncated
+            const shortString = 'a'.repeat(1000);
+            expect(GoogleDriveClient.formatCell(shortString)).toEqual(
+                shortString,
+            );
+
+            // String exactly at limit should not be truncated
+            const atLimitString = 'a'.repeat(50000);
+            expect(GoogleDriveClient.formatCell(atLimitString)).toEqual(
+                atLimitString,
+            );
+
+            // String exceeding limit should be truncated with suffix
+            const longString = 'a'.repeat(50001);
+            const truncated = GoogleDriveClient.formatCell(longString);
+            expect(truncated).toHaveLength(50000);
+            expect(truncated).toMatch(/\.\.\. \[TRUNCATED\]$/);
+
+            // Very long array joined should be truncated
+            const longArray = Array(60000).fill('x');
+            const truncatedArray = GoogleDriveClient.formatCell(longArray);
+            expect(truncatedArray).toHaveLength(50000);
+            expect(truncatedArray).toMatch(/\.\.\. \[TRUNCATED\]$/);
+
+            // Large JSON object should be truncated
+            const largeObject = { data: 'x'.repeat(60000) };
+            const truncatedObject = GoogleDriveClient.formatCell(largeObject);
+            expect(truncatedObject).toHaveLength(50000);
+            expect(truncatedObject).toMatch(/\.\.\. \[TRUNCATED\]$/);
+        });
+    });
+
+    describe('appendToSheet', () => {
+        test('should only export selected fields from the results table', async () => {
+            const client = new GoogleDriveClient({
+                lightdashConfig: {
+                    auth: {
+                        google: {
+                            oauth2ClientId: 'client-id',
+                            oauth2ClientSecret: 'client-secret',
+                        },
+                    },
+                },
+            } as never);
+
+            const appendCsvToSheet = jest
+                .spyOn(client, 'appendCsvToSheet')
+                .mockResolvedValue(undefined);
+
+            await client.appendToSheet(
+                'refresh-token',
+                'file-id',
+                [
+                    {
+                        orders_total_revenue: 120,
+                        orders_normalized_charges: 150,
+                    },
+                ],
+                {
+                    orders_total_revenue: {
+                        name: 'total_revenue',
+                        label: 'Total revenue',
+                        type: DimensionType.NUMBER,
+                        table: 'orders',
+                        tableLabel: 'Orders',
+                        fieldType: FieldType.METRIC,
+                        sql: '${TABLE}.total_revenue',
+                        hidden: false,
+                    },
+                },
+                false,
+            );
+
+            expect(appendCsvToSheet).toHaveBeenCalledWith(
+                'refresh-token',
+                'file-id',
+                [['Total revenue'], [120]],
+                undefined,
+            );
         });
     });
 });

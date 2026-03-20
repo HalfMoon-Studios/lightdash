@@ -1,7 +1,8 @@
 import {
+    assertUnreachable,
+    ConditionalFormattingColorApplyTo,
     ConditionalFormattingComparisonType,
     ConditionalFormattingConfigType,
-    assertUnreachable,
     createConditionalFormattingConfigWithColorRange,
     createConditionalFormattingConfigWithSingleColor,
     createConditionalFormattingRuleWithCompareTarget,
@@ -19,8 +20,8 @@ import {
     type ConditionalFormattingConfig,
     type ConditionalFormattingConfigWithColorRange,
     type ConditionalFormattingWithFilterOperator,
-    type FilterOperator,
     type FilterableItem,
+    type FilterOperator,
 } from '@lightdash/common';
 import {
     Accordion,
@@ -319,6 +320,17 @@ export const ConditionalFormattingItem: FC<Props> = ({
         [handleChange, config],
     );
 
+    const handleChangeApplyTo = useCallback(
+        (newApplyTo: ConditionalFormattingColorApplyTo) => {
+            handleChange(
+                produce(config, (draft) => {
+                    draft.applyTo = newApplyTo;
+                }),
+            );
+        },
+        [handleChange, config],
+    );
+
     const controlLabel = `Rule ${configIndex}`;
     const accordionValue = `${configIndex}`;
 
@@ -400,6 +412,28 @@ export const ConditionalFormattingItem: FC<Props> = ({
                                     onColorChange={handleChangeSingleColor}
                                 />
                             ) : null}
+                        </Group>
+
+                        <Group spacing="xs">
+                            <Config.Label>Apply to</Config.Label>
+
+                            <SegmentedControl
+                                data={[
+                                    {
+                                        value: ConditionalFormattingColorApplyTo.CELL,
+                                        label: 'Cell',
+                                    },
+                                    {
+                                        value: ConditionalFormattingColorApplyTo.TEXT,
+                                        label: 'Text',
+                                    },
+                                ]}
+                                value={
+                                    config.applyTo ??
+                                    ConditionalFormattingColorApplyTo.CELL
+                                }
+                                onChange={handleChangeApplyTo}
+                            />
                         </Group>
 
                         {isConditionalFormattingConfigWithSingleColor(

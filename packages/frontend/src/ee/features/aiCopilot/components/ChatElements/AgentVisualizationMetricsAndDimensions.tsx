@@ -19,21 +19,18 @@ import {
     HoverCard,
     Text,
     Tooltip,
-    useMantineTheme,
 } from '@mantine-8/core';
 import { IconCode } from '@tabler/icons-react';
-import { lighten } from 'polished';
 import { useMemo, useState, type FC } from 'react';
 import { useParams } from 'react-router';
 import FieldIcon from '../../../../../components/common/Filters/FieldIcon';
 import MantineIcon from '../../../../../components/common/MantineIcon';
 import { ItemDetailPreview } from '../../../../../components/Explorer/ExploreTree/TableTree/ItemDetailPreview';
-import { getItemBgColor } from '../../../../../hooks/useColumns';
+import { SingleItemModalContent } from '../../../../../components/Explorer/WriteBackModal';
 import useApp from '../../../../../providers/App/useApp';
 import useTracking from '../../../../../providers/Tracking/useTracking';
 import { EventName } from '../../../../../types/Events';
-
-import { SingleItemModalContent } from '../../../../../components/Explorer/WriteBackModal';
+import { getFieldColors } from '../../../../../utils/fieldColors';
 import classes from './AgentVisualizationMetricsAndDimensions.module.css';
 
 const MetricDimensionItem: FC<{
@@ -51,7 +48,6 @@ const MetricDimensionItem: FC<{
     customMetric,
     onWriteBackCustomMetric,
 }) => {
-    const theme = useMantineTheme();
     const { projectUuid } = useParams<{ projectUuid: string }>();
     const { user } = useApp();
     const { track } = useTracking();
@@ -79,8 +75,7 @@ const MetricDimensionItem: FC<{
         displayName = friendlyName(fieldId);
     }
 
-    const backgroundColor = lighten(0.05, getItemBgColor(field, theme));
-    const iconColor = type === 'dimension' ? 'blue.9' : 'yellow.9';
+    const itemColors = getFieldColors(field);
 
     const description = isField(field) ? field.description : undefined;
     const fieldName = field?.name || fieldId;
@@ -94,15 +89,15 @@ const MetricDimensionItem: FC<{
               filters: customMetric.filters,
           }
         : isCompiledMetric(field)
-        ? {
-              type: field.type,
-              sql: field.sql,
-              compiledSql: field.compiledSql,
-              filters: field.filters,
-              table: field.table,
-              name: field.name,
-          }
-        : undefined;
+          ? {
+                type: field.type,
+                sql: field.sql,
+                compiledSql: field.compiledSql,
+                filters: field.filters,
+                table: field.table,
+                name: field.name,
+            }
+          : undefined;
 
     const isHoverCardDisabled =
         (!description && !metricInfo) || isCodeIconHovered;
@@ -145,7 +140,7 @@ const MetricDimensionItem: FC<{
                     size="xs"
                     variant="default"
                     className={classes.itemButton}
-                    style={{ backgroundColor }}
+                    style={{ backgroundColor: itemColors.bg }}
                     styles={{
                         inner: {
                             color: 'black',
@@ -188,7 +183,11 @@ const MetricDimensionItem: FC<{
                     }
                 >
                     <Flex align="center" gap="xs">
-                        <FieldIcon item={field} color={iconColor} size="sm" />
+                        <FieldIcon
+                            item={field}
+                            color={itemColors.color}
+                            size="sm"
+                        />
                         <Box className={classes.itemText}>
                             <Text fz="xs" truncate>
                                 {displayName}

@@ -12,7 +12,6 @@ import {
     LightdashUser,
     LightdashUserWithAbilityRules,
     MemberAbility,
-    NotExistsError,
     NotFoundError,
     OpenIdIdentityIssuerType,
     OpenIdUser,
@@ -47,10 +46,9 @@ import {
     PasswordLoginTableName,
 } from '../database/entities/passwordLogins';
 import { DbPersonalAccessToken } from '../database/entities/personalAccessTokens';
-import {
-    RolesTableName,
-    ScopedRolesTableName,
-} from '../database/entities/roles';
+import { ProjectMembershipsTableName } from '../database/entities/projectMemberships';
+import { ProjectTableName } from '../database/entities/projects';
+import { ScopedRolesTableName } from '../database/entities/roles';
 import {
     DbUser,
     DbUserIn,
@@ -438,6 +436,7 @@ export class UserModel {
             isSetupComplete,
             isActive,
         }: Partial<UpdateUserArgs>,
+        isEmailVerified: boolean = false,
     ): Promise<LightdashUser> {
         await this.database.transaction(async (trx) => {
             const [user] = await trx(UserTableName)
@@ -467,6 +466,19 @@ export class UserModel {
                     email: email.toLowerCase(),
                     is_primary: true,
                 });
+                // If user needs to create a new email
+                // we can automatically verify the email
+                // This is useful for SCIM users who changed their email
+                if (isEmailVerified) {
+                    await trx(EmailTableName)
+                        .where({
+                            user_id: user.user_id,
+                            email: email.toLowerCase(),
+                        })
+                        .update({
+                            is_verified: true,
+                        });
+                }
             }
         });
         return this.getUserDetailsByUuid(userUuid);
@@ -488,9 +500,9 @@ export class UserModel {
     > {
         const projectMemberships = await this.database('project_memberships')
             .leftJoin(
-                'projects',
+                ProjectTableName,
                 'project_memberships.project_id',
-                'projects.project_id',
+                `${ProjectTableName}.project_id`,
             )
             .leftJoin('users', 'project_memberships.user_id', 'users.user_id')
             .select('*')
@@ -646,7 +658,7 @@ export class UserModel {
             .where('organization_uuid', organizationUuid)
             .select('organization_id');
         if (!org) {
-            throw new NotExistsError('Cannot find organization');
+            throw new NotFoundError('Cannot find organization');
         }
         const email = isOpenIdUser(createUser)
             ? createUser.openId.email
@@ -854,7 +866,7 @@ export class UserModel {
         const user = await this.findSessionUserByUUID(userUuid);
 
         if (!user?.userId) {
-            throw new NotExistsError('User is missing user_id');
+            throw new NotFoundError('User is missing user_id');
         }
 
         await this.database(PasswordLoginTableName)
@@ -928,7 +940,7 @@ export class UserModel {
             .select('user_id')
             .first();
         if (!user) {
-            throw new NotExistsError('Cannot find user');
+            throw new NotFoundError('Cannot find user');
         }
         return this.database(PasswordLoginTableName)
             .where({
@@ -952,14 +964,14 @@ export class UserModel {
             .where('organization_uuid', organizationUuid)
             .select('organization_id');
         if (!org) {
-            throw new NotExistsError('Cannot find organization');
+            throw new NotFoundError('Cannot find organization');
         }
 
         const [user] = await this.database(UserTableName)
             .where('user_uuid', userUuid)
             .select('user_id');
         if (!user) {
-            throw new NotExistsError('Cannot find user');
+            throw new NotFoundError('Cannot find user');
         }
 
         await this.database.transaction(async (trx) => {
@@ -1003,6 +1015,39 @@ export class UserModel {
         return this.getUserDetailsByUuid(userUuid);
     }
 
+    async addProjectMemberships(
+        userUuid: string,
+        projects: { [projectUuid: string]: ProjectMemberRole },
+    ): Promise<void> {
+        const [user] = await this.database(UserTableName)
+            .where('user_uuid', userUuid)
+            .select('user_id');
+        if (!user) {
+            throw new NotFoundError('Cannot find user');
+        }
+
+        const projectMemberships = Object.entries(projects).map(
+            async ([projectUuid, projectRole]) => {
+                const [project] = await this.database(ProjectTableName)
+                    .select('project_id')
+                    .where('project_uuid', projectUuid);
+
+                if (project) {
+                    await this.database(ProjectMembershipsTableName)
+                        .insert({
+                            project_id: project.project_id,
+                            role: projectRole,
+                            user_id: user.user_id,
+                        })
+                        .onConflict(['project_id', 'user_id'])
+                        .ignore();
+                }
+            },
+        );
+
+        await Promise.all(projectMemberships);
+    }
+
     async getRefreshToken(
         userUuid: string,
         issuerType: OpenIdIdentityIssuerType = OpenIdIdentityIssuerType.GOOGLE,
@@ -1019,11 +1064,11 @@ export class UserModel {
             .select('refresh_token');
 
         if (!row) {
-            throw new NotExistsError('Cannot find user with refresh token');
+            throw new NotFoundError('Cannot find user with refresh token');
         }
 
         if (!row.refresh_token) {
-            throw new NotExistsError('Cannot find refresh token');
+            throw new NotFoundError('Cannot find refresh token');
         }
 
         return row.refresh_token;

@@ -1,12 +1,11 @@
 import { type Dashboard } from '@lightdash/common';
 import {
     Button,
-    Group,
     Stack,
-    TextInput,
     Textarea,
+    TextInput,
     type ModalProps,
-} from '@mantine/core';
+} from '@mantine-8/core';
 import { useForm } from '@mantine/form';
 import { IconLayoutDashboard } from '@tabler/icons-react';
 import { useEffect, type FC } from 'react';
@@ -14,6 +13,7 @@ import {
     useDashboardQuery,
     useUpdateDashboard,
 } from '../../../hooks/dashboard/useDashboard';
+import { useProjectUuid } from '../../../hooks/useProjectUuid';
 import MantineModal from '../MantineModal';
 
 interface DashboardUpdateModalProps {
@@ -30,8 +30,15 @@ const DashboardUpdateModal: FC<DashboardUpdateModalProps> = ({
     onConfirm,
     ...modalProps
 }) => {
-    const { data: dashboard, isInitialLoading } = useDashboardQuery(uuid);
-    const { mutateAsync, isLoading: isUpdating } = useUpdateDashboard(uuid);
+    const projectUuid = useProjectUuid();
+    const { data: dashboard, isInitialLoading } = useDashboardQuery({
+        uuidOrSlug: uuid,
+        projectUuid,
+    });
+    const { mutateAsync, isLoading: isUpdating } = useUpdateDashboard(
+        uuid,
+        projectUuid,
+    );
 
     const form = useForm<FormState>({
         initialValues: {
@@ -69,20 +76,14 @@ const DashboardUpdateModal: FC<DashboardUpdateModalProps> = ({
             {...modalProps}
             icon={IconLayoutDashboard}
             actions={
-                <Group position="right">
-                    <Button variant="outline" onClick={modalProps.onClose}>
-                        Cancel
-                    </Button>
-
-                    <Button
-                        disabled={!form.isValid()}
-                        loading={isUpdating}
-                        type="submit"
-                        form="update-dashboard"
-                    >
-                        Save
-                    </Button>
-                </Group>
+                <Button
+                    disabled={!form.isValid()}
+                    loading={isUpdating}
+                    type="submit"
+                    form="update-dashboard"
+                >
+                    Save
+                </Button>
             }
         >
             <form
@@ -90,7 +91,7 @@ const DashboardUpdateModal: FC<DashboardUpdateModalProps> = ({
                 title="Update Dashboard"
                 onSubmit={handleConfirm}
             >
-                <Stack spacing="lg">
+                <Stack>
                     <TextInput
                         label="Name"
                         required

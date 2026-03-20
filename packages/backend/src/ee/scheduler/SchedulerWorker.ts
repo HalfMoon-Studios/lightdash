@@ -4,15 +4,13 @@ import {
     isSchedulerTaskName,
     SCHEDULER_TASKS,
     SchedulerJobStatus,
-    type Account,
 } from '@lightdash/common';
-import { fromSession } from '../../auth/account';
 import { SchedulerClient } from '../../scheduler/SchedulerClient';
 import { tryJobOrTimeout } from '../../scheduler/SchedulerJobTimeout';
 import { SchedulerTaskArguments } from '../../scheduler/SchedulerTask';
 import { SchedulerWorker } from '../../scheduler/SchedulerWorker';
 import { TypedEETaskList } from '../../scheduler/types';
-import { AiAgentService } from '../services/AiAgentService';
+import { AiAgentService } from '../services/AiAgentService/AiAgentService';
 import type { EmbedService } from '../services/EmbedService/EmbedService';
 
 const AI_AGENT_EVAL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes in milliseconds

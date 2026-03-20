@@ -13,12 +13,14 @@ import DbtCloudForm from './DbtForms/DbtCloudForm';
 import DbtLocalForm from './DbtForms/DbtLocalForm';
 import DbtManifestForm from './DbtForms/DbtManifestForm';
 import DbtNoneForm from './DbtForms/DbtNoneForm';
+import { dbtDefaults } from './DbtForms/defaultValues';
 import GithubForm from './DbtForms/GithubForm';
 import GitlabForm from './DbtForms/GitlabForm';
-import { dbtDefaults } from './DbtForms/defaultValues';
 import FormCollapseButton from './FormCollapseButton';
+import { useFormContext } from './formContext';
 import FormSection from './Inputs/FormSection';
 import { MultiKeyValuePairsInput } from './Inputs/MultiKeyValuePairsInput';
+import { AthenaSchemaInput } from './WarehouseForms/AthenaForm';
 import { BigQuerySchemaInput } from './WarehouseForms/BigQueryForm';
 import { ClickhouseSchemaInput } from './WarehouseForms/ClickhouseForm';
 import { DatabricksSchemaInput } from './WarehouseForms/DatabricksForm';
@@ -26,7 +28,6 @@ import { PostgresSchemaInput } from './WarehouseForms/PostgresForm';
 import { RedshiftSchemaInput } from './WarehouseForms/RedshiftForm';
 import { SnowflakeSchemaInput } from './WarehouseForms/SnowflakeForm';
 import { TrinoSchemaInput } from './WarehouseForms/TrinoForm';
-import { useFormContext } from './formContext';
 
 interface DbtSettingsFormProps {
     disabled: boolean;
@@ -145,6 +146,8 @@ const DbtSettingsForm: FC<DbtSettingsFormProps> = ({
                 return DatabricksSchemaInput;
             case WarehouseTypes.CLICKHOUSE:
                 return ClickhouseSchemaInput;
+            case WarehouseTypes.ATHENA:
+                return AthenaSchemaInput;
             default: {
                 return assertUnreachable(
                     warehouseType,

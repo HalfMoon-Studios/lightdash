@@ -2,19 +2,22 @@ import { type DbtColumnLightdashAdditionalDimension } from '../types/dbt';
 import { NotImplementedError } from '../types/errors';
 import {
     BinType,
-    type CustomBinDimension,
-    type CustomDimension,
-    type CustomSqlDimension,
     DimensionType,
     friendlyName,
     isCustomBinDimension,
+    type CustomBinDimension,
+    type CustomDimension,
+    type CustomSqlDimension,
 } from '../types/field';
 import { type CreateWarehouseCredentials } from '../types/projects';
 import {
+    type TimeIntervalUnit,
     type WarehouseClient,
     type WarehouseSqlBuilder,
 } from '../types/warehouse';
+import assertUnreachable from './assertUnreachable';
 import {
+    getCustomGroupSelectSql,
     getCustomRangeSelectSql,
     getFixedWidthBinSelectSql,
 } from './customDimensions';
@@ -42,7 +45,7 @@ export const convertCustomBinDimensionToDbt = ({
                 label: friendlyName(customDimension.name),
                 type: DimensionType.STRING,
                 sql: getCustomRangeSelectSql({
-                    binRanges: customDimension.customRange || [],
+                    binRanges: customDimension.customRange,
                     baseDimensionSql,
                     warehouseSqlBuilder,
                 }),
@@ -52,7 +55,7 @@ export const convertCustomBinDimensionToDbt = ({
                 label: friendlyName(customDimension.name),
                 type: DimensionType.STRING,
                 sql: getFixedWidthBinSelectSql({
-                    binWidth: customDimension.binWidth || 1,
+                    binWidth: customDimension.binWidth,
                     baseDimensionSql,
                     warehouseSqlBuilder,
                 }),
@@ -61,9 +64,20 @@ export const convertCustomBinDimensionToDbt = ({
             throw new NotImplementedError(
                 'Bin with fixed number of bins can not be converted to dbt as it requires a CTE',
             );
+        case BinType.CUSTOM_GROUP:
+            return {
+                label: friendlyName(customDimension.name),
+                type: DimensionType.STRING,
+                sql: getCustomGroupSelectSql({
+                    binGroups: customDimension.customGroups,
+                    baseDimensionSql,
+                    warehouseSqlBuilder,
+                }),
+            };
         default:
-            const never: never = customDimension.binType;
-            throw new Error(`Unknown bin type ${never}`);
+            throw new Error(
+                `Unknown bin type ${assertUnreachable(customDimension, 'Unknown bin type')}`,
+            );
     }
 };
 
@@ -86,7 +100,7 @@ const warehouseClientMock: WarehouseClient = {
         throw new NotImplementedError('getCatalog not implemented');
     },
     getMetricSql() {
-        throw new NotImplementedError('getCatalog not implemented');
+        throw new NotImplementedError('getMetricSql not implemented');
     },
     getStartOfWeek() {
         throw new NotImplementedError('getCatalog not implemented');
@@ -126,6 +140,26 @@ const warehouseClientMock: WarehouseClient = {
     },
     escapeString(value) {
         return value;
+    },
+    castToTimestamp(date) {
+        return `CAST('${date.toISOString()}' AS TIMESTAMP)`;
+    },
+    getIntervalSql(value: number, unit: TimeIntervalUnit) {
+        return `INTERVAL '${value} ${unit}'`;
+    },
+    getTimestampDiffSeconds(startTimestampSql, endTimestampSql) {
+        return `EXTRACT(EPOCH FROM (${endTimestampSql} - ${startTimestampSql}))`;
+    },
+    getMedianSql(valueSql) {
+        return `PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ${valueSql})`;
+    },
+    buildArray(elements) {
+        return `ARRAY[${elements.join(', ')}]`;
+    },
+    buildArrayAgg(expression, orderBy) {
+        return orderBy
+            ? `ARRAY_AGG(${expression} ORDER BY ${orderBy})`
+            : `ARRAY_AGG(${expression})`;
     },
 };
 

@@ -12,6 +12,7 @@ import {
     type Source,
 } from './field';
 import { type LightdashProjectConfig } from './lightdashProjectConfig';
+import { type PreAggregateDef } from './preAggregate';
 import { type TableBase } from './table';
 
 export enum JoinRelationship {
@@ -57,7 +58,30 @@ export type CompiledTable = TableBase & {
 export enum ExploreType {
     VIRTUAL = 'virtual',
     DEFAULT = 'default',
+    PRE_AGGREGATE = 'pre_aggregate',
 }
+
+export enum InlineErrorType {
+    // Fatal error types (ExploreError - explore is broken)
+    METADATA_PARSE_ERROR = 'METADATA_PARSE_ERROR',
+    NO_DIMENSIONS_FOUND = 'NO_DIMENSIONS_FOUND',
+    // Warning types (Explore.warnings - explore still usable)
+    SKIPPED_JOIN = 'SKIPPED_JOIN',
+    MISSING_TABLE = 'MISSING_TABLE',
+    FIELD_ERROR = 'FIELD_ERROR',
+    SET_VALIDATION_ERROR = 'SET_VALIDATION_ERROR',
+    INVALID_PARAMETER = 'INVALID_PARAMETER',
+}
+
+export type InlineError = {
+    type: InlineErrorType;
+    message: string;
+};
+
+export type PreAggregateSource = {
+    sourceExploreName: string;
+    preAggregateName: string;
+};
 
 export type Explore = {
     name: string; // Must be sql friendly (a-Z, 0-9, _)
@@ -74,23 +98,23 @@ export type Explore = {
     ymlPath?: string;
     sqlPath?: string;
     type?: ExploreType;
+    caseSensitive?: boolean; // When false, all string filters in this explore will be case insensitive. Default is true
     // Spotlight config for this explore
     spotlight?: {
         visibility: LightdashProjectConfig['spotlight']['default_visibility'];
         categories?: string[]; // yaml_reference
+        owner?: string; // model owner email (inherited by metrics)
     };
     aiHint?: string | string[];
     parameters?: LightdashProjectConfig['parameters'];
-};
-
-export enum InlineErrorType {
-    METADATA_PARSE_ERROR = 'METADATA_PARSE_ERROR',
-    NO_DIMENSIONS_FOUND = 'NO_DIMENSIONS_FOUND',
-}
-
-export type InlineError = {
-    type: InlineErrorType;
-    message: string;
+    preAggregates?: PreAggregateDef[];
+    preAggregateSource?: PreAggregateSource;
+    /**
+     * Non-fatal warnings from partial compilation.
+     * Present when some joins or fields failed to compile but the explore is still usable.
+     * Only populated when PARTIAL_COMPILATION_ENABLED=true.
+     */
+    warnings?: InlineError[];
 };
 
 export type ExploreError = Partial<Explore> &
@@ -98,6 +122,10 @@ export type ExploreError = Partial<Explore> &
         errors: InlineError[];
     };
 
+/**
+ * Check if an explore is an ExploreError (failed to compile completely).
+ * ExploreError has 'errors' field, working Explore does not.
+ */
 export const isExploreError = (
     explore: Explore | ExploreError,
 ): explore is ExploreError => 'errors' in explore;
@@ -108,8 +136,17 @@ type SummaryExploreFields =
     | 'tags'
     | 'groupLabel'
     | 'type'
-    | 'aiHint';
-type SummaryExploreErrorFields = SummaryExploreFields | 'errors';
+    | 'preAggregateSource'
+    | 'aiHint'
+    | 'warnings';
+type SummaryExploreErrorFields =
+    | 'name'
+    | 'label'
+    | 'tags'
+    | 'groupLabel'
+    | 'type'
+    | 'aiHint'
+    | 'errors';
 type SummaryExtraFields = {
     description?: string;
     schemaName: string;
@@ -120,6 +157,18 @@ export type SummaryExplore =
     | (Pick<Explore, SummaryExploreFields> & SummaryExtraFields)
     | (Pick<ExploreError, SummaryExploreErrorFields> &
           Partial<SummaryExtraFields>);
+
+/**
+ * Check if a SummaryExplore is from an ExploreError (completely failed to compile).
+ * ExploreError has 'errors' field with actual errors, working Explore may have 'warnings'.
+ */
+export const isSummaryExploreError = (
+    summary: SummaryExplore,
+): summary is Pick<ExploreError, SummaryExploreErrorFields> &
+    Partial<SummaryExtraFields> =>
+    'errors' in summary &&
+    summary.errors !== null &&
+    summary.errors !== undefined;
 
 export type Table = TableBase & {
     dimensions: { [fieldName: string]: Dimension }; // Field names must be unique across dims and metrics

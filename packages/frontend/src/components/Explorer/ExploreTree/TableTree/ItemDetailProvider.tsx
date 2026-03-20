@@ -1,4 +1,4 @@
-import { Group, Modal, Text } from '@mantine/core';
+import { Group, Modal, Text } from '@mantine-8/core';
 import { IconTable } from '@tabler/icons-react';
 import { useCallback, type FC, type PropsWithChildren } from 'react';
 import {
@@ -7,10 +7,10 @@ import {
     useExplorerDispatch,
     useExplorerSelector,
 } from '../../../../features/explorer/store';
+import { getFieldColor } from '../../../../utils/fieldColors';
 import FieldIcon from '../../../common/Filters/FieldIcon';
 import MantineIcon from '../../../common/MantineIcon';
 import { ItemDetailMarkdown } from './ItemDetailPreview';
-import { getFieldIconColor } from './utils';
 
 /**
  * Provider for a shared modal to display details about tree items
@@ -33,28 +33,28 @@ export const ItemDetailProvider: FC<PropsWithChildren<{}>> = ({ children }) => {
                         {itemDetail.fieldItem && (
                             <FieldIcon
                                 item={itemDetail.fieldItem}
-                                color={getFieldIconColor(itemDetail.fieldItem)}
+                                color={getFieldColor(itemDetail.fieldItem)}
                                 size="md"
                             />
                         )}
-                        <Text size="md">{itemDetail.label}</Text>
+                        <Text fz="md">{itemDetail.label}</Text>
                     </Group>
                 );
             case 'table':
                 return (
-                    <Group spacing="sm">
+                    <Group gap="sm">
                         <MantineIcon
                             icon={IconTable}
                             size="lg"
                             color="ldGray.7"
                         />
-                        <Text size="md">{itemDetail.label}</Text>
+                        <Text fz="md">{itemDetail.label}</Text>
                     </Group>
                 );
             case 'group':
                 return (
                     <Group>
-                        <Text size="md">{itemDetail.label}</Text>
+                        <Text fz="md">{itemDetail.label}</Text>
                     </Group>
                 );
             default:
@@ -66,7 +66,7 @@ export const ItemDetailProvider: FC<PropsWithChildren<{}>> = ({ children }) => {
         if (itemDetail.description) {
             return <ItemDetailMarkdown source={itemDetail.description} />;
         }
-        return <Text color="gray">No description available.</Text>;
+        return <Text c="gray">No description available.</Text>;
     }, [itemDetail.description]);
 
     return (

@@ -7,13 +7,13 @@ import {
     DimensionType,
     isCustomDimension,
     isDimension,
+    isMetric,
     isTableCalculation,
     TableCalculationType,
     type ItemsMap,
 } from '../types/field';
 import type { MetricQuery } from '../types/metricQuery';
-import type { PivotConfiguration } from '../types/pivot';
-
+import type { PivotConfig, PivotConfiguration } from '../types/pivot';
 import {
     ChartType,
     isCartesianChartConfig,
@@ -25,6 +25,7 @@ import {
     getTableCalculationAxisType,
     SortByDirection,
     VizAggregationOptions,
+    VizIndexType,
 } from '../visualizations/types';
 import { normalizeIndexColumns } from './utils';
 
@@ -56,6 +57,7 @@ function getSortByForPivotConfiguration(
                         direction: sort.descending
                             ? SortByDirection.DESC
                             : SortByDirection.ASC,
+                        nullsFirst: sort.nullsFirst,
                     };
                 }
 
@@ -76,17 +78,26 @@ const getIndexColumn = (
     valuesColumns: PivotConfiguration['valuesColumns'],
     fields: ItemsMap,
     metricQuery: MetricQuery,
+    xField?: string,
 ) => {
     const groupByColumnsReferences =
         groupByColumns?.map((c) => c.reference) ?? [];
     const valuesColumnsReferences =
         valuesColumns?.map((c) => c.reference) ?? [];
+    const sortFieldIds = new Set(metricQuery.sorts.map((s) => s.fieldId));
 
-    // Find any columns that are part of values or group by columns (these become index columns)
+    // Find any columns that are not groupBy or value columns (these become index columns)
+    // Table calculations are only included if they are the xField (used as the x-axis dimension)
+    // or if they are used in sorting. Otherwise we don't want to include them as multiple
+    // index columns cause multiple series.
+    const tableCalcNames = (metricQuery.tableCalculations || [])
+        .filter((tc) => tc.name === xField || sortFieldIds.has(tc.name))
+        .map((tc) => tc.name);
+
     const indexColumnNames = [
         ...metricQuery.dimensions,
         ...metricQuery.metrics,
-        ...(metricQuery.tableCalculations || []).map((tc) => tc.name),
+        ...tableCalcNames,
     ].filter(
         (dim) =>
             !groupByColumnsReferences.includes(dim) &&
@@ -126,6 +137,16 @@ const getIndexColumn = (
                     type: getTableCalculationAxisType(
                         field.type ?? TableCalculationType.NUMBER,
                     ),
+                };
+            }
+
+            // Metrics can be used as x-axis in scatter charts, so we need to handle them as index columns
+            // Only include metrics if they are explicitly the x-axis field, otherwise they would
+            // incorrectly become index columns and break pivoted charts (e.g., stacked bar charts)
+            if (isMetric(field) && dim === xField) {
+                return {
+                    reference: dim,
+                    type: VizIndexType.CATEGORY,
                 };
             }
 
@@ -197,6 +218,8 @@ function getTablePivotConfiguration(
             partialPivotConfiguration,
             metricQuery,
         ),
+        // Pass metricsAsRows from table chart config for accurate column limit calculation
+        metricsAsRows: chartConfig.config?.metricsAsRows,
     };
 
     return pivotConfiguration;
@@ -250,6 +273,7 @@ function getCartesianPivotConfiguration(
             valuesColumns,
             fields,
             metricQuery,
+            xField,
         );
 
         const partialPivotConfiguration: Omit<PivotConfiguration, 'sortBy'> = {
@@ -275,9 +299,6 @@ function isValid(pivotConfiguration: PivotConfiguration): boolean {
     const { groupByColumns, valuesColumns, indexColumn } = pivotConfiguration;
 
     const indexColumns = normalizeIndexColumns(indexColumn);
-    if (indexColumns.length === 0) {
-        return false;
-    }
 
     if (valuesColumns.length === 0) {
         return false;
@@ -330,6 +351,7 @@ export function derivePivotConfigurationFromChart(
         case ChartType.CUSTOM:
         case ChartType.BIG_NUMBER:
         case ChartType.MAP:
+        case ChartType.SANKEY:
             newConfig = undefined;
             break;
         default:
@@ -342,4 +364,27 @@ export function derivePivotConfigurationFromChart(
     }
 
     return undefined;
+}
+
+/**
+ * Derives a PivotConfiguration from a PivotConfig (the lightweight UI config)
+ * without requiring a full SavedChartDAO shape. Use this when you have a PivotConfig
+ * from a non-chart context (e.g. ad-hoc exports).
+ */
+export function derivePivotConfigurationFromPivotConfig(
+    pivotConfig: PivotConfig,
+    metricQuery: MetricQuery,
+    fields: ItemsMap,
+): PivotConfiguration | undefined {
+    return derivePivotConfigurationFromChart(
+        {
+            chartConfig: {
+                type: ChartType.TABLE,
+                config: { metricsAsRows: pivotConfig.metricsAsRows },
+            },
+            pivotConfig: { columns: pivotConfig.pivotDimensions },
+        },
+        metricQuery,
+        fields,
+    );
 }

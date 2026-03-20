@@ -1,4 +1,5 @@
 import {
+    ChartType,
     convertFieldRefToFieldId,
     getFieldRef,
     getItemId,
@@ -9,19 +10,17 @@ import {
     updateFieldIdInFilters,
     type AdditionalMetric,
     type ChartConfig,
-    type ChartType,
     type CustomDimension,
     type CustomFormat,
     type Dimension,
     type FieldId,
     type Item,
+    type ItemsMap,
     type Metric,
     type MetricQuery,
     type MetricType,
     type ParameterValue,
-    type PeriodOverPeriodComparison,
     type ReplaceCustomFields,
-    type ResultColumns,
     type SavedChart,
     type SortField,
     type TableCalculation,
@@ -39,13 +38,13 @@ import {
     type ConfigCacheMap,
     type ExplorerReduceState,
     type ExplorerSection,
+    type MapExtent,
 } from '../../../providers/Explorer/types';
 import {
     getCachedPivotConfig,
     getValidChartConfig,
 } from '../../../providers/Explorer/utils';
-
-import { calcColumnOrder, computeColumnOrderWithPoP } from './utils';
+import { calcColumnOrder } from './utils';
 
 export type ExplorerSliceState = ExplorerReduceState;
 
@@ -244,40 +243,8 @@ const explorerSlice = createSlice({
             state.unsavedChartVersion.metricQuery.timezone = action.payload;
         },
 
-        setPeriodOverPeriod: (
-            state,
-            action: PayloadAction<PeriodOverPeriodComparison | undefined>,
-        ) => {
-            state.unsavedChartVersion.metricQuery.periodOverPeriod =
-                action.payload;
-        },
-
         setColumnOrder: (state, action: PayloadAction<string[]>) => {
-            // Identify PoP fields by comparing with existing completeColumnOrder
-            // PoP fields are those in completeColumnOrder but not in base columnOrder
-            const currentBaseOrder =
-                state.unsavedChartVersion.tableConfig.columnOrder;
-            const currentCompleteOrder =
-                state.queryExecution.completeColumnOrder;
-
-            // Build set of PoP fields
-            const baseFieldsSet = new Set(currentBaseOrder);
-            const popFields = new Set(
-                currentCompleteOrder.filter(
-                    (field) => !baseFieldsSet.has(field),
-                ),
-            );
-
-            // Filter out PoP fields from the incoming order to get base order
-            const baseOrder = action.payload.filter(
-                (field) => !popFields.has(field),
-            );
-
-            // Update base order
-            state.unsavedChartVersion.tableConfig.columnOrder = baseOrder;
-
-            // Also update completeColumnOrder to match the user's drag immediately
-            state.queryExecution.completeColumnOrder = action.payload;
+            state.unsavedChartVersion.tableConfig.columnOrder = action.payload;
         },
 
         setPivotConfig: (
@@ -362,6 +329,17 @@ const explorerSlice = createSlice({
                 ...(action.payload && { ...action.payload }),
             };
         },
+        togglePeriodOverPeriodComparisonModal: (
+            state,
+            action: PayloadAction<
+                { metric?: Metric; itemsMap?: ItemsMap } | undefined
+            >,
+        ) => {
+            state.modals.periodOverPeriodComparison = {
+                isOpen: !state.modals.periodOverPeriodComparison.isOpen,
+                ...(action.payload && { ...action.payload }),
+            };
+        },
         toggleWriteBackModal: (
             state,
             action: PayloadAction<
@@ -375,7 +353,7 @@ const explorerSlice = createSlice({
         },
         toggleFormatModal: (
             state,
-            action: PayloadAction<{ metric?: Metric } | undefined>,
+            action: PayloadAction<{ item?: Metric | Dimension } | undefined>,
         ) => {
             state.modals.format = {
                 isOpen: !state.modals.format.isOpen,
@@ -395,6 +373,24 @@ const explorerSlice = createSlice({
                 state.unsavedChartVersion.metricQuery.metricOverrides = {};
             }
             state.unsavedChartVersion.metricQuery.metricOverrides[metricId] = {
+                formatOptions,
+            };
+        },
+        updateDimensionFormat: (
+            state,
+            action: PayloadAction<{
+                dimension: Dimension;
+                formatOptions: CustomFormat | undefined;
+            }>,
+        ) => {
+            const { dimension, formatOptions } = action.payload;
+            const dimensionId = getItemId(dimension);
+            if (!state.unsavedChartVersion.metricQuery.dimensionOverrides) {
+                state.unsavedChartVersion.metricQuery.dimensionOverrides = {};
+            }
+            state.unsavedChartVersion.metricQuery.dimensionOverrides[
+                dimensionId
+            ] = {
                 formatOptions,
             };
         },
@@ -799,6 +795,12 @@ const explorerSlice = createSlice({
             state.unsavedChartVersion.metricQuery.filters = newFilters;
 
             // Update tableCalculations SQL references
+            const tableCalcNames = new Set(
+                state.unsavedChartVersion.metricQuery.tableCalculations.map(
+                    (tc) => tc.name,
+                ),
+            );
+
             state.unsavedChartVersion.metricQuery.tableCalculations =
                 state.unsavedChartVersion.metricQuery.tableCalculations.map(
                     (tableCalculation) => {
@@ -809,6 +811,11 @@ const explorerSlice = createSlice({
                         const newSql = tableCalculation.sql.replace(
                             lightdashVariablePattern,
                             (_, fieldRef) => {
+                                // Skip table calculation references - they're valid without table prefix
+                                if (tableCalcNames.has(fieldRef)) {
+                                    return `\${${fieldRef}}`;
+                                }
+
                                 const fieldId =
                                     convertFieldRefToFieldId(fieldRef);
                                 if (fieldId === previousAdditionalMetricName) {
@@ -892,19 +899,7 @@ const explorerSlice = createSlice({
                 queryUuidHistory: [],
                 unpivotedQueryUuidHistory: [],
                 pendingFetch: false,
-                completeColumnOrder: [],
             };
-        },
-
-        setCompleteColumnOrder: (
-            state,
-            action: PayloadAction<ResultColumns>,
-        ) => {
-            const { completeColumnOrder } = computeColumnOrderWithPoP(
-                state.unsavedChartVersion.tableConfig.columnOrder,
-                action.payload,
-            );
-            state.queryExecution.completeColumnOrder = completeColumnOrder;
         },
 
         // Request a query execution (works regardless of auto-fetch setting)
@@ -946,6 +941,20 @@ const explorerSlice = createSlice({
                 draft.unsavedChartVersion.tableName = tableName;
                 draft.unsavedChartVersion.metricQuery.exploreName = tableName;
             });
+        },
+
+        // Map extent - updated on pan/zoom, read at save time
+        // Stored in cachedChartConfigs[MAP] to keep map-specific state together
+        // This does NOT cause re-renders because nothing subscribes to it during render
+        setMapExtent: (state, action: PayloadAction<MapExtent | null>) => {
+            // Ensure the MAP cache exists
+            if (!state.cachedChartConfigs[ChartType.MAP]) {
+                state.cachedChartConfigs[ChartType.MAP] = {
+                    chartConfig: undefined as any,
+                };
+            }
+            state.cachedChartConfigs[ChartType.MAP].tempMapExtent =
+                action.payload;
         },
     },
 });

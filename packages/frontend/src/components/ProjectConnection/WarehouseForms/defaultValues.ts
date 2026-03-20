@@ -1,6 +1,11 @@
-import { BigqueryAuthenticationType, WarehouseTypes } from '@lightdash/common';
-
+import {
+    AthenaAuthenticationType,
+    BigqueryAuthenticationType,
+    DatabricksAuthenticationType,
+    WarehouseTypes,
+} from '@lightdash/common';
 import type {
+    CreateAthenaCredentials,
     CreateBigqueryCredentials,
     CreateClickhouseCredentials,
     CreateDatabricksCredentials,
@@ -30,15 +35,17 @@ export const BigQueryDefaultValues: CreateBigqueryCredentials = {
     startOfWeek: undefined,
 };
 
-const DatabricksDefaultValues: CreateDatabricksCredentials = {
+export const DatabricksDefaultValues: CreateDatabricksCredentials = {
     type: WarehouseTypes.DATABRICKS,
     database: '',
     serverHostName: '',
     httpPath: '',
+    authenticationType: DatabricksAuthenticationType.PERSONAL_ACCESS_TOKEN,
     personalAccessToken: '',
     catalog: '',
     compute: [],
     startOfWeek: undefined,
+    requireUserCredentials: false,
 };
 
 export const PostgresDefaultValues: CreatePostgresCredentials = {
@@ -108,6 +115,7 @@ export const SnowflakeDefaultValues: CreateSnowflakeCredentials = {
     authenticationType: undefined,
     privateKey: '',
     privateKeyPass: '',
+    timeoutSeconds: 300,
 };
 
 export const TrinoDefaultValues: CreateTrinoCredentials = {
@@ -136,6 +144,20 @@ export const ClickhouseDefaultValues: CreateClickhouseCredentials = {
     timeoutSeconds: 300,
 };
 
+export const AthenaDefaultValues: CreateAthenaCredentials = {
+    type: WarehouseTypes.ATHENA,
+    authenticationType: AthenaAuthenticationType.ACCESS_KEY,
+    region: '',
+    database: 'AwsDataCatalog',
+    schema: '',
+    s3StagingDir: '',
+    accessKeyId: '',
+    secretAccessKey: '',
+    threads: 1,
+    numRetries: 5,
+    startOfWeek: undefined,
+};
+
 export const warehouseDefaultValues = {
     [WarehouseTypes.BIGQUERY]: BigQueryDefaultValues,
     [WarehouseTypes.POSTGRES]: PostgresDefaultValues,
@@ -144,4 +166,5 @@ export const warehouseDefaultValues = {
     [WarehouseTypes.DATABRICKS]: DatabricksDefaultValues,
     [WarehouseTypes.TRINO]: TrinoDefaultValues,
     [WarehouseTypes.CLICKHOUSE]: ClickhouseDefaultValues,
+    [WarehouseTypes.ATHENA]: AthenaDefaultValues,
 };

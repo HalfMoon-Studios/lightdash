@@ -108,6 +108,7 @@ export type VizPivotLayoutOptions = {
 export type VizSortBy = {
     reference: string;
     direction: SortByDirection;
+    nullsFirst?: boolean;
 };
 
 export type VizPieChartDisplay = {
@@ -172,11 +173,14 @@ export const isPivotChartLayout = (
         return false;
     }
 
-    if (!('y' in obj) && !('groupBy' in obj) && !('x' in obj)) {
-        return false;
+    // PivotChartLayout.y is always an array of { reference, aggregation }.
+    // A VizColumnsConfig could have a column named "y" but its value would be
+    // a VizColumnConfig object (with label, frozen, visible), never an array.
+    if ('y' in obj && Array.isArray(obj.y)) {
+        return true;
     }
 
-    return true;
+    return false;
 };
 
 export type VizCartesianChartOptions = {
@@ -310,7 +314,7 @@ export type VizTableHeaderSortConfig = {
 
 export type EChartsSeries = {
     type: Series['type'];
-    connectNulls: boolean;
+    connectNulls?: boolean;
     stack?: string;
     stackLabel?: {
         show?: boolean;
@@ -340,9 +344,26 @@ export type EChartsSeries = {
         position?: 'left' | 'top' | 'right' | 'bottom' | 'inside';
         formatter?: (param: { data: Record<string, unknown> }) => string;
     };
-    labelLayout?: {
-        hideOverlap?: boolean;
-    };
+    labelLayout?:
+        | {
+              hideOverlap?: boolean;
+          }
+        | ((params: {
+              rect: { x: number; y: number; width: number; height: number };
+              labelRect: {
+                  x: number;
+                  y: number;
+                  width: number;
+                  height: number;
+              };
+          }) =>
+              | {
+                    x?: number;
+                    y?: number;
+                    fontSize?: number;
+                    labelLinePoints?: number[][];
+                }
+              | undefined);
     tooltip?: {
         show?: boolean;
         valueFormatter?: (value: unknown) => string;
@@ -351,9 +372,16 @@ export type EChartsSeries = {
     showSymbol?: boolean;
     symbolSize?: number;
     markLine?: Record<string, unknown>;
+    colorBy?: 'series' | 'data';
     itemStyle?: {
         borderRadius?: number | number[];
-        color?: string;
+        color?:
+            | string
+            | ((params: {
+                  dataIndex: number;
+                  name: string;
+                  data: Record<string, unknown>;
+              }) => string);
         opacity?: number;
     };
     lineStyle?: {
@@ -370,6 +398,7 @@ export type EChartsSeries = {
         /** The field ID of the base metric this PoP series compares against */
         baseFieldId: string;
     };
+    clip?: boolean;
 };
 
 /**

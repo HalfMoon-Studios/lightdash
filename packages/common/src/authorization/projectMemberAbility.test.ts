@@ -40,7 +40,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(true);
@@ -49,7 +49,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(true);
@@ -58,7 +58,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -68,7 +68,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -78,7 +78,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_ADMIN.userUuid,
@@ -93,7 +93,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_ADMIN.userUuid,
@@ -108,7 +108,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_ADMIN.userUuid,
@@ -123,7 +123,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_ADMIN.userUuid,
@@ -140,7 +140,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(true);
@@ -149,7 +149,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(true);
@@ -158,7 +158,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -168,7 +168,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -178,7 +178,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_ADMIN.userUuid,
@@ -193,7 +193,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_ADMIN.userUuid,
@@ -208,7 +208,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_ADMIN.userUuid,
@@ -223,7 +223,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_ADMIN.userUuid,
@@ -240,7 +240,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(true);
@@ -249,7 +249,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(true);
@@ -258,7 +258,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -268,7 +268,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -278,7 +278,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_ADMIN.userUuid,
@@ -293,7 +293,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_ADMIN.userUuid,
@@ -308,7 +308,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_ADMIN.userUuid,
@@ -323,7 +323,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_ADMIN.userUuid,
@@ -350,7 +350,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('SavedChart', {
                             projectUuid: '5678',
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(false);
@@ -359,7 +359,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Dashboard', {
                             projectUuid: '5678',
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(false);
@@ -368,7 +368,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Space', {
                             projectUuid: '5678',
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(false);
@@ -492,6 +492,49 @@ describe('Project member permissions', () => {
                     ).toEqual(false);
                 });
             });
+
+            describe('ScheduledDeliveries', () => {
+                it('can create ScheduledDeliveries', () => {
+                    expect(
+                        ability.can(
+                            'create',
+                            subject('ScheduledDeliveries', { projectUuid }),
+                        ),
+                    ).toEqual(true);
+                });
+
+                it('can manage all ScheduledDeliveries', () => {
+                    expect(
+                        ability.can(
+                            'manage',
+                            subject('ScheduledDeliveries', { projectUuid }),
+                        ),
+                    ).toEqual(true);
+                });
+
+                it('can manage ScheduledDeliveries created by other users', () => {
+                    expect(
+                        ability.can(
+                            'manage',
+                            subject('ScheduledDeliveries', {
+                                projectUuid,
+                                userUuid: 'another-user-uuid',
+                            }),
+                        ),
+                    ).toEqual(true);
+                });
+
+                it('cannot manage ScheduledDeliveries from another project', () => {
+                    expect(
+                        ability.can(
+                            'manage',
+                            subject('ScheduledDeliveries', {
+                                projectUuid: '5678',
+                            }),
+                        ),
+                    ).toEqual(false);
+                });
+            });
         });
 
         describe('when user is an editor', () => {
@@ -505,7 +548,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(true);
@@ -514,7 +557,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(false);
@@ -523,7 +566,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -533,7 +576,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -543,7 +586,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_EDITOR.userUuid,
@@ -558,7 +601,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_EDITOR.userUuid,
@@ -573,7 +616,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_EDITOR.userUuid,
@@ -588,7 +631,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_EDITOR.userUuid,
@@ -605,7 +648,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(true);
@@ -614,7 +657,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(false);
@@ -623,7 +666,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -633,7 +676,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -643,7 +686,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_EDITOR.userUuid,
@@ -658,7 +701,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_EDITOR.userUuid,
@@ -673,7 +716,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_EDITOR.userUuid,
@@ -688,7 +731,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_EDITOR.userUuid,
@@ -715,7 +758,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(true);
@@ -724,7 +767,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(true);
@@ -733,7 +776,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -743,7 +786,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -753,7 +796,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_EDITOR.userUuid,
@@ -768,7 +811,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_EDITOR.userUuid,
@@ -783,7 +826,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_EDITOR.userUuid,
@@ -798,7 +841,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_EDITOR.userUuid,
@@ -813,7 +856,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_EDITOR.userUuid,
@@ -996,6 +1039,52 @@ describe('Project member permissions', () => {
                     ).toEqual(false);
                 });
             });
+
+            describe('ScheduledDeliveries', () => {
+                it('can create ScheduledDeliveries', () => {
+                    expect(
+                        ability.can(
+                            'create',
+                            subject('ScheduledDeliveries', { projectUuid }),
+                        ),
+                    ).toEqual(true);
+                });
+
+                it('can manage only his own ScheduledDeliveries', () => {
+                    expect(
+                        ability.can(
+                            'manage',
+                            subject('ScheduledDeliveries', {
+                                projectUuid,
+                                userUuid: PROJECT_EDITOR.userUuid,
+                            }),
+                        ),
+                    ).toEqual(true);
+                });
+
+                it('cannot manage ScheduledDeliveries created by other users', () => {
+                    expect(
+                        ability.can(
+                            'manage',
+                            subject('ScheduledDeliveries', {
+                                projectUuid,
+                                userUuid: 'another-user-uuid',
+                            }),
+                        ),
+                    ).toEqual(false);
+                });
+
+                it('cannot manage ScheduledDeliveries from another project', () => {
+                    expect(
+                        ability.can(
+                            'manage',
+                            subject('ScheduledDeliveries', {
+                                projectUuid: '5678',
+                            }),
+                        ),
+                    ).toEqual(false);
+                });
+            });
         });
 
         describe('when user is an developer', () => {
@@ -1118,6 +1207,52 @@ describe('Project member permissions', () => {
                     ).toEqual(false);
                 });
             });
+
+            describe('ScheduledDeliveries', () => {
+                it('can create ScheduledDeliveries', () => {
+                    expect(
+                        ability.can(
+                            'create',
+                            subject('ScheduledDeliveries', { projectUuid }),
+                        ),
+                    ).toEqual(true);
+                });
+
+                it('can manage only his own ScheduledDeliveries', () => {
+                    expect(
+                        ability.can(
+                            'manage',
+                            subject('ScheduledDeliveries', {
+                                projectUuid,
+                                userUuid: PROJECT_DEVELOPER.userUuid,
+                            }),
+                        ),
+                    ).toEqual(true);
+                });
+
+                it('cannot manage ScheduledDeliveries created by other users', () => {
+                    expect(
+                        ability.can(
+                            'manage',
+                            subject('ScheduledDeliveries', {
+                                projectUuid,
+                                userUuid: 'another-user-uuid',
+                            }),
+                        ),
+                    ).toEqual(false);
+                });
+
+                it('cannot manage ScheduledDeliveries from another project', () => {
+                    expect(
+                        ability.can(
+                            'manage',
+                            subject('ScheduledDeliveries', {
+                                projectUuid: '5678',
+                            }),
+                        ),
+                    ).toEqual(false);
+                });
+            });
         });
         describe('when user is a viewer', () => {
             beforeEach(() => {
@@ -1130,7 +1265,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(true);
@@ -1139,7 +1274,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(false);
@@ -1148,7 +1283,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -1158,7 +1293,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -1168,7 +1303,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_VIEWER.userUuid,
@@ -1183,7 +1318,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_VIEWER.userUuid,
@@ -1198,7 +1333,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_VIEWER.userUuid,
@@ -1213,7 +1348,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Dashboard', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_VIEWER.userUuid,
@@ -1230,7 +1365,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(true);
@@ -1239,7 +1374,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(false);
@@ -1248,7 +1383,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -1258,7 +1393,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -1268,7 +1403,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_VIEWER.userUuid,
@@ -1283,7 +1418,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_VIEWER.userUuid,
@@ -1298,7 +1433,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_VIEWER.userUuid,
@@ -1313,7 +1448,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_VIEWER.userUuid,
@@ -1330,7 +1465,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(true);
@@ -1339,7 +1474,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(false);
@@ -1348,7 +1483,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -1358,7 +1493,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [],
                         }),
                     ),
@@ -1368,7 +1503,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_VIEWER.userUuid,
@@ -1383,7 +1518,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_VIEWER.userUuid,
@@ -1398,7 +1533,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_VIEWER.userUuid,
@@ -1413,7 +1548,7 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('Space', {
                             projectUuid,
-                            isPrivate: true,
+                            inheritsFromOrgOrProject: false,
                             access: [
                                 {
                                     userUuid: PROJECT_VIEWER.userUuid,
@@ -1436,7 +1571,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('SavedChart', {
                             projectUuid: '5678',
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(false);
@@ -1445,7 +1580,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Dashboard', {
                             projectUuid: '5678',
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(false);
@@ -1454,7 +1589,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Space', {
                             projectUuid: '5678',
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(false);
@@ -1623,6 +1758,26 @@ describe('Project member permissions', () => {
                     ).toEqual(false);
                 });
             });
+
+            describe('ScheduledDeliveries', () => {
+                it('cannot create ScheduledDeliveries', () => {
+                    expect(
+                        ability.can(
+                            'create',
+                            subject('ScheduledDeliveries', { projectUuid }),
+                        ),
+                    ).toEqual(false);
+                });
+
+                it('cannot manage ScheduledDeliveries', () => {
+                    expect(
+                        ability.can(
+                            'manage',
+                            subject('ScheduledDeliveries', { projectUuid }),
+                        ),
+                    ).toEqual(false);
+                });
+            });
         });
 
         describe('when user is a interactive viewer', () => {
@@ -1638,20 +1793,26 @@ describe('Project member permissions', () => {
                         'view',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(true);
                 expect(
                     ability.can(
                         'view',
-                        subject('Dashboard', { projectUuid, isPrivate: false }),
+                        subject('Dashboard', {
+                            projectUuid,
+                            inheritsFromOrgOrProject: true,
+                        }),
                     ),
                 ).toEqual(true);
                 expect(
                     ability.can(
                         'view',
-                        subject('Space', { projectUuid, isPrivate: false }),
+                        subject('Space', {
+                            projectUuid,
+                            inheritsFromOrgOrProject: true,
+                        }),
                     ),
                 ).toEqual(true);
                 expect(
@@ -1668,19 +1829,28 @@ describe('Project member permissions', () => {
                 expect(
                     ability.can(
                         'view',
-                        subject('SavedChart', { projectUuid, isPrivate: true }),
+                        subject('SavedChart', {
+                            projectUuid,
+                            inheritsFromOrgOrProject: false,
+                        }),
                     ),
                 ).toEqual(false);
                 expect(
                     ability.can(
                         'view',
-                        subject('Dashboard', { projectUuid, isPrivate: true }),
+                        subject('Dashboard', {
+                            projectUuid,
+                            inheritsFromOrgOrProject: false,
+                        }),
                     ),
                 ).toEqual(false);
                 expect(
                     ability.can(
                         'view',
-                        subject('Space', { projectUuid, isPrivate: true }),
+                        subject('Space', {
+                            projectUuid,
+                            inheritsFromOrgOrProject: false,
+                        }),
                     ),
                 ).toEqual(false);
             });
@@ -1690,7 +1860,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('SavedChart', {
                             projectUuid: '5678',
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(false);
@@ -1699,7 +1869,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Dashboard', {
                             projectUuid: '5678',
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(false);
@@ -1708,7 +1878,7 @@ describe('Project member permissions', () => {
                         'view',
                         subject('Space', {
                             projectUuid: '5678',
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(false);
@@ -1725,38 +1895,53 @@ describe('Project member permissions', () => {
                         'manage',
                         subject('SavedChart', {
                             projectUuid,
-                            isPrivate: false,
+                            inheritsFromOrgOrProject: true,
                         }),
                     ),
                 ).toEqual(false);
                 expect(
                     ability.can(
                         'manage',
-                        subject('Dashboard', { projectUuid, isPrivate: false }),
+                        subject('Dashboard', {
+                            projectUuid,
+                            inheritsFromOrgOrProject: true,
+                        }),
                     ),
                 ).toEqual(false);
                 expect(
                     ability.can(
                         'manage',
-                        subject('Space', { projectUuid, isPrivate: false }),
+                        subject('Space', {
+                            projectUuid,
+                            inheritsFromOrgOrProject: true,
+                        }),
                     ),
                 ).toEqual(false);
                 expect(
                     ability.can(
                         'manage',
-                        subject('SavedChart', { projectUuid, isPrivate: true }),
+                        subject('SavedChart', {
+                            projectUuid,
+                            inheritsFromOrgOrProject: false,
+                        }),
                     ),
                 ).toEqual(false);
                 expect(
                     ability.can(
                         'manage',
-                        subject('Dashboard', { projectUuid, isPrivate: true }),
+                        subject('Dashboard', {
+                            projectUuid,
+                            inheritsFromOrgOrProject: false,
+                        }),
                     ),
                 ).toEqual(false);
                 expect(
                     ability.can(
                         'manage',
-                        subject('Space', { projectUuid, isPrivate: true }),
+                        subject('Space', {
+                            projectUuid,
+                            inheritsFromOrgOrProject: false,
+                        }),
                     ),
                 ).toEqual(false);
                 expect(
@@ -1884,6 +2069,52 @@ describe('Project member permissions', () => {
                     ).toEqual(false);
                 });
             });
+
+            describe('ScheduledDeliveries', () => {
+                it('can create ScheduledDeliveries', () => {
+                    expect(
+                        ability.can(
+                            'create',
+                            subject('ScheduledDeliveries', { projectUuid }),
+                        ),
+                    ).toEqual(true);
+                });
+
+                it('can manage only his own ScheduledDeliveries', () => {
+                    expect(
+                        ability.can(
+                            'manage',
+                            subject('ScheduledDeliveries', {
+                                projectUuid,
+                                userUuid: PROJECT_INTERACTIVE_VIEWER.userUuid,
+                            }),
+                        ),
+                    ).toEqual(true);
+                });
+
+                it('cannot manage ScheduledDeliveries created by other users', () => {
+                    expect(
+                        ability.can(
+                            'manage',
+                            subject('ScheduledDeliveries', {
+                                projectUuid,
+                                userUuid: 'another-user-uuid',
+                            }),
+                        ),
+                    ).toEqual(false);
+                });
+
+                it('cannot create ScheduledDeliveries in another project', () => {
+                    expect(
+                        ability.can(
+                            'create',
+                            subject('ScheduledDeliveries', {
+                                projectUuid: '5678',
+                            }),
+                        ),
+                    ).toEqual(false);
+                });
+            });
         });
     });
 
@@ -1892,78 +2123,92 @@ describe('Project member permissions', () => {
             membership: PROJECT_ADMIN,
             canCreatePreview: true,
             canDeleteTheirOwnPreview: true,
+            canDeleteOthersPreview: true, // Admins can delete any project
         },
         {
             membership: PROJECT_DEVELOPER,
             canCreatePreview: true,
             canDeleteTheirOwnPreview: true,
+            canDeleteOthersPreview: false,
         },
         {
             membership: PROJECT_EDITOR,
             canCreatePreview: false,
             canDeleteTheirOwnPreview: false,
+            canDeleteOthersPreview: false,
         },
         {
             membership: PROJECT_INTERACTIVE_VIEWER,
             canCreatePreview: false,
             canDeleteTheirOwnPreview: false,
+            canDeleteOthersPreview: false,
         },
         {
             membership: PROJECT_VIEWER,
             canCreatePreview: false,
             canDeleteTheirOwnPreview: false,
+            canDeleteOthersPreview: false,
         },
-    ].forEach(({ membership, canCreatePreview, canDeleteTheirOwnPreview }) => {
-        describe('test project preview permissions', () => {
-            const ability = defineAbilityForProjectMember(membership);
+    ].forEach(
+        ({
+            membership,
+            canCreatePreview,
+            canDeleteTheirOwnPreview,
+            canDeleteOthersPreview,
+        }) => {
+            describe('test project preview permissions', () => {
+                const ability = defineAbilityForProjectMember(membership);
 
-            it('checks if user can create PREVIEW projects', () => {
-                expect(
-                    ability.can(
-                        'create',
-                        subject('Project', {
-                            upstreamProjectUuid: projectUuid,
-                            type: ProjectType.PREVIEW,
-                        }),
-                    ),
-                ).toEqual(canCreatePreview);
-            });
+                it('checks if user can create PREVIEW projects', () => {
+                    expect(
+                        ability.can(
+                            'create',
+                            subject('Project', {
+                                upstreamProjectUuid: projectUuid,
+                                type: ProjectType.PREVIEW,
+                            }),
+                        ),
+                    ).toEqual(canCreatePreview);
+                });
 
-            it('checks that users cannot create regular projects', () => {
-                expect(
-                    ability.can(
-                        'create',
-                        subject('Project', {
-                            upstreamProjectUuid: projectUuid,
-                            type: ProjectType.DEFAULT,
-                        }),
-                    ),
-                ).toEqual(false);
-            });
+                it('checks that users cannot create regular projects', () => {
+                    expect(
+                        ability.can(
+                            'create',
+                            subject('Project', {
+                                upstreamProjectUuid: projectUuid,
+                                type: ProjectType.DEFAULT,
+                            }),
+                        ),
+                    ).toEqual(false);
+                });
 
-            it('checks if user can delete their own PREVIEW projects', () => {
-                expect(
-                    ability.can(
-                        'delete',
-                        subject('Project', {
-                            createdByUserUuid: membership.userUuid,
-                            type: ProjectType.PREVIEW,
-                        }),
-                    ),
-                ).toEqual(canDeleteTheirOwnPreview);
-            });
+                it('checks if user can delete their own PREVIEW projects', () => {
+                    expect(
+                        ability.can(
+                            'delete',
+                            subject('Project', {
+                                projectUuid,
+                                createdByUserUuid: membership.userUuid,
+                                type: ProjectType.PREVIEW,
+                            }),
+                        ),
+                    ).toEqual(canDeleteTheirOwnPreview);
+                });
 
-            it('checks that users cannot delete other users PREVIEW projects', () => {
-                expect(
-                    ability.can(
-                        'delete',
-                        subject('Project', {
-                            createdByUserUuid: '1234',
-                            type: ProjectType.PREVIEW,
-                        }),
-                    ),
-                ).toEqual(false);
+                it('checks if user can delete other users PREVIEW projects', () => {
+                    expect(
+                        ability.can(
+                            'delete',
+                            subject('Project', {
+                                projectUuid,
+                                createdByUserUuid: '1234',
+                                type: ProjectType.PREVIEW,
+                            }),
+                        ),
+                    ).toEqual(canDeleteOthersPreview);
+                });
             });
-        });
-    });
+        },
+    );
 });

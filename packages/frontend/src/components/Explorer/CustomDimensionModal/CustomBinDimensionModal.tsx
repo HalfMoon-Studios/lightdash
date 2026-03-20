@@ -1,31 +1,41 @@
 import {
+    assertUnreachable,
     BinType,
     CustomDimensionType,
+    DimensionType,
     getItemId,
+    GroupValueMatchType,
+    isCustomBinDimension,
     isCustomDimension,
     isDimension,
     snakeCaseName,
+    type BinGroup,
     type BinRange,
     type CustomBinDimension,
     type Dimension,
+    type GroupValueRule,
 } from '@lightdash/common';
 import {
     ActionIcon,
     Button,
     Flex,
     Group,
-    Modal,
+    Menu,
     NumberInput,
     Radio,
+    Select,
     Stack,
     Text,
     TextInput,
-    Title,
-} from '@mantine/core';
-import { useForm, zodResolver } from '@mantine/form';
-import { IconX } from '@tabler/icons-react';
-import cloneDeep from 'lodash/cloneDeep';
-import { useEffect, useMemo, type FC } from 'react';
+    Tooltip,
+} from '@mantine-8/core';
+import { useForm, zodResolver, type UseFormReturnType } from '@mantine/form';
+import {
+    IconArrowsTransferDown,
+    IconLayoutDashboard,
+    IconX,
+} from '@tabler/icons-react';
+import { useEffect, useMemo, useState, type FC } from 'react';
 import { z } from 'zod';
 import {
     explorerActions,
@@ -35,6 +45,8 @@ import {
 } from '../../../features/explorer/store';
 import useToaster from '../../../hooks/toaster/useToaster';
 import MantineIcon from '../../common/MantineIcon';
+import MantineModal from '../../common/MantineModal';
+import classes from './CustomBinDimensionModal.module.css';
 
 // TODO: preview custom dimension results
 
@@ -47,6 +59,278 @@ const DEFAULT_CUSTOM_RANGE: BinRange[] = [
     { from: 1, to: undefined },
 ];
 
+type FormGroupValueRule = GroupValueRule & { _id: string };
+type FormBinGroup = Omit<BinGroup, 'values'> & {
+    _id: string;
+    values: FormGroupValueRule[];
+};
+
+const makeFormGroup = (group: BinGroup): FormBinGroup => ({
+    ...group,
+    _id: crypto.randomUUID(),
+    values: group.values.map((v) => ({ ...v, _id: crypto.randomUUID() })),
+});
+
+const stripFormIds = (groups: FormBinGroup[]): BinGroup[] =>
+    groups.map(({ _id, values, ...rest }) => ({
+        ...rest,
+        values: values.map(({ _id: _, ...v }) => v),
+    }));
+
+const createDefaultCustomGroups = (): FormBinGroup[] => [
+    makeFormGroup({ name: 'Group 1', values: [] }),
+];
+
+const MATCH_TYPE_OPTIONS = [
+    { value: GroupValueMatchType.EXACT, label: 'is' },
+    { value: GroupValueMatchType.STARTS_WITH, label: 'starts with' },
+    { value: GroupValueMatchType.ENDS_WITH, label: 'ends with' },
+    { value: GroupValueMatchType.INCLUDES, label: 'includes' },
+];
+
+const createDefaultValueRule = (): FormGroupValueRule => ({
+    _id: crypto.randomUUID(),
+    matchType: GroupValueMatchType.EXACT,
+    value: '',
+});
+
+const isStringBinType = (binType: BinType) => binType === BinType.CUSTOM_GROUP;
+
+const buildCustomBinDimension = (
+    base: { id: string; name: string; table: string; dimensionId: string },
+    values: FormValues,
+): CustomBinDimension => {
+    const common = {
+        ...base,
+        type: CustomDimensionType.BIN as const,
+    };
+    switch (values.binType) {
+        case BinType.FIXED_NUMBER:
+            return {
+                ...common,
+                binType: BinType.FIXED_NUMBER,
+                binNumber: values.binConfig.fixedNumber.binNumber,
+            };
+        case BinType.FIXED_WIDTH:
+            return {
+                ...common,
+                binType: BinType.FIXED_WIDTH,
+                binWidth: values.binConfig.fixedWidth.binWidth,
+            };
+        case BinType.CUSTOM_RANGE:
+            return {
+                ...common,
+                binType: BinType.CUSTOM_RANGE,
+                customRange: values.binConfig.customRange as BinRange[],
+            };
+        case BinType.CUSTOM_GROUP:
+            return {
+                ...common,
+                binType: BinType.CUSTOM_GROUP,
+                customGroups: stripFormIds(values.binConfig.customGroups),
+            };
+        default:
+            return assertUnreachable(values.binType, `Unknown bin type`);
+    }
+};
+
+type FormValues = {
+    customDimensionLabel: string;
+    binType: BinType;
+    binConfig: {
+        fixedNumber: { binNumber: number };
+        fixedWidth: { binWidth: number };
+        customRange: Array<{ from?: number; to?: number }>;
+        customGroups: FormBinGroup[];
+    };
+};
+
+const GroupValueRow: FC<{
+    form: UseFormReturnType<FormValues>;
+    groupIndex: number;
+    valueIndex: number;
+    onAddValueAfter: (groupIndex: number, valueIndex: number) => void;
+}> = ({ form, groupIndex, valueIndex, onAddValueAfter }) => {
+    const groups = form.values.binConfig.customGroups;
+
+    return (
+        <Flex gap="sm" align="center" ml="md">
+            <Select
+                size="xs"
+                w={110}
+                data={MATCH_TYPE_OPTIONS}
+                allowDeselect={false}
+                {...form.getInputProps(
+                    `binConfig.customGroups.${groupIndex}.values.${valueIndex}.matchType`,
+                )}
+            />
+            <TextInput
+                flex={1}
+                size="xs"
+                placeholder="Enter a value"
+                data-focus-id={`custom-group-${groupIndex}-value-${valueIndex}`}
+                {...form.getInputProps(
+                    `binConfig.customGroups.${groupIndex}.values.${valueIndex}.value`,
+                )}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        onAddValueAfter(groupIndex, valueIndex);
+                    }
+                }}
+            />
+            {groups.length > 1 && (
+                <Menu position="bottom-end" withinPortal>
+                    <Menu.Target>
+                        <ActionIcon
+                            variant="subtle"
+                            color="ldDark.4"
+                            size="sm"
+                            title="Move to group"
+                        >
+                            <MantineIcon icon={IconArrowsTransferDown} />
+                        </ActionIcon>
+                    </Menu.Target>
+                    <Menu.Dropdown>
+                        <Menu.Label>Move to group</Menu.Label>
+                        {groups.map((targetGroup, targetIndex) =>
+                            targetIndex !== groupIndex ? (
+                                <Menu.Item
+                                    key={targetGroup._id}
+                                    onClick={() => {
+                                        const movedValue =
+                                            groups[groupIndex].values[
+                                                valueIndex
+                                            ];
+                                        const newGroups = groups.map((g, i) => {
+                                            if (i === groupIndex) {
+                                                return {
+                                                    ...g,
+                                                    values: g.values.filter(
+                                                        (_, j) =>
+                                                            j !== valueIndex,
+                                                    ),
+                                                };
+                                            }
+                                            if (i === targetIndex) {
+                                                return {
+                                                    ...g,
+                                                    values: [
+                                                        ...g.values,
+                                                        movedValue,
+                                                    ],
+                                                };
+                                            }
+                                            return g;
+                                        });
+                                        form.setFieldValue(
+                                            'binConfig.customGroups',
+                                            newGroups,
+                                        );
+                                    }}
+                                >
+                                    {targetGroup.name ||
+                                        `Group ${targetIndex + 1}`}
+                                </Menu.Item>
+                            ) : null,
+                        )}
+                    </Menu.Dropdown>
+                </Menu>
+            )}
+            <ActionIcon
+                variant="subtle"
+                color="ldDark.6"
+                size="sm"
+                onClick={() => {
+                    const newGroups = groups.map((g, i) =>
+                        i === groupIndex
+                            ? {
+                                  ...g,
+                                  values: g.values.filter(
+                                      (_, j) => j !== valueIndex,
+                                  ),
+                              }
+                            : g,
+                    );
+                    form.setFieldValue('binConfig.customGroups', newGroups);
+                }}
+            >
+                <MantineIcon icon={IconX} />
+            </ActionIcon>
+        </Flex>
+    );
+};
+
+const CustomGroupCard: FC<{
+    form: UseFormReturnType<FormValues>;
+    groupIndex: number;
+    onAddValue: (groupIndex: number, afterValueIndex?: number) => void;
+}> = ({ form, groupIndex, onAddValue }) => {
+    const groups = form.values.binConfig.customGroups;
+    const group = groups[groupIndex];
+
+    return (
+        <Stack className={classes.groupCard} gap="xs" p="sm">
+            <Flex gap="sm" align="center">
+                <TextInput
+                    flex={1}
+                    size="sm"
+                    label="Group name"
+                    required
+                    placeholder="e.g. North America"
+                    {...form.getInputProps(
+                        `binConfig.customGroups.${groupIndex}.name`,
+                    )}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            onAddValue(groupIndex);
+                        }
+                    }}
+                />
+                {groups.length > 1 && (
+                    <ActionIcon
+                        variant="subtle"
+                        color="ldDark.6"
+                        mt="xl"
+                        onClick={() => {
+                            const newGroups = [...groups];
+                            newGroups.splice(groupIndex, 1);
+                            form.setFieldValue(
+                                'binConfig.customGroups',
+                                newGroups,
+                            );
+                        }}
+                    >
+                        <MantineIcon icon={IconX} />
+                    </ActionIcon>
+                )}
+            </Flex>
+
+            {group.values.map((value, valueIndex) => (
+                <GroupValueRow
+                    key={value._id}
+                    form={form}
+                    groupIndex={groupIndex}
+                    valueIndex={valueIndex}
+                    onAddValueAfter={onAddValue}
+                />
+            ))}
+
+            <Button
+                variant="light"
+                size="compact-xs"
+                fw="400"
+                ml="md"
+                className={classes.addButton}
+                onClick={() => onAddValue(groupIndex)}
+            >
+                + Add a value
+            </Button>
+        </Stack>
+    );
+};
+
 export const CustomBinDimensionModal: FC<{
     isEditing: boolean;
     item: Dimension | CustomBinDimension;
@@ -54,6 +338,16 @@ export const CustomBinDimensionModal: FC<{
     const { showToastSuccess } = useToaster();
     const dispatch = useExplorerDispatch();
     const customDimensions = useExplorerSelector(selectCustomDimensions);
+
+    const isStringDimension = useMemo(() => {
+        if (isDimension(item)) {
+            return item.type === DimensionType.STRING;
+        }
+        if (isCustomBinDimension(item)) {
+            return isStringBinType(item.binType);
+        }
+        return false;
+    }, [item]);
 
     const toggleModal = () =>
         dispatch(explorerActions.toggleCustomDimensionModal());
@@ -102,15 +396,30 @@ export const CustomBinDimensionModal: FC<{
                     })
                     .transform((o) => ({ from: o.from, to: o.to })),
             ),
+            customGroups: z.array(
+                z.object({
+                    _id: z.string(),
+                    name: z.string().min(1),
+                    values: z
+                        .array(
+                            z.object({
+                                _id: z.string(),
+                                matchType: z.nativeEnum(GroupValueMatchType),
+                                value: z.string().trim().min(1),
+                            }),
+                        )
+                        .min(1, 'Each group must have at least one value'),
+                }),
+            ),
         }),
     });
-
-    type FormValues = z.infer<typeof formSchema>;
 
     const form = useForm<FormValues>({
         initialValues: {
             customDimensionLabel: '',
-            binType: BinType.FIXED_NUMBER,
+            binType: isStringDimension
+                ? BinType.CUSTOM_GROUP
+                : BinType.FIXED_NUMBER,
             binConfig: {
                 fixedNumber: {
                     binNumber: MIN_OF_FIXED_NUMBER_BINS,
@@ -119,6 +428,7 @@ export const CustomBinDimensionModal: FC<{
                     binWidth: MIN_OF_FIXED_NUMBER_BINS,
                 },
                 customRange: DEFAULT_CUSTOM_RANGE,
+                customGroups: createDefaultCustomGroups(),
             },
         },
         validate: zodResolver(formSchema),
@@ -130,22 +440,34 @@ export const CustomBinDimensionModal: FC<{
         if (isEditing && isCustomDimension(item)) {
             setFieldValue('customDimensionLabel', item.name);
             setFieldValue('binType', item.binType);
-            setFieldValue(
-                'binConfig.fixedNumber.binNumber',
-                item.binNumber ? item.binNumber : MIN_OF_FIXED_NUMBER_BINS,
-            );
-
-            setFieldValue(
-                'binConfig.fixedWidth.binWidth',
-                item.binWidth ? item.binWidth : MIN_OF_FIXED_NUMBER_BINS,
-            );
-
-            setFieldValue(
-                'binConfig.customRange',
-                item.customRange
-                    ? cloneDeep(item.customRange)
-                    : DEFAULT_CUSTOM_RANGE,
-            );
+            switch (item.binType) {
+                case BinType.FIXED_NUMBER:
+                    setFieldValue(
+                        'binConfig.fixedNumber.binNumber',
+                        item.binNumber,
+                    );
+                    break;
+                case BinType.FIXED_WIDTH:
+                    setFieldValue(
+                        'binConfig.fixedWidth.binWidth',
+                        item.binWidth,
+                    );
+                    break;
+                case BinType.CUSTOM_RANGE:
+                    setFieldValue(
+                        'binConfig.customRange',
+                        structuredClone(item.customRange),
+                    );
+                    break;
+                case BinType.CUSTOM_GROUP:
+                    setFieldValue(
+                        'binConfig.customGroups',
+                        item.customGroups.map(makeFormGroup),
+                    );
+                    break;
+                default:
+                    break;
+            }
         }
     }, [setFieldValue, item, isEditing]);
 
@@ -164,18 +486,15 @@ export const CustomBinDimensionModal: FC<{
             );
 
             if (isEditing && isCustomDimension(item)) {
-                // Edit by updating the entire array
-                const updatedDimension: CustomBinDimension = {
-                    id: item.id,
-                    name: values.customDimensionLabel,
-                    type: CustomDimensionType.BIN,
-                    dimensionId: item.dimensionId,
-                    binType: values.binType,
-                    binNumber: values.binConfig.fixedNumber.binNumber,
-                    binWidth: values.binConfig.fixedWidth.binWidth,
-                    table: item.table,
-                    customRange: values.binConfig.customRange,
-                };
+                const updatedDimension = buildCustomBinDimension(
+                    {
+                        id: item.id,
+                        name: values.customDimensionLabel,
+                        table: item.table,
+                        dimensionId: item.dimensionId,
+                    },
+                    values,
+                );
                 const updatedDimensions = (customDimensions ?? []).map((dim) =>
                     dim.id === item.id ? updatedDimension : dim,
                 );
@@ -188,17 +507,17 @@ export const CustomBinDimensionModal: FC<{
                 });
             } else {
                 dispatch(
-                    explorerActions.addCustomDimension({
-                        id: sanitizedId,
-                        name: values.customDimensionLabel,
-                        type: CustomDimensionType.BIN,
-                        dimensionId: getItemId(item),
-                        binType: values.binType,
-                        binNumber: values.binConfig.fixedNumber.binNumber,
-                        binWidth: values.binConfig.fixedWidth.binWidth,
-                        table: item.table,
-                        customRange: values.binConfig.customRange,
-                    }),
+                    explorerActions.addCustomDimension(
+                        buildCustomBinDimension(
+                            {
+                                id: sanitizedId,
+                                name: values.customDimensionLabel,
+                                table: item.table,
+                                dimensionId: getItemId(item),
+                            },
+                            values,
+                        ),
+                    ),
                 );
 
                 showToastSuccess({
@@ -223,29 +542,84 @@ export const CustomBinDimensionModal: FC<{
         }
     }, [isEditing, item]);
 
+    const handleClose = () => {
+        toggleModal();
+        form.reset();
+    };
+
+    const [focusTarget, setFocusTarget] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (focusTarget) {
+            setFocusTarget(null);
+            requestAnimationFrame(() => {
+                const el = document.querySelector<HTMLInputElement>(
+                    `[data-focus-id="${focusTarget}"]`,
+                );
+                el?.focus();
+            });
+        }
+    }, [focusTarget]);
+
+    const addValueToGroup = (groupIndex: number, afterValueIndex?: number) => {
+        const groups = form.values.binConfig.customGroups;
+        const insertAt =
+            afterValueIndex !== undefined
+                ? afterValueIndex + 1
+                : groups[groupIndex].values.length;
+        const newGroups = groups.map((g, i) =>
+            i === groupIndex
+                ? {
+                      ...g,
+                      values: [
+                          ...g.values.slice(0, insertAt),
+                          createDefaultValueRule(),
+                          ...g.values.slice(insertAt),
+                      ],
+                  }
+                : g,
+        );
+        form.setFieldValue('binConfig.customGroups', newGroups);
+        setFocusTarget(`custom-group-${groupIndex}-value-${insertAt}`);
+    };
+
+    const hasEmptyGroups = useMemo(
+        () =>
+            form.values.binType === BinType.CUSTOM_GROUP &&
+            form.values.binConfig.customGroups.some(
+                (group) =>
+                    group.values.length === 0 ||
+                    group.values.some((v) => v.value.trim() === ''),
+            ),
+        [form.values.binType, form.values.binConfig.customGroups],
+    );
+
     return (
-        <Modal
+        <MantineModal
             size="lg"
-            onClick={(e) => e.stopPropagation()}
             opened={true}
-            onClose={() => {
-                toggleModal();
-                form.reset();
-            }}
-            title={
-                <>
-                    <Title order={4}>
-                        {isEditing ? 'Edit' : 'Create'} Custom Dimension
-                        <Text span fw={400}>
-                            {' '}
-                            - {baseDimensionLabel}{' '}
-                        </Text>
-                    </Title>
-                </>
+            onClose={handleClose}
+            title={`${
+                isEditing ? 'Edit' : 'Create'
+            } Custom Dimension - ${baseDimensionLabel}`}
+            icon={IconLayoutDashboard}
+            actions={
+                <Tooltip
+                    label="Each group must have at least one value"
+                    disabled={!hasEmptyGroups}
+                >
+                    <Button
+                        type="submit"
+                        form="custom-bin-dimension-form"
+                        disabled={hasEmptyGroups}
+                    >
+                        {isEditing ? 'Save changes' : 'Create'}
+                    </Button>
+                </Tooltip>
             }
         >
-            <form onSubmit={handleOnSubmit}>
-                <Stack>
+            <form id="custom-bin-dimension-form" onSubmit={handleOnSubmit}>
+                <Stack gap="md">
                     <TextInput
                         label="Label"
                         required
@@ -253,27 +627,34 @@ export const CustomBinDimensionModal: FC<{
                         {...form.getInputProps('customDimensionLabel')}
                     />
 
-                    <Radio.Group
-                        label="Bin type"
-                        withAsterisk
-                        required
-                        {...form.getInputProps('binType')}
-                    >
-                        <Group mt="md">
-                            <Radio
-                                value={BinType.FIXED_NUMBER}
-                                label="Fixed number of bins"
-                            />
-                            <Radio
-                                value={BinType.FIXED_WIDTH}
-                                label="Fixed Width"
-                            />
-                            <Radio
-                                value={BinType.CUSTOM_RANGE}
-                                label="Custom range"
-                            />
-                        </Group>
-                    </Radio.Group>
+                    {isStringDimension ? (
+                        <Text size="sm" c="ldDark.6">
+                            Group values into custom categories. Ungrouped
+                            values will be labeled &quot;Other&quot;.
+                        </Text>
+                    ) : (
+                        <Radio.Group
+                            label="Bin type"
+                            withAsterisk
+                            required
+                            {...form.getInputProps('binType')}
+                        >
+                            <Group mt="md">
+                                <Radio
+                                    value={BinType.FIXED_NUMBER}
+                                    label="Fixed number of bins"
+                                />
+                                <Radio
+                                    value={BinType.FIXED_WIDTH}
+                                    label="Fixed Width"
+                                />
+                                <Radio
+                                    value={BinType.CUSTOM_RANGE}
+                                    label="Custom range"
+                                />
+                            </Group>
+                        </Radio.Group>
+                    )}
 
                     {form.values.binType === BinType.FIXED_NUMBER && (
                         <NumberInput
@@ -281,7 +662,6 @@ export const CustomBinDimensionModal: FC<{
                             label="Bin number"
                             required
                             min={MIN_OF_FIXED_NUMBER_BINS}
-                            type="number"
                             {...form.getInputProps(
                                 'binConfig.fixedNumber.binNumber',
                             )}
@@ -294,7 +674,6 @@ export const CustomBinDimensionModal: FC<{
                             label="Bin width"
                             required
                             min={MIN_OF_FIXED_NUMBER_BINS}
-                            type="number"
                             {...form.getInputProps(
                                 'binConfig.fixedWidth.binWidth',
                             )}
@@ -317,13 +696,14 @@ export const CustomBinDimensionModal: FC<{
                                         return (
                                             <Flex
                                                 key={`custom-range.${index}`}
-                                                gap="md"
+                                                gap="sm"
                                                 align="center"
                                             >
                                                 <Text
                                                     w={100}
-                                                    color="ldGray.6"
+                                                    c="ldDark.9"
                                                     fw="400"
+                                                    size="xs"
                                                 >
                                                     &lt;{toProps.value}{' '}
                                                 </Text>
@@ -332,6 +712,7 @@ export const CustomBinDimensionModal: FC<{
                                                     w={100}
                                                     required
                                                     type="number"
+                                                    size="xs"
                                                     {...toProps}
                                                 />
                                             </Flex>
@@ -344,14 +725,15 @@ export const CustomBinDimensionModal: FC<{
                                     ) {
                                         return (
                                             <Flex
-                                                gap="md"
+                                                gap="sm"
                                                 align="center"
                                                 key={`custom-range.${index}`}
                                             >
                                                 <Text
                                                     w={100}
-                                                    color="ldGray.6"
+                                                    c="ldDark.9"
                                                     fw="400"
+                                                    size="xs"
                                                 >
                                                     ≥{fromProps.value}{' '}
                                                 </Text>
@@ -360,9 +742,14 @@ export const CustomBinDimensionModal: FC<{
                                                     w={100}
                                                     required
                                                     type="number"
+                                                    size="xs"
                                                     {...fromProps}
                                                 />
-                                                <Text color="ldGray.6" fw="400">
+                                                <Text
+                                                    c="ldDark.9"
+                                                    fw="400"
+                                                    size="xs"
+                                                >
                                                     and above{' '}
                                                 </Text>
                                             </Flex>
@@ -370,14 +757,15 @@ export const CustomBinDimensionModal: FC<{
                                     } else {
                                         return (
                                             <Flex
-                                                gap="md"
+                                                gap="sm"
                                                 align="center"
                                                 key={`custom-range.${index}`}
                                             >
                                                 <Text
                                                     w={100}
-                                                    color="ldGray.6"
+                                                    c="ldDark.9"
                                                     fw="400"
+                                                    size="xs"
                                                 >
                                                     ≥{fromProps.value} and &lt;
                                                     {toProps.value}
@@ -385,22 +773,30 @@ export const CustomBinDimensionModal: FC<{
 
                                                 <TextInput
                                                     w={100}
+                                                    size="xs"
                                                     required
                                                     type="number"
                                                     {...fromProps}
                                                 />
-                                                <Text color="ldGray.6" fw="400">
+                                                <Text
+                                                    c="ldDark.6"
+                                                    fw="400"
+                                                    size="xs"
+                                                >
                                                     to{' '}
                                                 </Text>
 
                                                 <TextInput
                                                     w={100}
+                                                    size="xs"
                                                     required
                                                     type="number"
                                                     {...toProps}
                                                 />
 
                                                 <ActionIcon
+                                                    variant="subtle"
+                                                    color="ldDark.6"
                                                     onClick={() => {
                                                         const newRange = [
                                                             ...form.values
@@ -425,11 +821,11 @@ export const CustomBinDimensionModal: FC<{
                                 },
                             )}
 
-                            <Text
-                                color="blue.6"
+                            <Button
+                                variant="light"
+                                size="compact-xs"
                                 fw="400"
-                                maw={100}
-                                sx={{ cursor: 'pointer' }}
+                                className={classes.addButton}
                                 onClick={() => {
                                     // Insert new custom range item before the last one
                                     const newRange = [
@@ -446,19 +842,55 @@ export const CustomBinDimensionModal: FC<{
                                     );
                                 }}
                             >
-                                {' '}
-                                + Add a range{' '}
-                            </Text>
+                                + Add a range
+                            </Button>
                         </>
                     )}
 
-                    {/* Add results preview */}
+                    {form.values.binType === BinType.CUSTOM_GROUP && (
+                        <>
+                            <Text fw={500}>Groups</Text>
+                            {form.values.binConfig.customGroups.map(
+                                (group, groupIndex) => (
+                                    <CustomGroupCard
+                                        key={group._id}
+                                        form={form}
+                                        groupIndex={groupIndex}
+                                        onAddValue={addValueToGroup}
+                                    />
+                                ),
+                            )}
 
-                    <Button ml="auto" type="submit">
-                        {isEditing ? 'Save changes' : 'Create'}
-                    </Button>
+                            <Button
+                                variant="light"
+                                size="compact-xs"
+                                fw="400"
+                                className={classes.addButton}
+                                onClick={() => {
+                                    form.setFieldValue(
+                                        'binConfig.customGroups',
+                                        [
+                                            ...form.values.binConfig
+                                                .customGroups,
+                                            makeFormGroup({
+                                                name: '',
+                                                values: [],
+                                            }),
+                                        ],
+                                    );
+                                }}
+                            >
+                                + Add a group
+                            </Button>
+
+                            <Text size="xs" c="ldDark.6">
+                                Values not assigned to any group will be labeled
+                                &quot;Other&quot;.
+                            </Text>
+                        </>
+                    )}
                 </Stack>
             </form>
-        </Modal>
+        </MantineModal>
     );
 };

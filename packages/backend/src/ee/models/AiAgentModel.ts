@@ -26,6 +26,7 @@ import {
     AiResultType,
     AiThread,
     AiWebAppPrompt,
+    AlreadyExistsError,
     ApiAppendEvaluationRequest,
     ApiCreateAiAgent,
     ApiCreateEvaluationRequest,
@@ -59,6 +60,7 @@ import { AiAgentReasoningTableName } from '../../database/entities/aiAgentReason
 import { DbEmail, EmailTableName } from '../../database/entities/emails';
 import { DbProject, ProjectTableName } from '../../database/entities/projects';
 import { DbUser, UserTableName } from '../../database/entities/users';
+import { isUniqueConstraintViolation } from '../../database/errors';
 import KnexPaginate from '../../database/pagination';
 import Logger from '../../logging/logger';
 import { wrapSentryTransaction } from '../../utils';
@@ -138,6 +140,15 @@ export class AiAgentModel {
             return callback(db as Knex.Transaction);
         }
         return db.transaction(callback);
+    }
+
+    async filterExistingProjectUuids(
+        projectUuids: string[],
+    ): Promise<string[]> {
+        const rows = await this.database(ProjectTableName)
+            .select('project_uuid')
+            .whereIn('project_uuid', projectUuids);
+        return rows.map((row) => row.project_uuid);
     }
 
     async getAgent({
@@ -275,7 +286,12 @@ export class AiAgentModel {
         filter,
     }: {
         organizationUuid: string;
-        filter?: { projectType?: ProjectType; projectUuid?: string };
+        filter?: {
+            projectType?: ProjectType;
+            projectFilter?:
+                | { projectUuid: string }
+                | { projectUuids: string[] };
+        };
     }): Promise<AiAgentSummary[]> {
         const integrations = this.database
             .from(AiAgentIntegrationTableName)
@@ -383,18 +399,25 @@ export class AiAgentModel {
             .where(`${AiAgentTableName}.organization_uuid`, organizationUuid)
             .groupBy(`${AiAgentTableName}.ai_agent_uuid`);
 
-        if (filter?.projectUuid) {
-            void query.where(
-                `${ProjectTableName}.project_uuid`,
-                filter.projectUuid,
-            );
-        }
-
         if (filter?.projectType) {
             void query.where(
                 `${ProjectTableName}.project_type`,
                 filter.projectType,
             );
+        }
+
+        if (filter?.projectFilter) {
+            if ('projectUuid' in filter.projectFilter) {
+                void query.where(
+                    `${ProjectTableName}.project_uuid`,
+                    filter.projectFilter.projectUuid,
+                );
+            } else if (filter.projectFilter.projectUuids.length > 0) {
+                void query.whereIn(
+                    `${ProjectTableName}.project_uuid`,
+                    filter.projectFilter.projectUuids,
+                );
+            }
         }
 
         const rows = await query;
@@ -482,21 +505,32 @@ export class AiAgentModel {
                 args.integrations?.map(async (integration) => {
                     switch (integration.type) {
                         case 'slack':
-                            const [baseIntegration] = await trx(
-                                AiAgentIntegrationTableName,
-                            )
-                                .insert({
-                                    ai_agent_uuid: agent.ai_agent_uuid,
-                                    integration_type: integration.type,
-                                })
-                                .returning('*');
+                            try {
+                                const [baseIntegration] = await trx(
+                                    AiAgentIntegrationTableName,
+                                )
+                                    .insert({
+                                        ai_agent_uuid: agent.ai_agent_uuid,
+                                        integration_type: integration.type,
+                                    })
+                                    .returning('*');
 
-                            await trx(AiAgentSlackIntegrationTableName).insert({
-                                ai_agent_integration_uuid:
-                                    baseIntegration.ai_agent_integration_uuid,
-                                organization_uuid: agent.organization_uuid,
-                                slack_channel_id: integration.channelId,
-                            });
+                                await trx(
+                                    AiAgentSlackIntegrationTableName,
+                                ).insert({
+                                    ai_agent_integration_uuid:
+                                        baseIntegration.ai_agent_integration_uuid,
+                                    organization_uuid: agent.organization_uuid,
+                                    slack_channel_id: integration.channelId,
+                                });
+                            } catch (error) {
+                                if (isUniqueConstraintViolation(error)) {
+                                    throw new AlreadyExistsError(
+                                        'This Slack channel is already assigned to another AI agent',
+                                    );
+                                }
+                                throw error;
+                            }
 
                             return {
                                 type: integration.type,
@@ -630,21 +664,32 @@ export class AiAgentModel {
                 args.integrations?.map(async (integration) => {
                     switch (integration.type) {
                         case 'slack':
-                            const [baseIntegration] = await trx(
-                                AiAgentIntegrationTableName,
-                            )
-                                .insert({
-                                    ai_agent_uuid: agent.ai_agent_uuid,
-                                    integration_type: integration.type,
-                                })
-                                .returning('*');
+                            try {
+                                const [baseIntegration] = await trx(
+                                    AiAgentIntegrationTableName,
+                                )
+                                    .insert({
+                                        ai_agent_uuid: agent.ai_agent_uuid,
+                                        integration_type: integration.type,
+                                    })
+                                    .returning('*');
 
-                            await trx(AiAgentSlackIntegrationTableName).insert({
-                                ai_agent_integration_uuid:
-                                    baseIntegration.ai_agent_integration_uuid,
-                                organization_uuid: agent.organization_uuid,
-                                slack_channel_id: integration.channelId,
-                            });
+                                await trx(
+                                    AiAgentSlackIntegrationTableName,
+                                ).insert({
+                                    ai_agent_integration_uuid:
+                                        baseIntegration.ai_agent_integration_uuid,
+                                    organization_uuid: agent.organization_uuid,
+                                    slack_channel_id: integration.channelId,
+                                });
+                            } catch (error) {
+                                if (isUniqueConstraintViolation(error)) {
+                                    throw new AlreadyExistsError(
+                                        'This Slack channel is already assigned to another AI agent',
+                                    );
+                                }
+                                throw error;
+                            }
 
                             return {
                                 type: integration.type,
@@ -1350,6 +1395,7 @@ export class AiAgentModel {
                     | 'prompt'
                     | 'created_at'
                     | 'response'
+                    | 'error_message'
                     | 'responded_at'
                     | 'filters_output'
                     | 'viz_config_output'
@@ -1357,6 +1403,7 @@ export class AiAgentModel {
                     | 'human_score'
                     | 'human_feedback'
                     | 'saved_query_uuid'
+                    | 'model_config'
                 > &
                     Pick<DbUser, 'user_uuid'> &
                     Pick<DbAiThread, 'ai_thread_uuid'> &
@@ -1369,6 +1416,7 @@ export class AiAgentModel {
                 `${AiPromptTableName}.prompt`,
                 `${AiPromptTableName}.created_at`,
                 `${AiPromptTableName}.response`,
+                `${AiPromptTableName}.error_message`,
                 `${AiPromptTableName}.responded_at`,
                 `${AiPromptTableName}.filters_output`,
                 `${AiPromptTableName}.viz_config_output`,
@@ -1376,6 +1424,7 @@ export class AiAgentModel {
                 `${AiPromptTableName}.human_score`,
                 `${AiPromptTableName}.human_feedback`,
                 `${AiPromptTableName}.saved_query_uuid`,
+                `${AiPromptTableName}.model_config`,
                 `${UserTableName}.user_uuid`,
                 `${AiThreadTableName}.ai_thread_uuid`,
                 `${AiSlackPromptTableName}.slack_user_id`,
@@ -1450,11 +1499,13 @@ export class AiAgentModel {
                 status: AiAgentModel.getThreadMessageStatus({
                     responded_at: row.responded_at,
                     response: row.response,
+                    error_message: row.error_message,
                     created_at: row.created_at,
                 }),
                 uuid: row.ai_prompt_uuid,
                 threadUuid: row.ai_thread_uuid,
                 message: row.response,
+                errorMessage: row.error_message,
                 createdAt:
                     row.responded_at?.toISOString() ??
                     row.created_at.toISOString(),
@@ -1462,6 +1513,7 @@ export class AiAgentModel {
                 humanFeedback: row.human_feedback,
                 artifacts: artifacts ?? null,
                 referencedArtifacts: referencedArtifacts ?? null,
+                modelConfig: row.model_config,
                 toolCalls: toolCalls
                     .filter(
                         (
@@ -1905,8 +1957,15 @@ export class AiAgentModel {
     }
 
     static getThreadMessageStatus(
-        row: Pick<DbAiPrompt, 'responded_at' | 'response' | 'created_at'>,
+        row: Pick<
+            DbAiPrompt,
+            'responded_at' | 'response' | 'error_message' | 'created_at'
+        >,
     ): 'idle' | 'pending' | 'error' {
+        if (row.error_message != null) {
+            return 'error';
+        }
+
         if (row.responded_at == null || row.response == null) {
             // if the message was created more than 5 minutes ago, return error
             if (moment(row.created_at).add(5, 'minutes').isBefore(moment())) {
@@ -1960,6 +2019,7 @@ export class AiAgentModel {
                     | 'ai_prompt_uuid'
                     | 'prompt'
                     | 'response'
+                    | 'error_message'
                     | 'created_at'
                     | 'responded_at'
                     | 'filters_output'
@@ -1968,6 +2028,7 @@ export class AiAgentModel {
                     | 'human_score'
                     | 'human_feedback'
                     | 'saved_query_uuid'
+                    | 'model_config'
                 > &
                     Pick<DbUser, 'user_uuid'> &
                     Pick<DbAiThread, 'ai_thread_uuid'> &
@@ -1979,6 +2040,7 @@ export class AiAgentModel {
                 `${AiPromptTableName}.ai_prompt_uuid`,
                 `${AiPromptTableName}.prompt`,
                 `${AiPromptTableName}.response`,
+                `${AiPromptTableName}.error_message`,
                 `${AiPromptTableName}.created_at`,
                 `${AiPromptTableName}.responded_at`,
                 `${AiPromptTableName}.filters_output`,
@@ -1987,6 +2049,7 @@ export class AiAgentModel {
                 `${AiPromptTableName}.human_score`,
                 `${AiPromptTableName}.human_feedback`,
                 `${AiPromptTableName}.saved_query_uuid`,
+                `${AiPromptTableName}.model_config`,
                 `${UserTableName}.user_uuid`,
                 `${AiThreadTableName}.ai_thread_uuid`,
                 `${AiSlackPromptTableName}.slack_user_id`,
@@ -2096,16 +2159,19 @@ export class AiAgentModel {
                     status: AiAgentModel.getThreadMessageStatus({
                         responded_at: row.responded_at,
                         response: row.response,
+                        error_message: row.error_message,
                         created_at: row.created_at,
                     }),
                     uuid: row.ai_prompt_uuid,
                     threadUuid: row.ai_thread_uuid,
                     message: row.response ?? '',
+                    errorMessage: row.error_message,
                     createdAt: row.responded_at?.toString() ?? '',
                     humanScore: row.human_score,
                     humanFeedback: row.human_feedback,
                     artifacts: artifacts.length > 0 ? artifacts : null,
                     referencedArtifacts,
+                    modelConfig: row.model_config,
                     toolCalls: toolCalls
                         .filter(
                             (
@@ -2255,6 +2321,7 @@ export class AiAgentModel {
                 'ai_prompt_uuid',
                 'prompt',
                 'response',
+                'error_message',
                 'responded_at',
                 'filters_output',
                 'viz_config_output',
@@ -2307,12 +2374,14 @@ export class AiAgentModel {
                 prompt: `${AiPromptTableName}.prompt`,
                 createdAt: `${AiPromptTableName}.created_at`,
                 response: `${AiPromptTableName}.response`,
+                errorMessage: `${AiPromptTableName}.error_message`,
                 response_slack_ts: `${AiSlackPromptTableName}.response_slack_ts`,
                 slackUserId: `${AiSlackPromptTableName}.slack_user_id`,
                 slackChannelId: `${AiSlackPromptTableName}.slack_channel_id`,
                 promptSlackTs: `${AiSlackPromptTableName}.prompt_slack_ts`,
                 slackThreadTs: `${AiSlackThreadTableName}.slack_thread_ts`,
                 humanScore: `${AiPromptTableName}.human_score`,
+                modelConfig: `${AiPromptTableName}.model_config`,
             })
             .where(`${AiPromptTableName}.ai_prompt_uuid`, promptUuid)
             .first();
@@ -2385,6 +2454,9 @@ export class AiAgentModel {
             .update({
                 responded_at: this.database.fn.now(),
                 ...(data.response ? { response: data.response } : {}),
+                ...(data.errorMessage
+                    ? { error_message: data.errorMessage }
+                    : {}),
                 ...(data.humanScore ? { human_score: data.humanScore } : {}),
             })
             .where({
@@ -2402,7 +2474,9 @@ export class AiAgentModel {
             .update({
                 human_score: data.humanScore,
                 human_feedback:
-                    data.humanScore === -1 ? data.humanFeedback ?? null : null,
+                    data.humanScore === -1
+                        ? (data.humanFeedback ?? null)
+                        : null,
             })
             .where({
                 ai_prompt_uuid: data.promptUuid,
@@ -2602,6 +2676,7 @@ export class AiAgentModel {
                 createdAt: `${AiPromptTableName}.created_at`,
                 response: `${AiPromptTableName}.response`,
                 humanScore: `${AiPromptTableName}.human_score`,
+                modelConfig: `${AiPromptTableName}.model_config`,
             })
             .where(`${AiPromptTableName}.ai_prompt_uuid`, promptUuid)
             .first();
@@ -2642,6 +2717,7 @@ export class AiAgentModel {
                     ai_thread_uuid: data.threadUuid,
                     created_by_user_uuid: data.createdByUserUuid,
                     prompt: data.prompt,
+                    ...(data.modelConfig && { model_config: data.modelConfig }),
                 })
                 .returning('ai_prompt_uuid');
 

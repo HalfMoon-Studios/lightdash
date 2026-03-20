@@ -1,15 +1,13 @@
-import {
-    BigqueryAuthenticationType,
-    FeatureFlags,
-    WarehouseTypes,
-} from '@lightdash/common';
+import { BigqueryAuthenticationType, WarehouseTypes } from '@lightdash/common';
 import type { SelectItem } from '@mantine/core';
 import {
     Anchor,
+    Autocomplete,
     Button,
     FileInput,
     Group,
     Image,
+    Loader,
     NumberInput,
     Select,
     Stack,
@@ -18,16 +16,16 @@ import {
     Tooltip,
 } from '@mantine/core';
 import { useDebouncedValue } from '@mantine/hooks';
-import { IconCheck } from '@tabler/icons-react';
+import { IconCheck, IconExclamationCircle } from '@tabler/icons-react';
 import { useState, type ChangeEvent, type FC } from 'react';
 import { useToggle } from 'react-use';
 import { useGoogleLoginPopup } from '../../../hooks/gdrive/useGdrive';
 import useHealth from '../../../hooks/health/useHealth';
 import {
     useBigqueryDatasets,
+    useBigqueryProjects,
     useIsBigQueryAuthenticated,
 } from '../../../hooks/useBigquerySSO';
-import { useFeatureFlagEnabled } from '../../../hooks/useFeatureFlagEnabled';
 import MantineIcon from '../../common/MantineIcon';
 import DocumentationHelpButton from '../../DocumentationHelpButton';
 import FormCollapseButton from '../FormCollapseButton';
@@ -36,6 +34,7 @@ import BooleanSwitch from '../Inputs/BooleanSwitch';
 import FormSection from '../Inputs/FormSection';
 import StartOfWeekSelect from '../Inputs/StartOfWeekSelect';
 import { useProjectFormContext } from '../useProjectFormContext';
+import classes from './BigQueryForm.module.css';
 import { BigQueryDefaultValues } from './defaultValues';
 
 export const BigQuerySchemaInput: FC<{
@@ -98,7 +97,7 @@ export const BigQuerySSOInput: FC<{
                         alt="Google logo"
                     />
                 }
-                sx={{ ':hover': { textDecoration: 'underline' } }}
+                className={classes.signInButton}
             >
                 Sign in with Google
             </Button>
@@ -120,8 +119,6 @@ const BigQueryForm: FC<{
     const [debouncedProject] = useDebouncedValue(project.value, 300);
     const health = useHealth();
     const isAdcEnabled = health.data?.auth.google?.enableGCloudADC;
-
-    const isSsoEnabled = useFeatureFlagEnabled(FeatureFlags.BigquerySSO);
     // Fetching databases can only happen if user is authenticated
     // if user authenticates, and change to private_key
     // We will not make any queries, in case private_key is different
@@ -133,10 +130,12 @@ const BigQueryForm: FC<{
         data: datasets,
         refetch: refetchDatasets,
         error: datasetsError,
-    } = useBigqueryDatasets(
-        isSsoEnabled && isAuthenticated && isSso,
-        debouncedProject,
-    );
+    } = useBigqueryDatasets(isAuthenticated && isSso, debouncedProject);
+    const {
+        data: gcpProjects,
+        isLoading: isLoadingProjects,
+        error: projectsError,
+    } = useBigqueryProjects(isAuthenticated && isSso);
     const [isOpen, toggleOpen] = useToggle(false);
     const [temporaryFile, setTemporaryFile] = useState<File | null>(null);
     const { savedProject } = useProjectFormContext();
@@ -154,9 +153,7 @@ const BigQueryForm: FC<{
     }
 
     // savedProject might not be loaded when the form is rendered, so we need to set the defaultValue also on a hook
-    const defaultAuthenticationType = isSsoEnabled
-        ? BigqueryAuthenticationType.SSO
-        : BigqueryAuthenticationType.PRIVATE_KEY;
+    const defaultAuthenticationType = BigqueryAuthenticationType.SSO;
 
     const { mutate: openLoginPopup } = useGoogleLoginPopup(
         'bigquery',
@@ -179,7 +176,7 @@ const BigQueryForm: FC<{
             value: BigqueryAuthenticationType.PRIVATE_KEY,
             label: 'Service Account (JSON key file)',
         },
-        isSsoEnabled && {
+        {
             value: BigqueryAuthenticationType.SSO,
             label: 'User Account (Sign in with Google)',
         },
@@ -190,8 +187,8 @@ const BigQueryForm: FC<{
     ].filter(Boolean) as SelectItem[];
     return (
         <>
-            <Stack style={{ marginTop: '8px' }}>
-                {(isSsoEnabled || isAdcEnabled) && (
+            <Stack mt={8}>
+                {
                     <Group spacing="sm">
                         <Select
                             name="warehouse.authenticationType"
@@ -233,45 +230,100 @@ const BigQueryForm: FC<{
                             </Tooltip>
                         )}
                     </Group>
-                )}
+                }
 
-                {isSsoEnabled &&
-                    authenticationType === BigqueryAuthenticationType.SSO && (
-                        <BigQuerySSOInput
-                            isAuthenticated={isAuthenticated}
+                {authenticationType === BigqueryAuthenticationType.SSO && (
+                    <BigQuerySSOInput
+                        isAuthenticated={isAuthenticated}
+                        disabled={disabled}
+                        openLoginPopup={openLoginPopup}
+                    />
+                )}
+                <Group spacing="sm">
+                    {isSso && isAuthenticated ? (
+                        <Autocomplete
+                            name="warehouse.project"
+                            label="Project"
+                            description={
+                                <p>
+                                    <Anchor
+                                        target="_blank"
+                                        href="https://docs.lightdash.com/get-started/setup-lightdash/connect-project#project"
+                                        rel="noreferrer"
+                                    >
+                                        This is the GCP project ID
+                                    </Anchor>
+                                    .
+                                </p>
+                            }
+                            placeholder={
+                                isLoadingProjects
+                                    ? 'Loading projects...'
+                                    : 'Type or select a project'
+                            }
+                            required
+                            {...form.getInputProps('warehouse.project')}
                             disabled={disabled}
-                            openLoginPopup={openLoginPopup}
+                            labelProps={{ style: { marginTop: '8px' } }}
+                            w={hasDatasets ? '90%' : '100%'}
+                            data={
+                                gcpProjects?.map((p) => ({
+                                    value: p.projectId,
+                                    label: p.friendlyName
+                                        ? `${p.friendlyName} (${p.projectId})`
+                                        : p.projectId,
+                                })) ?? []
+                            }
+                            rightSection={
+                                isLoadingProjects ? (
+                                    <Loader size="xs" />
+                                ) : projectsError ? (
+                                    <Tooltip label="Failed to load projects. You can type manually.">
+                                        <MantineIcon
+                                            icon={IconExclamationCircle}
+                                            color="yellow"
+                                        />
+                                    </Tooltip>
+                                ) : undefined
+                            }
+                            error={
+                                datasetsError ? (
+                                    <Text c="red">
+                                        {datasetsError.error.message}
+                                    </Text>
+                                ) : undefined
+                            }
+                        />
+                    ) : (
+                        <TextInput
+                            name="warehouse.project"
+                            label="Project"
+                            description={
+                                <p>
+                                    <Anchor
+                                        target="_blank"
+                                        href="https://docs.lightdash.com/get-started/setup-lightdash/connect-project#project"
+                                        rel="noreferrer"
+                                    >
+                                        This is the GCP project ID
+                                    </Anchor>
+                                    .
+                                </p>
+                            }
+                            required
+                            {...form.getInputProps('warehouse.project')}
+                            disabled={disabled}
+                            labelProps={{ style: { marginTop: '8px' } }}
+                            w={hasDatasets ? '90%' : '100%'}
+                            error={
+                                datasetsError ? (
+                                    <Text c="red">
+                                        {datasetsError.error.message}
+                                    </Text>
+                                ) : undefined
+                            }
                         />
                     )}
-                <Group spacing="sm">
-                    <TextInput
-                        name="warehouse.project"
-                        label="Project"
-                        description={
-                            <p>
-                                <Anchor
-                                    target="_blank"
-                                    href="https://docs.lightdash.com/get-started/setup-lightdash/connect-project#project"
-                                    rel="noreferrer"
-                                >
-                                    This is the GCP project ID
-                                </Anchor>
-                                .
-                            </p>
-                        }
-                        required
-                        {...form.getInputProps('warehouse.project')}
-                        disabled={disabled}
-                        labelProps={{ style: { marginTop: '8px' } }}
-                        w={hasDatasets ? '90%' : '100%'}
-                        error={
-                            datasetsError ? (
-                                <Text color="red">
-                                    {datasetsError.error.message}
-                                </Text>
-                            ) : undefined
-                        }
-                    />
                     {hasDatasets && (
                         <Tooltip label="You have access to this project">
                             <Group mt="50px">
@@ -303,8 +355,7 @@ const BigQueryForm: FC<{
                     disabled={disabled}
                 />
 
-                {isSsoEnabled &&
-                authenticationType === BigqueryAuthenticationType.SSO ? (
+                {authenticationType === BigqueryAuthenticationType.SSO ? (
                     <>
                         {/*
                 // Autocomplete for datasets
@@ -428,23 +479,22 @@ const BigQueryForm: FC<{
                     <></>
                 )}
                 <FormSection isOpen={isOpen} name="advanced">
-                    <Stack style={{ marginTop: '8px' }}>
-                        {isSsoEnabled && (
-                            <BooleanSwitch
-                                name="warehouse.requireUserCredentials"
-                                {...form.getInputProps(
-                                    'warehouse.requireUserCredentials',
-                                    {
-                                        type: 'checkbox',
-                                    },
-                                )}
-                                label="Require users to provide their own credentials"
-                                disabled={disabled}
-                                defaultChecked={
-                                    BigQueryDefaultValues.requireUserCredentials
-                                }
-                            />
-                        )}
+                    <Stack mt={8}>
+                        <BooleanSwitch
+                            name="warehouse.requireUserCredentials"
+                            {...form.getInputProps(
+                                'warehouse.requireUserCredentials',
+                                {
+                                    type: 'checkbox',
+                                },
+                            )}
+                            label="Require users to provide their own credentials"
+                            disabled={disabled}
+                            defaultChecked={
+                                BigQueryDefaultValues.requireUserCredentials
+                            }
+                        />
+
                         <TextInput
                             name="warehouse.executionProject"
                             label="Execution project"

@@ -33,22 +33,32 @@ export default function mockHealthResponse(
         pylon: {
             appId: '',
         },
+        headway: {
+            enabled: false,
+        },
         siteUrl: 'http://localhost:3000',
         staticIp: '',
+        signupUrl: undefined,
+        helpMenuUrl: undefined,
         posthog: undefined,
         query: {
             maxPageSize: 2500,
             maxLimit: 1000000,
             defaultLimit: 500,
             csvCellsLimit: 100,
+            retryQueryOnTransientErrors: true,
+        },
+        dashboard: {
+            maxTilesPerTab: 50,
+            maxTabsPerDashboard: 20,
+            versionHistory: {
+                daysLimit: 3,
+            },
         },
         pivotTable: {
             maxColumnLimit: 100,
         },
         hasSlack: false,
-        slack: {
-            multiAgentChannelEnabled: false,
-        },
         auth: {
             disablePasswordAuthentication: false,
             google: {
@@ -97,6 +107,8 @@ export default function mockHealthResponse(
         },
         isServiceAccountEnabled: false,
         isOrganizationWarehouseCredentialsEnabled: false,
+        isAthenaWarehouseIamRoleAuthEnabled: false,
+        isSaveCredentialsFormEnabled: false,
         isCustomRolesEnabled: false,
         embedding: {
             enabled: false,
@@ -105,8 +117,19 @@ export default function mockHealthResponse(
         ai: {
             analyticsProjectUuid: undefined,
             analyticsDashboardUuid: undefined,
+            isAmbientAiEnabled: false,
         },
         echarts6: {
+            enabled: false,
+        },
+        funnelBuilder: {
+            enabled: false,
+        },
+        softDelete: {
+            enabled: false,
+            retentionDays: 30,
+        },
+        preAggregates: {
             enabled: false,
         },
         ...overrides,

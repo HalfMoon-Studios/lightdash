@@ -1,17 +1,16 @@
 import {
+    assertUnreachable,
     ChartKind,
     ResourceViewItemType,
-    assertUnreachable,
     type ResourceViewItem,
 } from '@lightdash/common';
 import {
-    Center,
     Indicator,
     Paper,
     Tooltip,
     type IndicatorProps,
     type TooltipProps,
-} from '@mantine/core';
+} from '@mantine-8/core';
 import {
     IconFolder,
     IconLayoutDashboard,
@@ -20,6 +19,7 @@ import {
 import { useRef, useState, type FC, type ReactNode } from 'react';
 import { type StyledComponent } from 'styled-components';
 import MantineIcon, { type MantineIconProps } from '../MantineIcon';
+import classes from './ResourceIcon.module.css';
 import { getChartIcon } from './utils';
 
 interface ResourceIconProps {
@@ -39,18 +39,7 @@ export const IconBox: FC<IconBoxProps> = ({
     bg = 'ldGray.0',
     ...mantineIconProps
 }) => (
-    <Paper
-        display="flex"
-        component={Center}
-        w={32}
-        h={32}
-        radius="md"
-        bg={bg}
-        sx={{
-            flexGrow: 0,
-            flexShrink: 0,
-        }}
-    >
+    <Paper w={32} h={32} radius="md" bg={bg} className={classes.iconBox}>
         <MantineIcon
             icon={icon}
             color={color}
@@ -70,8 +59,10 @@ export const ChartIcon: FC<{
     <IconBox
         icon={getChartIcon(chartKind)}
         color={color ?? 'blue.6'}
-        transform={
-            chartKind === ChartKind.HORIZONTAL_BAR ? 'rotate(90)' : undefined
+        style={
+            chartKind === ChartKind.HORIZONTAL_BAR
+                ? { rotate: '90deg' }
+                : undefined
         }
     />
 );
@@ -136,7 +127,7 @@ export const ResourceIndicator: FC<
             label={
                 <Tooltip
                     {...tooltipProps}
-                    sx={{ pointerEvents: 'auto' }}
+                    className={classes.tooltipPointerEvents}
                     label={
                         <div
                             onMouseEnter={handleLabelMouseEnter}
@@ -149,10 +140,15 @@ export const ResourceIndicator: FC<
                 >
                     <MantineIcon
                         icon={iconProps.icon}
+                        size={14}
                         onMouseEnter={handleMouseEnter}
                         onMouseLeave={handleMouseLeave}
+                        fill={iconProps.color}
+                        fillOpacity={0.15}
+                        strokeWidth={1.2}
                         style={{
-                            color: iconProps.color, // NOTE: If react-tabler icon is filled, then we have to override the color this way
+                            color: iconProps.color,
+                            opacity: 0.65, // NOTE: If react-tabler icon is filled, then we have to override the color this way
                         }}
                     />
                 </Tooltip>

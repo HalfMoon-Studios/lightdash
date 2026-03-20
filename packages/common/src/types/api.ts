@@ -1,25 +1,35 @@
-import { type AnyType } from './any';
-import { type ApiTogglePinnedItem, type PinnedItems } from './pinning';
-import { type ProjectGroupAccess } from './projectGroupAccess';
-import { type MostPopularAndRecentlyUpdated } from './resourceViewItem';
-import {
-    type ApiJobScheduledResponse,
-    type ApiJobStatusResponse,
-    type ApiSchedulersResponse,
-    type SchedulerAndTargets,
-    type SchedulerJobStatus,
-} from './scheduler';
-import { type ApiSlackChannelsResponse } from './slack';
-import { type Space } from './space';
-import { type ApiSshKeyPairResponse } from './SshKeyPair';
-import {
-    type LightdashUser,
-    type LoginOptions,
-    type UserAllowedOrganization,
-} from './user';
-import { type UserWarehouseCredentials } from './userWarehouseCredentials';
-import { type ValidationResponse } from './validation';
-
+// Note: EE types removed from direct import to avoid circular module resolution
+// They are still available via the re-export below: export * from './ee';
+import type {
+    ApiAiAgentAdminConversationsResponse,
+    ApiAiAgentArtifactResponse,
+    ApiAiAgentEvaluationResponse,
+    ApiAiAgentEvaluationRunResponse,
+    ApiAiAgentEvaluationRunResultsResponse,
+    ApiAiAgentEvaluationRunSummaryListResponse,
+    ApiAiAgentEvaluationSummaryListResponse,
+    ApiAiAgentThreadCreateResponse,
+    ApiAiAgentThreadGenerateTitleResponse,
+    ApiAiAgentThreadMessageCreateResponse,
+    ApiAiAgentThreadMessageVizQueryResponse,
+    ApiAiAgentThreadMessageVizResponse,
+    ApiAiAgentThreadResponse,
+    ApiAiAgentThreadSummaryListResponse,
+    ApiAiAgentVerifiedArtifactsResponse,
+    ApiAiDashboardSummaryResponse,
+    ApiAiGenerateChartMetadataResponse,
+    ApiAiGenerateTableCalculationResponse,
+    ApiAiGetDashboardSummaryResponse,
+    ApiAiOrganizationSettingsResponse,
+    ApiAppendInstructionResponse,
+    ApiCreateEvaluationResponse,
+    ApiGetUserAgentPreferencesResponse,
+    ApiUpdateAiOrganizationSettingsResponse,
+    ApiUpdateUserAgentPreferencesResponse,
+    DecodedEmbed,
+    EmbedUrl,
+} from '../ee';
+import type { PivotValuesColumn } from '../visualizations/types';
 import {
     type ApiUnusedContent,
     type ApiUserActivityDownloadCsv,
@@ -28,6 +38,7 @@ import {
     type UserActivity,
     type ViewStatistics,
 } from './analytics';
+import { type AnyType } from './any';
 import {
     type ApiCreateComment,
     type ApiDeleteComment,
@@ -45,13 +56,18 @@ import {
     type ApiCatalogAnalyticsResults,
     type ApiCatalogMetadataResults,
     type ApiGetMetricsTree,
+    type ApiGetMetricsTreeResponse,
+    type ApiGetMetricsTreesResponse,
     type ApiMetricsCatalog,
+    type ApiMetricsTreeLockResponse,
+    type ApiUpdateMetricsTreeResponse,
 } from './catalog';
 import { type ApiGetChangeResponse } from './changeset';
 import {
     type ApiChartAsCodeListResponse,
     type ApiChartAsCodeUpsertResponse,
     type ApiDashboardAsCodeListResponse,
+    type ApiSqlChartAsCodeListResponse,
 } from './coder';
 import {
     type ApiChartContentResponse,
@@ -61,11 +77,16 @@ import {
     type Dashboard,
     type DashboardAvailableFilters,
     type DashboardBasicDetails,
-    type DashboardSummary,
+    type DashboardHistory,
 } from './dashboard';
 import { type DbtExposure } from './dbt';
 import { type EmailStatusExpiring } from './email';
-import { type Explore, type SummaryExplore } from './explore';
+import {
+    type Explore,
+    type ExploreError,
+    type SummaryExplore,
+} from './explore';
+import { type ApiFavoriteItems, type ApiToggleFavorite } from './favorites';
 import {
     type DimensionType,
     type FilterableField,
@@ -74,11 +95,15 @@ import {
 import { type FieldValueSearchResult } from './fieldMatch';
 import { type DashboardFilters } from './filter';
 import {
+    type ApiGitFileContent,
+    type GitBranch,
+    type GitFileOrDirectory,
     type GitIntegrationConfiguration,
     type GitRepo,
     type PullRequestCreated,
 } from './gitIntegration';
 import type { ApiGroupListResponse } from './groups';
+import { type ApiImpersonationOrganizationSettingsResponse } from './impersonationOrganizationSettings';
 import { type MetricQuery, type QueryWarning } from './metricQuery';
 import type {
     ApiMetricsExplorerQueryResults,
@@ -100,16 +125,24 @@ import {
     type OrganizationMemberProfile,
     type OrganizationMemberRole,
 } from './organizationMemberProfile';
+import type { ResultsPaginationMetadata } from './paginateResults';
 import type { ParametersValuesMap } from './parameters';
 import {
     type CreatePersonalAccessToken,
     type PersonalAccessToken,
 } from './personalAccessToken';
-
+import { type ApiTogglePinnedItem, type PinnedItems } from './pinning';
+import { type PivotConfiguration } from './pivot';
+import type {
+    ApiGetPreAggregateMaterializationsResponse,
+    ApiGetPreAggregateStatsResponse,
+    PreAggregateMatchMiss,
+} from './preAggregate';
 import {
     type ApiProjectCompileLogResponse,
     type ApiProjectCompileLogsResponse,
 } from './projectCompileLogs';
+import { type ProjectGroupAccess } from './projectGroupAccess';
 import { type ProjectMemberProfile } from './projectMemberProfile';
 import { type ProjectMemberRole } from './projectMemberRole';
 import {
@@ -120,7 +153,9 @@ import {
     type WarehouseCredentials,
 } from './projects';
 import { type ApiPromotionChangesResponse } from './promotion';
+import { type QueryHistoryStatus } from './queryHistory';
 import { type ApiRenameFieldsResponse } from './rename';
+import { type MostPopularAndRecentlyUpdated } from './resourceViewItem';
 import { type ResultColumns, type ResultRow } from './results';
 import {
     type ApiCalculateSubtotalsResponse,
@@ -129,10 +164,21 @@ import {
     type ChartVersion,
     type SavedChart,
 } from './savedCharts';
+import {
+    type ApiJobScheduledResponse,
+    type ApiJobStatusResponse,
+    type ApiReassignUserSchedulersResponse,
+    type ApiSchedulersResponse,
+    type ApiUserSchedulersSummaryResponse,
+    type SchedulerAndTargets,
+    type SchedulerJobStatus,
+} from './scheduler';
 import { type SchedulerWithLogs } from './schedulerLog';
 import { type SearchResults } from './search';
 import { type ShareUrl } from './share';
+import { type ApiSlackChannelsResponse } from './slack';
 import { type SlackSettings } from './slackSettings';
+import { type ApiSpaceDeleteImpactResponse, type Space } from './space';
 import {
     type ApiCreateSqlChart,
     type ApiCreateVirtualView,
@@ -143,46 +189,29 @@ import {
     type GroupByColumn,
     type SortBy,
 } from './sqlRunner';
+import { type ApiSshKeyPairResponse } from './SshKeyPair';
 import { type TableBase } from './table';
 import { type ApiCreateTagResponse } from './tags';
+import {
+    type LightdashUser,
+    type LoginOptions,
+    type UserAllowedOrganization,
+} from './user';
+import { type UserWarehouseCredentials } from './userWarehouseCredentials';
+import {
+    type ApiChartValidationResponse,
+    type ApiDashboardValidationResponse,
+    type ApiPaginatedValidateResponse,
+    type ApiSingleValidationResponse,
+    type ValidationResponse,
+} from './validation';
 import { type ApiWarehouseTableFields } from './warehouse';
-
-// Note: EE types removed from direct import to avoid circular module resolution
-// They are still available via the re-export below: export * from './ee';
-import type {
-    ApiAiAgentAdminConversationsResponse,
-    ApiAiAgentArtifactResponse,
-    ApiAiAgentEvaluationResponse,
-    ApiAiAgentEvaluationRunResponse,
-    ApiAiAgentEvaluationRunResultsResponse,
-    ApiAiAgentEvaluationRunSummaryListResponse,
-    ApiAiAgentEvaluationSummaryListResponse,
-    ApiAiAgentThreadCreateResponse,
-    ApiAiAgentThreadGenerateTitleResponse,
-    ApiAiAgentThreadMessageCreateResponse,
-    ApiAiAgentThreadMessageVizQueryResponse,
-    ApiAiAgentThreadMessageVizResponse,
-    ApiAiAgentThreadResponse,
-    ApiAiAgentThreadSummaryListResponse,
-    ApiAiAgentVerifiedArtifactsResponse,
-    ApiAiOrganizationSettingsResponse,
-    ApiAppendInstructionResponse,
-    ApiCreateEvaluationResponse,
-    ApiGetUserAgentPreferencesResponse,
-    ApiUpdateAiOrganizationSettingsResponse,
-    ApiUpdateUserAgentPreferencesResponse,
-    DecodedEmbed,
-    EmbedUrl,
-} from '../ee';
-import type { PivotValuesColumn } from '../visualizations/types';
-import type { ResultsPaginationMetadata } from './paginateResults';
-import { type PivotConfiguration } from './pivot';
-import { type QueryHistoryStatus } from './queryHistory';
 
 export enum RequestMethod {
     CLI = 'CLI',
     CLI_CI = 'CLI_CI',
     WEB_APP = 'WEB_APP',
+    SDK = 'SDK',
     HEADLESS_BROWSER = 'HEADLESS_BROWSER',
     UNKNOWN = 'UNKNOWN',
     BACKEND = 'BACKEND',
@@ -206,9 +235,15 @@ export type UpdateProjectMember = {
 export type UpdateMetadata = {
     upstreamProjectUuid?: string | null; // null means we unset this value
 };
+
+export type UpdateDefaultUserSpaces = {
+    hasDefaultUserSpaces: boolean;
+};
 export type ApiCompiledQueryResults = {
     query: string;
+    pivotQuery?: string;
     parameterReferences: string[];
+    compilationErrors?: string[];
 };
 
 export type ApiExploresResults = SummaryExplore[];
@@ -279,6 +314,7 @@ export type SentryConfig = {
     release: string;
     environment: string;
     tracesSampleRate: number;
+    queryTracesSampleRate: number | null;
     profilesSampleRate: number;
     anr: {
         enabled: boolean;
@@ -307,6 +343,8 @@ export type HealthState = {
     hasMicrosoftTeams: boolean;
     isServiceAccountEnabled: boolean;
     isOrganizationWarehouseCredentialsEnabled: boolean;
+    isAthenaWarehouseIamRoleAuthEnabled: boolean;
+    isSaveCredentialsFormEnabled: boolean;
     latest: {
         version?: string;
     };
@@ -373,20 +411,30 @@ export type HealthState = {
         appId: string;
         verificationHash?: string;
     };
+    headway: {
+        enabled: boolean;
+    };
     staticIp: string;
+    signupUrl: string | undefined;
+    helpMenuUrl: string | undefined;
     query: {
         maxLimit: number;
         defaultLimit: number;
         csvCellsLimit: number;
         maxPageSize: number;
+        retryQueryOnTransientErrors: boolean;
+    };
+    dashboard: {
+        maxTilesPerTab: number;
+        maxTabsPerDashboard: number;
+        versionHistory: {
+            daysLimit: number;
+        };
     };
     pivotTable: {
         maxColumnLimit: number;
     };
     hasSlack: boolean;
-    slack: {
-        multiAgentChannelEnabled: boolean;
-    };
     hasGithub: boolean;
     hasGitlab: boolean;
     hasHeadlessBrowser: boolean;
@@ -414,9 +462,66 @@ export type HealthState = {
     ai: {
         analyticsProjectUuid?: string;
         analyticsDashboardUuid?: string;
+        isAmbientAiEnabled: boolean;
     };
     echarts6: {
         enabled: boolean;
+    };
+    funnelBuilder: {
+        enabled: boolean;
+    };
+    softDelete: {
+        enabled: boolean;
+        retentionDays: number;
+    };
+    preAggregates: {
+        enabled: boolean;
+    };
+};
+
+// Deploy Session Types
+export enum DeploySessionStatus {
+    UPLOADING = 'uploading',
+    FINALIZING = 'finalizing',
+    COMPLETED = 'completed',
+    FAILED = 'failed',
+}
+
+export type DeploySession = {
+    deploySessionUuid: string;
+    projectUuid: string;
+    userUuid: string;
+    status: DeploySessionStatus;
+    batchCount: number;
+    exploreCount: number;
+    createdAt: Date;
+};
+
+export type ApiStartDeploySessionResponse = {
+    status: 'ok';
+    results: {
+        deploySessionUuid: string;
+    };
+};
+
+export type ApiAddDeployBatchRequest = {
+    explores: (Explore | ExploreError)[];
+    batchNumber: number;
+};
+
+export type ApiAddDeployBatchResponse = {
+    status: 'ok';
+    results: {
+        batchNumber: number;
+        exploreCount: number;
+    };
+};
+
+export type ApiFinalizeDeployResponse = {
+    status: 'ok';
+    results: {
+        exploreCount: number;
+        status: DeploySessionStatus;
     };
 };
 
@@ -451,7 +556,9 @@ export type CreateProject = Omit<
     | 'projectUuid'
     | 'organizationUuid'
     | 'schedulerTimezone'
+    | 'queryTimezone'
     | 'createdByUserUuid'
+    | 'hasDefaultUserSpaces'
 > & {
     warehouseConnection: CreateWarehouseCredentials;
     copyWarehouseConnectionFromUpstreamProject?: boolean;
@@ -480,7 +587,9 @@ export type UpdateProject = Omit<
     | 'organizationUuid'
     | 'type'
     | 'schedulerTimezone'
+    | 'queryTimezone'
     | 'createdByUserUuid'
+    | 'hasDefaultUserSpaces'
 > & {
     warehouseConnection: CreateWarehouseCredentials;
 };
@@ -490,6 +599,11 @@ export type CacheMetadata = {
     cacheExpiresAt?: Date;
     cacheKey?: string;
     cacheHit: boolean;
+    preAggregate?: {
+        hit: boolean;
+        name?: string;
+        reason?: PreAggregateMatchMiss;
+    };
 };
 
 export type ApiQueryResults = {
@@ -518,6 +632,7 @@ export type ApiExecuteAsyncDashboardChartQueryResults =
         metricQuery: MetricQuery;
         fields: ItemsMap;
         appliedDashboardFilters: DashboardFilters;
+        dateZoomApplied: boolean;
     };
 
 export type ApiExecuteAsyncSqlQueryResults =
@@ -551,11 +666,15 @@ export type ReadyQueryResultsPage = ResultsPaginationMetadata<ResultRow> & {
 export type ApiGetAsyncQueryResults =
     | ReadyQueryResultsPage
     | {
-          status: QueryHistoryStatus.PENDING | QueryHistoryStatus.CANCELLED;
+          status:
+              | QueryHistoryStatus.PENDING
+              | QueryHistoryStatus.QUEUED
+              | QueryHistoryStatus.EXECUTING
+              | QueryHistoryStatus.CANCELLED;
           queryUuid: string;
       }
     | {
-          status: QueryHistoryStatus.ERROR;
+          status: QueryHistoryStatus.ERROR | QueryHistoryStatus.EXPIRED;
           queryUuid: string;
           error: string | null;
       };
@@ -668,21 +787,6 @@ export type ProjectSavedChartStatus = boolean;
 
 export type ApiFlashResults = Record<string, string[]>;
 
-export type ApiAiDashboardSummaryResponse = {
-    status: 'ok';
-    results: DashboardSummary;
-};
-
-export type ApiAiGetDashboardSummaryResponse = {
-    status: 'ok';
-    results: DashboardSummary;
-};
-
-export type ApiAiGenerateCustomVizResponse = {
-    status: 'ok';
-    results: string;
-};
-
 type ApiResults =
     | ApiQueryResults
     | ApiSqlQueryResults
@@ -746,13 +850,21 @@ type ApiResults =
     | ViewStatistics
     | SchedulerWithLogs
     | ValidationResponse[]
+    | ApiPaginatedValidateResponse['results']
     | ChartHistory
     | ChartVersion
+    | DashboardHistory
     | EmbedUrl
     | DecodedEmbed
     | Array<GitRepo>
     | PullRequestCreated
+    | ApiGitFileContent
     | GitIntegrationConfiguration
+    | GitBranch
+    | GitBranch[]
+    | GitFileOrDirectory
+    | { sha: string; path: string }
+    | { filePath: string }
     | UserWarehouseCredentials
     | ApiJobStatusResponse['results']
     | ApiJobScheduledResponse['results']
@@ -767,6 +879,8 @@ type ApiResults =
     | ApiCreateProjectResults
     | ApiAiDashboardSummaryResponse['results']
     | ApiAiGetDashboardSummaryResponse['results']
+    | ApiAiGenerateChartMetadataResponse['results']
+    | ApiAiGenerateTableCalculationResponse['results']
     | ApiCatalogMetadataResults
     | ApiCatalogAnalyticsResults
     | ApiPromotionChangesResponse['results']
@@ -786,9 +900,14 @@ type ApiResults =
     | ApiGroupListResponse['results']
     | ApiCreateTagResponse['results']
     | ApiChartAsCodeListResponse['results']
+    | ApiSqlChartAsCodeListResponse['results']
     | ApiDashboardAsCodeListResponse['results']
     | ApiChartAsCodeUpsertResponse['results']
     | ApiGetMetricsTree['results']
+    | ApiGetMetricsTreeResponse['results']
+    | ApiGetMetricsTreesResponse['results']
+    | ApiMetricsTreeLockResponse['results']
+    | ApiUpdateMetricsTreeResponse['results']
     | ApiMetricsExplorerTotalResults['results']
     | ApiGetSpotlightTableConfig['results']
     | ApiCalculateSubtotalsResponse['results']
@@ -798,6 +917,8 @@ type ApiResults =
     | ApiExecuteAsyncDashboardChartQueryResults
     | ApiGetAsyncQueryResults
     | ApiSchedulersResponse['results']
+    | ApiUserSchedulersSummaryResponse['results']
+    | ApiReassignUserSchedulersResponse['results']
     | ApiUserActivityDownloadCsv['results']
     | ApiRenameFieldsResponse['results']
     | ApiDownloadAsyncQueryResults
@@ -828,7 +949,16 @@ type ApiResults =
     | ApiAiOrganizationSettingsResponse['results']
     | ApiUpdateAiOrganizationSettingsResponse['results']
     | ApiProjectCompileLogsResponse['results']
-    | ApiProjectCompileLogResponse['results'];
+    | ApiProjectCompileLogResponse['results']
+    | ApiSingleValidationResponse['results']
+    | ApiFavoriteItems['results']
+    | ApiChartValidationResponse['results']
+    | ApiDashboardValidationResponse['results']
+    | ApiToggleFavorite['results']
+    | ApiSpaceDeleteImpactResponse['results']
+    | ApiGetPreAggregateStatsResponse['results']
+    | ApiGetPreAggregateMaterializationsResponse['results']
+    | ApiImpersonationOrganizationSettingsResponse['results'];
 // Note: EE API types removed from ApiResults to avoid circular imports
 // They can still be used with ApiResponse<T> by importing from '@lightdash/common'
 

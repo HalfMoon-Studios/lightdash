@@ -15,6 +15,7 @@ import {
     DeleteOpenIdentity,
     EmailStatusExpiring,
     ExpiredError,
+    FeatureFlags,
     ForbiddenError,
     getEmailDomain,
     hasInviteCode,
@@ -29,7 +30,6 @@ import {
     LoginOptions,
     LoginOptionTypes,
     MissingConfigError,
-    NotExistsError,
     NotFoundError,
     NotImplementedError,
     OpenIdIdentityIssuerType,
@@ -38,9 +38,11 @@ import {
     OrganizationMemberRole,
     ParameterError,
     PasswordReset,
+    ProjectMemberRole,
     RegisterOrActivateUser,
     SessionUser,
     SnowflakeAuthenticationType,
+    SpaceMemberRole,
     UpdateUserArgs,
     UpsertUserWarehouseCredentials,
     UserAllowedOrganization,
@@ -58,6 +60,7 @@ import { LightdashConfig } from '../config/parseConfig';
 import Logger from '../logging/logger';
 import { PersonalAccessTokenModel } from '../models/DashboardModel/PersonalAccessTokenModel';
 import { EmailModel } from '../models/EmailModel';
+import { FeatureFlagModel } from '../models/FeatureFlagModel/FeatureFlagModel';
 import { GroupsModel } from '../models/GroupsModel';
 import { InviteLinkModel } from '../models/InviteLinkModel';
 import { OpenIdIdentityModel } from '../models/OpenIdIdentitiesModel';
@@ -65,6 +68,7 @@ import { OrganizationAllowedEmailDomainsModel } from '../models/OrganizationAllo
 import { OrganizationMemberProfileModel } from '../models/OrganizationMemberProfileModel';
 import { OrganizationModel } from '../models/OrganizationModel';
 import { PasswordResetLinkModel } from '../models/PasswordResetLinkModel';
+import { ProjectModel } from '../models/ProjectModel/ProjectModel';
 import { SessionModel } from '../models/SessionModel';
 import { UserModel } from '../models/UserModel';
 import { UserWarehouseCredentialsModel } from '../models/UserWarehouseCredentials/UserWarehouseCredentialsModel';
@@ -90,6 +94,8 @@ type UserServiceArguments = {
     organizationAllowedEmailDomainsModel: OrganizationAllowedEmailDomainsModel;
     userWarehouseCredentialsModel: UserWarehouseCredentialsModel;
     warehouseAvailableTablesModel: WarehouseAvailableTablesModel;
+    projectModel: ProjectModel;
+    featureFlagModel: FeatureFlagModel;
 };
 
 export class UserService extends BaseService {
@@ -125,6 +131,10 @@ export class UserService extends BaseService {
 
     private readonly warehouseAvailableTablesModel: WarehouseAvailableTablesModel;
 
+    private readonly projectModel: ProjectModel;
+
+    private readonly featureFlagModel: FeatureFlagModel;
+
     private readonly emailOneTimePasscodeExpirySeconds = 60 * 15;
 
     private readonly emailOneTimePasscodeMaxAttempts = 5;
@@ -146,6 +156,8 @@ export class UserService extends BaseService {
         organizationAllowedEmailDomainsModel,
         userWarehouseCredentialsModel,
         warehouseAvailableTablesModel,
+        projectModel,
+        featureFlagModel,
     }: UserServiceArguments) {
         super();
         this.lightdashConfig = lightdashConfig;
@@ -165,6 +177,8 @@ export class UserService extends BaseService {
             organizationAllowedEmailDomainsModel;
         this.userWarehouseCredentialsModel = userWarehouseCredentialsModel;
         this.warehouseAvailableTablesModel = warehouseAvailableTablesModel;
+        this.projectModel = projectModel;
+        this.featureFlagModel = featureFlagModel;
     }
 
     private identifyUser(
@@ -286,6 +300,50 @@ export class UserService extends BaseService {
             activateUser,
         );
         await this.inviteLinkModel.deleteByCode(inviteLink.inviteCode);
+
+        // Apply default project memberships from allowed email domains config.
+        // Wrapped in try-catch because the user is already activated and the
+        // invite link is deleted — a failure here must not break activation.
+        try {
+            if (
+                user.organizationUuid &&
+                user.role === OrganizationMemberRole.MEMBER
+            ) {
+                const allowedEmailDomains =
+                    await this.organizationAllowedEmailDomainsModel.findAllowedEmailDomains(
+                        user.organizationUuid,
+                    );
+                if (allowedEmailDomains) {
+                    const emailDomain = getEmailDomain(userEmail);
+                    if (
+                        allowedEmailDomains.emailDomains.some(
+                            (domain) => domain.toLowerCase() === emailDomain,
+                        ) &&
+                        allowedEmailDomains.projects.length > 0
+                    ) {
+                        const projectMemberships =
+                            allowedEmailDomains.projects.reduce<
+                                Record<string, ProjectMemberRole>
+                            >(
+                                (acc, project) => ({
+                                    ...acc,
+                                    [project.projectUuid]: project.role,
+                                }),
+                                {},
+                            );
+                        await this.userModel.addProjectMemberships(
+                            user.userUuid,
+                            projectMemberships,
+                        );
+                    }
+                }
+            }
+        } catch (e) {
+            this.logger.warn(
+                `Failed to apply default project memberships for invited user ${user.userUuid}: ${e}`,
+            );
+        }
+
         this.identifyUser(user);
         this.analytics.track({
             event: 'user.created',
@@ -304,9 +362,8 @@ export class UserService extends BaseService {
     }
 
     async delete(user: SessionUser, userUuidToDelete: string): Promise<void> {
-        const userToDelete = await this.userModel.getUserDetailsByUuid(
-            userUuidToDelete,
-        );
+        const userToDelete =
+            await this.userModel.getUserDetailsByUuid(userUuidToDelete);
         // The user might not have an org yet
         // This is expected on the "Cancel registration" flow on single org instances.
         if (userToDelete?.organizationUuid) {
@@ -376,12 +433,11 @@ export class UserService extends BaseService {
         const { expiresAt, email, role } = createInviteLink;
         const inviteCode = nanoid(30);
         if (organizationUuid === undefined) {
-            throw new NotExistsError('Organization not found');
+            throw new NotFoundError('Organization not found');
         }
 
-        const existingUserWithEmail = await this.userModel.findUserByEmail(
-            email,
-        );
+        const existingUserWithEmail =
+            await this.userModel.findUserByEmail(email);
         if (existingUserWithEmail && existingUserWithEmail.organizationUuid) {
             if (existingUserWithEmail.organizationUuid !== organizationUuid) {
                 throw new ParameterError(
@@ -473,7 +529,7 @@ export class UserService extends BaseService {
             throw new ForbiddenError();
         }
         if (organizationUuid === undefined) {
-            throw new NotExistsError('Organization not found');
+            throw new NotFoundError('Organization not found');
         }
         await this.inviteLinkModel.deleteByOrganization(organizationUuid);
         this.analytics.track({
@@ -603,9 +659,8 @@ export class UserService extends BaseService {
             };
 
             if (inviteCode) {
-                const inviteLink = await this.inviteLinkModel.getByCode(
-                    inviteCode,
-                );
+                const inviteLink =
+                    await this.inviteLinkModel.getByCode(inviteCode);
                 this.logger.info(
                     `Checking invite code - Invite email: ${inviteLink.email}, User email: ${loginUser.email}`,
                 );
@@ -1035,7 +1090,7 @@ export class UserService extends BaseService {
             try {
                 await this.inviteLinkModel.deleteByCode(inviteLink.inviteCode);
             } catch (e) {
-                throw new NotExistsError('Invite link not found');
+                throw new NotFoundError('Invite link not found');
             }
             throw new ExpiredError('Invite link expired');
         }
@@ -1129,6 +1184,8 @@ export class UserService extends BaseService {
         user: SessionUser,
         data: Partial<UpdateUserArgs>,
     ): Promise<LightdashUser> {
+        const emailChanged = data.email && user.email !== data.email;
+
         const updatedUser = await this.userModel.updateUser(
             user.userUuid,
             user.email,
@@ -1151,6 +1208,11 @@ export class UserService extends BaseService {
                 context: 'update_self',
             },
         });
+
+        if (emailChanged) {
+            await this.sendOneTimePasscodeToPrimaryEmail(updatedUser);
+        }
+
         return updatedUser;
     }
 
@@ -1238,9 +1300,9 @@ export class UserService extends BaseService {
             try {
                 await this.passwordResetLinkModel.deleteByCode(link.code);
             } catch (e) {
-                throw new NotExistsError('Password reset link not found');
+                throw new NotFoundError('Password reset link not found');
             }
-            throw new NotExistsError('Password reset link expired');
+            throw new NotFoundError('Password reset link expired');
         }
     }
 
@@ -1265,7 +1327,7 @@ export class UserService extends BaseService {
     async resetPassword(data: PasswordReset): Promise<void> {
         const link = await this.passwordResetLinkModel.getByCode(data.code);
         if (link.isExpired) {
-            throw new NotExistsError('Password reset link expired');
+            throw new NotFoundError('Password reset link expired');
         }
         const user = await this.userModel.findUserByEmail(link.email);
         if (user) {
@@ -1495,11 +1557,10 @@ export class UserService extends BaseService {
             'organizationUuid' | 'organizationCreatedAt' | 'organizationName'
         >
     > {
-        const organizations = await this.userModel.getOrganizationsForUser(
-            userUuid,
-        );
+        const organizations =
+            await this.userModel.getOrganizationsForUser(userUuid);
         if (organizations.length === 0) {
-            throw new NotExistsError('User not part of any organization');
+            throw new NotFoundError('User not part of any organization');
         } else if (organizations.length > 1) {
             throw new ForbiddenError('User is part of multiple organizations');
         }
@@ -1519,9 +1580,161 @@ export class UserService extends BaseService {
                         passportUser.organization,
                     );
                 span.setAttribute('cacheHit', cacheHit);
+
                 return sessionUser;
             },
         );
+    }
+
+    async onLogin(user: {
+        userUuid: string;
+        organizationUuid?: string;
+    }): Promise<void> {
+        if (!user.organizationUuid) return;
+
+        const sessionUser = await this.findSessionUser({
+            id: user.userUuid,
+            organization: user.organizationUuid,
+        });
+        await this.ensureDefaultUserSpaces(sessionUser);
+    }
+
+    private async ensureDefaultUserSpaces(
+        sessionUser: SessionUser,
+    ): Promise<void> {
+        const { enabled } = await this.featureFlagModel.get({
+            user: sessionUser,
+            featureFlagId: FeatureFlags.DefaultUserSpaces,
+        });
+        if (!enabled) return;
+        if (!sessionUser.organizationUuid) return;
+
+        const projects =
+            await this.projectModel.getProjectsWithDefaultUserSpaces(
+                sessionUser.organizationUuid,
+            );
+
+        if (projects.length === 0) return;
+
+        await Promise.all(
+            projects.map(async (project) => {
+                if (
+                    sessionUser.ability.cannot(
+                        'manage',
+                        subject('SavedChart', {
+                            projectUuid: project.projectUuid,
+                            organizationUuid: sessionUser.organizationUuid,
+                            access: [
+                                {
+                                    userUuid: sessionUser.userUuid,
+                                    // We already know that we'll assign ADMIN permissions
+                                    // for the user in their default space
+                                    role: SpaceMemberRole.ADMIN,
+                                },
+                            ],
+                        }),
+                    ) ||
+                    sessionUser.ability.cannot(
+                        'manage',
+                        subject('Explore', {
+                            projectUuid: project.projectUuid,
+                            organizationUuid: sessionUser.organizationUuid,
+                        }),
+                    )
+                )
+                    return;
+
+                await this.projectModel.ensureDefaultUserSpace(
+                    project.projectId,
+                    project.parentSpaceUuid,
+                    project.parentPath,
+                    {
+                        userId: sessionUser.userId,
+                        userUuid: sessionUser.userUuid,
+                        firstName: sessionUser.firstName,
+                        lastName: sessionUser.lastName,
+                    },
+                );
+            }),
+        );
+    }
+
+    /**
+     * Resolves the session user, handling impersonation if active.
+     * When impersonation is active, validates that the admin still has
+     * permission to impersonate and the target user is still valid,
+     * then returns the target user. Calls clearImpersonation if the
+     * session is no longer valid.
+     */
+    async resolveSessionUser(
+        passportUser: { id: string; organization: string },
+        impersonation:
+            | { targetUserUuid: string; startedAt: string }
+            | undefined,
+        clearImpersonation: () => void,
+    ): Promise<SessionUser> {
+        const requestUser = await this.findSessionUser(passportUser);
+
+        if (!impersonation) {
+            return requestUser;
+        }
+
+        // Check if impersonation has exceeded TTL (15 minutes)
+        const IMPERSONATION_TTL_MS = 15 * 60 * 1000;
+        const elapsed =
+            Date.now() - new Date(impersonation.startedAt).getTime();
+        if (elapsed > IMPERSONATION_TTL_MS) {
+            this.logger.info(
+                `Impersonation TTL exceeded for admin ${passportUser.id} (elapsed: ${Math.round(elapsed / 1000)}s), clearing impersonation`,
+            );
+            clearImpersonation();
+            return requestUser;
+        }
+
+        // If feature flag is off, clear any active impersonation
+        if (!(await this.isImpersonationEnabled(requestUser))) {
+            this.logger.warn(
+                `Impersonation feature flag is disabled, clearing impersonation for admin ${passportUser.id}`,
+            );
+            clearImpersonation();
+            return requestUser;
+        }
+
+        // Validate admin can still impersonate
+        if (
+            !requestUser.isActive ||
+            requestUser.ability.cannot(
+                'impersonate',
+                subject('User', {
+                    organizationUuid: requestUser.organizationUuid,
+                    isActive: requestUser.isActive,
+                }),
+            )
+        ) {
+            this.logger.warn(
+                `Impersonation admin ${passportUser.id} is no longer authorized, clearing impersonation`,
+            );
+            clearImpersonation();
+            return requestUser;
+        }
+
+        // Load the impersonated user
+        const targetUser = await this.getSessionByUserUuid(
+            impersonation.targetUserUuid,
+        );
+
+        if (
+            !targetUser.isActive ||
+            targetUser.organizationUuid !== requestUser.organizationUuid
+        ) {
+            this.logger.warn(
+                `Impersonation target ${impersonation.targetUserUuid} is no longer valid, clearing impersonation`,
+            );
+            clearImpersonation();
+            return requestUser;
+        }
+
+        return targetUser;
     }
 
     static async generateGoogleAccessToken(
@@ -1567,10 +1780,13 @@ export class UserService extends BaseService {
                         if (
                             scopes.includes(
                                 'https://www.googleapis.com/auth/drive.file',
-                            ) &&
-                            scopes.includes(
-                                'https://www.googleapis.com/auth/spreadsheets',
                             )
+                            // This scope is now optional
+                            // Not grating this scope will prevent users from overwritting
+                            // existing sheets that were not created by this app, throwing GoogleSheetsScopeError on scheduler
+                            /* scopes.includes(
+                                'https://www.googleapis.com/auth/spreadsheets',
+                            ) */
                         ) {
                             resolve(accessToken);
                         }
@@ -1619,9 +1835,8 @@ export class UserService extends BaseService {
                 user.userUuid,
                 OpenIdIdentityIssuerType.SNOWFLAKE,
             );
-            const accessToken = await UserService.generateSnowflakeAccessToken(
-                refreshToken,
-            );
+            const accessToken =
+                await UserService.generateSnowflakeAccessToken(refreshToken);
             return accessToken;
         }
         if (type === 'databricks') {
@@ -1635,9 +1850,8 @@ export class UserService extends BaseService {
                 user.userUuid,
                 OpenIdIdentityIssuerType.DATABRICKS,
             );
-            const accessToken = await UserService.generateDatabricksAccessToken(
-                refreshToken,
-            );
+            const accessToken =
+                await UserService.generateDatabricksAccessToken(refreshToken);
             return accessToken;
         }
         const refreshToken: string = await this.userModel.getRefreshToken(
@@ -1726,6 +1940,18 @@ export class UserService extends BaseService {
         );
     }
 
+    async hasDatabricksOAuthCredentialForHost(
+        user: SessionUser,
+        serverHostName: string,
+    ): Promise<boolean> {
+        const credential =
+            await this.userWarehouseCredentialsModel.findDatabricksOauthU2mForHostWithSecrets(
+                user.userUuid,
+                serverHostName,
+            );
+        return credential !== undefined;
+    }
+
     async createBigqueryWarehouseCredentials(
         user: SessionUser,
         refreshToken: string,
@@ -1763,7 +1989,7 @@ export class UserService extends BaseService {
                 user: user.userUuid,
                 type: WarehouseTypes.SNOWFLAKE,
                 authenticationType: SnowflakeAuthenticationType.SSO,
-                token: refreshToken,
+                refreshToken,
             },
         };
         await this.createWarehouseCredentials(user, snowflakeCredentials);
@@ -1772,35 +1998,105 @@ export class UserService extends BaseService {
     async createDatabricksWarehouseCredentials(
         user: SessionUser,
         refreshToken: string,
+        options?: {
+            projectUuid?: string;
+            projectName?: string;
+            serverHostName?: string;
+            credentialsName?: string;
+            oauthClientId?: string;
+        },
     ) {
-        // Remove old Databricks credentials to prevent duplicates on re-authentication
-        await this.userWarehouseCredentialsModel.deleteAllByUserAndWarehouseType(
-            user.userUuid,
-            WarehouseTypes.DATABRICKS,
-        );
-
+        const credentialsNameFromOptions = options?.credentialsName?.trim();
+        const projectName = options?.projectName?.trim();
+        const serverHostName = options?.serverHostName?.trim();
+        let credentialsName = 'Default';
+        if (credentialsNameFromOptions) {
+            credentialsName = credentialsNameFromOptions;
+        } else if (serverHostName) {
+            credentialsName = `Databricks (${serverHostName})`;
+        }
         const databricksCredentials: UpsertUserWarehouseCredentials = {
-            name: 'Default',
+            name: credentialsName,
             credentials: {
                 type: WarehouseTypes.DATABRICKS,
-                authenticationType: DatabricksAuthenticationType.OAUTH_M2M,
+                authenticationType: DatabricksAuthenticationType.OAUTH_U2M,
                 refreshToken,
-                database: '', // Will be set when connecting to a project
-                serverHostName: '', // Will be set when connecting to a project
-                httpPath: '', // Will be set when connecting to a project
+                serverHostName,
+                oauthClientId: options?.oauthClientId,
             },
         };
-        await this.createWarehouseCredentials(user, databricksCredentials);
+
+        if (options?.projectUuid) {
+            if (serverHostName) {
+                const matchingCredential =
+                    await this.userWarehouseCredentialsModel.findDatabricksOauthU2mForHostWithSecrets(
+                        user.userUuid,
+                        serverHostName,
+                        {
+                            projectUuid: options.projectUuid,
+                        },
+                    );
+                if (matchingCredential) {
+                    return this.updateWarehouseCredentials(
+                        user,
+                        matchingCredential.uuid,
+                        databricksCredentials,
+                    );
+                }
+            }
+
+            const existingCredentials =
+                await this.userWarehouseCredentialsModel.findForProject(
+                    options.projectUuid,
+                    user.userUuid,
+                    WarehouseTypes.DATABRICKS,
+                );
+            if (existingCredentials) {
+                return this.updateWarehouseCredentials(
+                    user,
+                    existingCredentials.uuid,
+                    databricksCredentials,
+                );
+            }
+
+            return this.createWarehouseCredentials(
+                user,
+                databricksCredentials,
+                options.projectUuid,
+            );
+        }
+
+        if (serverHostName) {
+            const existingCredentials =
+                await this.userWarehouseCredentialsModel.findDatabricksOauthU2mForHostWithSecrets(
+                    user.userUuid,
+                    serverHostName,
+                    {
+                        includeProjectScoped: false,
+                    },
+                );
+            if (existingCredentials) {
+                return this.updateWarehouseCredentials(
+                    user,
+                    existingCredentials.uuid,
+                    databricksCredentials,
+                );
+            }
+        }
+
+        return this.createWarehouseCredentials(user, databricksCredentials);
     }
 
     async createWarehouseCredentials(
         user: SessionUser,
         data: UpsertUserWarehouseCredentials,
+        projectUuid?: string,
     ) {
         const userWarehouseCredentialsUuid =
             await this.userWarehouseCredentialsModel.create(
                 user.userUuid,
                 data,
+                projectUuid,
             );
         this.analytics.track({
             userId: user.userUuid,
@@ -1955,8 +2251,8 @@ export class UserService extends BaseService {
         };
     }
 
-    /* 
-    For service accounts, we get the admin user from the userUuid who created the user 
+    /*
+    For service accounts, we get the admin user from the userUuid who created the user
     if this user no longer exist, then we will get another admin user from the org
     */
     async getAdminUser(userUuid: string | null, organizationUuid: string) {
@@ -1981,7 +2277,7 @@ export class UserService extends BaseService {
                 (member) => member.role === 'admin',
             );
             if (adminUser) {
-                return await this.userModel.findSessionUserAndOrgByUuid(
+                return this.userModel.findSessionUserAndOrgByUuid(
                     adminUser.userUuid,
                     organizationUuid,
                 );
@@ -2000,5 +2296,136 @@ export class UserService extends BaseService {
         );
 
         return openId !== undefined;
+    }
+
+    private async isImpersonationEnabled(
+        user: Pick<
+            LightdashUser,
+            'userUuid' | 'organizationUuid' | 'organizationName'
+        >,
+    ): Promise<boolean> {
+        if (!user.organizationUuid) {
+            return false;
+        }
+        return this.organizationModel.getImpersonationEnabled(
+            user.organizationUuid,
+        );
+    }
+
+    async startImpersonation(
+        adminUser: SessionUser,
+        targetUserUuid: string,
+        {
+            isSessionAuth,
+            getImpersonation,
+            setImpersonation,
+        }: {
+            isSessionAuth: boolean;
+            getImpersonation: () => { targetUserUuid: string } | undefined;
+            setImpersonation: (data: {
+                adminUserUuid: string;
+                adminName: string;
+                targetUserUuid: string;
+                startedAt: string;
+            }) => void;
+        },
+    ): Promise<void> {
+        if (!(await this.isImpersonationEnabled(adminUser))) {
+            throw new ForbiddenError('User impersonation is not enabled');
+        }
+
+        if (!isSessionAuth) {
+            throw new ForbiddenError(
+                'Impersonation requires session authentication',
+            );
+        }
+
+        // Prevent recursive impersonation
+        if (getImpersonation()) {
+            throw new ForbiddenError(
+                'Cannot start impersonation while already impersonating',
+            );
+        }
+
+        // Prevent self-impersonation
+        if (adminUser.userUuid === targetUserUuid) {
+            throw new ParameterError('Cannot impersonate yourself');
+        }
+
+        // Load target user details
+        const targetUser =
+            await this.userModel.getUserDetailsByUuid(targetUserUuid);
+
+        // Check permissions using CASL (includes org match and isActive)
+        if (
+            adminUser.ability.cannot(
+                'impersonate',
+                subject('User', {
+                    organizationUuid: targetUser.organizationUuid,
+                    isActive: targetUser.isActive,
+                }),
+            )
+        ) {
+            throw new ForbiddenError(
+                "You don't have permissions to impersonate this user",
+            );
+        }
+
+        setImpersonation({
+            adminUserUuid: adminUser.userUuid,
+            adminName: `${adminUser.firstName} ${adminUser.lastName}`,
+            targetUserUuid,
+            startedAt: new Date().toISOString(),
+        });
+
+        this.logger.info(
+            `Impersonation started: admin ${adminUser.userUuid} (${adminUser.firstName} ${adminUser.lastName}) is now impersonating user ${targetUserUuid} in organization ${adminUser.organizationUuid}`,
+        );
+
+        this.analytics.track({
+            event: 'user.impersonation_started',
+            userId: adminUser.userUuid,
+            properties: {
+                adminUserUuid: adminUser.userUuid,
+                targetUserUuid,
+                organizationUuid: adminUser.organizationUuid!,
+            },
+        });
+    }
+
+    async stopImpersonation({
+        getImpersonation,
+        clearImpersonation,
+    }: {
+        getImpersonation: () =>
+            | { adminUserUuid: string; targetUserUuid: string }
+            | undefined;
+        clearImpersonation: () => void;
+    }): Promise<void> {
+        const impersonation = getImpersonation();
+
+        if (!impersonation) {
+            return;
+        }
+
+        const { adminUserUuid, targetUserUuid } = impersonation;
+        const adminUser =
+            await this.userModel.getUserDetailsByUuid(adminUserUuid);
+
+        clearImpersonation();
+
+        this.logger.info(
+            `Impersonation stopped: admin ${adminUserUuid} (${adminUser.firstName} ${adminUser.lastName}) stopped impersonating user ${targetUserUuid} in organization ${adminUser.organizationUuid}`,
+        );
+
+        this.analytics.track({
+            event: 'user.impersonation_stopped',
+            userId: adminUserUuid,
+            properties: {
+                adminUserUuid,
+                targetUserUuid,
+                organizationUuid: adminUser.organizationUuid!,
+            },
+        });
     }
 }

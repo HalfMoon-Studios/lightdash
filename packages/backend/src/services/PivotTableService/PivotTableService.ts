@@ -13,8 +13,8 @@ import { stringify } from 'csv-stringify';
 import * as fsPromise from 'fs/promises';
 import moment from 'moment';
 import { nanoid } from 'nanoid';
-import { S3Client } from '../../clients/Aws/S3Client';
 import { AttachmentUrl } from '../../clients/EmailClient/EmailClient';
+import { type FileStorageClient } from '../../clients/FileStorage/FileStorageClient';
 import { S3ResultsFileStorageClient } from '../../clients/ResultsFileStorageClients/S3ResultsFileStorageClient';
 import { LightdashConfig } from '../../config/parseConfig';
 import Logger from '../../logging/logger';
@@ -24,29 +24,35 @@ import {
     streamJsonlData,
 } from '../../utils/FileDownloadUtils/FileDownloadUtils';
 import { BaseService } from '../BaseService';
+import { PersistentDownloadFileService } from '../PersistentDownloadFileService/PersistentDownloadFileService';
 
 type PivotTableServiceArguments = {
     lightdashConfig: LightdashConfig;
-    s3Client: S3Client;
+    fileStorageClient: FileStorageClient;
     downloadFileModel: DownloadFileModel;
+    persistentDownloadFileService: PersistentDownloadFileService;
 };
 
 export class PivotTableService extends BaseService {
     lightdashConfig: LightdashConfig;
 
-    s3Client: S3Client;
+    fileStorageClient: FileStorageClient;
 
     downloadFileModel: DownloadFileModel;
 
+    persistentDownloadFileService: PersistentDownloadFileService;
+
     constructor({
         lightdashConfig,
-        s3Client,
+        fileStorageClient,
         downloadFileModel,
+        persistentDownloadFileService,
     }: PivotTableServiceArguments) {
         super();
         this.lightdashConfig = lightdashConfig;
-        this.s3Client = s3Client;
+        this.fileStorageClient = fileStorageClient;
         this.downloadFileModel = downloadFileModel;
+        this.persistentDownloadFileService = persistentDownloadFileService;
     }
 
     /**
@@ -92,6 +98,9 @@ export class PivotTableService extends BaseService {
         storageClient,
         options,
         pivotDetails,
+        organizationUuid,
+        createdByUserUuid,
+        expirationSecondsOverride,
     }: {
         resultsFileName: string;
         fields: ItemsMap;
@@ -108,15 +117,17 @@ export class PivotTableService extends BaseService {
             pivotConfig: PivotConfig;
             attachmentDownloadName?: string;
         };
+        organizationUuid: string;
+        createdByUserUuid: string | null;
+        expirationSecondsOverride?: number;
     }): Promise<{ fileUrl: string; truncated: boolean }> {
         const { onlyRaw, customLabels, pivotConfig, attachmentDownloadName } =
             options;
 
         // Load rows from the results file using shared streaming utility
         // Use the same logic as regular CSV exports - respect csvCellsLimit with field count
-        const readStream = await storageClient.getDownloadStream(
-            resultsFileName,
-        );
+        const readStream =
+            await storageClient.getDownloadStream(resultsFileName);
 
         const fieldCount = Object.keys(fields).length;
         const cellsLimit = this.lightdashConfig.query?.csvCellsLimit || 100000;
@@ -159,6 +170,9 @@ export class PivotTableService extends BaseService {
             truncated: finalTruncated,
             customLabels,
             pivotDetails,
+            organizationUuid,
+            createdByUserUuid,
+            expirationSecondsOverride,
         });
 
         return {
@@ -183,6 +197,9 @@ export class PivotTableService extends BaseService {
         truncated,
         customLabels,
         pivotDetails,
+        organizationUuid,
+        createdByUserUuid,
+        expirationSecondsOverride,
     }: {
         name?: string;
         projectUuid: string;
@@ -196,6 +213,9 @@ export class PivotTableService extends BaseService {
         truncated: boolean;
         customLabels: Record<string, string> | undefined;
         metricsAsRows?: boolean;
+        organizationUuid: string;
+        createdByUserUuid: string | null;
+        expirationSecondsOverride?: number;
     }): Promise<AttachmentUrl> {
         // PivotDetails.valuesColumns is just an array objects, we need to convert it to a map so we can format the pivoted results
         // See AsyncQueryService.ts line 1126 for more details on why we're using pivotColumnName as the key
@@ -241,6 +261,9 @@ export class PivotTableService extends BaseService {
             fileName: name || exploreId,
             projectUuid,
             truncated,
+            organizationUuid,
+            createdByUserUuid,
+            expirationSecondsOverride,
         });
     }
 
@@ -252,11 +275,17 @@ export class PivotTableService extends BaseService {
         fileName,
         projectUuid,
         truncated = false,
+        organizationUuid,
+        createdByUserUuid,
+        expirationSecondsOverride,
     }: {
         csvContent: string;
         fileName: string;
         projectUuid: string;
         truncated?: boolean;
+        organizationUuid: string;
+        createdByUserUuid: string | null;
+        expirationSecondsOverride?: number;
     }): Promise<AttachmentUrl> {
         const fileId = PivotTableService.generateFileId(fileName, truncated);
         const filePath = `/tmp/${fileId}`;
@@ -266,17 +295,35 @@ export class PivotTableService extends BaseService {
         ]);
         await fsPromise.writeFile(filePath, csvWithBOM);
 
-        if (this.s3Client.isEnabled()) {
-            const s3Url = await this.s3Client.uploadCsv(csvContent, fileId);
+        if (this.fileStorageClient.isEnabled()) {
+            await this.fileStorageClient.uploadCsv(csvContent, fileId);
 
             // Delete local file in 10 minutes, we could still read from the local file to upload to google sheets
-            setTimeout(async () => {
-                await fsPromise.unlink(filePath);
-            }, 60 * 10 * 1000);
+            setTimeout(
+                async () => {
+                    try {
+                        await fsPromise.unlink(filePath);
+                    } catch (error) {
+                        this.logger.warn(
+                            `Error deleting local file ${filePath}: ${error}`,
+                        );
+                    }
+                },
+                60 * 10 * 1000,
+            );
 
+            const url =
+                await this.persistentDownloadFileService.createPersistentUrl({
+                    s3Key: fileId,
+                    fileType: DownloadFileType.CSV,
+                    organizationUuid,
+                    projectUuid,
+                    createdByUserUuid,
+                    expirationSeconds: expirationSecondsOverride,
+                });
             return {
                 filename: fileName,
-                path: s3Url,
+                path: url,
                 localPath: filePath,
                 truncated,
             };

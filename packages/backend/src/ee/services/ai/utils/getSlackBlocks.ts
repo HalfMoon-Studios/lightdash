@@ -7,9 +7,105 @@ import {
     followUpToolsText,
     parseVizConfig,
     SlackPrompt,
+    type Explore,
 } from '@lightdash/common';
 import { Block, KnownBlock } from '@slack/bolt';
 import { partition } from 'lodash';
+import { populateCustomMetricsSQL } from './populateCustomMetricsSQL';
+
+const SLACK_SECTION_TEXT_LIMIT = 3000;
+
+/**
+ * Splits text into chunks that fit within Slack's section block text limit (3000 chars).
+ * Splits at markdown-safe boundaries to avoid breaking links, code blocks, or formatting.
+ * Priority: newlines > spaces > hard cut (as last resort).
+ */
+const findSplitIndex = (window: string): { index: number; skip: number } => {
+    // Try to split at the last newline within the limit
+    const newlineIdx = window.lastIndexOf('\n');
+    if (newlineIdx > 0) {
+        return { index: newlineIdx, skip: 1 };
+    }
+
+    // Fall back to the last space
+    const spaceIdx = window.lastIndexOf(' ');
+    if (spaceIdx > 0) {
+        return { index: spaceIdx, skip: 1 };
+    }
+
+    // Hard cut as last resort (no whitespace at all in 3000 chars)
+    return { index: SLACK_SECTION_TEXT_LIMIT, skip: 0 };
+};
+
+const chunkSlackText = (text: string): string[] => {
+    if (text.length <= SLACK_SECTION_TEXT_LIMIT) {
+        return [text];
+    }
+
+    const chunks: string[] = [];
+    let remaining = text;
+
+    while (remaining.length > 0) {
+        if (remaining.length <= SLACK_SECTION_TEXT_LIMIT) {
+            chunks.push(remaining);
+            break;
+        }
+
+        const window = remaining.slice(0, SLACK_SECTION_TEXT_LIMIT);
+        const { index, skip } = findSplitIndex(window);
+
+        chunks.push(remaining.slice(0, index));
+        remaining = remaining.slice(index + skip);
+    }
+
+    return chunks;
+};
+
+/**
+ * Converts text into Slack section blocks, splitting long text
+ * into multiple blocks to stay within Slack's 3000 character limit.
+ */
+export const getTextBlocks = (
+    text: string,
+    format: 'mrkdwn' | 'plain_text' = 'mrkdwn',
+): (Block | KnownBlock)[] =>
+    chunkSlackText(text).map((chunk) => ({
+        type: 'section' as const,
+        text: {
+            type: format,
+            text: chunk,
+        },
+    }));
+
+/**
+ * Returns compact Slack blocks showing a "thinking" animation with a GIF.
+ * Uses context block for smaller, dimmed text appearance.
+ * Used while the AI agent is processing a request.
+ *
+ * @param text - Custom progress text to display (e.g., "Running your query...")
+ * @param siteUrl - The base URL of the Lightdash instance
+ */
+export function getThinkingBlocks(
+    text: string,
+    siteUrl: string,
+): (Block | KnownBlock)[] {
+    return [
+        {
+            type: 'context',
+            elements: [
+                {
+                    type: 'image',
+                    image_url: `${siteUrl}/lightdash-bolt-pixelating.gif`,
+                    alt_text: text,
+                },
+                {
+                    type: 'mrkdwn',
+                    text: `_${text}_`,
+                },
+            ],
+        },
+    ];
+}
 
 export function getReferencedArtifactsBlocks(
     agentUuid: string,
@@ -50,7 +146,7 @@ export function getReferencedArtifactsBlocks(
                         text: `📊 ${title}`,
                         emoji: true,
                     },
-                    action_id: 'view_artifact',
+                    action_id: `view_artifact_${artifact.artifactUuid}`,
                 };
             }),
         },
@@ -182,6 +278,7 @@ export async function getArtifactBlocks(
     siteUrl: string,
     maxQueryLimit: number,
     createShareUrl: (path: string, params: string) => Promise<string>,
+    getExplore: (exploreName: string) => Promise<Explore>,
     artifacts?: AiArtifact[],
 ): Promise<(Block | KnownBlock)[]> {
     // TODO: Assuming each thread has just one artifact for now
@@ -200,16 +297,35 @@ export async function getArtifactBlocks(
         throw new Error('Failed to parse viz config');
     }
 
+    // Get explore to populate SQL for additional metrics
+    const explore = await getExplore(vizConfig.metricQuery.exploreName);
+    const additionalMetricsWithSql = populateCustomMetricsSQL(
+        vizConfig.metricQuery.additionalMetrics,
+        explore,
+    );
+
+    // Build column order including all field types
+    const additionalMetricFieldIds = additionalMetricsWithSql.map(
+        (m) => `${m.table}_${m.name}`,
+    );
+    const tableCalculationNames = vizConfig.metricQuery.tableCalculations.map(
+        (tc) => tc.name,
+    );
+    const columnOrder = [
+        ...vizConfig.metricQuery.dimensions,
+        ...vizConfig.metricQuery.metrics,
+        ...additionalMetricFieldIds,
+        ...tableCalculationNames,
+    ];
+
     const configState = {
         tableName: vizConfig.metricQuery.exploreName,
         metricQuery: {
             ...vizConfig.metricQuery,
-            tableCalculations: [],
+            additionalMetrics: additionalMetricsWithSql,
         },
         tableConfig: {
-            columnOrder: vizConfig.metricQuery.dimensions.concat(
-                vizConfig.metricQuery.metrics,
-            ),
+            columnOrder,
         },
         chartConfig: {
             type: 'table',
@@ -358,6 +474,7 @@ export function getAgentSelectionBlocks(
     agents: AiAgent[],
     channelId: string,
     projectMap?: Map<string, string>,
+    shouldSkipForwardingQuery = false,
 ): (Block | KnownBlock)[] {
     if (agents.length === 0) {
         return [
@@ -410,6 +527,7 @@ export function getAgentSelectionBlocks(
                         value: JSON.stringify({
                             agentUuid: agent.uuid,
                             channelId,
+                            shouldSkipForwardingQuery,
                         }),
                     })),
                 };
@@ -471,6 +589,7 @@ export function getAgentSelectionBlocks(
                         value: JSON.stringify({
                             agentUuid: agent.uuid,
                             channelId,
+                            shouldSkipForwardingQuery,
                         }),
                     })),
                 },

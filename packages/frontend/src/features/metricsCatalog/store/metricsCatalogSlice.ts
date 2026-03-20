@@ -1,12 +1,15 @@
 import {
+    CatalogCategoryFilterMode,
     DEFAULT_SPOTLIGHT_TABLE_COLUMN_CONFIG,
     SpotlightTableColumns,
+    UNCATEGORIZED_TAG_UUID,
     type CatalogField,
     type SpotlightTableConfig,
 } from '@lightdash/common';
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { MRT_SortingState } from 'mantine-react-table';
 import type { UserWithAbility } from '../../../hooks/user/useUser';
+import { SavedTreeEditMode } from '../types';
 
 type MetricsCatalogState = {
     modals: {
@@ -30,6 +33,9 @@ type MetricsCatalogState = {
     projectUuid: string | undefined;
     organizationUuid: string | undefined;
     categoryFilters: CatalogField['categories'][number]['tagUuid'][];
+    categoryFilterMode: CatalogCategoryFilterMode;
+    tableFilters: string[];
+    ownerFilters: string[];
     search: string | undefined;
     tableSorting: MRT_SortingState;
     popovers: {
@@ -44,6 +50,8 @@ type MetricsCatalogState = {
         columnOrder: string[];
         columnVisibility: Record<string, boolean>;
     };
+    activeTreeUuid: string | null;
+    savedTreeEditMode: SavedTreeEditMode;
 };
 
 export function convertStateToTableColumnConfig(
@@ -58,10 +66,20 @@ export function convertStateToTableColumnConfig(
 export function convertTableColumnConfigToState(
     columnConfig: SpotlightTableConfig['columnConfig'],
 ): MetricsCatalogState['columnConfig'] {
+    // Merge with defaults to ensure all columns exist (handles old configs missing new columns)
+    const mergedConfig = DEFAULT_SPOTLIGHT_TABLE_COLUMN_CONFIG.map(
+        (defaultCol) => {
+            const savedCol = columnConfig.find(
+                (c) => c.column === defaultCol.column,
+            );
+            return savedCol ?? defaultCol;
+        },
+    );
+
     return {
-        columnOrder: columnConfig.map((column) => column.column),
+        columnOrder: mergedConfig.map((column) => column.column),
         columnVisibility: Object.fromEntries(
-            columnConfig.map((column) => [column.column, column.isVisible]),
+            mergedConfig.map((column) => [column.column, column.isVisible]),
         ),
     };
 }
@@ -71,6 +89,9 @@ const initialState: MetricsCatalogState = {
     projectUuid: undefined,
     organizationUuid: undefined,
     categoryFilters: [],
+    categoryFilterMode: CatalogCategoryFilterMode.OR,
+    tableFilters: [],
+    ownerFilters: [],
     search: undefined,
     tableSorting: [
         {
@@ -111,8 +132,11 @@ const initialState: MetricsCatalogState = {
             [SpotlightTableColumns.DESCRIPTION]: false,
             [SpotlightTableColumns.CATEGORIES]: false,
             [SpotlightTableColumns.METRIC]: false,
+            [SpotlightTableColumns.OWNER]: false,
         },
     },
+    activeTreeUuid: null,
+    savedTreeEditMode: SavedTreeEditMode.VIEW,
 };
 
 export const metricsCatalogSlice = createSlice({
@@ -139,6 +163,25 @@ export const metricsCatalogSlice = createSlice({
             >,
         ) => {
             state.categoryFilters = action.payload;
+            // Reset to OR when cleared or uncategorized selected (AND doesn't apply)
+            if (
+                action.payload.length === 0 ||
+                action.payload.includes(UNCATEGORIZED_TAG_UUID)
+            ) {
+                state.categoryFilterMode = CatalogCategoryFilterMode.OR;
+            }
+        },
+        setCategoryFilterMode: (
+            state,
+            action: PayloadAction<CatalogCategoryFilterMode>,
+        ) => {
+            state.categoryFilterMode = action.payload;
+        },
+        setTableFilters: (state, action: PayloadAction<string[]>) => {
+            state.tableFilters = action.payload;
+        },
+        setOwnerFilters: (state, action: PayloadAction<string[]>) => {
+            state.ownerFilters = action.payload;
         },
         setSearch: (state, action: PayloadAction<string | undefined>) => {
             state.search = action.payload;
@@ -207,6 +250,15 @@ export const metricsCatalogSlice = createSlice({
             const formattedConfig = convertTableColumnConfigToState(config);
             state.columnConfig = formattedConfig;
         },
+        setActiveTreeUuid: (state, action: PayloadAction<string | null>) => {
+            state.activeTreeUuid = action.payload;
+        },
+        setSavedTreeEditMode: (
+            state,
+            action: PayloadAction<SavedTreeEditMode>,
+        ) => {
+            state.savedTreeEditMode = action.payload;
+        },
     },
 });
 
@@ -214,6 +266,9 @@ export const {
     setActiveMetric,
     setProjectUuid,
     setCategoryFilters,
+    setCategoryFilterMode,
+    setTableFilters,
+    setOwnerFilters,
     setOrganizationUuid,
     setAbility,
     setUser,
@@ -225,4 +280,6 @@ export const {
     setColumnOrder,
     setColumnVisibility,
     setColumnConfig,
+    setActiveTreeUuid,
+    setSavedTreeEditMode,
 } = metricsCatalogSlice.actions;

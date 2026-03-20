@@ -16,14 +16,14 @@ export const projectMemberAbilities: Record<
     viewer(member, { can }) {
         can('view', 'Dashboard', {
             projectUuid: member.projectUuid,
-            isPrivate: false,
+            inheritsFromOrgOrProject: true,
         });
         can('view', 'JobStatus', {
             createdByUserUuid: member.userUuid,
         });
         can('view', 'SavedChart', {
             projectUuid: member.projectUuid,
-            isPrivate: false,
+            inheritsFromOrgOrProject: true,
         });
         can('view', 'Dashboard', {
             projectUuid: member.projectUuid,
@@ -39,7 +39,7 @@ export const projectMemberAbilities: Record<
         });
         can('view', 'Space', {
             projectUuid: member.projectUuid,
-            isPrivate: false,
+            inheritsFromOrgOrProject: true,
         });
         can('view', 'Space', {
             projectUuid: member.projectUuid,
@@ -89,6 +89,10 @@ export const projectMemberAbilities: Record<
         });
         can('create', 'ScheduledDeliveries', {
             projectUuid: member.projectUuid,
+        });
+        can('manage', 'ScheduledDeliveries', {
+            projectUuid: member.projectUuid,
+            userUuid: member.userUuid,
         });
         can('manage', 'GoogleSheets', {
             projectUuid: member.projectUuid,
@@ -157,13 +161,10 @@ export const projectMemberAbilities: Record<
         });
         can('manage', 'Space', {
             projectUuid: member.projectUuid,
-            isPrivate: false,
+            inheritsFromOrgOrProject: true,
         });
         can('manage', 'Job');
         can('manage', 'PinnedItems', {
-            projectUuid: member.projectUuid,
-        });
-        can('manage', 'ScheduledDeliveries', {
             projectUuid: member.projectUuid,
         });
 
@@ -184,6 +185,9 @@ export const projectMemberAbilities: Record<
     },
     developer(member, { can }) {
         projectMemberAbilities.editor(member, { can });
+        can('manage', 'PreAggregation', {
+            projectUuid: member.projectUuid,
+        });
         can('manage', 'VirtualView', {
             projectUuid: member.projectUuid,
         });
@@ -196,12 +200,29 @@ export const projectMemberAbilities: Record<
         can('manage', 'Validation', {
             projectUuid: member.projectUuid,
         });
+        can('view', 'SourceCode', {
+            projectUuid: member.projectUuid,
+        });
+        can('manage', 'SourceCode', {
+            projectUuid: member.projectUuid,
+            isProtectedBranch: false, // Only allow writes when NOT writing to protected branch
+        });
 
         can('manage', 'CompileProject', {
             projectUuid: member.projectUuid,
         });
 
+        can('manage', 'DeployProject', {
+            projectUuid: member.projectUuid,
+        });
+        can('manage', 'DeployProject', {
+            projectUuid: member.projectUuid,
+            type: ProjectType.PREVIEW,
+            createdByUserUuid: member.userUuid,
+        });
+
         can('delete', 'Project', {
+            projectUuid: member.projectUuid,
             type: ProjectType.PREVIEW,
             createdByUserUuid: member.userUuid,
         });
@@ -213,6 +234,11 @@ export const projectMemberAbilities: Record<
 
         can('update', 'Project', {
             projectUuid: member.projectUuid,
+        });
+        can('update', 'Project', {
+            projectUuid: member.projectUuid,
+            type: ProjectType.PREVIEW,
+            createdByUserUuid: member.userUuid,
         });
         can('manage', 'SpotlightTableConfig', {
             projectUuid: member.projectUuid,
@@ -257,6 +283,14 @@ export const projectMemberAbilities: Record<
             projectUuid: member.projectUuid,
         });
         can('manage', 'AiAgentThread', {
+            projectUuid: member.projectUuid,
+        });
+
+        can('manage', 'ScheduledDeliveries', {
+            projectUuid: member.projectUuid,
+        });
+
+        can('manage', 'DeletedContent', {
             projectUuid: member.projectUuid,
         });
     },

@@ -11,6 +11,9 @@ import {
     detectCircularDependencies,
     Explore,
     ExploreCompiler,
+    getItemId,
+    isCustomBinDimension,
+    isPeriodOverPeriodAdditionalMetric,
     isPostCalculationMetricType,
     isSqlTableCalculation,
     isTemplateTableCalculation,
@@ -18,7 +21,6 @@ import {
     MetricQuery,
     MetricType,
     PivotConfiguration,
-    POP_PREVIOUS_PERIOD_SUFFIX,
     TableCalculation,
     type WarehouseSqlBuilder,
 } from '@lightdash/common';
@@ -76,6 +78,7 @@ const compileTableCalculation = (
     dependencyGraph: DependencyNode[],
     warehouseSqlBuilder: WarehouseSqlBuilder,
     sortFields: MetricQuery['sorts'],
+    customBinDimensionIds: Set<string>,
 ): CompiledTableCalculation => {
     if (validFieldIds.includes(tableCalculation.name)) {
         throw new CompileError(
@@ -135,6 +138,7 @@ const compileTableCalculation = (
             tableCalculation.template,
             warehouseSqlBuilder,
             sortFields,
+            customBinDimensionIds,
         );
 
         return {
@@ -153,6 +157,7 @@ const compileTableCalculations = (
     quoteChar: string,
     warehouseSqlBuilder: WarehouseSqlBuilder,
     sortFields: MetricQuery['sorts'],
+    customBinDimensionIds: Set<string>,
 ): CompiledTableCalculation[] => {
     if (tableCalculations.length === 0) {
         return [];
@@ -177,6 +182,7 @@ const compileTableCalculations = (
             dependencyGraph,
             warehouseSqlBuilder,
             sortFields,
+            customBinDimensionIds,
         );
         compiledTableCalculations.push(compiled);
     }
@@ -292,15 +298,14 @@ export const compileMetricQuery = ({
 }: CompileMetricQueryArgs): CompiledMetricQuery => {
     const fieldQuoteChar = warehouseSqlBuilder.getFieldQuoteChar();
 
+    const popMetricIds = (metricQuery.additionalMetrics ?? [])
+        .filter(isPeriodOverPeriodAdditionalMetric)
+        .map(getItemId);
+
     const validFieldIds = [
         ...metricQuery.dimensions,
-        ...metricQuery.metrics.reduce<string[]>((acc2, metric) => {
-            acc2.push(metric);
-            if (metricQuery.periodOverPeriod) {
-                acc2.push(`${metric}${POP_PREVIOUS_PERIOD_SUFFIX}`);
-            }
-            return acc2;
-        }, []),
+        ...metricQuery.metrics,
+        ...popMetricIds,
     ];
 
     const compiledAdditionalMetrics = (metricQuery.additionalMetrics || []).map(
@@ -322,6 +327,11 @@ export const compileMetricQuery = ({
                 availableParameters,
             ),
     );
+    const customBinDimensionIds = new Set(
+        (metricQuery.customDimensions || [])
+            .filter(isCustomBinDimension)
+            .map(getItemId),
+    );
 
     const compiledTableCalculations = compileTableCalculations(
         metricQuery.tableCalculations,
@@ -329,6 +339,7 @@ export const compileMetricQuery = ({
         fieldQuoteChar,
         warehouseSqlBuilder,
         metricQuery.sorts,
+        customBinDimensionIds,
     );
 
     return {

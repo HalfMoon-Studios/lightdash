@@ -12,6 +12,7 @@ import {
     ExploreError,
     ExploreType,
     FieldType,
+    isExploreError,
     Job,
     JobLabels,
     JobStatusType,
@@ -89,7 +90,11 @@ export const buildAccount = ({
         isRegisteredUser: () => userType === 'registered',
         isJwtUser: () => accountType === 'jwt',
         isAnonymousUser: () => userType === 'anonymous',
-    } as unknown as Account);
+        isServiceAccount: () => accountType === 'service-account',
+        isPatUser: () => accountType === 'pat',
+        isOauthUser: () => accountType === 'oauth',
+        isAuthenticated: () => true,
+    }) as unknown as Account;
 
 export const validExplore: Explore = {
     targetDatabase: SupportedDbtAdapter.POSTGRES,
@@ -185,6 +190,18 @@ export const virtualExplore: Explore = {
     name: 'virtual_explore',
     label: 'Virtual Explore',
     type: ExploreType.VIRTUAL,
+    tags: [],
+};
+
+export const preAggregateExplore: Explore = {
+    ...validExplore,
+    name: '__preagg__valid_explore__rollup',
+    label: 'Pre-agg Explore',
+    type: ExploreType.PRE_AGGREGATE,
+    preAggregateSource: {
+        sourceExploreName: 'valid_explore',
+        preAggregateName: 'rollup',
+    },
     tags: [],
 };
 
@@ -318,7 +335,9 @@ export const projectWithSensitiveFields: Project = {
         environment_id: 'environment_id',
     },
     schedulerTimezone: 'UTC',
+    queryTimezone: null,
     createdByUserUuid: sessionAccount.user.id,
+    hasDefaultUserSpaces: false,
 };
 
 export const projectSummary: ProjectSummary = {
@@ -335,7 +354,6 @@ export const defaultProject: OrganizationProject = {
     createdAt: new Date('2024-01-01T00:00:00Z'),
     upstreamProjectUuid: null,
     warehouseType: WarehouseTypes.POSTGRES,
-    requireUserCredentials: false,
 };
 
 export const spacesWithSavedCharts: Space[] = [
@@ -345,8 +363,8 @@ export const spacesWithSavedCharts: Space[] = [
         slug: 'space',
         parentSpaceUuid: null,
         path: 'space',
-
-        isPrivate: false,
+        inheritParentPermissions: true,
+        inheritsFromOrgOrProject: true,
         uuid: 'uuid',
         pinnedListUuid: null,
         pinnedListOrder: null,
@@ -385,13 +403,13 @@ export const spacesWithNoSavedCharts: Space[] = [
         slug: 'space',
         parentSpaceUuid: null,
         path: 'space',
-
         uuid: 'uuid',
         pinnedListUuid: null,
         pinnedListOrder: null,
         queries: [],
         projectUuid,
-        isPrivate: false,
+        inheritParentPermissions: true,
+        inheritsFromOrgOrProject: true,
         dashboards: [],
         access: [],
         groupsAccess: [],
@@ -458,6 +476,8 @@ export const lightdashConfigWithNoSMTP: Pick<
         csvCellsLimit: 100,
         timezone: undefined,
         useSqlPivotResults: false,
+        showExecutionTime: false,
+        retryQueryOnTransientErrors: false,
     },
 };
 
@@ -554,7 +574,8 @@ export const exploreToSummaryWithAttributes = (
 ): SummaryExplore & {
     baseTableRequiredAttributes?: Record<string, string | string[]>;
 } => {
-    if ('errors' in explore) {
+    // ExploreError: completely failed to compile (no tables field)
+    if (isExploreError(explore)) {
         return {
             name: explore.name,
             label: explore.label,
@@ -563,6 +584,7 @@ export const exploreToSummaryWithAttributes = (
         };
     }
 
+    // Working Explore (may have partial compilation warnings)
     const baseTable = explore.tables[explore.baseTable];
     return {
         name: explore.name,
@@ -572,6 +594,8 @@ export const exploreToSummaryWithAttributes = (
         schemaName: baseTable.schema,
         description: baseTable.description,
         type: explore.type,
+        preAggregateSource: explore.preAggregateSource,
         baseTableRequiredAttributes: baseTable.requiredAttributes,
+        ...(explore.warnings ? { warnings: explore.warnings } : {}),
     };
 };

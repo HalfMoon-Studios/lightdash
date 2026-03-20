@@ -1,20 +1,20 @@
 import { type SavedChart } from '@lightdash/common';
 import {
     Button,
-    Group,
-    Modal,
     Stack,
-    TextInput,
     Textarea,
-    Title,
+    TextInput,
     type ModalProps,
-} from '@mantine/core';
+} from '@mantine-8/core';
 import { useForm } from '@mantine/form';
+import { IconPencil } from '@tabler/icons-react';
 import { useEffect, type FC } from 'react';
+import { useProjectUuid } from '../../../hooks/useProjectUuid';
 import { useSavedQuery, useUpdateMutation } from '../../../hooks/useSavedQuery';
 import useSearchParams from '../../../hooks/useSearchParams';
+import MantineModal from '../MantineModal';
 
-interface ChartUpdateModalProps extends ModalProps {
+interface ChartUpdateModalProps extends Pick<ModalProps, 'opened' | 'onClose'> {
     uuid: string;
     onConfirm?: () => void;
 }
@@ -22,12 +22,17 @@ interface ChartUpdateModalProps extends ModalProps {
 type FormState = Pick<SavedChart, 'name' | 'description'>;
 
 const ChartUpdateModal: FC<ChartUpdateModalProps> = ({
+    opened,
+    onClose,
     uuid,
     onConfirm,
-    ...modalProps
 }) => {
+    const projectUuid = useProjectUuid();
     const dashboardUuid = useSearchParams('fromDashboard');
-    const { data: chart, isInitialLoading } = useSavedQuery({ id: uuid });
+    const { data: chart, isInitialLoading } = useSavedQuery({
+        uuidOrSlug: uuid,
+        projectUuid,
+    });
     const { mutateAsync, isLoading: isUpdating } = useUpdateMutation(
         dashboardUuid ? dashboardUuid : undefined,
         uuid,
@@ -63,9 +68,28 @@ const ChartUpdateModal: FC<ChartUpdateModalProps> = ({
     });
 
     return (
-        <Modal title={<Title order={4}>Update Chart</Title>} {...modalProps}>
-            <form title="Update Chart" onSubmit={handleConfirm}>
-                <Stack spacing="lg" pt="sm">
+        <MantineModal
+            opened={opened}
+            onClose={onClose}
+            title="Update Chart"
+            icon={IconPencil}
+            actions={
+                <Button
+                    disabled={!form.isValid()}
+                    loading={isUpdating}
+                    type="submit"
+                    form="update-chart-form"
+                >
+                    Save
+                </Button>
+            }
+        >
+            <form
+                id="update-chart-form"
+                title="Update Chart"
+                onSubmit={handleConfirm}
+            >
+                <Stack>
                     <TextInput
                         label="Chart name"
                         required
@@ -82,23 +106,9 @@ const ChartUpdateModal: FC<ChartUpdateModalProps> = ({
                         maxRows={3}
                         {...form.getInputProps('description')}
                     />
-
-                    <Group position="right" mt="sm">
-                        <Button variant="outline" onClick={modalProps.onClose}>
-                            Cancel
-                        </Button>
-
-                        <Button
-                            disabled={!form.isValid()}
-                            loading={isUpdating}
-                            type="submit"
-                        >
-                            Save
-                        </Button>
-                    </Group>
                 </Stack>
             </form>
-        </Modal>
+        </MantineModal>
     );
 };
 

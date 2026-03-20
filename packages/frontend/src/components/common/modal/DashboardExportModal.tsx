@@ -1,20 +1,15 @@
 import { type Dashboard } from '@lightdash/common';
 import {
-    Alert,
-    Box,
     Button,
     Checkbox,
     Group,
     Input,
-    Modal,
     MultiSelect,
-    Paper,
     SegmentedControl,
     Stack,
     Text,
     Tooltip,
-    type ModalProps,
-} from '@mantine/core';
+} from '@mantine-8/core';
 import {
     IconCsv,
     IconFileExport,
@@ -31,75 +26,39 @@ import {
     useExportDashboard,
 } from '../../../hooks/dashboard/useDashboard';
 import useDashboardContext from '../../../providers/Dashboard/useDashboardContext';
+import Callout from '../Callout';
 import MantineIcon from '../MantineIcon';
+import MantineModal, { type MantineModalProps } from '../MantineModal';
 
-type Props = {
+type DashboardExportModalProps = Pick<
+    MantineModalProps,
+    'opened' | 'onClose'
+> & {
     gridWidth: number;
     dashboard: Dashboard;
 };
 
-type CsvExportProps = {
-    dashboard: Dashboard;
-};
-
-const CsvExport: FC<CsvExportProps & Pick<ModalProps, 'onClose'>> = ({
-    dashboard,
+export const DashboardExportModal: FC<DashboardExportModalProps> = ({
+    opened,
     onClose,
+    gridWidth,
+    dashboard,
 }) => {
+    const [exportType, setExportType] = useState<'image' | 'csv'>('image');
+    const location = useLocation();
+
+    // CSV export state
     const exportCsvDashboardMutation = useExportCsvDashboard();
     const dashboardFilters = useDashboardContext((c) => c.allFilters);
     const dateZoomGranularity = useDashboardContext(
         (c) => c.dateZoomGranularity,
     );
-    return (
-        <Stack p="md">
-            {!!dateZoomGranularity && (
-                <Alert title="Date zoom is enabled" color="blue" mb="md">
-                    Your CSV export will include data for the selected date zoom
-                    granularity.
-                </Alert>
-            )}
-            <Group position="right" spacing="lg">
-                <Button variant="outline" onClick={onClose}>
-                    Cancel
-                </Button>
 
-                <Group spacing="xs">
-                    <Tooltip
-                        withinPortal
-                        position="bottom"
-                        label="Export results in table for all charts in a zip file"
-                    >
-                        <Button
-                            onClick={() => {
-                                exportCsvDashboardMutation.mutate({
-                                    dashboard,
-                                    filters: dashboardFilters,
-                                    dateZoomGranularity: dateZoomGranularity,
-                                });
-                                onClose();
-                            }}
-                            leftIcon={<MantineIcon icon={IconCsv} />}
-                        >
-                            Export CSV
-                        </Button>
-                    </Tooltip>
-                </Group>
-            </Group>
-        </Stack>
-    );
-};
-
-const ImageExport: FC<Props & Pick<ModalProps, 'onClose'>> = ({
-    onClose,
-    gridWidth,
-    dashboard,
-}) => {
+    // Image export state
     const [previews, setPreviews] = useState<Record<string, string>>({});
     const [previewChoice, setPreviewChoice] = useState<
-        typeof CUSTOM_WIDTH_OPTIONS[number]['value'] | undefined
+        (typeof CUSTOM_WIDTH_OPTIONS)[number]['value'] | undefined
     >(CUSTOM_WIDTH_OPTIONS[1].value);
-    const location = useLocation();
     const exportDashboardMutation = useExportDashboard();
 
     const isDashboardTabsAvailable =
@@ -133,12 +92,34 @@ const ImageExport: FC<Props & Pick<ModalProps, 'onClose'>> = ({
         ? previews[getPreviewKey(previewChoice)]
         : undefined;
 
-    const handleExportClick = useCallback(() => {
+    const handleCsvExport = useCallback(() => {
+        exportCsvDashboardMutation.mutate({
+            dashboard,
+            filters: dashboardFilters,
+            dateZoomGranularity: dateZoomGranularity,
+            selectedTabs:
+                isDashboardTabsAvailable &&
+                !allTabsSelected &&
+                selectedTabs.length > 0
+                    ? selectedTabs
+                    : null,
+        });
+        onClose();
+    }, [
+        exportCsvDashboardMutation,
+        dashboard,
+        dashboardFilters,
+        dateZoomGranularity,
+        isDashboardTabsAvailable,
+        allTabsSelected,
+        selectedTabs,
+        onClose,
+    ]);
+
+    const handleImageExport = useCallback(() => {
         if (previewChoice && previews[getPreviewKey(previewChoice)]) {
-            return window.open(
-                previews[getPreviewKey(previewChoice)],
-                '_blank',
-            );
+            window.open(previews[getPreviewKey(previewChoice)], '_blank');
+            return;
         }
 
         const queryParams = new URLSearchParams(location.search);
@@ -201,20 +182,91 @@ const ImageExport: FC<Props & Pick<ModalProps, 'onClose'>> = ({
         getPreviewKey,
     ]);
 
+    const renderActions = () => {
+        if (exportType === 'csv') {
+            return (
+                <Button
+                    onClick={handleCsvExport}
+                    leftSection={<MantineIcon icon={IconCsv} />}
+                >
+                    Export CSV
+                </Button>
+            );
+        }
+
+        return (
+            <Button
+                loading={exportDashboardMutation.isLoading}
+                onClick={handleImageExport}
+                disabled={!hasTilesInSelectedTabs()}
+                leftSection={
+                    <MantineIcon
+                        icon={previewChoice ? IconScreenshot : IconFileExport}
+                    />
+                }
+            >
+                Export dashboard
+            </Button>
+        );
+    };
+
     return (
-        <Stack>
-            <Stack spacing="xs" px="md">
-                {isDashboardTabsAvailable && (
-                    <Stack spacing="xs">
+        <MantineModal
+            opened={opened}
+            onClose={onClose}
+            title="Export dashboard"
+            icon={IconLayoutDashboard}
+            size="xl"
+            actions={renderActions()}
+        >
+            <Stack gap="md">
+                <Stack gap="xs">
+                    <Input.Label>Export format</Input.Label>
+                    <SegmentedControl
+                        data={[
+                            { label: 'Image', value: 'image' },
+                            { label: '.csv', value: 'csv' },
+                        ]}
+                        w="min-content"
+                        radius="md"
+                        value={exportType}
+                        onChange={(value) =>
+                            setExportType(value as 'image' | 'csv')
+                        }
+                    />
+                    {exportType === 'csv' && (
+                        <Text fs="italic" fz="sm" c="dimmed">
+                            All charts from all tabs will be exported as tables
+                            in a ZIP file.
+                        </Text>
+                    )}
+                </Stack>
+
+                {exportType === 'csv' && (
+                    <>
+                        {!!dateZoomGranularity && (
+                            <Callout
+                                title="Date zoom is enabled"
+                                variant="info"
+                            >
+                                Your CSV export will include data for the
+                                selected date zoom granularity.
+                            </Callout>
+                        )}
+                    </>
+                )}
+
+                {isDashboardTabsAvailable && dashboard.tabs.length > 1 && (
+                    <Stack gap="xs">
                         <Input.Label>
-                            <Group spacing="xs">
+                            <Group gap="xs">
                                 Tabs
                                 <Tooltip
                                     withinPortal={true}
                                     maw={400}
                                     variant="xs"
                                     multiline
-                                    label="Select all tabs to include all tabs in the export. If you don't select this option, only selected tabs will be included."
+                                    label="When unchecked, choose specific tabs to include in the export."
                                 >
                                     <MantineIcon
                                         icon={IconHelpCircle}
@@ -277,123 +329,20 @@ const ImageExport: FC<Props & Pick<ModalProps, 'onClose'>> = ({
                     </Stack>
                 )}
 
-                <PreviewAndCustomizeScreenshot
-                    containerWidth={gridWidth}
-                    exportMutation={exportDashboardMutation}
-                    previewChoice={previewChoice}
-                    setPreviewChoice={setPreviewChoice}
-                    onPreviewClick={handlePreviewClick}
-                    currentPreview={currentPreview}
-                    disabled={!hasTilesInSelectedTabs()}
-                />
-            </Stack>
-
-            <Box
-                sx={(theme) => ({
-                    borderTop: `1px solid ${theme.colors.ldGray[2]}`,
-                    padding: theme.spacing.sm,
-                    backgroundColor: theme.colors.background[0],
-                    position: 'sticky',
-                    bottom: 0,
-                    width: '100%',
-                    zIndex: 10,
-                })}
-            >
-                <Group position="right" spacing="lg">
-                    <Button variant="outline" onClick={onClose}>
-                        Cancel
-                    </Button>
-
-                    <Group spacing="xs">
-                        <Button
-                            loading={exportDashboardMutation.isLoading}
-                            onClick={handleExportClick}
-                            disabled={!hasTilesInSelectedTabs()}
-                            leftIcon={
-                                <MantineIcon
-                                    icon={
-                                        previewChoice
-                                            ? IconScreenshot
-                                            : IconFileExport
-                                    }
-                                />
-                            }
-                        >
-                            Export dashboard
-                        </Button>
-                    </Group>
-                </Group>
-            </Box>
-        </Stack>
-    );
-};
-
-export const DashboardExportModal: FC<Props & ModalProps> = ({
-    opened,
-    onClose,
-    gridWidth,
-    dashboard,
-}) => {
-    const [exportType, setExportType] = useState<string>('image');
-
-    return (
-        <Modal.Root opened={opened} onClose={onClose} size="xl" yOffset="3vh">
-            <Modal.Overlay />
-            <Modal.Content
-                sx={{
-                    maxWidth: '800px',
-                    margin: '0 auto',
-                    display: 'flex',
-                    flexDirection: 'column',
-                }}
-            >
-                <Modal.Header
-                    sx={(theme) => ({
-                        borderBottom: `1px solid ${theme.colors.ldGray[2]}`,
-                        padding: theme.spacing.sm,
-                    })}
-                >
-                    <Group spacing="xs">
-                        <Paper p="xs" withBorder radius="sm">
-                            <MantineIcon icon={IconLayoutDashboard} size="sm" />
-                        </Paper>
-                        <Text color="ldDark.7" fw={700} fz="md">
-                            Export dashboard
-                        </Text>
-                    </Group>
-                    <Modal.CloseButton />
-                </Modal.Header>
-
-                <SegmentedControl
-                    ml="md"
-                    mt="xs"
-                    data={[
-                        {
-                            label: 'Image',
-                            value: 'image',
-                        },
-                        {
-                            label: '.csv',
-                            value: 'csv',
-                        },
-                    ]}
-                    w="min-content"
-                    mb="xs"
-                    defaultValue="image"
-                    onChange={setExportType}
-                />
-                {exportType === 'csv' && (
-                    <CsvExport dashboard={dashboard} onClose={onClose} />
-                )}
-
                 {exportType === 'image' && (
-                    <ImageExport
-                        dashboard={dashboard}
-                        onClose={onClose}
-                        gridWidth={gridWidth}
-                    />
+                    <Stack gap="xs">
+                        <PreviewAndCustomizeScreenshot
+                            containerWidth={gridWidth}
+                            exportMutation={exportDashboardMutation}
+                            previewChoice={previewChoice}
+                            setPreviewChoice={setPreviewChoice}
+                            onPreviewClick={handlePreviewClick}
+                            currentPreview={currentPreview}
+                            disabled={!hasTilesInSelectedTabs()}
+                        />
+                    </Stack>
                 )}
-            </Modal.Content>
-        </Modal.Root>
+            </Stack>
+        </MantineModal>
     );
 };

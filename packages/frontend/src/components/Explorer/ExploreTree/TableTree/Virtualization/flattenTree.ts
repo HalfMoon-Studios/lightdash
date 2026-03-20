@@ -8,6 +8,7 @@ import {
     type CustomDimension,
     type Explore,
 } from '@lightdash/common';
+import { LD_FIELD_COLORS } from '../../../../../mantineTheme';
 import { sortNodes } from '../Tree/sortNodes';
 import {
     isGroupNode,
@@ -58,16 +59,14 @@ function flattenNodeRecursive(
     // If it's a group, check if any children are visible
     if (isGroup) {
         const groupNode = node;
-        const hasVisibleChildren = Object.values(groupNode.children).some(
-            (child) =>
-                !isSearching ||
-                searchResults.includes(child.key) ||
-                ('children' in child &&
-                    child.children &&
-                    Object.values(child.children).some((grandchild) =>
-                        searchResults.includes(grandchild.key),
-                    )),
-        );
+        const hasMatchInDescendants = (treeNode: TreeNode): boolean =>
+            searchResults.includes(treeNode.key) ||
+            (isGroupNode(treeNode) &&
+                Object.values(treeNode.children).some(hasMatchInDescendants));
+
+        const hasVisibleChildren =
+            !isSearching ||
+            Object.values(groupNode.children).some(hasMatchInDescendants);
 
         if (!hasVisibleChildren && isSearching) {
             return items;
@@ -301,7 +300,7 @@ function flattenTable(
                 tableName,
                 treeSection: TreeSection.Dimensions,
                 label: 'Dimensions',
-                color: 'blue.9',
+                color: LD_FIELD_COLORS.dimension.color,
                 depth: baseDepth,
             },
         } satisfies SectionHeaderItem);
@@ -312,7 +311,7 @@ function flattenTable(
             {
                 type: TreeSection.Dimensions,
                 label: 'Dimensions',
-                color: 'blue.9',
+                color: LD_FIELD_COLORS.dimension.color,
                 itemsMap: dimensionsMap,
                 orderFieldsBy: table.orderFieldsBy,
             },
@@ -361,7 +360,7 @@ function flattenTable(
                 tableName,
                 treeSection: TreeSection.Metrics,
                 label: 'Metrics',
-                color: 'yellow.9',
+                color: LD_FIELD_COLORS.metric.color,
                 depth: baseDepth,
                 helpButton: !hasMetrics
                     ? {
@@ -379,7 +378,7 @@ function flattenTable(
             {
                 type: TreeSection.Metrics,
                 label: 'Metrics',
-                color: 'yellow.9',
+                color: LD_FIELD_COLORS.metric.color,
                 itemsMap: metricsMap,
                 orderFieldsBy: table.orderFieldsBy,
             },
@@ -415,7 +414,7 @@ function flattenTable(
                 tableName,
                 treeSection: TreeSection.CustomMetrics,
                 label: 'Custom metrics',
-                color: 'yellow.9',
+                color: LD_FIELD_COLORS.metric.color,
                 depth: baseDepth,
                 helpButton: {
                     href: 'https://docs.lightdash.com/guides/how-to-create-metrics#-adding-custom-metrics-in-the-explore-view',
@@ -452,7 +451,7 @@ function flattenTable(
             {
                 type: TreeSection.CustomMetrics,
                 label: 'Custom metrics',
-                color: 'yellow.9',
+                color: LD_FIELD_COLORS.metric.color,
                 itemsMap: customMetricsMap,
                 missingItems: options.missingCustomMetrics.filter(
                     (m) => m.table === tableName,
@@ -490,7 +489,7 @@ function flattenTable(
                 tableName,
                 treeSection: TreeSection.CustomDimensions,
                 label: 'Custom dimensions',
-                color: 'blue.9',
+                color: LD_FIELD_COLORS.dimension.color,
                 depth: baseDepth,
             },
         } satisfies SectionHeaderItem);
@@ -499,7 +498,7 @@ function flattenTable(
             {
                 type: TreeSection.CustomDimensions,
                 label: 'Custom dimensions',
-                color: 'blue.9',
+                color: LD_FIELD_COLORS.dimension.color,
                 itemsMap: customDimensionsMap,
                 missingItems: options.missingCustomDimensions.filter(
                     (d) => d.table === tableName,

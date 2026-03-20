@@ -12,6 +12,7 @@ import {
     type ConditionalFormattingConfig,
     type ConditionalFormattingMinMaxMap,
     type DashboardFilters,
+    type DateZoom,
     type ItemsMap,
     type MetricQuery,
     type ParametersValuesMap,
@@ -48,6 +49,7 @@ const useTableConfig = (
     dashboardFilters?: DashboardFilters,
     invalidateCache?: boolean,
     parameters?: ParametersValuesMap,
+    dateZoom?: DateZoom,
 ) => {
     const { embedToken } = useEmbed();
 
@@ -170,6 +172,11 @@ const useTableConfig = (
         [columnProperties],
     );
 
+    const getColumnWidth = useCallback(
+        (fieldId: string) => columnProperties[fieldId]?.width,
+        [columnProperties],
+    );
+
     const isPivotTableEnabled =
         resultsData?.metricQuery &&
         resultsData.metricQuery.metrics.length > 0 &&
@@ -220,8 +227,7 @@ const useTableConfig = (
                   itemsMap,
                   showColumnCalculation:
                       tableChartConfig?.showColumnCalculation,
-                  // embed token is not necessary here because embeds don't use metricQuery for table calculations
-                  embedToken: undefined,
+                  embedToken,
                   parameters,
               },
     );
@@ -236,6 +242,7 @@ const useTableConfig = (
                   columnOrder,
                   pivotDimensions,
                   embedToken,
+                  dateZoom,
               }
             : {
                   metricQuery: resultsData?.metricQuery,
@@ -243,8 +250,9 @@ const useTableConfig = (
                   showSubtotals,
                   columnOrder,
                   pivotDimensions,
-                  embedToken: undefined,
+                  embedToken,
                   parameters,
+                  dateZoom,
               },
     );
 
@@ -264,6 +272,7 @@ const useTableConfig = (
             showTableNames,
             getFieldLabelOverride,
             isColumnFrozen,
+            getColumnWidth,
             columnOrder,
             totals: totalCalculations,
             groupedSubtotals,
@@ -277,6 +286,7 @@ const useTableConfig = (
         isColumnVisible,
         showTableNames,
         isColumnFrozen,
+        getColumnWidth,
         getFieldLabelOverride,
         totalCalculations,
         groupedSubtotals,
@@ -597,6 +607,8 @@ const useTableConfig = (
         resultsData,
     ]);
 
+    const exposedColumnProperties = columnProperties;
+
     const validConfig: TableChart = useMemo(
         () => ({
             showColumnCalculation,
@@ -639,7 +651,8 @@ const useTableConfig = (
             setShowResultsTotal,
             showSubtotals,
             setShowSubtotals,
-            columnProperties,
+
+            columnProperties: exposedColumnProperties,
             setColumnProperties,
             updateColumnProperty,
             columns,
@@ -675,7 +688,8 @@ const useTableConfig = (
             setShowResultsTotal,
             showSubtotals,
             setShowSubtotals,
-            columnProperties,
+
+            exposedColumnProperties,
             setColumnProperties,
             updateColumnProperty,
             columns,

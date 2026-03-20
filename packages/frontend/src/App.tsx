@@ -1,12 +1,14 @@
 import { ModalsProvider } from '@mantine/modals';
 import { wrapCreateBrowserRouterV7 } from '@sentry/react';
 import { createBrowserRouter, Outlet, RouterProvider } from 'react-router';
+import { DocumentTitle } from './components/common/DocumentTitle';
 import VersionAutoUpdater from './components/VersionAutoUpdater/VersionAutoUpdater';
 import {
     CommercialMobileRoutes,
     CommercialWebAppRoutes,
 } from './ee/CommercialRoutes';
 import ErrorBoundary from './features/errorBoundary/ErrorBoundary';
+import { SourceCodeEditorProvider } from './features/sourceCodeEditor';
 import ChartColorMappingContextProvider from './hooks/useChartColorConfig/ChartColorMappingContextProvider';
 import MobileRoutes from './MobileRoutes';
 import AbilityProvider from './providers/Ability/AbilityProvider';
@@ -16,6 +18,7 @@ import FullscreenProvider from './providers/Fullscreen/FullscreenProvider';
 import Mantine8Provider from './providers/Mantine8Provider';
 import MantineProvider from './providers/MantineProvider';
 import ReactQueryProvider from './providers/ReactQuery/ReactQueryProvider';
+import SchedulerJobsProvider from './providers/SchedulerJobs/SchedulerJobsProvider';
 import ThirdPartyProvider from './providers/ThirdPartyServicesProvider';
 import TrackingProvider from './providers/Tracking/TrackingProvider';
 import Routes from './Routes';
@@ -47,9 +50,13 @@ const router = sentryCreateBrowserRouter([
                             >
                                 <AbilityProvider>
                                     <ActiveJobProvider>
-                                        <ChartColorMappingContextProvider>
-                                            <Outlet />
-                                        </ChartColorMappingContextProvider>
+                                        <SchedulerJobsProvider>
+                                            <ChartColorMappingContextProvider>
+                                                <SourceCodeEditorProvider>
+                                                    <Outlet />
+                                                </SourceCodeEditorProvider>
+                                            </ChartColorMappingContextProvider>
+                                        </SchedulerJobsProvider>
                                     </ActiveJobProvider>
                                 </AbilityProvider>
                             </TrackingProvider>
@@ -65,7 +72,7 @@ const router = sentryCreateBrowserRouter([
 ]);
 const App = () => (
     <>
-        <title>Lightdash</title>
+        <DocumentTitle />
 
         <ReactQueryProvider>
             <MantineProvider withGlobalStyles withNormalizeCSS withCSSVariables>

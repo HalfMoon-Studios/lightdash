@@ -8,6 +8,7 @@ import {
     type VizTableHeaderSortConfig,
 } from '@lightdash/common';
 import {
+    ActionIcon,
     Box,
     Group,
     Indicator,
@@ -24,6 +25,7 @@ import { notifications } from '@mantine/notifications';
 import {
     IconAlertCircle,
     IconChartHistogram,
+    IconCode,
     IconGripHorizontal,
 } from '@tabler/icons-react';
 import {
@@ -56,6 +58,7 @@ import RunSqlQueryButton from '../../../components/SqlRunner/RunSqlQueryButton';
 import { useOrganization } from '../../../hooks/organization/useOrganization';
 import useToaster from '../../../hooks/toaster/useToaster';
 import useApp from '../../../providers/App/useApp';
+import { formatSql } from '../../../utils/sqlFormatter';
 import { Parameters, useParameters } from '../../parameters';
 import { executeSqlQuery } from '../../queryRunner/executeQuery';
 import { DEFAULT_SQL_LIMIT } from '../constants';
@@ -77,10 +80,11 @@ import {
     selectSqlRunnerResultsRunner,
     setActiveEditorTab,
     setEditorHighlightError,
+    setSql,
     setSqlLimit,
     updateParameterValue,
 } from '../store/sqlRunnerSlice';
-import { runSqlQuery } from '../store/thunks';
+import { prepareAndFetchChartData, runSqlQuery } from '../store/thunks';
 import { ChartDownload } from './Download/ChartDownload';
 import ResultsDownloadButton from './Download/ResultsDownloadButton';
 import { SqlEditor } from './SqlEditor';
@@ -104,6 +108,9 @@ export const ContentPanel: FC = () => {
     const queryError = useAppSelector((state) => state.sqlRunner.queryError);
     const editorHighlightError = useAppSelector(
         (state) => state.sqlRunner.editorHighlightError,
+    );
+    const warehouseConnectionType = useAppSelector(
+        (state) => state.sqlRunner.warehouseConnectionType,
     );
     // So we can dispatch to redux
     const dispatch = useAppDispatch();
@@ -158,21 +165,46 @@ export const ContentPanel: FC = () => {
     );
 
     const queryResults = useAppSelector(selectSqlQueryResults);
+    const hasQueryResults = useMemo(() => !!queryResults, [queryResults]);
 
     const handleRunQuery = useCallback(
         async (sqlToUse: string) => {
             if (!sqlToUse || !limit) return;
 
-            await dispatch(
-                runSqlQuery({
-                    sql: sqlToUse,
-                    limit,
-                    projectUuid,
-                    parameterValues,
-                }),
-            );
+            if (
+                activeEditorTab === EditorTabs.VISUALIZATION &&
+                hasQueryResults
+            ) {
+                // Already have results, just refresh pivot data
+                await dispatch(
+                    prepareAndFetchChartData({ forceRefresh: true }),
+                );
+            } else {
+                // Need to run SQL query first
+                await dispatch(
+                    runSqlQuery({
+                        sql: sqlToUse,
+                        limit,
+                        projectUuid,
+                        parameterValues,
+                    }),
+                );
+                // If we're on viz tab, also fetch chart data after SQL completes
+                if (activeEditorTab === EditorTabs.VISUALIZATION) {
+                    await dispatch(
+                        prepareAndFetchChartData({ forceRefresh: true }),
+                    );
+                }
+            }
         },
-        [dispatch, projectUuid, limit, parameterValues],
+        [
+            activeEditorTab,
+            dispatch,
+            projectUuid,
+            limit,
+            parameterValues,
+            hasQueryResults,
+        ],
     );
 
     useEffect(() => {
@@ -186,6 +218,11 @@ export const ContentPanel: FC = () => {
         }
     }, [queryError, showToastError]);
 
+    const handleFormatSql = useCallback(() => {
+        if (!sql) return;
+        dispatch(setSql(formatSql(sql, warehouseConnectionType)));
+    }, [sql, warehouseConnectionType, dispatch]);
+
     // Run query on cmd + enter
     useHotkeys([
         ['mod + enter', () => handleRunQuery, { preventDefault: true }],
@@ -194,17 +231,24 @@ export const ContentPanel: FC = () => {
     useEffect(
         // When the user opens the sql runner and the query results are not yet loaded, run the query and then change to the visualization tab
         function handleEditModeOnLoad() {
-            if (fetchResultsOnLoad && !queryResults) {
+            if (fetchResultsOnLoad && !hasQueryResults) {
                 void handleRunQuery(sql);
             } else if (
                 fetchResultsOnLoad &&
-                queryResults &&
+                hasQueryResults &&
                 mode === 'default'
             ) {
                 dispatch(setActiveEditorTab(EditorTabs.VISUALIZATION));
             }
         },
-        [fetchResultsOnLoad, handleRunQuery, queryResults, dispatch, sql, mode],
+        [
+            fetchResultsOnLoad,
+            handleRunQuery,
+            hasQueryResults,
+            dispatch,
+            sql,
+            mode,
+        ],
     );
 
     const activeConfigs = useAppSelector((state) => {
@@ -366,7 +410,7 @@ export const ContentPanel: FC = () => {
                     sql,
                     downloadLimit === null
                         ? MAX_SAFE_INTEGER
-                        : downloadLimit ?? limit,
+                        : (downloadLimit ?? limit),
                 );
                 return newQuery.queryUuid;
             }
@@ -504,6 +548,22 @@ export const ContentPanel: FC = () => {
                                       }
                                     : {})}
                             />
+                            {activeEditorTab === EditorTabs.SQL && (
+                                <Tooltip
+                                    variant="xs"
+                                    label="Format SQL"
+                                    withArrow
+                                    position="bottom"
+                                >
+                                    <ActionIcon
+                                        onClick={handleFormatSql}
+                                        disabled={!sql}
+                                        variant="default"
+                                    >
+                                        <MantineIcon icon={IconCode} />
+                                    </ActionIcon>
+                                </Tooltip>
+                            )}
                             {activeEditorTab === EditorTabs.VISUALIZATION &&
                             !isVizTableConfig(currentVizConfig) &&
                             selectedChartType ? (

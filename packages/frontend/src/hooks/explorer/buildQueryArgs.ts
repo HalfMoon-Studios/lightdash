@@ -6,6 +6,7 @@ import {
     type FieldId,
     type MetricQuery,
     type ParametersValuesMap,
+    type QueryExecutionContext,
     type SavedChartDAO,
 } from '@lightdash/common';
 import type { QueryResultsProps } from '../useQueryResults';
@@ -26,9 +27,9 @@ export function buildQueryArgs(options: {
     parameters: ParametersValuesMap | undefined;
     isEditMode: boolean;
     viewModeQueryArgs?:
-        | { chartUuid: string; context?: string }
+        | { chartUuid: string; context?: QueryExecutionContext }
         | { chartUuid: string; chartVersionUuid: string };
-    dateZoomGranularity?: DateGranularity;
+    dateZoomGranularity?: DateGranularity | string;
     minimal: boolean;
     savedChart: Pick<SavedChartDAO, 'chartConfig' | 'pivotConfig'>;
 }): QueryResultsProps | null {
@@ -62,10 +63,16 @@ export function buildQueryArgs(options: {
             items,
         );
     }
+
+    const pivotDimensions = options.savedChart.pivotConfig?.columns;
+
     return {
         projectUuid,
         tableId: tableName,
-        query: computedMetricQuery,
+        query: {
+            ...computedMetricQuery,
+            pivotDimensions,
+        },
         ...(isEditMode ? {} : viewModeQueryArgs),
         dateZoomGranularity,
         invalidateCache: minimal,

@@ -3,16 +3,36 @@ import {
     AbilityAction,
     Account,
     AnonymousAccount,
+    assertUnreachable,
     BulkActionable,
     ChartHistory,
     ChartSummary,
     ChartType,
     ChartVersion,
+    countCustomDimensionsInMetricQuery,
+    countTotalFilterRules,
     CreateSavedChart,
     CreateSavedChartVersion,
     CreateSchedulerAndTargetsWithoutIds,
+    DeletedContentFilters,
+    DeletedDbtChartContentSummary,
     ExploreType,
     ForbiddenError,
+    generateSlug,
+    getTimezoneLabel,
+    GoogleSheetsTransientError,
+    isChartScheduler,
+    isConditionalFormattingConfigWithColorRange,
+    isConditionalFormattingConfigWithSingleColor,
+    isCustomSqlDimension,
+    isJwtUser,
+    isSchedulerGsheetsOptions,
+    isUserWithOrg,
+    isValidFrequency,
+    isValidTimezone,
+    KnexPaginateArgs,
+    KnexPaginatedData,
+    MissingConfigError,
     NotFoundError,
     ParameterError,
     SavedChart,
@@ -20,29 +40,17 @@ import {
     SchedulerAndTargets,
     SchedulerFormat,
     SessionUser,
-    SpaceShare,
-    SpaceSummary,
     TogglePinnedItemInfo,
+    UnexpectedGoogleSheetsError,
+    UpdatedByUser,
     UpdateMultipleSavedChart,
     UpdateSavedChart,
-    UpdatedByUser,
     ViewStatistics,
-    assertUnreachable,
-    countCustomDimensionsInMetricQuery,
-    countTotalFilterRules,
-    generateSlug,
-    getTimezoneLabel,
-    isChartScheduler,
-    isConditionalFormattingConfigWithColorRange,
-    isConditionalFormattingConfigWithSingleColor,
-    isCustomSqlDimension,
-    isJwtUser,
-    isUserWithOrg,
-    isValidFrequency,
-    isValidTimezone,
     type ChartFieldUpdates,
     type Explore,
     type ExploreError,
+    type SpaceAccess,
+    type SpaceSummaryBase,
 } from '@lightdash/common';
 import cronstrue from 'cronstrue';
 import { Knex } from 'knex';
@@ -52,7 +60,9 @@ import {
     LightdashAnalytics,
     SchedulerUpsertEvent,
 } from '../../analytics/LightdashAnalytics';
+import { GoogleDriveClient } from '../../clients/Google/GoogleDriveClient';
 import { SlackClient } from '../../clients/Slack/SlackClient';
+import { LightdashConfig } from '../../config/parseConfig';
 import { getSchedulerTargetType } from '../../database/entities/scheduler';
 import { AnalyticsModel } from '../../models/AnalyticsModel';
 import type { CatalogModel } from '../../models/CatalogModel/CatalogModel';
@@ -66,28 +76,41 @@ import { SpaceModel } from '../../models/SpaceModel';
 import { SchedulerClient } from '../../scheduler/SchedulerClient';
 import { BaseService } from '../BaseService';
 import { PermissionsService } from '../PermissionsService/PermissionsService';
-import { hasViewAccessToSpace } from '../SpaceService/SpaceService';
+import type { SchedulerService } from '../SchedulerService/SchedulerService';
+import type {
+    SoftDeletableService,
+    SoftDeleteOptions,
+} from '../SoftDeletableService';
+import { SpacePermissionService } from '../SpaceService/SpacePermissionService';
+import { UserService } from '../UserService';
 
 type SavedChartServiceArguments = {
     analytics: LightdashAnalytics;
+    lightdashConfig: LightdashConfig;
     projectModel: ProjectModel;
     savedChartModel: SavedChartModel;
     spaceModel: SpaceModel;
     analyticsModel: AnalyticsModel;
     pinnedListModel: PinnedListModel;
     schedulerModel: SchedulerModel;
+    schedulerService: SchedulerService;
     schedulerClient: SchedulerClient;
     slackClient: SlackClient;
     dashboardModel: DashboardModel;
     catalogModel: CatalogModel;
     permissionsService: PermissionsService;
+    googleDriveClient: GoogleDriveClient;
+    userService: UserService;
+    spacePermissionService: SpacePermissionService;
 };
 
 export class SavedChartService
     extends BaseService
-    implements BulkActionable<Knex>
+    implements BulkActionable<Knex>, SoftDeletableService
 {
     private readonly analytics: LightdashAnalytics;
+
+    private readonly lightdashConfig: LightdashConfig;
 
     private readonly projectModel: ProjectModel;
 
@@ -101,6 +124,8 @@ export class SavedChartService
 
     private readonly schedulerModel: SchedulerModel;
 
+    private readonly schedulerService: SchedulerService;
+
     private readonly schedulerClient: SchedulerClient;
 
     private readonly slackClient: SlackClient;
@@ -111,20 +136,31 @@ export class SavedChartService
 
     private readonly permissionsService: PermissionsService;
 
+    private readonly googleDriveClient: GoogleDriveClient;
+
+    private readonly userService: UserService;
+
+    private readonly spacePermissionService: SpacePermissionService;
+
     constructor(args: SavedChartServiceArguments) {
         super();
         this.analytics = args.analytics;
+        this.lightdashConfig = args.lightdashConfig;
         this.projectModel = args.projectModel;
         this.savedChartModel = args.savedChartModel;
         this.spaceModel = args.spaceModel;
         this.analyticsModel = args.analyticsModel;
         this.pinnedListModel = args.pinnedListModel;
         this.schedulerModel = args.schedulerModel;
+        this.schedulerService = args.schedulerService;
         this.schedulerClient = args.schedulerClient;
         this.slackClient = args.slackClient;
         this.dashboardModel = args.dashboardModel;
         this.catalogModel = args.catalogModel;
         this.permissionsService = args.permissionsService;
+        this.googleDriveClient = args.googleDriveClient;
+        this.userService = args.userService;
+        this.spacePermissionService = args.spacePermissionService;
     }
 
     private async checkUpdateAccess(
@@ -133,20 +169,18 @@ export class SavedChartService
     ): Promise<ChartSummary> {
         const savedChart = await this.savedChartModel.getSummary(chartUuid);
         const { organizationUuid, projectUuid } = savedChart;
-        const space = await this.spaceModel.getSpaceSummary(
-            savedChart.spaceUuid,
-        );
-        const access = await this.spaceModel.getUserSpaceAccess(
-            user.userUuid,
-            savedChart.spaceUuid,
-        );
+        const { access, inheritsFromOrgOrProject } =
+            await this.spacePermissionService.getSpaceAccessContext(
+                user.userUuid,
+                savedChart.spaceUuid,
+            );
         if (
             user.ability.cannot(
                 'update',
                 subject('SavedChart', {
                     organizationUuid,
                     projectUuid,
-                    isPrivate: space.isPrivate,
+                    inheritsFromOrgOrProject,
                     access,
                 }),
             )
@@ -188,12 +222,11 @@ export class SavedChartService
         spaceUuid: string,
     ): Promise<boolean> {
         try {
-            const space = await this.spaceModel.getSpaceSummary(spaceUuid);
-            const access = await this.spaceModel.getUserSpaceAccess(
-                user.userUuid,
-                space.uuid,
+            return await this.spacePermissionService.can(
+                'view',
+                user,
+                spaceUuid,
             );
-            return hasViewAccessToSpace(user, space, access);
         } catch (e) {
             return false;
         }
@@ -405,11 +438,11 @@ export class SavedChartService
             },
         } = await this.savedChartModel.get(savedChartUuid);
 
-        const space = await this.spaceModel.getSpaceSummary(spaceUuid);
-        const access = await this.spaceModel.getUserSpaceAccess(
-            user.userUuid,
-            spaceUuid,
-        );
+        const { inheritsFromOrgOrProject, access } =
+            await this.spacePermissionService.getSpaceAccessContext(
+                user.userUuid,
+                spaceUuid,
+            );
 
         if (
             user.ability.cannot(
@@ -417,7 +450,7 @@ export class SavedChartService
                 subject('SavedChart', {
                     organizationUuid,
                     projectUuid,
-                    isPrivate: space.isPrivate,
+                    inheritsFromOrgOrProject,
                     access,
                 }),
             )
@@ -484,7 +517,7 @@ export class SavedChartService
 
         return {
             ...savedChart,
-            isPrivate: space.isPrivate,
+            inheritsFromOrgOrProject,
             access,
         };
     }
@@ -502,11 +535,11 @@ export class SavedChartService
             name,
         } = await this.savedChartModel.getSummary(savedChartUuid);
 
-        const space = await this.spaceModel.getSpaceSummary(spaceUuid);
-        const access = await this.spaceModel.getUserSpaceAccess(
-            user.userUuid,
-            spaceUuid,
-        );
+        const { inheritsFromOrgOrProject, access } =
+            await this.spacePermissionService.getSpaceAccessContext(
+                user.userUuid,
+                spaceUuid,
+            );
 
         if (
             user.ability.cannot(
@@ -514,7 +547,7 @@ export class SavedChartService
                 subject('SavedChart', {
                     organizationUuid,
                     projectUuid,
-                    isPrivate: space.isPrivate,
+                    inheritsFromOrgOrProject,
                     access,
                 }),
             )
@@ -560,7 +593,7 @@ export class SavedChartService
         }
         return {
             ...savedChart,
-            isPrivate: space.isPrivate,
+            inheritsFromOrgOrProject,
             access,
         };
     }
@@ -596,9 +629,8 @@ export class SavedChartService
                 savedChartUuid,
             });
         }
-        const pinnedList = await this.pinnedListModel.getPinnedListAndItems(
-            projectUuid,
-        );
+        const pinnedList =
+            await this.pinnedListModel.getPinnedListAndItems(projectUuid);
 
         this.analytics.track({
             event: 'pinned_list.updated',
@@ -627,22 +659,18 @@ export class SavedChartService
         projectUuid: string,
         data: UpdateMultipleSavedChart[],
     ): Promise<SavedChart[]> {
-        const project = await this.projectModel.getSummary(projectUuid);
-
         const spaceAccessPromises = data.map(async (chart) => {
-            const space = await this.spaceModel.getSpaceSummary(
-                chart.spaceUuid,
-            );
-            const access = await this.spaceModel.getUserSpaceAccess(
-                user.userUuid,
-                chart.spaceUuid,
-            );
+            const { inheritsFromOrgOrProject, access, organizationUuid } =
+                await this.spacePermissionService.getSpaceAccessContext(
+                    user.userUuid,
+                    chart.spaceUuid,
+                );
             return user.ability.can(
                 'update',
                 subject('SavedChart', {
-                    organizationUuid: project.organizationUuid,
+                    organizationUuid,
                     projectUuid,
-                    isPrivate: space.isPrivate,
+                    inheritsFromOrgOrProject,
                     access,
                 }),
             );
@@ -656,16 +684,14 @@ export class SavedChartService
         const savedChartsDaos = await this.savedChartModel.updateMultiple(data);
         const savedCharts = await Promise.all(
             savedChartsDaos.map(async (savedChart) => {
-                const space = await this.spaceModel.getSpaceSummary(
-                    savedChart.spaceUuid,
-                );
-                const access = await this.spaceModel.getUserSpaceAccess(
-                    user.userUuid,
-                    savedChart.spaceUuid,
-                );
+                const { inheritsFromOrgOrProject, access } =
+                    await this.spacePermissionService.getSpaceAccessContext(
+                        user.userUuid,
+                        savedChart.spaceUuid,
+                    );
                 return {
                     ...savedChart,
-                    isPrivate: space.isPrivate,
+                    inheritsFromOrgOrProject,
                     access,
                 };
             }),
@@ -681,35 +707,52 @@ export class SavedChartService
         return savedCharts;
     }
 
-    async delete(user: SessionUser, savedChartUuid: string): Promise<void> {
+    async delete(
+        user: SessionUser,
+        savedChartUuid: string,
+        options?: SoftDeleteOptions & { projectUuid?: string },
+    ): Promise<void> {
         const {
+            uuid: resolvedUuid,
             organizationUuid,
             projectUuid,
             spaceUuid,
             metricQuery: { metrics, dimensions },
             tableName,
-        } = await this.savedChartModel.get(savedChartUuid);
-        const space = await this.spaceModel.getSpaceSummary(spaceUuid);
-        const access = await this.spaceModel.getUserSpaceAccess(
-            user.userUuid,
-            spaceUuid,
-        );
+        } = await this.savedChartModel.get(savedChartUuid, undefined, {
+            projectUuid: options?.projectUuid,
+        });
 
-        if (
-            user.ability.cannot(
-                'delete',
-                subject('SavedChart', {
-                    organizationUuid,
-                    projectUuid,
-                    isPrivate: space.isPrivate,
-                    access,
-                }),
-            )
-        ) {
-            throw new ForbiddenError();
+        if (!options?.bypassPermissions) {
+            const { inheritsFromOrgOrProject, access } =
+                await this.spacePermissionService.getSpaceAccessContext(
+                    user.userUuid,
+                    spaceUuid,
+                );
+            if (
+                user.ability.cannot(
+                    'delete',
+                    subject('SavedChart', {
+                        organizationUuid,
+                        projectUuid,
+                        inheritsFromOrgOrProject,
+                        access,
+                    }),
+                )
+            ) {
+                throw new ForbiddenError();
+            }
         }
 
-        const deletedChart = await this.savedChartModel.delete(savedChartUuid);
+        if (this.lightdashConfig.softDelete.enabled) {
+            await this.softDelete(user, resolvedUuid, {
+                bypassPermissions: true, // perms checked above
+            });
+        } else {
+            await this.permanentDelete(user, resolvedUuid, {
+                bypassPermissions: true, // perms checked above
+            });
+        }
 
         try {
             const cachedExplore = await this.projectModel.getExploreFromCache(
@@ -738,32 +781,73 @@ export class SavedChartService
             event: 'saved_chart.deleted',
             userId: user.userUuid,
             properties: {
-                savedQueryId: deletedChart.uuid,
-                projectId: deletedChart.projectUuid,
+                savedQueryId: savedChartUuid,
+                projectId: projectUuid,
+                softDelete: this.lightdashConfig.softDelete.enabled,
             },
         });
+    }
+
+    async softDelete(
+        user: SessionUser,
+        savedChartUuid: string,
+        options?: SoftDeleteOptions,
+    ): Promise<void> {
+        if (!options?.bypassPermissions) {
+            const chart = await this.savedChartModel.get(savedChartUuid);
+            const { inheritsFromOrgOrProject, access } =
+                await this.spacePermissionService.getSpaceAccessContext(
+                    user.userUuid,
+                    chart.spaceUuid,
+                );
+            if (
+                user.ability.cannot(
+                    'delete',
+                    subject('SavedChart', {
+                        organizationUuid: chart.organizationUuid,
+                        projectUuid: chart.projectUuid,
+                        inheritsFromOrgOrProject,
+                        access,
+                    }),
+                )
+            ) {
+                throw new ForbiddenError();
+            }
+        }
+
+        const deletedChart = await this.savedChartModel.softDelete(
+            savedChartUuid,
+            user.userUuid,
+        );
+
+        await this.schedulerService.softDeleteByChartUuid(
+            user,
+            savedChartUuid,
+            {
+                projectUuid: deletedChart.projectUuid,
+                organizationUuid: deletedChart.organizationUuid,
+            },
+            { bypassPermissions: true }, // chart delete authorized above
+        );
     }
 
     async getViewStats(
         user: SessionUser,
         savedChartUuid: string,
     ): Promise<ViewStatistics> {
-        const savedChart = await this.savedChartModel.getSummary(
-            savedChartUuid,
-        );
-        const space = await this.spaceModel.getSpaceSummary(
-            savedChart.spaceUuid,
-        );
-        const access = await this.spaceModel.getUserSpaceAccess(
-            user.userUuid,
-            savedChart.spaceUuid,
-        );
+        const savedChart =
+            await this.savedChartModel.getSummary(savedChartUuid);
+        const { inheritsFromOrgOrProject, access } =
+            await this.spacePermissionService.getSpaceAccessContext(
+                user.userUuid,
+                savedChart.spaceUuid,
+            );
         if (
             user.ability.cannot(
                 'view',
                 subject('SavedChart', {
                     ...savedChart,
-                    isPrivate: space.isPrivate,
+                    inheritsFromOrgOrProject,
                     access,
                 }),
             )
@@ -777,10 +861,11 @@ export class SavedChartService
 
     private async checkPermissions(
         account: Account,
-        space: Omit<SpaceSummary, 'userAccess'>,
+        space: SpaceSummaryBase,
         savedChart: SavedChartDAO,
-    ): Promise<SpaceShare[]> {
+    ): Promise<{ access: SpaceAccess[]; inheritsFromOrgOrProject: boolean }> {
         let access;
+        let inheritsFromOrgOrProject: boolean;
         if (isJwtUser(account)) {
             await this.permissionsService.checkEmbedPermissions(
                 account,
@@ -793,11 +878,18 @@ export class SavedChartService
             // TODO: Get all chartUuids for a given dashboard in the middleware.
             //       https://linear.app/lightdash/issue/CENG-110/front-load-available-charts-for-dashboard-requests
             access = [{ chartUuid: savedChart.uuid }];
+            const spaceCtx =
+                await this.spacePermissionService.getAllSpaceAccessContext(
+                    space.uuid,
+                );
+            inheritsFromOrgOrProject = spaceCtx.inheritsFromOrgOrProject;
         } else {
-            access = await this.spaceModel.getUserSpaceAccess(
-                account.user.id,
+            const ctx = await this.spacePermissionService.getSpaceAccessContext(
+                account.user.userUuid,
                 savedChart.spaceUuid,
             );
+            access = ctx.access;
+            inheritsFromOrgOrProject = ctx.inheritsFromOrgOrProject;
         }
 
         if (
@@ -805,7 +897,7 @@ export class SavedChartService
                 'view',
                 subject('SavedChart', {
                     ...savedChart,
-                    isPrivate: space.isPrivate,
+                    inheritsFromOrgOrProject,
                     access,
                 }),
             )
@@ -815,19 +907,28 @@ export class SavedChartService
             );
         }
 
-        return isJwtUser(account) ? [] : (access as SpaceShare[]);
+        return {
+            access: isJwtUser(account) ? [] : (access as SpaceAccess[]),
+            inheritsFromOrgOrProject,
+        };
     }
 
     async get(
         savedChartUuidOrSlug: string,
         account: Account,
+        options?: { projectUuid?: string },
     ): Promise<SavedChart> {
-        const savedChart = await this.savedChartModel.get(savedChartUuidOrSlug);
+        const savedChart = await this.savedChartModel.get(
+            savedChartUuidOrSlug,
+            undefined,
+            { projectUuid: options?.projectUuid },
+        );
         const space = await this.spaceModel.getSpaceSummary(
             savedChart.spaceUuid,
         );
 
-        const access = await this.checkPermissions(account, space, savedChart);
+        const { access, inheritsFromOrgOrProject } =
+            await this.checkPermissions(account, space, savedChart);
 
         await this.analyticsModel.addChartViewEvent(
             savedChart.uuid,
@@ -847,7 +948,7 @@ export class SavedChartService
 
         return {
             ...savedChart,
-            isPrivate: space.isPrivate,
+            inheritsFromOrgOrProject,
             access,
         };
     }
@@ -857,32 +958,43 @@ export class SavedChartService
         projectUuid: string,
         savedChart: CreateSavedChart,
     ): Promise<SavedChart> {
-        const { organizationUuid } = await this.projectModel.getSummary(
-            projectUuid,
-        );
-        let isPrivate = false;
-        let access: SpaceShare[] = [];
-        if (savedChart.spaceUuid) {
-            const space = await this.spaceModel.getSpaceSummary(
-                savedChart.spaceUuid,
-            );
-            isPrivate = space.isPrivate;
-            access = await this.spaceModel.getUserSpaceAccess(
-                user.userUuid,
-                savedChart.spaceUuid,
-            );
+        const { organizationUuid } =
+            await this.projectModel.getSummary(projectUuid);
+
+        // When saving to a dashboard, always check permissions against the
+        // dashboard's space — the chart's spaceUuid may refer to a different
+        // space where the user has no access.
+        const resolvedSpaceUuid = savedChart.dashboardUuid
+            ? undefined
+            : (savedChart.spaceUuid ??
+              (await this.spacePermissionService.getFirstViewableSpaceUuid(
+                  user,
+                  projectUuid,
+              )));
+
+        let inheritsFromOrgOrProject = true;
+        let access: SpaceAccess[] = [];
+        if (resolvedSpaceUuid) {
+            const spaceAccessContext =
+                await this.spacePermissionService.getSpaceAccessContext(
+                    user.userUuid,
+                    resolvedSpaceUuid,
+                );
+            inheritsFromOrgOrProject =
+                spaceAccessContext.inheritsFromOrgOrProject;
+            access = spaceAccessContext.access;
         } else if (savedChart.dashboardUuid) {
             const dashboard = await this.dashboardModel.getByIdOrSlug(
                 savedChart.dashboardUuid,
             );
-            const space = await this.spaceModel.getSpaceSummary(
-                dashboard.spaceUuid,
-            );
-            isPrivate = space.isPrivate;
-            access = await this.spaceModel.getUserSpaceAccess(
-                user.userUuid,
-                dashboard.spaceUuid,
-            );
+            const dashboardSpaceAccessContext =
+                await this.spacePermissionService.getSpaceAccessContext(
+                    user.userUuid,
+                    dashboard.spaceUuid,
+                );
+            inheritsFromOrgOrProject =
+                dashboardSpaceAccessContext.inheritsFromOrgOrProject;
+            access = dashboardSpaceAccessContext.access;
         }
 
         if (
@@ -891,7 +1003,7 @@ export class SavedChartService
                 subject('SavedChart', {
                     organizationUuid,
                     projectUuid,
-                    isPrivate,
+                    inheritsFromOrgOrProject,
                     access,
                 }),
             )
@@ -899,14 +1011,29 @@ export class SavedChartService
             throw new ForbiddenError();
         }
 
+        if (!resolvedSpaceUuid && !savedChart.dashboardUuid) {
+            throw new Error(
+                'Unable to save chart; no space or dashboard provided.',
+            );
+        }
+
+        const chartToCreate = resolvedSpaceUuid
+            ? {
+                  ...savedChart,
+                  spaceUuid: resolvedSpaceUuid,
+                  dashboardUuid: null as null,
+                  slug: generateSlug(savedChart.name),
+                  updatedByUser: user,
+              }
+            : {
+                  ...savedChart,
+                  slug: generateSlug(savedChart.name),
+                  updatedByUser: user,
+              };
         const newSavedChart = await this.savedChartModel.create(
             projectUuid,
             user.userUuid,
-            {
-                ...savedChart,
-                slug: generateSlug(savedChart.name),
-                updatedByUser: user,
-            },
+            chartToCreate,
         );
 
         const cachedExplore = await this.projectModel.getExploreFromCache(
@@ -955,7 +1082,11 @@ export class SavedChartService
             );
         }
 
-        return { ...newSavedChart, isPrivate, access };
+        return {
+            ...newSavedChart,
+            inheritsFromOrgOrProject,
+            access,
+        };
     }
 
     async duplicate(
@@ -965,17 +1096,17 @@ export class SavedChartService
         data: { chartName: string; chartDesc: string },
     ): Promise<SavedChart> {
         const chart = await this.savedChartModel.get(chartUuid);
-        const space = await this.spaceModel.getSpaceSummary(chart.spaceUuid);
-        const access = await this.spaceModel.getUserSpaceAccess(
-            user.userUuid,
-            chart.spaceUuid,
-        );
+        const { inheritsFromOrgOrProject, access } =
+            await this.spacePermissionService.getSpaceAccessContext(
+                user.userUuid,
+                chart.spaceUuid,
+            );
         if (
             user.ability.cannot(
                 'create',
                 subject('SavedChart', {
                     ...chart,
-                    isPrivate: space.isPrivate,
+                    inheritsFromOrgOrProject,
                     access,
                 }),
             )
@@ -1064,15 +1195,36 @@ export class SavedChartService
             );
         }
 
-        return { ...newSavedChart, isPrivate: space.isPrivate, access };
+        return {
+            ...newSavedChart,
+            inheritsFromOrgOrProject,
+            access,
+        };
     }
 
     async getSchedulers(
         user: SessionUser,
         chartUuid: string,
-    ): Promise<SchedulerAndTargets[]> {
-        await this.checkCreateScheduledDeliveryAccess(user, chartUuid);
-        return this.schedulerModel.getChartSchedulers(chartUuid);
+        searchQuery?: string,
+        paginateArgs?: KnexPaginateArgs,
+        filters?: {
+            formats?: string[];
+        },
+    ): Promise<KnexPaginatedData<SchedulerAndTargets[]>> {
+        const chart = await this.checkCreateScheduledDeliveryAccess(
+            user,
+            chartUuid,
+        );
+        return this.schedulerModel.getSchedulers({
+            projectUuid: chart.projectUuid,
+            paginateArgs,
+            searchQuery,
+            filters: {
+                resourceType: 'chart',
+                resourceUuids: [chartUuid],
+                formats: filters?.formats,
+            },
+        });
     }
 
     async createScheduler(
@@ -1092,6 +1244,41 @@ export class SavedChartService
 
         if (!isValidTimezone(newScheduler.timezone)) {
             throw new ParameterError('Timezone string is not valid');
+        }
+
+        if (!newScheduler.targets || !Array.isArray(newScheduler.targets)) {
+            throw new ParameterError(
+                'Targets is required and must be an array',
+            );
+        }
+
+        // Validate Google Sheets file if format is GSHEETS
+        if (newScheduler.format === SchedulerFormat.GSHEETS) {
+            if (!isSchedulerGsheetsOptions(newScheduler.options)) {
+                throw new ParameterError(
+                    'Google Sheets format requires valid gsheets options',
+                );
+            }
+
+            try {
+                const refreshToken = await this.userService.getRefreshToken(
+                    user.userUuid,
+                );
+                await this.googleDriveClient.assertFileIsGoogleSheet(
+                    refreshToken,
+                    newScheduler.options.gdriveId,
+                );
+            } catch (error) {
+                if (error instanceof UnexpectedGoogleSheetsError) {
+                    throw error; // Already has clear user-facing message
+                }
+                if (error instanceof GoogleSheetsTransientError) {
+                    throw error; // Allow transient errors to propagate for retry
+                }
+                throw new MissingConfigError(
+                    'Unable to validate Google Sheets file. Please ensure you have connected your Google account.',
+                );
+            }
         }
 
         const { projectUuid, organizationUuid } =
@@ -1158,17 +1345,18 @@ export class SavedChartService
         chartUuid: string,
     ): Promise<ChartHistory> {
         const chart = await this.savedChartModel.getSummary(chartUuid);
-        const space = await this.spaceModel.getSpaceSummary(chart.spaceUuid);
-        const access = await this.spaceModel.getUserSpaceAccess(
-            user.userUuid,
-            chart.spaceUuid,
-        );
+        const { inheritsFromOrgOrProject, access } =
+            await this.spacePermissionService.getSpaceAccessContext(
+                user.userUuid,
+                chart.spaceUuid,
+            );
+
         if (
             user.ability.cannot(
                 'view',
                 subject('SavedChart', {
                     ...chart,
-                    isPrivate: space.isPrivate,
+                    inheritsFromOrgOrProject,
                     access,
                 }),
             )
@@ -1177,9 +1365,8 @@ export class SavedChartService
                 "You don't have access to the space this chart belongs to",
             );
         }
-        const versions = await this.savedChartModel.getLatestVersionSummaries(
-            chartUuid,
-        );
+        const versions =
+            await this.savedChartModel.getLatestVersionSummaries(chartUuid);
         this.analytics.track({
             event: 'saved_chart_history.view',
             userId: user.userUuid,
@@ -1200,17 +1387,17 @@ export class SavedChartService
         versionUuid: string,
     ): Promise<ChartVersion> {
         const chart = await this.savedChartModel.getSummary(chartUuid);
-        const space = await this.spaceModel.getSpaceSummary(chart.spaceUuid);
-        const access = await this.spaceModel.getUserSpaceAccess(
-            user.userUuid,
-            chart.spaceUuid,
-        );
+        const { inheritsFromOrgOrProject, access } =
+            await this.spacePermissionService.getSpaceAccessContext(
+                user.userUuid,
+                chart.spaceUuid,
+            );
         if (
             user.ability.cannot(
                 'view',
                 subject('SavedChart', {
                     ...chart,
-                    isPrivate: space.isPrivate,
+                    inheritsFromOrgOrProject,
                     access,
                 }),
             )
@@ -1237,7 +1424,11 @@ export class SavedChartService
 
         return {
             ...chartVersionSummary,
-            chart: { ...savedChart, isPrivate: space.isPrivate, access },
+            chart: {
+                ...savedChart,
+                inheritsFromOrgOrProject,
+                access,
+            },
         };
     }
 
@@ -1316,7 +1507,7 @@ export class SavedChartService
                   savedChartUuid: string;
                   spaceUuid?: string;
               },
-    ): Promise<SpaceShare[]> {
+    ): Promise<SpaceAccess[]> {
         let { spaceUuid } = resource;
 
         if (resource.savedChartUuid !== null) {
@@ -1342,8 +1533,11 @@ export class SavedChartService
             throw new NotFoundError('Space is required');
         }
 
-        const space = await this.spaceModel.getSpaceSummary(spaceUuid);
-        const spaceAccess = await this.spaceModel.getUserSpaceAccess(
+        const {
+            access: spaceAccess,
+            inheritsFromOrgOrProject,
+            organizationUuid,
+        } = await this.spacePermissionService.getSpaceAccessContext(
             actor.user.userUuid,
             spaceUuid,
         );
@@ -1351,9 +1545,9 @@ export class SavedChartService
         const hasPermission = actor.user.ability.can(
             action,
             subject('SavedChart', {
-                organizationUuid: space.organizationUuid,
+                organizationUuid,
                 projectUuid: actor.projectUuid,
-                isPrivate: space.isPrivate,
+                inheritsFromOrgOrProject,
                 access: spaceAccess,
             }),
         );
@@ -1365,10 +1559,11 @@ export class SavedChartService
         }
 
         if (resource.spaceUuid && spaceUuid !== resource.spaceUuid) {
-            const newSpace = await this.spaceModel.getSpaceSummary(
-                resource.spaceUuid,
-            );
-            const newSpaceAccess = await this.spaceModel.getUserSpaceAccess(
+            const {
+                inheritsFromOrgOrProject: newSpaceInheritsFromOrgOrProject,
+                access: newSpaceAccess,
+                organizationUuid: newSpaceOrganizationUuid,
+            } = await this.spacePermissionService.getSpaceAccessContext(
                 actor.user.userUuid,
                 resource.spaceUuid,
             );
@@ -1376,9 +1571,9 @@ export class SavedChartService
             const hasPermissionInNewSpace = actor.user.ability.can(
                 action,
                 subject('SavedChart', {
-                    organizationUuid: newSpace.organizationUuid,
+                    organizationUuid: newSpaceOrganizationUuid,
                     projectUuid: actor.projectUuid,
-                    isPrivate: newSpace.isPrivate,
+                    inheritsFromOrgOrProject: newSpaceInheritsFromOrgOrProject,
                     access: newSpaceAccess,
                 }),
             );
@@ -1444,5 +1639,152 @@ export class SavedChartService
                 },
             });
         }
+    }
+
+    /**
+     * Get deleted charts for a project
+     * Admins see all deleted charts, non-admins see only their own
+     */
+    async getDeletedCharts(
+        user: SessionUser,
+        projectUuid: string,
+        filters: DeletedContentFilters,
+        paginateArgs?: KnexPaginateArgs,
+    ): Promise<KnexPaginatedData<DeletedDbtChartContentSummary[]>> {
+        const { organizationUuid } =
+            await this.projectModel.getSummary(projectUuid);
+
+        // Check if user can view the project
+        if (
+            user.ability.cannot(
+                'view',
+                subject('Project', { organizationUuid, projectUuid }),
+            )
+        ) {
+            throw new ForbiddenError();
+        }
+
+        // Check if user is admin (can manage all deleted content)
+        const isAdmin = user.ability.can(
+            'manage',
+            subject('DeletedContent', { organizationUuid, projectUuid }),
+        );
+
+        // Non-admins can only see their own deleted items
+        const userUuidFilter = isAdmin ? undefined : user.userUuid;
+
+        return this.savedChartModel.getDeletedCharts(
+            projectUuid,
+            filters,
+            paginateArgs,
+            userUuidFilter,
+        );
+    }
+
+    /**
+     * Restore a soft-deleted chart
+     * Admins can restore any, non-admins can only restore their own
+     */
+    async restore(
+        user: SessionUser,
+        chartUuid: string,
+        options?: SoftDeleteOptions,
+    ): Promise<void> {
+        const deletedChart = await this.savedChartModel.get(
+            chartUuid,
+            undefined,
+            { deleted: true },
+        );
+        const { organizationUuid, projectUuid } = deletedChart;
+
+        if (!options?.bypassPermissions) {
+            if (
+                user.ability.cannot(
+                    'view',
+                    subject('Project', { organizationUuid, projectUuid }),
+                )
+            ) {
+                throw new ForbiddenError();
+            }
+
+            const isAdmin = user.ability.can(
+                'manage',
+                subject('DeletedContent', { organizationUuid, projectUuid }),
+            );
+
+            if (
+                !isAdmin &&
+                deletedChart.deletedBy?.userUuid !== user.userUuid
+            ) {
+                throw new ForbiddenError(
+                    'You can only restore content you deleted',
+                );
+            }
+        }
+
+        await this.savedChartModel.restore(chartUuid);
+
+        await this.schedulerService.restoreByChartUuid(
+            user,
+            chartUuid,
+            {
+                projectUuid,
+                organizationUuid,
+            },
+            { bypassPermissions: true }, // chart restore authorized above
+        );
+
+        this.analytics.track({
+            event: 'saved_chart.restored',
+            userId: user.userUuid,
+            properties: {
+                savedQueryId: chartUuid,
+                projectId: projectUuid,
+            },
+        });
+    }
+
+    /**
+     * Permanently delete a soft-deleted chart
+     * Admins can delete any, non-admins can only delete their own
+     */
+    async permanentDelete(
+        user: SessionUser,
+        chartUuid: string,
+        options?: SoftDeleteOptions,
+    ): Promise<void> {
+        if (!options?.bypassPermissions) {
+            const deletedChart = await this.savedChartModel.get(
+                chartUuid,
+                undefined,
+                { deleted: true },
+            );
+            const { organizationUuid, projectUuid } = deletedChart;
+
+            if (
+                user.ability.cannot(
+                    'view',
+                    subject('Project', { organizationUuid, projectUuid }),
+                )
+            ) {
+                throw new ForbiddenError();
+            }
+
+            const isAdmin = user.ability.can(
+                'manage',
+                subject('DeletedContent', { organizationUuid, projectUuid }),
+            );
+
+            if (
+                !isAdmin &&
+                deletedChart.deletedBy?.userUuid !== user.userUuid
+            ) {
+                throw new ForbiddenError(
+                    'You can only permanently delete content you deleted',
+                );
+            }
+        }
+
+        await this.savedChartModel.permanentDelete(chartUuid);
     }
 }

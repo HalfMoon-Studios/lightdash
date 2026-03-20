@@ -1,14 +1,16 @@
 import {
-    type Account as AccountType,
     AnyType,
+    applyDimensionOverrides,
+    assertUnreachable,
     CompileProjectPayload,
+    convertReplaceableFieldMatchMapToReplaceCustomFields,
     CreateProject,
     CreateSchedulerAndTargets,
     CreateSchedulerLog,
     CreateSchedulerTarget,
-    DashboardFilterRule,
-    DashboardParameterValue,
-    type DownloadAsyncQueryResultsPayload,
+    DashboardFilters,
+    DateZoom,
+    derivePivotConfigurationFromPivotConfig,
     DownloadCsvPayload,
     DownloadFileType,
     EmailNotificationPayload,
@@ -16,55 +18,12 @@ import {
     FeatureFlags,
     FieldReferenceError,
     ForbiddenError,
-    GsheetsNotificationPayload,
-    LightdashPage,
-    MAX_SAFE_INTEGER,
-    MissingConfigError,
-    type MsTeamsNotificationPayload,
-    NotEnoughResults,
-    NotFoundError,
-    NotificationFrequency,
-    NotificationPayloadBase,
-    ParametersValuesMap,
-    QueryExecutionContext,
-    ReadFileError,
-    RenameResourcesPayload,
-    ReplaceCustomFields,
-    ReplaceCustomFieldsPayload,
-    ReplaceableCustomFields,
-    type RunQueryTags,
-    SCHEDULER_TASKS,
-    SavedChartDAO,
-    ScheduledDeliveryPayload,
-    SchedulerAndTargets,
-    SchedulerCreateProjectWithCompilePayload,
-    SchedulerFormat,
-    type SchedulerIndexCatalogJobPayload,
-    SchedulerJobStatus,
-    SchedulerLog,
-    SessionUser,
-    SlackInstallationNotFoundError,
-    SlackNotificationPayload,
-    SqlRunnerPayload,
-    SqlRunnerPivotQueryPayload,
-    ThresholdOperator,
-    ThresholdOptions,
-    UnexpectedGoogleSheetsError,
-    UnexpectedServerError,
-    UploadMetricGsheetPayload,
-    ValidateProjectPayload,
-    VizColumn,
-    applyDimensionOverrides,
-    assertUnreachable,
-    convertReplaceableFieldMatchMapToReplaceCustomFields,
     formatRows,
     friendlyName,
     getColumnOrderFromVizTableConfig,
     getCustomLabelsFromTableConfig,
     getCustomLabelsFromVizTableConfig,
-    getDashboardFiltersForTile,
     getErrorMessage,
-    getFulfilledValues,
     getHiddenFieldsFromVizTableConfig,
     getHiddenTableFields,
     getHumanReadableCronExpression,
@@ -72,8 +31,10 @@ import {
     getPivotConfig,
     getRequestMethod,
     getSchedulerUuid,
+    GsheetsNotificationPayload,
     isChartValidationError,
     isCreateScheduler,
+    isCreateSchedulerGoogleChatTarget,
     isCreateSchedulerMsTeamsTarget,
     isCreateSchedulerSlackTarget,
     isDashboardChartTileType,
@@ -85,22 +46,81 @@ import {
     isSchedulerImageOptions,
     isTableChartConfig,
     isVizTableConfig,
+    LightdashPage,
+    MAX_SAFE_INTEGER,
+    MissingConfigError,
+    NotEnoughResults,
+    NotFoundError,
+    NotificationFrequency,
+    NotificationPayloadBase,
     operatorActionValue,
+    ParameterError,
+    ParametersValuesMap,
+    PartialFailureType,
     pivotResultsAsCsv,
+    QueryExecutionContext,
+    ReadFileError,
+    RenameResourcesPayload,
+    ReplaceableCustomFields,
+    ReplaceCustomFields,
+    ReplaceCustomFieldsPayload,
+    SavedChartDAO,
+    ScheduledDeliveryPayload,
+    SCHEDULER_TASKS,
+    SchedulerAndTargets,
+    SchedulerCreateProjectWithCompilePayload,
+    SchedulerFormat,
+    SchedulerJobStatus,
+    SchedulerLog,
+    SessionUser,
     setUuidParam,
+    SlackInstallationNotFoundError,
+    SlackNotificationPayload,
+    SqlRunnerPayload,
+    SqlRunnerPivotQueryPayload,
+    SyncSlackChannelsPayload,
+    ThresholdOperator,
+    ThresholdOptions,
+    TimeZone,
+    UnexpectedGoogleSheetsError,
+    UnexpectedServerError,
+    UploadMetricGsheetPayload,
+    ValidateProjectPayload,
+    VizColumn,
+    WarehouseConnectionError,
+    type Account as AccountType,
+    type BatchDeliveryResult,
+    type DeliveryResult,
+    type DownloadAsyncQueryResultsPayload,
+    type EmailBatchNotificationPayload,
+    type GoogleChatBatchNotificationPayload,
+    type GoogleChatNotificationPayload,
+    type MaterializePreAggregatePayload,
+    type MetricQuery,
+    type MsTeamsBatchNotificationPayload,
+    type MsTeamsNotificationPayload,
+    type PartialFailure,
+    type PivotConfiguration,
+    type SchedulerIndexCatalogJobPayload,
+    type SlackBatchNotificationPayload,
 } from '@lightdash/common';
+import archiver from 'archiver';
+import fsSync from 'fs';
 import fs from 'fs/promises';
 import { nanoid } from 'nanoid';
+import pLimit from 'p-limit';
 import slackifyMarkdown from 'slackify-markdown';
+import { Readable } from 'stream';
 import {
     DownloadCsv,
     LightdashAnalytics,
     parseAnalyticsLimit,
 } from '../analytics/LightdashAnalytics';
 import * as Account from '../auth/account';
-import { S3Client } from '../clients/Aws/S3Client';
 import EmailClient from '../clients/EmailClient/EmailClient';
+import { type FileStorageClient } from '../clients/FileStorage/FileStorageClient';
 import { GoogleDriveClient } from '../clients/Google/GoogleDriveClient';
+import { GoogleChatClient } from '../clients/GoogleChat/GoogleChatClient';
 import { MicrosoftTeamsClient } from '../clients/MicrosoftTeams/MicrosoftTeamsClient';
 import { SlackClient } from '../clients/Slack/SlackClient';
 import {
@@ -112,6 +132,7 @@ import {
 } from '../clients/Slack/SlackMessageBlocks';
 import { LightdashConfig } from '../config/parseConfig';
 import Logger from '../logging/logger';
+import type { PreAggregateModel } from '../models/PreAggregateModel';
 import { isFeatureFlagEnabled } from '../postHog';
 import { AsyncQueryService } from '../services/AsyncQueryService/AsyncQueryService';
 import type { CatalogService } from '../services/CatalogService/CatalogService';
@@ -120,8 +141,11 @@ import {
     getSchedulerCsvLimit,
 } from '../services/CsvService/CsvService';
 import { DashboardService } from '../services/DashboardService/DashboardService';
+import { DeployService } from '../services/DeployService';
 import { ExcelService } from '../services/ExcelService/ExcelService';
 import type { FeatureFlagService } from '../services/FeatureFlag/FeatureFlagService';
+import { PersistentDownloadFileService } from '../services/PersistentDownloadFileService/PersistentDownloadFileService';
+import type { PreAggregateMaterializationService } from '../services/PreAggregateMaterializationService/PreAggregateMaterializationService';
 import { getDashboardParametersValuesMap } from '../services/ProjectService/parameters';
 import { ProjectService } from '../services/ProjectService/ProjectService';
 import { RenameService } from '../services/RenameService/RenameService';
@@ -133,13 +157,15 @@ import {
 import { UserService } from '../services/UserService';
 import { ValidationService } from '../services/ValidationService/ValidationService';
 import { EncryptionUtil } from '../utils/EncryptionUtil/EncryptionUtil';
-import { SchedulerClient } from './SchedulerClient';
+import { sanitizeGenericFileName } from '../utils/FileDownloadUtils/FileDownloadUtils';
+import { getDailyDatesFromCron, SchedulerClient } from './SchedulerClient';
 
 export type SchedulerTaskArguments = {
     lightdashConfig: LightdashConfig;
     analytics: LightdashAnalytics;
     csvService: CsvService;
     dashboardService: DashboardService;
+    deployService: DeployService;
     projectService: ProjectService;
     schedulerService: SchedulerService;
     unfurlService: UnfurlService;
@@ -147,15 +173,19 @@ export type SchedulerTaskArguments = {
     validationService: ValidationService;
     emailClient: EmailClient;
     googleDriveClient: GoogleDriveClient;
-    s3Client: S3Client;
+    fileStorageClient: FileStorageClient;
     schedulerClient: SchedulerClient;
     slackClient: SlackClient;
     catalogService: CatalogService;
     encryptionUtil: EncryptionUtil;
     msTeamsClient: MicrosoftTeamsClient;
+    googleChatClient: GoogleChatClient;
     renameService: RenameService;
     asyncQueryService: AsyncQueryService;
     featureFlagService: FeatureFlagService;
+    persistentDownloadFileService: PersistentDownloadFileService;
+    preAggregateModel: PreAggregateModel;
+    preAggregateMaterializationService: PreAggregateMaterializationService;
 };
 
 export default class SchedulerTask {
@@ -166,6 +196,8 @@ export default class SchedulerTask {
     protected readonly csvService: CsvService;
 
     protected readonly dashboardService: DashboardService;
+
+    protected readonly deployService: DeployService;
 
     protected readonly projectService: ProjectService;
 
@@ -181,7 +213,7 @@ export default class SchedulerTask {
 
     protected readonly googleDriveClient: GoogleDriveClient;
 
-    protected readonly s3Client: S3Client;
+    protected readonly fileStorageClient: FileStorageClient;
 
     protected readonly schedulerClient: SchedulerClient;
 
@@ -193,17 +225,26 @@ export default class SchedulerTask {
 
     protected readonly msTeamsClient: MicrosoftTeamsClient;
 
+    protected readonly googleChatClient: GoogleChatClient;
+
     private readonly renameService: RenameService;
 
     protected readonly asyncQueryService: AsyncQueryService;
 
     private readonly featureFlagService: FeatureFlagService;
 
+    protected readonly persistentDownloadFileService: PersistentDownloadFileService;
+
+    protected readonly preAggregateMaterializationService: PreAggregateMaterializationService;
+
+    protected readonly preAggregateModel: PreAggregateModel;
+
     constructor(args: SchedulerTaskArguments) {
         this.lightdashConfig = args.lightdashConfig;
         this.analytics = args.analytics;
         this.csvService = args.csvService;
         this.dashboardService = args.dashboardService;
+        this.deployService = args.deployService;
         this.projectService = args.projectService;
         this.schedulerService = args.schedulerService;
         this.unfurlService = args.unfurlService;
@@ -211,15 +252,20 @@ export default class SchedulerTask {
         this.validationService = args.validationService;
         this.emailClient = args.emailClient;
         this.googleDriveClient = args.googleDriveClient;
-        this.s3Client = args.s3Client;
+        this.fileStorageClient = args.fileStorageClient;
         this.schedulerClient = args.schedulerClient;
         this.slackClient = args.slackClient;
         this.catalogService = args.catalogService;
         this.encryptionUtil = args.encryptionUtil;
         this.msTeamsClient = args.msTeamsClient;
+        this.googleChatClient = args.googleChatClient;
         this.renameService = args.renameService;
         this.asyncQueryService = args.asyncQueryService;
         this.featureFlagService = args.featureFlagService;
+        this.persistentDownloadFileService = args.persistentDownloadFileService;
+        this.preAggregateModel = args.preAggregateModel;
+        this.preAggregateMaterializationService =
+            args.preAggregateMaterializationService;
     }
 
     private static getCsvOptions(
@@ -292,6 +338,7 @@ export default class SchedulerTask {
     protected async getNotificationPageData(
         scheduler: CreateSchedulerAndTargets,
         jobId: string,
+        expirationSecondsOverride?: number,
     ): Promise<NotificationPayloadBase['page']> {
         const {
             createdBy: userUuid,
@@ -302,10 +349,11 @@ export default class SchedulerTask {
         } = scheduler;
 
         let imageUrl;
+        let imageS3Key;
         let csvUrl;
         let csvUrls;
         let pdfFile;
-        let failures: { chartName: string; error: string }[] | undefined;
+        let failures: PartialFailure[] | undefined;
 
         const schedulerUuid =
             'schedulerUuid' in scheduler &&
@@ -386,6 +434,22 @@ export default class SchedulerTask {
                     }
                     pdfFile = unfurlImage.pdfFile;
                     imageUrl = unfurlImage.imageUrl;
+                    imageS3Key = `${imageId}.png`;
+
+                    if (this.fileStorageClient.isEnabled() && imageUrl) {
+                        imageUrl =
+                            await this.persistentDownloadFileService.createPersistentUrl(
+                                {
+                                    s3Key: `${imageId}.png`,
+                                    fileType: DownloadFileType.IMAGE,
+                                    organizationUuid,
+                                    projectUuid,
+                                    createdByUserUuid: userUuid,
+                                    expirationSeconds:
+                                        expirationSecondsOverride,
+                                },
+                            );
+                    }
                 } catch (error) {
                     if (this.slackClient.isEnabled) {
                         await this.slackClient.postMessageToNotificationChannel(
@@ -410,9 +474,8 @@ export default class SchedulerTask {
                 throw new Error("Don't fetch csv for gsheets");
             case SchedulerFormat.CSV:
             case SchedulerFormat.XLSX:
-                const sessionUser = await this.userService.getSessionByUserUuid(
-                    userUuid,
-                );
+                const sessionUser =
+                    await this.userService.getSessionByUserUuid(userUuid);
                 const account = Account.fromSession(sessionUser);
                 const csvOptions = isSchedulerCsvOptions(options)
                     ? options
@@ -431,7 +494,9 @@ export default class SchedulerTask {
                     fileType: format,
                     values: csvOptions?.formatted ? 'formatted' : 'raw',
                     limit: parseAnalyticsLimit(csvOptions?.limit),
-                    storage: this.s3Client.isEnabled() ? 's3' : 'local',
+                    storage: this.fileStorageClient.isEnabled()
+                        ? 's3'
+                        : 'local',
                     context,
                 };
 
@@ -482,6 +547,7 @@ export default class SchedulerTask {
                                     ),
                                     pivotConfig: getPivotConfig(chart),
                                     columnOrder: chart.tableConfig.columnOrder,
+                                    expirationSecondsOverride,
                                 },
                             );
                         csvUrl = {
@@ -540,7 +606,7 @@ export default class SchedulerTask {
                             ...schedulerParameters,
                         };
 
-                        const chartTileUuidsWithChartUuids = dashboard.tiles
+                        const chartTiles = dashboard.tiles
                             .filter(isDashboardChartTileType)
                             .filter((tile) => tile.properties.savedChartUuid)
                             .filter(
@@ -551,78 +617,88 @@ export default class SchedulerTask {
                             .map((tile) => ({
                                 tileUuid: tile.uuid,
                                 chartUuid: tile.properties.savedChartUuid!,
+                                // Use tile name as initial chart name, will be updated with actual chart name on success
+                                chartName:
+                                    tile.properties.title ||
+                                    tile.properties.chartName ||
+                                    'Unknown Chart',
+                                type: 'chart' as const,
                             }));
-                        const sqlChartTileUuids = dashboard.tiles
+                        const sqlChartTiles = dashboard.tiles
                             .filter(isDashboardSqlChartTile)
                             .filter((tile) => !!tile.properties.savedSqlUuid)
                             .map((tile) => ({
                                 tileUuid: tile.uuid,
                                 chartUuid: tile.properties.savedSqlUuid!,
+                                chartName:
+                                    tile.properties.title ||
+                                    tile.properties.chartName ||
+                                    'Unknown SQL Chart',
+                                type: 'sql_chart' as const,
                             }));
-                        const csvForChartPromises =
-                            chartTileUuidsWithChartUuids.map(
-                                async ({ chartUuid, tileUuid }) => {
-                                    const chartLimit =
-                                        getSchedulerCsvLimit(csvOptions);
-                                    const query =
-                                        await this.asyncQueryService.executeAsyncDashboardChartQuery(
-                                            {
-                                                account,
-                                                projectUuid,
-                                                tileUuid,
-                                                chartUuid,
-                                                invalidateCache: true,
-                                                context:
-                                                    QueryExecutionContext.SCHEDULED_DELIVERY,
-                                                dashboardUuid,
-                                                dashboardFilters,
-                                                dashboardSorts: [],
-                                                parameters: finalParameters,
-                                                limit: chartLimit,
-                                                pivotResults:
-                                                    pivotResultsFlag.enabled,
-                                            },
-                                        );
-                                    const chart =
-                                        await this.schedulerService.savedChartModel.get(
+
+                        // Metadata for tracking failures - order matches the promises
+                        const chartMetadata = [...chartTiles, ...sqlChartTiles];
+
+                        const csvForChartPromises = chartTiles.map(
+                            async ({ chartUuid, tileUuid }) => {
+                                const chartLimit =
+                                    getSchedulerCsvLimit(csvOptions);
+                                const query =
+                                    await this.asyncQueryService.executeAsyncDashboardChartQuery(
+                                        {
+                                            account,
+                                            projectUuid,
+                                            tileUuid,
                                             chartUuid,
-                                        );
-                                    const downloadResult =
-                                        await this.asyncQueryService.downloadSyncQueryResults(
-                                            {
-                                                account,
-                                                projectUuid,
-                                                queryUuid: query.queryUuid,
-                                                type: downloadFileType,
-                                                onlyRaw:
-                                                    csvOptions?.formatted ===
-                                                    false,
-                                                customLabels:
-                                                    getCustomLabelsFromTableConfig(
-                                                        chart.chartConfig
-                                                            .config,
-                                                    ),
-                                                hiddenFields:
-                                                    getHiddenTableFields(
-                                                        chart.chartConfig,
-                                                    ),
-                                                pivotConfig:
-                                                    getPivotConfig(chart),
-                                                columnOrder:
-                                                    chart.tableConfig
-                                                        .columnOrder,
-                                            },
-                                        );
-                                    return {
-                                        chartName: chart.name,
-                                        filename: chart.name,
-                                        path: downloadResult.fileUrl,
-                                        localPath: downloadResult.fileUrl,
-                                        truncated: false,
-                                    };
-                                },
-                            );
-                        const csvForSqlChartPromises = sqlChartTileUuids.map(
+                                            invalidateCache: true,
+                                            context:
+                                                QueryExecutionContext.SCHEDULED_DELIVERY,
+                                            dashboardUuid,
+                                            dashboardFilters,
+                                            dashboardSorts: [],
+                                            parameters: finalParameters,
+                                            limit: chartLimit,
+                                            pivotResults:
+                                                pivotResultsFlag.enabled,
+                                        },
+                                    );
+                                const chart =
+                                    await this.schedulerService.savedChartModel.get(
+                                        chartUuid,
+                                    );
+                                const downloadResult =
+                                    await this.asyncQueryService.downloadSyncQueryResults(
+                                        {
+                                            account,
+                                            projectUuid,
+                                            queryUuid: query.queryUuid,
+                                            type: downloadFileType,
+                                            onlyRaw:
+                                                csvOptions?.formatted === false,
+                                            customLabels:
+                                                getCustomLabelsFromTableConfig(
+                                                    chart.chartConfig.config,
+                                                ),
+                                            hiddenFields: getHiddenTableFields(
+                                                chart.chartConfig,
+                                            ),
+                                            pivotConfig: getPivotConfig(chart),
+                                            columnOrder:
+                                                chart.tableConfig.columnOrder,
+                                            expirationSecondsOverride,
+                                        },
+                                    );
+                                return {
+                                    chartName: chart.name,
+                                    filename: chart.name,
+                                    path: downloadResult.fileUrl,
+                                    localPath: downloadResult.fileUrl,
+                                    truncated: false,
+                                };
+                            },
+                        );
+                        const csvForSqlChartPromises = sqlChartTiles.map(
                             async ({ chartUuid, tileUuid }) => {
                                 const sqlLimit =
                                     getSchedulerCsvLimit(csvOptions);
@@ -686,6 +762,7 @@ export default class SchedulerTask {
                                                         ? chart.config
                                                         : undefined,
                                                 ),
+                                            expirationSecondsOverride,
                                         },
                                     );
                                 return {
@@ -718,29 +795,39 @@ export default class SchedulerTask {
                         csvUrls = successfulResults.map((r) => r.value);
 
                         const csvFailures = results
+                            .map((result, index) => ({ result, index }))
                             .filter(
-                                (result): result is PromiseRejectedResult =>
-                                    result.status === 'rejected',
+                                (
+                                    item,
+                                ): item is {
+                                    result: PromiseRejectedResult;
+                                    index: number;
+                                } => item.result.status === 'rejected',
                             )
-                            .map((result, index) => {
-                                // Try to get chart name from the error context or use a default
-                                const chartIndex = results.indexOf(result);
-                                const chartName =
-                                    chartIndex <
-                                    chartTileUuidsWithChartUuids.length
-                                        ? `Chart ${chartIndex + 1}`
-                                        : `SQL Chart ${
-                                              chartIndex -
-                                              chartTileUuidsWithChartUuids.length +
-                                              1
-                                          }`;
+                            .map(({ result, index }) => {
+                                // Look up chart metadata using the index
+                                const metadata = chartMetadata[index];
                                 Logger.warn(
-                                    `Failed to generate CSV for ${chartName} in scheduled delivery: ${result.reason}`,
+                                    `Failed to generate CSV for ${metadata.chartName} (${metadata.chartUuid}) in scheduled delivery: ${result.reason}`,
                                 );
+
+                                if (metadata.type === 'chart') {
+                                    return {
+                                        type: PartialFailureType.DASHBOARD_CHART,
+                                        chartUuid: metadata.chartUuid,
+                                        chartName: metadata.chartName,
+                                        tileUuid: metadata.tileUuid,
+                                        error: getErrorMessage(result.reason),
+                                    } satisfies PartialFailure;
+                                }
+
                                 return {
-                                    chartName,
+                                    type: PartialFailureType.DASHBOARD_SQL_CHART,
+                                    savedSqlUuid: metadata.chartUuid,
+                                    chartName: metadata.chartName,
+                                    tileUuid: metadata.tileUuid,
                                     error: getErrorMessage(result.reason),
-                                };
+                                } satisfies PartialFailure;
                             });
 
                         // Log partial failures if any
@@ -806,6 +893,7 @@ export default class SchedulerTask {
             details,
             organizationUuid,
             imageUrl,
+            imageS3Key,
             csvUrl,
             csvUrls,
             pdfFile,
@@ -827,10 +915,14 @@ export default class SchedulerTask {
         this.analytics.track({
             event: 'scheduler_notification_job.started',
             anonymousId: LightdashAnalytics.anonymousId,
+            userId: notification.userUuid,
             properties: {
                 jobId,
+                organizationId: notification.organizationUuid,
+                projectId: notification.projectUuid,
                 schedulerId: schedulerUuid,
                 schedulerTargetId: schedulerSlackTargetUuid,
+                groupId: notification.jobGroup,
                 type: 'slack',
                 sendNow: schedulerUuid === undefined,
                 isThresholdAlert: scheduler.thresholds !== undefined,
@@ -870,9 +962,17 @@ export default class SchedulerTask {
             });
 
             // Backwards compatibility for old scheduled deliveries
+            const slackExpiration =
+                this.lightdashConfig.persistentDownloadUrls
+                    .expirationSecondsSlack ??
+                this.lightdashConfig.persistentDownloadUrls.expirationSeconds;
             const notificationPageData =
                 notification.page ??
-                (await this.getNotificationPageData(scheduler, jobId));
+                (await this.getNotificationPageData(
+                    scheduler,
+                    jobId,
+                    slackExpiration,
+                ));
 
             const {
                 url,
@@ -892,6 +992,7 @@ export default class SchedulerTask {
                 );
 
             const showExpirationWarning = format !== SchedulerFormat.IMAGE;
+            const slackExpirationDays = Math.ceil(slackExpiration / 86400);
             const schedulerFooter = includeLinks
                 ? `<${url}?${setUuidParam(
                       'scheduler_uuid',
@@ -910,7 +1011,7 @@ export default class SchedulerTask {
                     timezone || defaultSchedulerTimezone,
                 )} from Lightdash.\n${
                     showExpirationWarning
-                        ? this.s3Client.getExpirationWarning()?.slack || ''
+                        ? `For security reasons, delivered files expire after *${slackExpirationDays}* days.`
                         : ''
                 }`,
                 includeLinks,
@@ -933,9 +1034,7 @@ export default class SchedulerTask {
                         : 'data alert';
 
                     const expiration = slackImageUrl.expiring
-                        ? `For security reasons, delivered files expire after ${
-                              this.s3Client.getExpirationWarning()?.days || 3
-                          } days.`
+                        ? `For security reasons, delivered files expire after ${slackExpirationDays} days.`
                         : '';
 
                     const blocks = getChartThresholdAlertBlocks({
@@ -963,9 +1062,7 @@ export default class SchedulerTask {
                     );
 
                 const expiration = slackImageUrl.expiring
-                    ? `For security reasons, delivered files expire after ${
-                          this.s3Client.getExpirationWarning()?.days || 3
-                      } days.`
+                    ? `For security reasons, delivered files expire after ${slackExpirationDays} days.`
                     : '';
                 const blocks = getChartAndDashboardBlocks({
                     ...getBlocksArgs,
@@ -983,8 +1080,8 @@ export default class SchedulerTask {
                 if (pdfFile && message.ts) {
                     try {
                         // Add the pdf to the thread
-                        const pdfBuffer = this.s3Client.isEnabled()
-                            ? await this.s3Client.getS3FileStream(
+                        const pdfBuffer = this.fileStorageClient.isEnabled()
+                            ? await this.fileStorageClient.getFileStream(
                                   pdfFile.fileName,
                               )
                             : await fs.readFile(pdfFile.source);
@@ -1050,10 +1147,14 @@ export default class SchedulerTask {
             this.analytics.track({
                 event: 'scheduler_notification_job.completed',
                 anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
                 properties: {
                     jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
                     schedulerId: schedulerUuid,
                     schedulerTargetId: schedulerSlackTargetUuid,
+                    groupId: notification.jobGroup,
                     type: 'slack',
                     format,
                     resourceType:
@@ -1084,11 +1185,15 @@ export default class SchedulerTask {
             this.analytics.track({
                 event: 'scheduler_notification_job.failed',
                 anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
                 properties: {
                     error: `${e}`,
                     jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
                     schedulerId: schedulerUuid,
                     schedulerTargetId: schedulerSlackTargetUuid,
+                    groupId: notification.jobGroup,
                     type: 'slack',
                     sendNow: schedulerUuid === undefined,
                     isThresholdAlert: scheduler.thresholds !== undefined,
@@ -1145,10 +1250,14 @@ export default class SchedulerTask {
         this.analytics.track({
             event: 'scheduler_notification_job.started',
             anonymousId: LightdashAnalytics.anonymousId,
+            userId: notification.userUuid,
             properties: {
                 jobId,
+                organizationId: notification.organizationUuid,
+                projectId: notification.projectUuid,
                 schedulerId: schedulerUuid,
                 schedulerTargetId: schedulerMsTeamsTargetUuid,
+                groupId: notification.jobGroup,
                 type: 'msteams',
                 sendNow: schedulerUuid === undefined,
                 isThresholdAlert: scheduler.thresholds !== undefined,
@@ -1190,9 +1299,17 @@ export default class SchedulerTask {
             });
 
             // Backwards compatibility for old scheduled deliveries
+            const msTeamsExpiration =
+                this.lightdashConfig.persistentDownloadUrls
+                    .expirationSecondsMsTeams ??
+                this.lightdashConfig.persistentDownloadUrls.expirationSeconds;
             const notificationPageData =
                 notification.page ??
-                (await this.getNotificationPageData(scheduler, jobId));
+                (await this.getNotificationPageData(
+                    scheduler,
+                    jobId,
+                    msTeamsExpiration,
+                ));
 
             const {
                 url,
@@ -1211,7 +1328,7 @@ export default class SchedulerTask {
                     ? 'data alert'
                     : 'scheduled delivery';
             const schedulerFooter = includeLinks
-                ? `[${schedulerType}](${url})`
+                ? `<a href="${url}">${schedulerType}</a>`
                 : schedulerType;
 
             const defaultSchedulerTimezone =
@@ -1280,10 +1397,14 @@ export default class SchedulerTask {
             this.analytics.track({
                 event: 'scheduler_notification_job.completed',
                 anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
                 properties: {
                     jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
                     schedulerId: schedulerUuid,
                     schedulerTargetId: schedulerMsTeamsTargetUuid,
+                    groupId: notification.jobGroup,
                     type: 'msteams',
                     format,
                     resourceType:
@@ -1314,11 +1435,15 @@ export default class SchedulerTask {
             this.analytics.track({
                 event: 'scheduler_notification_job.failed',
                 anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
                 properties: {
                     error: `${e}`,
                     jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
                     schedulerId: schedulerUuid,
                     schedulerTargetId: schedulerMsTeamsTargetUuid,
+                    groupId: notification.jobGroup,
                     type: 'msteams',
                     sendNow: schedulerUuid === undefined,
                     isThresholdAlert: scheduler.thresholds !== undefined,
@@ -1565,6 +1690,159 @@ export default class SchedulerTask {
         }
     }
 
+    protected async materializePreAggregate(
+        jobId: string,
+        scheduledTime: Date,
+        payload: MaterializePreAggregatePayload,
+    ) {
+        const baseLog: Pick<SchedulerLog, 'task' | 'jobId' | 'scheduledTime'> =
+            {
+                task: SCHEDULER_TASKS.MATERIALIZE_PRE_AGGREGATE,
+                jobId,
+                scheduledTime,
+            };
+
+        try {
+            const sessionUser = await this.userService.getSessionByUserUuid(
+                payload.userUuid,
+            );
+            const account = Account.fromSession(sessionUser);
+
+            await this.schedulerService.logSchedulerJob({
+                ...baseLog,
+                details: {
+                    createdByUserUuid: payload.userUuid,
+                    organizationUuid: payload.organizationUuid,
+                    projectUuid: payload.projectUuid,
+                    preAggregateDefinitionUuid:
+                        payload.preAggregateDefinitionUuid,
+                    trigger: payload.trigger,
+                },
+                status: SchedulerJobStatus.STARTED,
+            });
+
+            const result =
+                await this.preAggregateMaterializationService.materializePreAggregate(
+                    {
+                        account,
+                        projectUuid: payload.projectUuid,
+                        preAggregateDefinitionUuid:
+                            payload.preAggregateDefinitionUuid,
+                        trigger: payload.trigger,
+                    },
+                );
+
+            await this.schedulerService.logSchedulerJob({
+                ...baseLog,
+                details: {
+                    createdByUserUuid: payload.userUuid,
+                    organizationUuid: payload.organizationUuid,
+                    projectUuid: payload.projectUuid,
+                    preAggregateDefinitionUuid:
+                        payload.preAggregateDefinitionUuid,
+                    trigger: payload.trigger,
+                    materializationUuid: result.materializationUuid,
+                    materializationStatus: result.status,
+                    queryUuid: result.queryUuid,
+                },
+                status: SchedulerJobStatus.COMPLETED,
+            });
+        } catch (error) {
+            await this.schedulerService.logSchedulerJob({
+                ...baseLog,
+                details: {
+                    createdByUserUuid: payload.userUuid,
+                    organizationUuid: payload.organizationUuid,
+                    projectUuid: payload.projectUuid,
+                    preAggregateDefinitionUuid:
+                        payload.preAggregateDefinitionUuid,
+                    trigger: payload.trigger,
+                    error: getErrorMessage(error),
+                },
+                status: SchedulerJobStatus.ERROR,
+            });
+
+            throw error;
+        }
+    }
+
+    protected async generateDailyPreAggregateMaterializationJobs(
+        currentDateStartOfDay: Date,
+    ): Promise<void> {
+        const preAggregateSchedulerDetails =
+            await this.preAggregateModel.getProjectSchedulerDetailsForPreAggregates();
+
+        let totalScheduledJobs = 0;
+
+        await Promise.all(
+            preAggregateSchedulerDetails.map(async (definition) => {
+                const { createdByUserUuid } = definition;
+                if (!createdByUserUuid) {
+                    return;
+                }
+
+                try {
+                    const materializationDates = getDailyDatesFromCron(
+                        {
+                            cron: definition.refreshCron,
+                            timezone:
+                                definition.schedulerTimezone || TimeZone.UTC,
+                        },
+                        currentDateStartOfDay,
+                    );
+
+                    const materializationJobs = materializationDates.map(
+                        (runAt) =>
+                            this.schedulerClient
+                                .materializePreAggregate(
+                                    {
+                                        organizationUuid:
+                                            definition.organizationUuid,
+                                        projectUuid: definition.projectUuid,
+                                        userUuid: createdByUserUuid,
+                                        preAggregateDefinitionUuid:
+                                            definition.preAggregateDefinitionUuid,
+                                        trigger: 'cron',
+                                    },
+                                    runAt,
+                                )
+                                .then(({ jobId }) => ({
+                                    jobId,
+                                    runAt,
+                                })),
+                    );
+
+                    // eslint-disable-next-line no-await-in-loop
+                    for await (const { jobId, runAt } of materializationJobs) {
+                        totalScheduledJobs += 1;
+
+                        Logger.info(
+                            `Scheduled pre-aggregate cron materialization job ${jobId}`,
+                            {
+                                projectUuid: definition.projectUuid,
+                                preAggregateDefinitionUuid:
+                                    definition.preAggregateDefinitionUuid,
+                                preAggregateExploreName:
+                                    definition.preAggExploreName,
+                                runAt,
+                            },
+                        );
+                    }
+                } catch (error) {
+                    Logger.error(
+                        `Failed scheduling pre-aggregate cron jobs for definition ${definition.preAggregateDefinitionUuid} in project ${definition.projectUuid}: ${getErrorMessage(
+                            error,
+                        )}`,
+                    );
+                }
+            }),
+        );
+
+        Logger.info(
+            `Scheduled ${totalScheduledJobs} pre-aggregate cron materialization job(s)`,
+        );
+    }
+
     protected async validateProject(
         jobId: string,
         scheduledTime: Date,
@@ -1667,6 +1945,11 @@ export default class SchedulerTask {
         }
     }
 
+    /**
+     * @deprecated Uses old sync query pipeline via CsvService.downloadCsv().
+     * Only kept alive by deprecated v1 downloadCsv endpoints for external API consumers.
+     * Internal frontend uses v2 async query + schedule-download flow instead.
+     */
     protected async downloadCsv(
         jobId: string,
         scheduledTime: Date,
@@ -1845,23 +2128,42 @@ export default class SchedulerTask {
                 userId: payload.userUuid,
                 properties: analyticsProperties,
             });
-            const queryTags: RunQueryTags = {
-                project_uuid: payload.projectUuid,
-                user_uuid: payload.userUuid,
-                organization_uuid: payload.organizationUuid,
-                explore_name: payload.exploreId,
-                query_context: QueryExecutionContext.GSHEETS,
+            // Build MetricQuery with exploreName (required by executeAsyncMetricQuery)
+            const metricQuery: MetricQuery = {
+                ...payload.metricQuery,
+                exploreName: payload.exploreId,
             };
 
-            const { rows } = await this.projectService.runMetricQuery({
+            // Build PivotConfiguration if pivotConfig is present
+            let pivotConfiguration: PivotConfiguration | undefined;
+            if (payload.pivotConfig) {
+                const explore = await this.projectService.getExplore(
+                    account,
+                    payload.projectUuid,
+                    payload.exploreId,
+                );
+                const fields = getItemMap(
+                    explore,
+                    metricQuery.additionalMetrics,
+                    metricQuery.tableCalculations,
+                );
+                pivotConfiguration = derivePivotConfigurationFromPivotConfig(
+                    payload.pivotConfig,
+                    metricQuery,
+                    fields,
+                );
+            }
+
+            const {
+                rows,
+                fields: itemMap,
+                pivotDetails,
+            } = await this.asyncQueryService.executeMetricQueryAndGetResults({
                 account,
-                metricQuery: payload.metricQuery,
                 projectUuid: payload.projectUuid,
-                exploreName: payload.exploreId,
-                csvLimit: undefined,
+                metricQuery,
                 context: QueryExecutionContext.GSHEETS,
-                chartUuid: undefined,
-                queryTags,
+                pivotConfiguration,
             });
 
             const refreshToken = await this.userService.getRefreshToken(
@@ -1877,19 +2179,9 @@ export default class SchedulerTask {
                 throw new Error('Unable to create new sheet');
             }
 
-            const explore = await this.projectService.getExplore(
-                account,
-                payload.projectUuid,
-                payload.exploreId,
-            );
-            const itemMap = getItemMap(
-                explore,
-                payload.metricQuery.additionalMetrics,
-                payload.metricQuery.tableCalculations,
-            );
             if (payload.pivotConfig) {
                 // PivotQueryResults expects a formatted ResultRow[] type, so we need to convert it first
-                // TODO: refactor pivotQueryResults to accept a Record<string, any>[] simple row type for performance
+                // TODO: refactor pivotQueryResults to accept a Record<string, unknown>[] simple row type for performance
                 const formattedRows = formatRows(rows, itemMap);
 
                 const pivotedResults = pivotResultsAsCsv({
@@ -1901,7 +2193,7 @@ export default class SchedulerTask {
                     onlyRaw: true,
                     maxColumnLimit:
                         this.lightdashConfig.pivotTable.maxColumnLimit,
-                    pivotDetails: null, // TODO: this is using old way of running queries + pivoting, therefore pivotDetails is not available
+                    pivotDetails,
                 });
 
                 await this.googleDriveClient.appendCsvToSheet(
@@ -1979,10 +2271,14 @@ export default class SchedulerTask {
         this.analytics.track({
             event: 'scheduler_notification_job.started',
             anonymousId: LightdashAnalytics.anonymousId,
+            userId: notification.userUuid,
             properties: {
                 jobId,
+                organizationId: notification.organizationUuid,
+                projectId: notification.projectUuid,
                 schedulerId: schedulerUuid,
                 schedulerTargetId: schedulerEmailTargetUuid,
+                groupId: notification.jobGroup,
                 type: 'email',
                 sendNow: schedulerUuid === undefined,
                 isThresholdAlert: scheduler.thresholds !== undefined,
@@ -2016,20 +2312,52 @@ export default class SchedulerTask {
             });
 
             // Backwards compatibility for old scheduled deliveries
+            const emailExpiration =
+                this.lightdashConfig.persistentDownloadUrls
+                    .expirationSecondsEmail ??
+                this.lightdashConfig.persistentDownloadUrls.expirationSeconds;
             const notificationPageData =
                 notification.page ??
-                (await this.getNotificationPageData(scheduler, jobId));
+                (await this.getNotificationPageData(
+                    scheduler,
+                    jobId,
+                    emailExpiration,
+                ));
 
             const {
                 url,
                 details,
                 pageType,
                 imageUrl,
+                imageS3Key,
                 csvUrl,
                 csvUrls,
                 pdfFile,
                 failures,
             } = notificationPageData;
+
+            let imageBuffer: Buffer | undefined;
+            if (
+                this.lightdashConfig.smtp?.inlineImageCid === true &&
+                imageS3Key &&
+                this.fileStorageClient.isEnabled()
+            ) {
+                try {
+                    const stream =
+                        await this.fileStorageClient.getFileStream(imageS3Key);
+                    const chunks: Buffer[] = [];
+                    for await (const chunk of stream) {
+                        chunks.push(
+                            Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
+                        );
+                    }
+                    imageBuffer = Buffer.concat(chunks);
+                } catch (e) {
+                    Logger.warn(
+                        `Failed to stream CID inline image from S3 (key: ${imageS3Key}), falling back to external image URL: ${e}`,
+                    );
+                }
+            }
 
             const schedulerUrl = `${url}?${setUuidParam(
                 'scheduler_uuid',
@@ -2074,9 +2402,7 @@ export default class SchedulerTask {
                     details.description || '',
                     thresholdMessage,
                     new Date().toLocaleDateString('en-GB'),
-                    `For security reasons, delivered files expire after ${
-                        this.s3Client.getExpirationWarning()?.days || 3
-                    } days`,
+                    `For security reasons, delivered files expire after ${Math.ceil(emailExpiration / 86400)} days`,
                     imageUrl,
                     url,
                     schedulerUrl,
@@ -2084,6 +2410,7 @@ export default class SchedulerTask {
                     pdfFile?.source,
                     undefined, // expiration days
                     'This is a data alert sent by Lightdash',
+                    imageBuffer,
                 );
             } else if (format === SchedulerFormat.IMAGE) {
                 if (imageUrl === undefined) {
@@ -2105,7 +2432,9 @@ export default class SchedulerTask {
                     schedulerUrl,
                     includeLinks,
                     pdfFile?.source,
-                    this.s3Client.getExpirationWarning()?.days,
+                    Math.ceil(emailExpiration / 86400),
+                    undefined, // deliveryType
+                    imageBuffer,
                 );
             } else if (savedChartUuid) {
                 if (csvUrl === undefined) {
@@ -2127,7 +2456,7 @@ export default class SchedulerTask {
                     url,
                     schedulerUrl,
                     includeLinks,
-                    this.s3Client.getExpirationWarning()?.days,
+                    Math.ceil(emailExpiration / 86400),
                     csvOptions?.asAttachment,
                     format,
                 );
@@ -2152,7 +2481,7 @@ export default class SchedulerTask {
                     url,
                     schedulerUrl,
                     includeLinks,
-                    this.s3Client.getExpirationWarning()?.days,
+                    Math.ceil(emailExpiration / 86400),
                     csvOptions?.asAttachment,
                     format,
                     failures,
@@ -2164,10 +2493,14 @@ export default class SchedulerTask {
             this.analytics.track({
                 event: 'scheduler_notification_job.completed',
                 anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
                 properties: {
                     jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
                     schedulerId: schedulerUuid,
                     schedulerTargetId: schedulerEmailTargetUuid,
+                    groupId: notification.jobGroup,
                     type: 'email',
                     format,
                     withPdf: pdfFile !== undefined,
@@ -2198,11 +2531,15 @@ export default class SchedulerTask {
             this.analytics.track({
                 event: 'scheduler_notification_job.failed',
                 anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
                 properties: {
                     error: `${e}`,
                     jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
                     schedulerId: schedulerUuid,
                     schedulerTargetId: schedulerEmailTargetUuid,
+                    groupId: notification.jobGroup,
                     type: 'email',
                     sendNow: schedulerUuid === undefined,
                     isThresholdAlert: scheduler.thresholds !== undefined,
@@ -2308,10 +2645,14 @@ export default class SchedulerTask {
         this.analytics.track({
             event: 'scheduler_notification_job.started',
             anonymousId: LightdashAnalytics.anonymousId,
+            userId: notification.userUuid,
             properties: {
                 jobId,
+                organizationId: notification.organizationUuid,
+                projectId: notification.projectUuid,
                 schedulerId: schedulerUuid,
                 schedulerTargetId: undefined,
+                groupId: notification.jobGroup,
                 type: 'gsheets',
                 sendNow: schedulerUuid === undefined,
             },
@@ -2376,9 +2717,10 @@ export default class SchedulerTask {
                     `Unable to process format ${format} on sendGdriveNotification`,
                 );
             } else if (savedChartUuid) {
-                const chart = await this.schedulerService.savedChartModel.get(
-                    savedChartUuid,
-                );
+                const chart =
+                    await this.schedulerService.savedChartModel.get(
+                        savedChartUuid,
+                    );
                 deliveryUrl = `${this.lightdashConfig.siteUrl}/projects/${chart.projectUuid}/saved/${savedChartUuid}/view?${schedulerUuidParam}&isSync=true`;
 
                 const defaultSchedulerTimezone =
@@ -2386,10 +2728,23 @@ export default class SchedulerTask {
                         schedulerUuid,
                     );
 
-                const { rows } = await this.projectService.getResultsForChart(
-                    account,
-                    savedChartUuid,
-                    QueryExecutionContext.SCHEDULED_GSHEETS_DASHBOARD,
+                const shouldPivot =
+                    isTableChartConfig(chart.chartConfig.config) &&
+                    !!getPivotConfig(chart);
+
+                const {
+                    rows,
+                    fields: itemMap,
+                    pivotDetails,
+                } = await this.asyncQueryService.executeSavedChartQueryAndGetResults(
+                    {
+                        account,
+                        projectUuid: chart.projectUuid,
+                        chartUuid: savedChartUuid,
+                        context:
+                            QueryExecutionContext.SCHEDULED_GSHEETS_DASHBOARD,
+                        pivotResults: shouldPivot,
+                    },
                 );
 
                 if (thresholds !== undefined && thresholds.length > 0) {
@@ -2397,21 +2752,10 @@ export default class SchedulerTask {
                         'Thresholds not implemented for google sheets',
                     );
                 }
-
-                const explore = await this.projectService.getExplore(
-                    account,
-                    chart.projectUuid,
-                    chart.tableName,
-                );
-                const itemMap = getItemMap(
-                    explore,
-                    chart.metricQuery.additionalMetrics,
-                    chart.metricQuery.tableCalculations,
-                );
                 const showTableNames = isTableChartConfig(
                     chart.chartConfig.config,
                 )
-                    ? chart.chartConfig.config.showTableNames ?? false
+                    ? (chart.chartConfig.config.showTableNames ?? false)
                     : true;
                 const customLabels = getCustomLabelsFromTableConfig(
                     chart.chartConfig.config,
@@ -2438,7 +2782,7 @@ export default class SchedulerTask {
                     isTableChartConfig(chart.chartConfig.config)
                 ) {
                     // PivotQueryResults expects a formatted ResultRow[] type, so we need to convert it first
-                    // TODO: refactor pivotQueryResults to accept a Record<string, any>[] simple row type for performance
+                    // TODO: refactor pivotQueryResults to accept a Record<string, unknown>[] simple row type for performance
                     const formattedRows = formatRows(rows, itemMap);
 
                     const pivotedResults = pivotResultsAsCsv({
@@ -2450,7 +2794,7 @@ export default class SchedulerTask {
                         onlyRaw: true,
                         maxColumnLimit:
                             this.lightdashConfig.pivotTable.maxColumnLimit,
-                        pivotDetails: null, // TODO: this is using old way of running queries + pivoting, therefore pivotDetails is not available
+                        pivotDetails,
                     });
                     await this.googleDriveClient.appendCsvToSheet(
                         refreshToken,
@@ -2483,39 +2827,22 @@ export default class SchedulerTask {
                         schedulerUuid,
                     );
 
-                const chartUuids = dashboard.tiles.reduce<string[]>(
-                    (acc, tile) => {
-                        if (
-                            isDashboardChartTileType(tile) &&
-                            tile.properties.savedChartUuid
-                        ) {
-                            return [...acc, tile.properties.savedChartUuid];
-                        }
-                        return acc;
-                    },
-                    [],
-                );
+                const chartTiles = dashboard.tiles
+                    .filter(isDashboardChartTileType)
+                    .filter((tile) => tile.properties.savedChartUuid);
 
                 const refreshToken = await this.userService.getRefreshToken(
                     scheduler.createdBy,
                 );
 
-                const chartNames = chartUuids.reduce<Record<string, string>>(
-                    (acc, chartUuid) => {
-                        const tile = dashboard.tiles.find(
-                            (t) =>
-                                isDashboardChartTileType(t) &&
-                                t.properties.savedChartUuid === chartUuid,
-                        );
-                        const chartName =
-                            tile && isDashboardChartTileType(tile)
-                                ? tile.properties.chartName
-                                : undefined;
+                const chartNames = chartTiles.reduce<Record<string, string>>(
+                    (acc, tile) => {
+                        const chartUuid = tile.properties.savedChartUuid!;
                         return {
                             ...acc,
                             [chartUuid]:
-                                tile?.properties.title ||
-                                chartName ||
+                                tile.properties.title ||
+                                tile.properties.chartName ||
                                 chartUuid,
                         };
                     },
@@ -2533,42 +2860,62 @@ export default class SchedulerTask {
                 );
 
                 Logger.debug(
-                    `Uploading dashboard with ${chartUuids.length} charts to Google Sheets`,
+                    `Uploading dashboard with ${chartTiles.length} charts to Google Sheets`,
                 );
+
+                // Extract dashboard filters and apply scheduler filter overrides
+                const dashboardFilters = dashboard.filters;
+                const schedulerFilters = isDashboardScheduler(scheduler)
+                    ? scheduler.filters
+                    : undefined;
+
+                if (schedulerFilters) {
+                    dashboardFilters.dimensions = applyDimensionOverrides(
+                        dashboard.filters,
+                        schedulerFilters,
+                    );
+                }
 
                 // Get the dashboard parameters to override the saved chart parameters
                 const dashboardParameters =
                     getDashboardParametersValuesMap(dashboard);
 
                 // We want to process all charts in sequence, so we don't load all chart results in memory
-                chartUuids
-                    .reduce(async (promise, chartUuid) => {
+                await chartTiles
+                    .reduce(async (promise, tile) => {
                         await promise;
+                        const chartUuid = tile.properties.savedChartUuid!;
                         const chart =
                             await this.schedulerService.savedChartModel.get(
                                 chartUuid,
                             );
-                        const { rows } =
-                            await this.projectService.getResultsForChart(
-                                account!,
+                        const shouldPivotChart =
+                            isTableChartConfig(chart.chartConfig.config) &&
+                            !!getPivotConfig(chart);
+
+                        const {
+                            rows,
+                            fields: itemMap,
+                            pivotDetails,
+                        } = await this.asyncQueryService.executeDashboardChartQueryAndGetResults(
+                            {
+                                account: account!,
+                                projectUuid: dashboard.projectUuid,
+                                tileUuid: tile.uuid,
                                 chartUuid,
-                                QueryExecutionContext.SCHEDULED_GSHEETS_DASHBOARD,
-                                dashboardParameters,
-                            );
-                        const explore = await this.projectService.getExplore(
-                            account!,
-                            chart.projectUuid,
-                            chart.tableName,
-                        );
-                        const itemMap = getItemMap(
-                            explore,
-                            chart.metricQuery.additionalMetrics,
-                            chart.metricQuery.tableCalculations,
+                                dashboardUuid,
+                                dashboardFilters,
+                                dashboardSorts: [],
+                                context:
+                                    QueryExecutionContext.SCHEDULED_GSHEETS_DASHBOARD,
+                                pivotResults: shouldPivotChart,
+                                parameters: dashboardParameters,
+                            },
                         );
                         const showTableNames = isTableChartConfig(
                             chart.chartConfig.config,
                         )
-                            ? chart.chartConfig.config.showTableNames ?? false
+                            ? (chart.chartConfig.config.showTableNames ?? false)
                             : true;
                         const customLabels = getCustomLabelsFromTableConfig(
                             chart.chartConfig.config,
@@ -2586,7 +2933,7 @@ export default class SchedulerTask {
                             isTableChartConfig(chart.chartConfig.config)
                         ) {
                             // PivotQueryResults expects a formatted ResultRow[] type, so we need to convert it first
-                            // TODO: refactor pivotQueryResults to accept a Record<string, any>[] simple row type for performance
+                            // TODO: refactor pivotQueryResults to accept a Record<string, unknown>[] simple row type for performance
                             const formattedRows = formatRows(rows, itemMap);
 
                             const pivotedResults = pivotResultsAsCsv({
@@ -2599,7 +2946,7 @@ export default class SchedulerTask {
                                 maxColumnLimit:
                                     this.lightdashConfig.pivotTable
                                         .maxColumnLimit,
-                                pivotDetails: null, // TODO: this is using old way of running queries + pivoting, therefore pivotDetails is not available
+                                pivotDetails,
                             });
 
                             await this.googleDriveClient.appendCsvToSheet(
@@ -2633,10 +2980,14 @@ export default class SchedulerTask {
             this.analytics.track({
                 event: 'scheduler_notification_job.completed',
                 anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
                 properties: {
                     jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
                     schedulerId: schedulerUuid,
                     schedulerTargetId: undefined,
+                    groupId: notification.jobGroup,
                     type: 'gsheets',
                     format,
                     resourceType: savedChartUuid ? 'chart' : 'dashboard',
@@ -2662,11 +3013,15 @@ export default class SchedulerTask {
             this.analytics.track({
                 event: 'scheduler_notification_job.failed',
                 anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
                 properties: {
                     error: `${e}`,
                     jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
                     schedulerId: schedulerUuid,
                     schedulerTargetId: undefined,
+                    groupId: notification.jobGroup,
                     type: 'gsheets',
                     sendNow: schedulerUuid === undefined,
                 },
@@ -2691,7 +3046,8 @@ export default class SchedulerTask {
                 e instanceof NotFoundError ||
                 e instanceof ForbiddenError ||
                 e instanceof MissingConfigError ||
-                e instanceof UnexpectedGoogleSheetsError;
+                e instanceof UnexpectedGoogleSheetsError ||
+                e instanceof WarehouseConnectionError;
 
             if (
                 this.slackClient.isEnabled &&
@@ -2798,6 +3154,13 @@ export default class SchedulerTask {
                     targetType: 'msteams',
                 };
             }
+            if (isCreateSchedulerGoogleChatTarget(target)) {
+                return {
+                    task: SCHEDULER_TASKS.SEND_GOOGLE_CHAT_NOTIFICATION,
+                    target: target.googleChatWebhook,
+                    targetType: 'googlechat',
+                };
+            }
             return {
                 task: SCHEDULER_TASKS.SEND_EMAIL_NOTIFICATION,
                 target: target.recipient,
@@ -2834,16 +3197,85 @@ export default class SchedulerTask {
                   );
 
         if (!scheduler.enabled) {
-            // This should not happen, if schedulers are not enabled, we should remove the scheduled jobs from the queue
-            throw new Error('Scheduler is disabled');
+            await this.schedulerService.logSchedulerJob({
+                task: SCHEDULER_TASKS.HANDLE_SCHEDULED_DELIVERY,
+                schedulerUuid,
+                jobId,
+                jobGroup: jobId,
+                scheduledTime,
+                status: SchedulerJobStatus.ERROR,
+                details: {
+                    error: `Scheduler is disabled, skipping scheduled delivery.`,
+                    projectUuid: schedulerPayload.projectUuid,
+                    organizationUuid: schedulerPayload.organizationUuid,
+                    createdByUserUuid: schedulerPayload.userUuid,
+                },
+            });
+            return;
+        }
+
+        const {
+            createdBy: userUuid,
+            savedChartUuid,
+            dashboardUuid,
+            thresholds,
+            notificationFrequency,
+            targets,
+        } = scheduler;
+
+        const sessionUser =
+            await this.userService.getSessionByUserUuid(userUuid);
+        const account = Account.fromSession(sessionUser);
+
+        // If the scheduler is not a gsheets and has no targets, we skip the delivery
+        if (
+            scheduler.format !== SchedulerFormat.GSHEETS &&
+            targets.length === 0
+        ) {
+            Logger.warn(
+                `Scheduler ${schedulerUuid} has no targets, disabling scheduler and skipping scheduled delivery. Formats: ${scheduler.format}`,
+            );
+
+            // Disable scheduler if it has no targets
+            if (schedulerUuid) {
+                await this.schedulerService.setSchedulerEnabled(
+                    sessionUser,
+                    schedulerUuid,
+                    false,
+                );
+            }
+
+            await this.schedulerService.logSchedulerJob({
+                task: SCHEDULER_TASKS.HANDLE_SCHEDULED_DELIVERY,
+                schedulerUuid,
+                jobId,
+                jobGroup: jobId,
+                scheduledTime,
+                status: SchedulerJobStatus.COMPLETED,
+                details: {
+                    partialFailures: [
+                        {
+                            type: PartialFailureType.MISSING_TARGETS,
+                        },
+                    ],
+                    projectUuid: schedulerPayload.projectUuid,
+                    organizationUuid: schedulerPayload.organizationUuid,
+                    createdByUserUuid: schedulerPayload.userUuid,
+                },
+            });
+            return;
         }
 
         this.analytics.track({
             event: 'scheduler_job.started',
             anonymousId: LightdashAnalytics.anonymousId,
+            userId: schedulerPayload.userUuid,
             properties: {
                 jobId,
+                organizationId: schedulerPayload.organizationUuid,
+                projectId: schedulerPayload.projectUuid,
                 schedulerId: schedulerUuid,
+                groupId: jobId,
                 sendNow: schedulerUuid === undefined,
                 isThresholdAlert: scheduler.thresholds !== undefined,
             },
@@ -2868,26 +3300,19 @@ export default class SchedulerTask {
             userUuid: schedulerPayload.userUuid,
         };
 
-        const {
-            createdBy: userUuid,
-            savedChartUuid,
-            dashboardUuid,
-            thresholds,
-            notificationFrequency,
-        } = scheduler;
         try {
             if (thresholds !== undefined && thresholds.length > 0) {
                 // TODO add multiple AND conditions
                 if (savedChartUuid) {
                     // We are fetching here the results before getting image or CSV
-                    const sessionUser =
-                        await this.userService.getSessionByUserUuid(userUuid);
-                    const account = Account.fromSession(sessionUser);
                     const { rows } =
-                        await this.projectService.getResultsForChart(
-                            account,
-                            savedChartUuid,
-                            QueryExecutionContext.SCHEDULED_CHART,
+                        await this.asyncQueryService.executeSavedChartQueryAndGetResults(
+                            {
+                                account,
+                                projectUuid: schedulerPayload.projectUuid,
+                                chartUuid: savedChartUuid,
+                                context: QueryExecutionContext.SCHEDULED_CHART,
+                            },
                         );
 
                     if (
@@ -2925,10 +3350,95 @@ export default class SchedulerTask {
                 }
             }
 
-            const page =
-                scheduler.format === SchedulerFormat.GSHEETS
-                    ? undefined
-                    : await this.getNotificationPageData(scheduler, jobId);
+            let page: NotificationPayloadBase['page'] | undefined;
+            let perChannelPages:
+                | {
+                      email?: NotificationPayloadBase['page'];
+                      slack?: NotificationPayloadBase['page'];
+                      msteams?: NotificationPayloadBase['page'];
+                  }
+                | undefined;
+
+            if (scheduler.format === SchedulerFormat.GSHEETS) {
+                page = undefined;
+            } else {
+                const {
+                    expirationSeconds,
+                    expirationSecondsEmail,
+                    expirationSecondsSlack,
+                    expirationSecondsMsTeams,
+                } = this.lightdashConfig.persistentDownloadUrls;
+
+                const emailExpiration =
+                    expirationSecondsEmail ?? expirationSeconds;
+                const slackExpiration =
+                    expirationSecondsSlack ?? expirationSeconds;
+                const msTeamsExpiration =
+                    expirationSecondsMsTeams ?? expirationSeconds;
+
+                const hasEmail = targets.some(
+                    (t) =>
+                        !isCreateSchedulerSlackTarget(t) &&
+                        !isCreateSchedulerMsTeamsTarget(t) &&
+                        !isCreateSchedulerGoogleChatTarget(t),
+                );
+                const hasSlack = targets.some(isCreateSchedulerSlackTarget);
+                const hasMsTeams = targets.some(isCreateSchedulerMsTeamsTarget);
+                const hasGoogleChat = targets.some(
+                    isCreateSchedulerGoogleChatTarget,
+                );
+
+                const expirationToChannels = new Map<
+                    number,
+                    Set<'email' | 'slack' | 'msteams' | 'googlechat'>
+                >();
+                const addToMap = (
+                    expiration: number,
+                    channel: 'email' | 'slack' | 'msteams' | 'googlechat',
+                ) => {
+                    const existing = expirationToChannels.get(expiration);
+                    if (existing) {
+                        existing.add(channel);
+                    } else {
+                        expirationToChannels.set(
+                            expiration,
+                            new Set([channel]),
+                        );
+                    }
+                };
+                if (hasEmail) addToMap(emailExpiration, 'email');
+                if (hasSlack) addToMap(slackExpiration, 'slack');
+                if (hasMsTeams) addToMap(msTeamsExpiration, 'msteams');
+                if (hasGoogleChat) addToMap(expirationSeconds, 'googlechat');
+
+                const pageByChannel = await Array.from(
+                    expirationToChannels.entries(),
+                ).reduce(
+                    async (accPromise, [expiration, channels]) => {
+                        const acc = await accPromise;
+                        const channelPage = await this.getNotificationPageData(
+                            scheduler,
+                            jobId,
+                            expiration,
+                        );
+                        for (const channel of channels) {
+                            acc[channel] = channelPage;
+                        }
+                        return acc;
+                    },
+                    Promise.resolve(
+                        {} as Record<string, NotificationPayloadBase['page']>,
+                    ),
+                );
+
+                perChannelPages = pageByChannel;
+                page =
+                    pageByChannel.email ??
+                    pageByChannel.slack ??
+                    pageByChannel.msteams ??
+                    pageByChannel.googlechat;
+            }
+
             const scheduledJobs =
                 await this.schedulerClient.generateJobsForSchedulerTargets(
                     scheduledTime,
@@ -2936,12 +3446,17 @@ export default class SchedulerTask {
                     page,
                     jobId,
                     traceProperties,
+                    perChannelPages,
                 );
 
             // Create scheduled jobs for targets
             await Promise.all(
-                scheduledJobs.map(({ target, jobId: targetJobId }) =>
-                    this.logScheduledTarget(
+                scheduledJobs.map(({ target, jobId: targetJobId }) => {
+                    if (!target) {
+                        return Promise.resolve();
+                    }
+
+                    return this.logScheduledTarget(
                         scheduler.format,
                         target,
                         targetJobId,
@@ -2953,9 +3468,12 @@ export default class SchedulerTask {
                             organizationUuid: schedulerPayload.organizationUuid,
                             createdByUserUuid: schedulerPayload.userUuid,
                         },
-                    ),
-                ),
+                    );
+                }),
             );
+
+            // Use page failures directly as partialFailures for logging
+            const partialFailures = page?.failures;
 
             await this.schedulerService.logSchedulerJob({
                 task: SCHEDULER_TASKS.HANDLE_SCHEDULED_DELIVERY,
@@ -2968,25 +3486,39 @@ export default class SchedulerTask {
                     projectUuid: schedulerPayload.projectUuid,
                     organizationUuid: schedulerPayload.organizationUuid,
                     createdByUserUuid: schedulerPayload.userUuid,
+                    ...(partialFailures &&
+                        partialFailures.length > 0 && { partialFailures }),
                 },
             });
 
             this.analytics.track({
                 event: 'scheduler_job.completed',
                 anonymousId: LightdashAnalytics.anonymousId,
+                userId: schedulerPayload.userUuid,
                 properties: {
                     jobId,
+                    organizationId: schedulerPayload.organizationUuid,
+                    projectId: schedulerPayload.projectUuid,
                     schedulerId: schedulerUuid,
+                    groupId: jobId,
                     isThresholdAlert: scheduler.thresholds !== undefined,
+                    hasPartialFailures:
+                        partialFailures && partialFailures.length > 0,
+                    partialFailuresCount: partialFailures?.length ?? 0,
                 },
             });
         } catch (e) {
             this.analytics.track({
                 event: 'scheduler_job.failed',
                 anonymousId: LightdashAnalytics.anonymousId,
+                userId: schedulerPayload.userUuid,
                 properties: {
                     jobId,
+                    organizationId: schedulerPayload.organizationUuid,
+                    projectId: schedulerPayload.projectUuid,
                     schedulerId: schedulerUuid,
+                    groupId: jobId,
+                    error: `${e}`,
                 },
             });
             await this.schedulerService.logSchedulerJob({
@@ -3049,8 +3581,14 @@ export default class SchedulerTask {
                 return; // Do not cascade error
             }
 
-            if (e instanceof FieldReferenceError) {
+            if (
+                e instanceof FieldReferenceError ||
+                e instanceof WarehouseConnectionError ||
+                e instanceof ParameterError
+            ) {
                 // This captures both the error from thresholdAlert and metricQuery
+                // WarehouseConnectionError indicates misconfigured credentials (wrong password, unreachable host, etc.)
+                // ParameterError indicates invalid configuration (e.g., selected tabs no longer exist)
                 Logger.warn(
                     `Disabling scheduler with non-retryable error: ${e}`,
                 );
@@ -3106,6 +3644,11 @@ export default class SchedulerTask {
                     payload.prevMetricTreeEdges,
                 );
 
+                await this.catalogService.migrateMetricsTreeNodes(
+                    payload.projectUuid,
+                    payload.prevMetricsTreeNodes,
+                );
+
                 await this.catalogService.setChartUsages(
                     payload.projectUuid,
                     catalogFieldMap,
@@ -3133,13 +3676,367 @@ export default class SchedulerTask {
                 },
             },
             async () => {
-                const url =
-                    await this.csvService.runScheduledExportCsvDashboard(
-                        payload,
+                if (!this.fileStorageClient.isEnabled()) {
+                    throw new MissingConfigError(
+                        'Cloud storage is not enabled',
                     );
-                return { url };
+                }
+
+                const {
+                    dashboardUuid,
+                    dashboardFilters,
+                    dateZoomGranularity,
+                    selectedTabs,
+                    userUuid,
+                    organizationUuid,
+                    projectUuid,
+                } = payload;
+
+                const sessionUser =
+                    await this.userService.getSessionByUserUuid(userUuid);
+                const account = Account.fromSession(sessionUser);
+                const dashboard =
+                    await this.schedulerService.dashboardModel.getByIdOrSlug(
+                        dashboardUuid,
+                    );
+
+                const pivotResultsFlag = await this.featureFlagService.get({
+                    user: account.user,
+                    featureFlagId: FeatureFlags.UseSqlPivotResults,
+                });
+
+                const baseAnalyticsProperties: DownloadCsv['properties'] = {
+                    jobId,
+                    userId: userUuid,
+                    organizationId: organizationUuid,
+                    projectId: projectUuid,
+                    fileType: SchedulerFormat.CSV,
+                    values: 'formatted',
+                    limit: 'results',
+                    storage: 's3',
+                    context: 'dashboard csv zip',
+                };
+
+                this.analytics.trackAccount(account, {
+                    event: 'download_results.started',
+                    userId: account.user.id,
+                    properties: baseAnalyticsProperties,
+                });
+
+                const dateZoom = dateZoomGranularity
+                    ? { granularity: dateZoomGranularity }
+                    : undefined;
+
+                const limit = pLimit(5);
+
+                const isInSelectedTab = (tile: { tabUuid?: string | null }) =>
+                    !selectedTabs ||
+                    !tile.tabUuid ||
+                    selectedTabs.includes(tile.tabUuid);
+
+                const chartTilePromises = dashboard.tiles
+                    .filter(isDashboardChartTileType)
+                    .filter((tile) => tile.properties.savedChartUuid)
+                    .filter(isInSelectedTab)
+                    .map((tile) =>
+                        limit(() =>
+                            this.exportCsvForChartTile({
+                                account,
+                                projectUuid,
+                                dashboardUuid,
+                                dashboardFilters,
+                                dateZoom,
+                                pivotResultsFlag,
+                                chartUuid: tile.properties.savedChartUuid!,
+                                tileUuid: tile.uuid,
+                            }),
+                        ),
+                    );
+
+                const sqlChartTilePromises = dashboard.tiles
+                    .filter(isDashboardSqlChartTile)
+                    .filter((tile) => !!tile.properties.savedSqlUuid)
+                    .filter(isInSelectedTab)
+                    .map((tile) =>
+                        limit(() =>
+                            this.exportCsvForSqlChartTile({
+                                account,
+                                projectUuid,
+                                dashboardUuid,
+                                dashboardFilters,
+                                chartUuid: tile.properties.savedSqlUuid!,
+                                tileUuid: tile.uuid,
+                            }),
+                        ),
+                    );
+
+                const results = await Promise.allSettled([
+                    ...chartTilePromises,
+                    ...sqlChartTilePromises,
+                ]);
+
+                const successfulResults = results.filter(
+                    (
+                        result,
+                    ): result is PromiseFulfilledResult<{
+                        chartName: string;
+                        filename: string;
+                        fileUrl: string;
+                    }> => result.status === 'fulfilled',
+                );
+
+                const failedCount = results.filter(
+                    (r) => r.status === 'rejected',
+                ).length;
+                if (failedCount > 0) {
+                    Logger.warn(
+                        `Dashboard CSV export completed with ${failedCount} failed chart(s) out of ${results.length} total`,
+                    );
+                }
+
+                if (successfulResults.length === 0) {
+                    throw new UnexpectedServerError(
+                        'All chart queries failed — no CSVs to export',
+                    );
+                }
+
+                // Fetch CSVs from presigned URLs and zip them
+                const zipPath = `/tmp/${nanoid()}.zip`;
+                let zipFileName: string;
+                try {
+                    const zipWriteStream = fsSync.createWriteStream(zipPath);
+                    const archive = archiver('zip', {
+                        zlib: { level: 9 },
+                    });
+
+                    const zipDone = new Promise<void>((resolve, reject) => {
+                        zipWriteStream.on('close', resolve);
+                        zipWriteStream.on('error', reject);
+                        archive.on('error', reject);
+                    });
+                    archive.pipe(zipWriteStream);
+
+                    // Fetch all CSVs from presigned URLs in parallel
+                    const csvStreams = await Promise.all(
+                        successfulResults.map(async (r) => {
+                            const csvResponse = await fetch(r.value.fileUrl);
+                            if (!csvResponse.ok || !csvResponse.body) {
+                                Logger.warn(
+                                    `Failed to fetch CSV for ${r.value.chartName} from presigned URL`,
+                                );
+                                return null;
+                            }
+                            return {
+                                filename: r.value.filename,
+                                stream: Readable.fromWeb(
+                                    csvResponse.body as Parameters<
+                                        typeof Readable.fromWeb
+                                    >[0],
+                                ),
+                            };
+                        }),
+                    );
+
+                    const usedNames = new Set<string>();
+                    const deduplicateName = (baseName: string): string => {
+                        let name = sanitizeGenericFileName(baseName);
+                        if (usedNames.has(name)) {
+                            let suffix = 2;
+                            while (usedNames.has(`${name}_${suffix}`))
+                                suffix += 1;
+                            name = `${name}_${suffix}`;
+                        }
+                        usedNames.add(name);
+                        return name;
+                    };
+
+                    const validCsvStreams = csvStreams.filter(
+                        (
+                            s,
+                        ): s is {
+                            filename: string;
+                            stream: Readable;
+                        } => s !== null,
+                    );
+
+                    if (validCsvStreams.length === 0) {
+                        throw new UnexpectedServerError(
+                            'All CSV downloads failed — no files to include in zip',
+                        );
+                    }
+
+                    validCsvStreams.forEach((s) => {
+                        const name = deduplicateName(s.filename);
+                        archive.append(s.stream, {
+                            name: `${name}.csv`,
+                        });
+                    });
+
+                    await archive.finalize();
+                    await zipDone;
+
+                    Logger.info(
+                        `Generated zip of ${successfulResults.length} CSVs for dashboard ${dashboardUuid}`,
+                    );
+
+                    zipFileName = `${sanitizeGenericFileName(
+                        dashboard.name,
+                    )}-${new Date().toISOString().replace(/[:.]/g, '-')}.zip`;
+
+                    await this.fileStorageClient.uploadZip(
+                        fsSync.createReadStream(zipPath),
+                        zipFileName,
+                    );
+                } finally {
+                    await fs.unlink(zipPath).catch(() => {});
+                }
+
+                const url =
+                    await this.persistentDownloadFileService.createPersistentUrl(
+                        {
+                            s3Key: zipFileName,
+                            fileType: 'zip',
+                            organizationUuid,
+                            projectUuid,
+                            createdByUserUuid: userUuid,
+                        },
+                    );
+
+                this.analytics.trackAccount(account, {
+                    event: 'download_results.completed',
+                    userId: account.user.id,
+                    properties: {
+                        ...baseAnalyticsProperties,
+                        numCharts: successfulResults.length,
+                        numFailures: failedCount,
+                    },
+                });
+
+                return { url, numFailures: failedCount };
             },
         );
+    }
+
+    private async exportCsvForChartTile({
+        account,
+        projectUuid,
+        dashboardUuid,
+        dashboardFilters,
+        dateZoom,
+        pivotResultsFlag,
+        chartUuid,
+        tileUuid,
+    }: {
+        account: AccountType;
+        projectUuid: string;
+        dashboardUuid: string;
+        dashboardFilters: DashboardFilters;
+        dateZoom: DateZoom | undefined;
+        pivotResultsFlag: { enabled: boolean };
+        chartUuid: string;
+        tileUuid: string;
+    }): Promise<{ chartName: string; filename: string; fileUrl: string }> {
+        const query =
+            await this.asyncQueryService.executeAsyncDashboardChartQuery({
+                account,
+                projectUuid,
+                tileUuid,
+                chartUuid,
+                invalidateCache: true,
+                context: QueryExecutionContext.CSV,
+                dashboardUuid,
+                dashboardFilters,
+                dashboardSorts: [],
+                dateZoom,
+                limit: getSchedulerCsvLimit({
+                    formatted: true,
+                    limit: 'table',
+                }),
+                pivotResults: pivotResultsFlag.enabled,
+            });
+        const chart =
+            await this.schedulerService.savedChartModel.get(chartUuid);
+        const downloadResult =
+            await this.asyncQueryService.downloadSyncQueryResults({
+                account,
+                projectUuid,
+                queryUuid: query.queryUuid,
+                type: DownloadFileType.CSV,
+                onlyRaw: false,
+                customLabels: getCustomLabelsFromTableConfig(
+                    chart.chartConfig.config,
+                ),
+                hiddenFields: getHiddenTableFields(chart.chartConfig),
+                pivotConfig: getPivotConfig(chart),
+                columnOrder: chart.tableConfig.columnOrder,
+            });
+        return {
+            chartName: chart.name,
+            filename: chart.name,
+            fileUrl: downloadResult.fileUrl,
+        };
+    }
+
+    private async exportCsvForSqlChartTile({
+        account,
+        projectUuid,
+        dashboardUuid,
+        dashboardFilters,
+        chartUuid,
+        tileUuid,
+    }: {
+        account: AccountType;
+        projectUuid: string;
+        dashboardUuid: string;
+        dashboardFilters: DashboardFilters;
+        chartUuid: string;
+        tileUuid: string;
+    }): Promise<{ chartName: string; filename: string; fileUrl: string }> {
+        const query =
+            await this.asyncQueryService.executeAsyncDashboardSqlChartQuery({
+                account,
+                projectUuid,
+                savedSqlUuid: chartUuid,
+                invalidateCache: true,
+                context: QueryExecutionContext.CSV,
+                dashboardUuid,
+                tileUuid,
+                dashboardFilters,
+                dashboardSorts: [],
+                limit:
+                    getSchedulerCsvLimit({
+                        formatted: true,
+                        limit: 'table',
+                    }) ?? MAX_SAFE_INTEGER,
+            });
+        const chart = await this.asyncQueryService.savedSqlModel.getByUuid(
+            chartUuid,
+            {
+                projectUuid,
+            },
+        );
+        const downloadResult =
+            await this.asyncQueryService.downloadSyncQueryResults({
+                account,
+                projectUuid,
+                queryUuid: query.queryUuid,
+                type: DownloadFileType.CSV,
+                onlyRaw: false,
+                customLabels: getCustomLabelsFromVizTableConfig(
+                    isVizTableConfig(chart.config) ? chart.config : undefined,
+                ),
+                hiddenFields: getHiddenFieldsFromVizTableConfig(
+                    isVizTableConfig(chart.config) ? chart.config : undefined,
+                ),
+                columnOrder: getColumnOrderFromVizTableConfig(
+                    isVizTableConfig(chart.config) ? chart.config : undefined,
+                ),
+            });
+        return {
+            chartName: chart.name,
+            filename: chart.name,
+            fileUrl: downloadResult.fileUrl,
+        };
     }
 
     protected async replaceCustomFields(
@@ -3241,6 +4138,1161 @@ export default class SchedulerTask {
                     ...payload,
                 });
             },
+        );
+    }
+
+    // ==================== Batch Notification Methods ====================
+    // These methods handle multiple targets of the same type in a single job,
+    // providing aggregated result reporting for better failure notification handling.
+    private async sendDeliveryFailureNotification(
+        scheduler: SchedulerAndTargets,
+        batchResult: BatchDeliveryResult,
+        projectUuid: string | undefined,
+    ): Promise<void> {
+        if (batchResult.failed === 0) return; // No failures, nothing to send
+
+        try {
+            const user = await this.userService.getSessionByUserUuid(
+                scheduler.createdBy,
+            );
+            if (!user.email) {
+                Logger.warn(
+                    `Cannot send failure notification - scheduler creator has no email`,
+                );
+                return;
+            }
+
+            const schedulerUrlParam = setUuidParam(
+                'scheduler_uuid',
+                scheduler.schedulerUuid,
+            );
+
+            const resourceUuid =
+                scheduler.savedChartUuid || scheduler.dashboardUuid;
+            const resourceType = scheduler.savedChartUuid
+                ? 'saved'
+                : 'dashboards';
+
+            let schedulerUrl = this.lightdashConfig.siteUrl;
+            if (resourceUuid && projectUuid) {
+                schedulerUrl = `${this.lightdashConfig.siteUrl}/projects/${projectUuid}/${resourceType}/${resourceUuid}/view?${schedulerUrlParam}`;
+            }
+
+            const failedTargets = batchResult.results
+                .filter((r) => !r.success)
+                .map((r) => ({ target: r.target, error: r.error }));
+
+            await this.emailClient.sendScheduledDeliveryTargetFailureEmail(
+                user.email,
+                scheduler.name,
+                schedulerUrl,
+                batchResult.type,
+                failedTargets,
+                batchResult.total,
+            );
+
+            Logger.info(
+                `Sent delivery failure notification for scheduler ${scheduler.schedulerUuid} to ${user.email}`,
+            );
+        } catch (emailError) {
+            Logger.error(
+                `Failed to send delivery failure notification: ${emailError}`,
+            );
+        }
+    }
+
+    protected async sendSlackBatchNotification(
+        jobId: string,
+        notification: SlackBatchNotificationPayload,
+    ): Promise<BatchDeliveryResult> {
+        const { schedulerUuid, targets, scheduledTime, scheduler, page } =
+            notification;
+
+        const results: DeliveryResult[] = [];
+
+        this.analytics.track({
+            event: 'scheduler_notification_job.started',
+            anonymousId: LightdashAnalytics.anonymousId,
+            userId: notification.userUuid,
+            properties: {
+                jobId,
+                organizationId: notification.organizationUuid,
+                projectId: notification.projectUuid,
+                schedulerId: schedulerUuid,
+                groupId: notification.jobGroup,
+                type: 'slack',
+                targetCount: targets.length,
+                sendNow: false,
+                isThresholdAlert: scheduler.thresholds !== undefined,
+            },
+        });
+
+        await this.schedulerService.logSchedulerJob({
+            task: SCHEDULER_TASKS.SEND_SLACK_BATCH_NOTIFICATION,
+            schedulerUuid,
+            jobId,
+            jobGroup: notification.jobGroup,
+            scheduledTime,
+            targetType: 'slack',
+            status: SchedulerJobStatus.STARTED,
+            details: {
+                projectUuid: notification.projectUuid,
+                organizationUuid: notification.organizationUuid,
+                createdByUserUuid: notification.userUuid,
+                targetCount: targets.length,
+            },
+        });
+
+        // Process all targets in parallel, catching errors per-target
+        const settledResults = await Promise.allSettled(
+            targets.map(async (target) => {
+                const singleTargetPayload: SlackNotificationPayload = {
+                    ...notification,
+                    schedulerSlackTargetUuid: target.schedulerSlackTargetUuid,
+                    channel: target.channel,
+                };
+                await this.sendSlackNotification(jobId, singleTargetPayload);
+                return target;
+            }),
+        );
+
+        // Collect results from settled promises
+        settledResults.forEach((result, index) => {
+            const target = targets[index];
+            if (result.status === 'fulfilled') {
+                results.push({
+                    target: target.channel,
+                    targetUuid: target.schedulerSlackTargetUuid,
+                    success: true,
+                });
+            } else {
+                results.push({
+                    target: target.channel,
+                    targetUuid: target.schedulerSlackTargetUuid,
+                    success: false,
+                    error: getErrorMessage(result.reason),
+                });
+            }
+        });
+
+        // Determine overall status
+        const succeeded = results.filter((r) => r.success).length;
+        const failed = results.filter((r) => !r.success).length;
+
+        const batchResult: BatchDeliveryResult = {
+            type: 'slack',
+            total: targets.length,
+            succeeded,
+            failed,
+            results,
+        };
+
+        if (failed === 0) {
+            // All succeeded
+            this.analytics.track({
+                event: 'scheduler_notification_job.completed',
+                anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
+                properties: {
+                    jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
+                    schedulerId: schedulerUuid,
+                    groupId: notification.jobGroup,
+                    type: 'slack',
+                    targetCount: targets.length,
+                    succeeded,
+                    failed,
+                    sendNow: false,
+                    isThresholdAlert: scheduler.thresholds !== undefined,
+                },
+            });
+            await this.schedulerService.logSchedulerJob({
+                task: SCHEDULER_TASKS.SEND_SLACK_BATCH_NOTIFICATION,
+                schedulerUuid,
+                jobId,
+                jobGroup: notification.jobGroup,
+                scheduledTime,
+                targetType: 'slack',
+                status: SchedulerJobStatus.COMPLETED,
+                details: {
+                    projectUuid: notification.projectUuid,
+                    organizationUuid: notification.organizationUuid,
+                    createdByUserUuid: notification.userUuid,
+                    batchResult,
+                },
+            });
+        } else if (succeeded === 0) {
+            // All failed - total failure
+            this.analytics.track({
+                event: 'scheduler_notification_job.failed',
+                anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
+                properties: {
+                    jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
+                    schedulerId: schedulerUuid,
+                    groupId: notification.jobGroup,
+                    type: 'slack',
+                    targetCount: targets.length,
+                    succeeded,
+                    failed,
+                    sendNow: false,
+                    isThresholdAlert: scheduler.thresholds !== undefined,
+                    error: 'All Slack deliveries failed',
+                },
+            });
+            await this.schedulerService.logSchedulerJob({
+                task: SCHEDULER_TASKS.SEND_SLACK_BATCH_NOTIFICATION,
+                schedulerUuid,
+                jobId,
+                jobGroup: notification.jobGroup,
+                scheduledTime,
+                targetType: 'slack',
+                status: SchedulerJobStatus.ERROR,
+                details: {
+                    projectUuid: notification.projectUuid,
+                    organizationUuid: notification.organizationUuid,
+                    createdByUserUuid: notification.userUuid,
+                    error: 'All Slack deliveries failed',
+                    batchResult,
+                },
+            });
+            await this.sendDeliveryFailureNotification(
+                scheduler,
+                batchResult,
+                notification.projectUuid,
+            );
+        } else {
+            // Partial failure - some succeeded, some failed
+            this.analytics.track({
+                event: 'scheduler_notification_job.completed',
+                anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
+                properties: {
+                    jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
+                    schedulerId: schedulerUuid,
+                    groupId: notification.jobGroup,
+                    type: 'slack',
+                    targetCount: targets.length,
+                    succeeded,
+                    failed,
+                    partialFailure: true,
+                    sendNow: false,
+                    isThresholdAlert: scheduler.thresholds !== undefined,
+                },
+            });
+            await this.schedulerService.logSchedulerJob({
+                task: SCHEDULER_TASKS.SEND_SLACK_BATCH_NOTIFICATION,
+                schedulerUuid,
+                jobId,
+                jobGroup: notification.jobGroup,
+                scheduledTime,
+                targetType: 'slack',
+                status: SchedulerJobStatus.COMPLETED,
+                details: {
+                    projectUuid: notification.projectUuid,
+                    organizationUuid: notification.organizationUuid,
+                    createdByUserUuid: notification.userUuid,
+                    partialFailure: true,
+                    batchResult,
+                },
+            });
+            await this.sendDeliveryFailureNotification(
+                scheduler,
+                batchResult,
+                notification.projectUuid,
+            );
+        }
+
+        return batchResult;
+    }
+
+    protected async sendEmailBatchNotification(
+        jobId: string,
+        notification: EmailBatchNotificationPayload,
+    ): Promise<BatchDeliveryResult> {
+        const { schedulerUuid, targets, scheduledTime, scheduler, page } =
+            notification;
+
+        const results: DeliveryResult[] = [];
+
+        this.analytics.track({
+            event: 'scheduler_notification_job.started',
+            anonymousId: LightdashAnalytics.anonymousId,
+            userId: notification.userUuid,
+            properties: {
+                jobId,
+                organizationId: notification.organizationUuid,
+                projectId: notification.projectUuid,
+                schedulerId: schedulerUuid,
+                groupId: notification.jobGroup,
+                type: 'email',
+                targetCount: targets.length,
+                sendNow: false,
+                isThresholdAlert: scheduler.thresholds !== undefined,
+            },
+        });
+
+        await this.schedulerService.logSchedulerJob({
+            task: SCHEDULER_TASKS.SEND_EMAIL_BATCH_NOTIFICATION,
+            schedulerUuid,
+            jobId,
+            jobGroup: notification.jobGroup,
+            scheduledTime,
+            targetType: 'email',
+            status: SchedulerJobStatus.STARTED,
+            details: {
+                projectUuid: notification.projectUuid,
+                organizationUuid: notification.organizationUuid,
+                createdByUserUuid: notification.userUuid,
+                targetCount: targets.length,
+            },
+        });
+
+        // Process all targets in parallel, catching errors per-target
+        const settledResults = await Promise.allSettled(
+            targets.map(async (target) => {
+                const singleTargetPayload: EmailNotificationPayload = {
+                    ...notification,
+                    schedulerEmailTargetUuid: target.schedulerEmailTargetUuid,
+                    recipient: target.recipient,
+                };
+                await this.sendEmailNotification(jobId, singleTargetPayload);
+                return target;
+            }),
+        );
+
+        // Collect results from settled promises
+        settledResults.forEach((result, index) => {
+            const target = targets[index];
+            if (result.status === 'fulfilled') {
+                results.push({
+                    target: target.recipient,
+                    targetUuid: target.schedulerEmailTargetUuid,
+                    success: true,
+                });
+            } else {
+                results.push({
+                    target: target.recipient,
+                    targetUuid: target.schedulerEmailTargetUuid,
+                    success: false,
+                    error: getErrorMessage(result.reason),
+                });
+            }
+        });
+
+        // Determine overall status
+        const succeeded = results.filter((r) => r.success).length;
+        const failed = results.filter((r) => !r.success).length;
+
+        const batchResult: BatchDeliveryResult = {
+            type: 'email',
+            total: targets.length,
+            succeeded,
+            failed,
+            results,
+        };
+
+        if (failed === 0) {
+            // All succeeded
+            this.analytics.track({
+                event: 'scheduler_notification_job.completed',
+                anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
+                properties: {
+                    jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
+                    schedulerId: schedulerUuid,
+                    groupId: notification.jobGroup,
+                    type: 'email',
+                    targetCount: targets.length,
+                    succeeded,
+                    failed,
+                    sendNow: false,
+                    isThresholdAlert: scheduler.thresholds !== undefined,
+                },
+            });
+            await this.schedulerService.logSchedulerJob({
+                task: SCHEDULER_TASKS.SEND_EMAIL_BATCH_NOTIFICATION,
+                schedulerUuid,
+                jobId,
+                jobGroup: notification.jobGroup,
+                scheduledTime,
+                targetType: 'email',
+                status: SchedulerJobStatus.COMPLETED,
+                details: {
+                    projectUuid: notification.projectUuid,
+                    organizationUuid: notification.organizationUuid,
+                    createdByUserUuid: notification.userUuid,
+                    batchResult,
+                },
+            });
+        } else if (succeeded === 0) {
+            // All failed - total failure
+            this.analytics.track({
+                event: 'scheduler_notification_job.failed',
+                anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
+                properties: {
+                    jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
+                    schedulerId: schedulerUuid,
+                    groupId: notification.jobGroup,
+                    type: 'email',
+                    targetCount: targets.length,
+                    succeeded,
+                    failed,
+                    sendNow: false,
+                    isThresholdAlert: scheduler.thresholds !== undefined,
+                    error: 'All email deliveries failed',
+                },
+            });
+            await this.schedulerService.logSchedulerJob({
+                task: SCHEDULER_TASKS.SEND_EMAIL_BATCH_NOTIFICATION,
+                schedulerUuid,
+                jobId,
+                jobGroup: notification.jobGroup,
+                scheduledTime,
+                targetType: 'email',
+                status: SchedulerJobStatus.ERROR,
+                details: {
+                    projectUuid: notification.projectUuid,
+                    organizationUuid: notification.organizationUuid,
+                    createdByUserUuid: notification.userUuid,
+                    error: 'All email deliveries failed',
+                    batchResult,
+                },
+            });
+            await this.sendDeliveryFailureNotification(
+                scheduler,
+                batchResult,
+                notification.projectUuid,
+            );
+            throw new Error(
+                `All email deliveries failed: ${results
+                    .map((r) => r.error)
+                    .join(', ')}`,
+            );
+        } else {
+            // Partial failure - some succeeded, some failed
+            this.analytics.track({
+                event: 'scheduler_notification_job.completed',
+                anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
+                properties: {
+                    jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
+                    schedulerId: schedulerUuid,
+                    groupId: notification.jobGroup,
+                    type: 'email',
+                    targetCount: targets.length,
+                    succeeded,
+                    failed,
+                    partialFailure: true,
+                    sendNow: false,
+                    isThresholdAlert: scheduler.thresholds !== undefined,
+                },
+            });
+            await this.schedulerService.logSchedulerJob({
+                task: SCHEDULER_TASKS.SEND_EMAIL_BATCH_NOTIFICATION,
+                schedulerUuid,
+                jobId,
+                jobGroup: notification.jobGroup,
+                scheduledTime,
+                targetType: 'email',
+                status: SchedulerJobStatus.COMPLETED,
+                details: {
+                    projectUuid: notification.projectUuid,
+                    organizationUuid: notification.organizationUuid,
+                    createdByUserUuid: notification.userUuid,
+                    partialFailure: true,
+                    batchResult,
+                },
+            });
+            await this.sendDeliveryFailureNotification(
+                scheduler,
+                batchResult,
+                notification.projectUuid,
+            );
+        }
+
+        return batchResult;
+    }
+
+    protected async sendMsTeamsBatchNotification(
+        jobId: string,
+        notification: MsTeamsBatchNotificationPayload,
+    ): Promise<BatchDeliveryResult> {
+        const { schedulerUuid, targets, scheduledTime, scheduler, page } =
+            notification;
+
+        const results: DeliveryResult[] = [];
+
+        this.analytics.track({
+            event: 'scheduler_notification_job.started',
+            anonymousId: LightdashAnalytics.anonymousId,
+            userId: notification.userUuid,
+            properties: {
+                jobId,
+                organizationId: notification.organizationUuid,
+                projectId: notification.projectUuid,
+                schedulerId: schedulerUuid,
+                groupId: notification.jobGroup,
+                type: 'msteams',
+                targetCount: targets.length,
+                sendNow: false,
+                isThresholdAlert: scheduler.thresholds !== undefined,
+            },
+        });
+
+        await this.schedulerService.logSchedulerJob({
+            task: SCHEDULER_TASKS.SEND_MSTEAMS_BATCH_NOTIFICATION,
+            schedulerUuid,
+            jobId,
+            jobGroup: notification.jobGroup,
+            scheduledTime,
+            targetType: 'msteams',
+            status: SchedulerJobStatus.STARTED,
+            details: {
+                projectUuid: notification.projectUuid,
+                organizationUuid: notification.organizationUuid,
+                createdByUserUuid: notification.userUuid,
+                targetCount: targets.length,
+            },
+        });
+
+        // Process all targets in parallel, catching errors per-target
+        const settledResults = await Promise.allSettled(
+            targets.map(async (target) => {
+                const singleTargetPayload: MsTeamsNotificationPayload = {
+                    ...notification,
+                    schedulerMsTeamsTargetUuid:
+                        target.schedulerMsTeamsTargetUuid,
+                    webhook: target.webhook,
+                };
+                await this.sendMsTeamsNotification(jobId, singleTargetPayload);
+                return target;
+            }),
+        );
+
+        // Collect results from settled promises
+        settledResults.forEach((result, index) => {
+            const target = targets[index];
+            if (result.status === 'fulfilled') {
+                results.push({
+                    target: target.webhook,
+                    targetUuid: target.schedulerMsTeamsTargetUuid,
+                    success: true,
+                });
+            } else {
+                results.push({
+                    target: target.webhook,
+                    targetUuid: target.schedulerMsTeamsTargetUuid,
+                    success: false,
+                    error: getErrorMessage(result.reason),
+                });
+            }
+        });
+
+        // Determine overall status
+        const succeeded = results.filter((r) => r.success).length;
+        const failed = results.filter((r) => !r.success).length;
+
+        const batchResult: BatchDeliveryResult = {
+            type: 'msteams',
+            total: targets.length,
+            succeeded,
+            failed,
+            results,
+        };
+
+        if (failed === 0) {
+            // All succeeded
+            this.analytics.track({
+                event: 'scheduler_notification_job.completed',
+                anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
+                properties: {
+                    jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
+                    schedulerId: schedulerUuid,
+                    groupId: notification.jobGroup,
+                    type: 'msteams',
+                    targetCount: targets.length,
+                    succeeded,
+                    failed,
+                    sendNow: false,
+                    isThresholdAlert: scheduler.thresholds !== undefined,
+                },
+            });
+            await this.schedulerService.logSchedulerJob({
+                task: SCHEDULER_TASKS.SEND_MSTEAMS_BATCH_NOTIFICATION,
+                schedulerUuid,
+                jobId,
+                jobGroup: notification.jobGroup,
+                scheduledTime,
+                targetType: 'msteams',
+                status: SchedulerJobStatus.COMPLETED,
+                details: {
+                    projectUuid: notification.projectUuid,
+                    organizationUuid: notification.organizationUuid,
+                    createdByUserUuid: notification.userUuid,
+                    batchResult,
+                },
+            });
+        } else if (succeeded === 0) {
+            // All failed - total failure
+            this.analytics.track({
+                event: 'scheduler_notification_job.failed',
+                anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
+                properties: {
+                    jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
+                    schedulerId: schedulerUuid,
+                    groupId: notification.jobGroup,
+                    type: 'msteams',
+                    targetCount: targets.length,
+                    succeeded,
+                    failed,
+                    sendNow: false,
+                    isThresholdAlert: scheduler.thresholds !== undefined,
+                    error: 'All MS Teams deliveries failed',
+                },
+            });
+            await this.schedulerService.logSchedulerJob({
+                task: SCHEDULER_TASKS.SEND_MSTEAMS_BATCH_NOTIFICATION,
+                schedulerUuid,
+                jobId,
+                jobGroup: notification.jobGroup,
+                scheduledTime,
+                targetType: 'msteams',
+                status: SchedulerJobStatus.ERROR,
+                details: {
+                    projectUuid: notification.projectUuid,
+                    organizationUuid: notification.organizationUuid,
+                    createdByUserUuid: notification.userUuid,
+                    error: 'All MS Teams deliveries failed',
+                    batchResult,
+                },
+            });
+            await this.sendDeliveryFailureNotification(
+                scheduler,
+                batchResult,
+                notification.projectUuid,
+            );
+        } else {
+            // Partial failure - some succeeded, some failed
+            this.analytics.track({
+                event: 'scheduler_notification_job.completed',
+                anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
+                properties: {
+                    jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
+                    schedulerId: schedulerUuid,
+                    groupId: notification.jobGroup,
+                    type: 'msteams',
+                    targetCount: targets.length,
+                    succeeded,
+                    failed,
+                    partialFailure: true,
+                    sendNow: false,
+                    isThresholdAlert: scheduler.thresholds !== undefined,
+                },
+            });
+            await this.schedulerService.logSchedulerJob({
+                task: SCHEDULER_TASKS.SEND_MSTEAMS_BATCH_NOTIFICATION,
+                schedulerUuid,
+                jobId,
+                jobGroup: notification.jobGroup,
+                scheduledTime,
+                targetType: 'msteams',
+                status: SchedulerJobStatus.COMPLETED,
+                details: {
+                    projectUuid: notification.projectUuid,
+                    organizationUuid: notification.organizationUuid,
+                    createdByUserUuid: notification.userUuid,
+                    partialFailure: true,
+                    batchResult,
+                },
+            });
+            await this.sendDeliveryFailureNotification(
+                scheduler,
+                batchResult,
+                notification.projectUuid,
+            );
+        }
+
+        return batchResult;
+    }
+
+    protected async sendGoogleChatNotification(
+        jobId: string,
+        notification: GoogleChatNotificationPayload,
+    ) {
+        const {
+            schedulerUuid,
+            schedulerGoogleChatTargetUuid,
+            googleChatWebhook,
+            scheduledTime,
+            scheduler,
+        } = notification;
+        this.analytics.track({
+            event: 'scheduler_notification_job.started',
+            anonymousId: LightdashAnalytics.anonymousId,
+            userId: notification.userUuid,
+            properties: {
+                jobId,
+                organizationId: notification.organizationUuid,
+                projectId: notification.projectUuid,
+                schedulerId: schedulerUuid,
+                schedulerTargetId: schedulerGoogleChatTargetUuid,
+                groupId: notification.jobGroup,
+                type: 'googlechat',
+                sendNow: schedulerUuid === undefined,
+                isThresholdAlert: scheduler.thresholds !== undefined,
+            },
+        });
+
+        try {
+            const {
+                format,
+                savedChartUuid,
+                dashboardUuid,
+                name,
+                cron,
+                timezone,
+                thresholds,
+                includeLinks,
+            } = scheduler;
+
+            await this.schedulerService.logSchedulerJob({
+                task: SCHEDULER_TASKS.SEND_GOOGLE_CHAT_NOTIFICATION,
+                schedulerUuid,
+                jobId,
+                jobGroup: notification.jobGroup,
+                scheduledTime,
+                target: googleChatWebhook,
+                targetType: 'googlechat',
+                status: SchedulerJobStatus.STARTED,
+                details: {
+                    projectUuid: notification.projectUuid,
+                    organizationUuid: notification.organizationUuid,
+                    createdByUserUuid: notification.userUuid,
+                },
+            });
+
+            // Backwards compatibility for old scheduled deliveries
+            const notificationPageData =
+                notification.page ??
+                (await this.getNotificationPageData(
+                    scheduler,
+                    jobId,
+                    this.lightdashConfig.persistentDownloadUrls
+                        .expirationSeconds,
+                ));
+
+            const {
+                url,
+                details,
+                pageType,
+                organizationUuid,
+                imageUrl,
+                csvUrl,
+                csvUrls,
+                pdfFile,
+                failures,
+            } = notificationPageData;
+
+            const schedulerType =
+                thresholds !== undefined && thresholds.length > 0
+                    ? 'data alert'
+                    : 'scheduled delivery';
+            const schedulerFooter = includeLinks
+                ? `<a href="${url}">${schedulerType}</a>`
+                : schedulerType;
+
+            const defaultSchedulerTimezone =
+                await this.schedulerService.getSchedulerDefaultTimezone(
+                    schedulerUuid,
+                );
+
+            const footer = `This is a ${schedulerFooter} ${getHumanReadableCronExpression(
+                cron,
+                timezone || defaultSchedulerTimezone,
+            )} from Lightdash.`;
+            const getBlocksArgs = {
+                title: name,
+                name: details.name,
+                description: details.description,
+                message: scheduler.message,
+                ctaUrl: url,
+                footer,
+            };
+
+            if (thresholds !== undefined && thresholds.length > 0) {
+                // We assume the threshold is possitive , so we don't need to get results here
+                if (savedChartUuid) {
+                    if (imageUrl)
+                        await this.googleChatClient.postImageWithWebhook({
+                            webhookUrl: googleChatWebhook,
+                            ...getBlocksArgs,
+                            image: imageUrl,
+                            thresholds,
+                        });
+                } else {
+                    throw new Error('No chart found');
+                }
+            } else if (format === SchedulerFormat.IMAGE) {
+                if (imageUrl)
+                    await this.googleChatClient.postImageWithWebhook({
+                        webhookUrl: googleChatWebhook,
+                        ...getBlocksArgs,
+                        image: imageUrl,
+                        pdfUrl: pdfFile?.source,
+                    });
+            } else if (format === SchedulerFormat.CSV) {
+                if (savedChartUuid) {
+                    if (csvUrl === undefined) {
+                        throw new UnexpectedServerError('Missing CSV URL');
+                    }
+                    await this.googleChatClient.postCsvWithWebhook({
+                        webhookUrl: googleChatWebhook,
+                        ...getBlocksArgs,
+                        csvUrl,
+                    });
+                } else if (dashboardUuid) {
+                    if (csvUrls === undefined) {
+                        throw new UnexpectedServerError('Missing CSV URLS');
+                    }
+                    await this.googleChatClient.postCsvsWithWebhook({
+                        webhookUrl: googleChatWebhook,
+                        ...getBlocksArgs,
+                        csvUrls,
+                        failures,
+                    });
+                } else {
+                    throw new UnexpectedServerError('Not implemented');
+                }
+            }
+            this.analytics.track({
+                event: 'scheduler_notification_job.completed',
+                anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
+                properties: {
+                    jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
+                    schedulerId: schedulerUuid,
+                    schedulerTargetId: schedulerGoogleChatTargetUuid,
+                    groupId: notification.jobGroup,
+                    type: 'googlechat',
+                    format,
+                    resourceType:
+                        pageType === LightdashPage.CHART
+                            ? 'chart'
+                            : 'dashboard',
+                    sendNow: schedulerUuid === undefined,
+                    isThresholdAlert: scheduler.thresholds !== undefined,
+                },
+            });
+            await this.schedulerService.logSchedulerJob({
+                task: SCHEDULER_TASKS.SEND_GOOGLE_CHAT_NOTIFICATION,
+                schedulerUuid,
+                jobId,
+                jobGroup: notification.jobGroup,
+
+                scheduledTime,
+                target: googleChatWebhook,
+                targetType: 'googlechat',
+                status: SchedulerJobStatus.COMPLETED,
+                details: {
+                    projectUuid: notification.projectUuid,
+                    organizationUuid: notification.organizationUuid,
+                    createdByUserUuid: notification.userUuid,
+                },
+            });
+        } catch (e) {
+            this.analytics.track({
+                event: 'scheduler_notification_job.failed',
+                anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
+                properties: {
+                    error: `${e}`,
+                    jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
+                    schedulerId: schedulerUuid,
+                    schedulerTargetId: schedulerGoogleChatTargetUuid,
+                    groupId: notification.jobGroup,
+                    type: 'googlechat',
+                    sendNow: schedulerUuid === undefined,
+                    isThresholdAlert: scheduler.thresholds !== undefined,
+                },
+            });
+
+            await this.schedulerService.logSchedulerJob({
+                task: SCHEDULER_TASKS.SEND_GOOGLE_CHAT_NOTIFICATION,
+                schedulerUuid,
+                jobId,
+                jobGroup: notification.jobGroup,
+
+                scheduledTime,
+                targetType: 'googlechat',
+                status: SchedulerJobStatus.ERROR,
+                details: {
+                    error: getErrorMessage(e),
+                    projectUuid: notification.projectUuid,
+                    organizationUuid: notification.organizationUuid,
+                    createdByUserUuid: notification.userUuid,
+                },
+            });
+
+            throw e; // Cascade error to it can be retried by graphile
+        }
+    }
+
+    protected async sendGoogleChatBatchNotification(
+        jobId: string,
+        notification: GoogleChatBatchNotificationPayload,
+    ): Promise<BatchDeliveryResult> {
+        const { schedulerUuid, targets, scheduledTime, scheduler, page } =
+            notification;
+
+        const results: DeliveryResult[] = [];
+
+        this.analytics.track({
+            event: 'scheduler_notification_job.started',
+            anonymousId: LightdashAnalytics.anonymousId,
+            userId: notification.userUuid,
+            properties: {
+                jobId,
+                organizationId: notification.organizationUuid,
+                projectId: notification.projectUuid,
+                schedulerId: schedulerUuid,
+                groupId: notification.jobGroup,
+                type: 'googlechat',
+                targetCount: targets.length,
+                sendNow: false,
+                isThresholdAlert: scheduler.thresholds !== undefined,
+            },
+        });
+
+        await this.schedulerService.logSchedulerJob({
+            task: SCHEDULER_TASKS.SEND_GOOGLE_CHAT_BATCH_NOTIFICATION,
+            schedulerUuid,
+            jobId,
+            jobGroup: notification.jobGroup,
+            scheduledTime,
+            targetType: 'googlechat',
+            status: SchedulerJobStatus.STARTED,
+            details: {
+                projectUuid: notification.projectUuid,
+                organizationUuid: notification.organizationUuid,
+                createdByUserUuid: notification.userUuid,
+                targetCount: targets.length,
+            },
+        });
+
+        // Process all targets in parallel, catching errors per-target
+        const settledResults = await Promise.allSettled(
+            targets.map(async (target) => {
+                const singleTargetPayload: GoogleChatNotificationPayload = {
+                    ...notification,
+                    schedulerGoogleChatTargetUuid:
+                        target.schedulerGoogleChatTargetUuid,
+                    googleChatWebhook: target.googleChatWebhook,
+                };
+                await this.sendGoogleChatNotification(
+                    jobId,
+                    singleTargetPayload,
+                );
+                return target;
+            }),
+        );
+
+        // Collect results from settled promises
+        settledResults.forEach((result, index) => {
+            const target = targets[index];
+            if (result.status === 'fulfilled') {
+                results.push({
+                    target: target.googleChatWebhook,
+                    targetUuid: target.schedulerGoogleChatTargetUuid,
+                    success: true,
+                });
+            } else {
+                results.push({
+                    target: target.googleChatWebhook,
+                    targetUuid: target.schedulerGoogleChatTargetUuid,
+                    success: false,
+                    error: getErrorMessage(result.reason),
+                });
+            }
+        });
+
+        // Determine overall status
+        const succeeded = results.filter((r) => r.success).length;
+        const failed = results.filter((r) => !r.success).length;
+
+        const batchResult: BatchDeliveryResult = {
+            type: 'googlechat',
+            total: targets.length,
+            succeeded,
+            failed,
+            results,
+        };
+
+        if (failed === 0) {
+            // All succeeded
+            this.analytics.track({
+                event: 'scheduler_notification_job.completed',
+                anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
+                properties: {
+                    jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
+                    schedulerId: schedulerUuid,
+                    groupId: notification.jobGroup,
+                    type: 'googlechat',
+                    targetCount: targets.length,
+                    succeeded,
+                    failed,
+                    sendNow: false,
+                    isThresholdAlert: scheduler.thresholds !== undefined,
+                },
+            });
+            await this.schedulerService.logSchedulerJob({
+                task: SCHEDULER_TASKS.SEND_GOOGLE_CHAT_BATCH_NOTIFICATION,
+                schedulerUuid,
+                jobId,
+                jobGroup: notification.jobGroup,
+                scheduledTime,
+                targetType: 'googlechat',
+                status: SchedulerJobStatus.COMPLETED,
+                details: {
+                    projectUuid: notification.projectUuid,
+                    organizationUuid: notification.organizationUuid,
+                    createdByUserUuid: notification.userUuid,
+                    batchResult,
+                },
+            });
+        } else if (succeeded === 0) {
+            // All failed - total failure
+            this.analytics.track({
+                event: 'scheduler_notification_job.failed',
+                anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
+                properties: {
+                    jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
+                    schedulerId: schedulerUuid,
+                    groupId: notification.jobGroup,
+                    type: 'googlechat',
+                    targetCount: targets.length,
+                    succeeded,
+                    failed,
+                    sendNow: false,
+                    isThresholdAlert: scheduler.thresholds !== undefined,
+                    error: 'All Google Chat deliveries failed',
+                },
+            });
+            await this.schedulerService.logSchedulerJob({
+                task: SCHEDULER_TASKS.SEND_GOOGLE_CHAT_BATCH_NOTIFICATION,
+                schedulerUuid,
+                jobId,
+                jobGroup: notification.jobGroup,
+                scheduledTime,
+                targetType: 'googlechat',
+                status: SchedulerJobStatus.ERROR,
+                details: {
+                    projectUuid: notification.projectUuid,
+                    organizationUuid: notification.organizationUuid,
+                    createdByUserUuid: notification.userUuid,
+                    error: 'All Google Chat deliveries failed',
+                    batchResult,
+                },
+            });
+            await this.sendDeliveryFailureNotification(
+                scheduler,
+                batchResult,
+                notification.projectUuid,
+            );
+        } else {
+            // Partial failure - some succeeded, some failed
+            this.analytics.track({
+                event: 'scheduler_notification_job.completed',
+                anonymousId: LightdashAnalytics.anonymousId,
+                userId: notification.userUuid,
+                properties: {
+                    jobId,
+                    organizationId: notification.organizationUuid,
+                    projectId: notification.projectUuid,
+                    schedulerId: schedulerUuid,
+                    groupId: notification.jobGroup,
+                    type: 'googlechat',
+                    targetCount: targets.length,
+                    succeeded,
+                    failed,
+                    partialFailure: true,
+                    sendNow: false,
+                    isThresholdAlert: scheduler.thresholds !== undefined,
+                },
+            });
+            await this.schedulerService.logSchedulerJob({
+                task: SCHEDULER_TASKS.SEND_GOOGLE_CHAT_BATCH_NOTIFICATION,
+                schedulerUuid,
+                jobId,
+                jobGroup: notification.jobGroup,
+                scheduledTime,
+                targetType: 'googlechat',
+                status: SchedulerJobStatus.COMPLETED,
+                details: {
+                    projectUuid: notification.projectUuid,
+                    organizationUuid: notification.organizationUuid,
+                    createdByUserUuid: notification.userUuid,
+                    partialFailure: true,
+                    batchResult,
+                },
+            });
+            await this.sendDeliveryFailureNotification(
+                scheduler,
+                batchResult,
+                notification.projectUuid,
+            );
+        }
+
+        return batchResult;
+    }
+
+    protected async syncSlackChannels(
+        jobId: string,
+        payload: SyncSlackChannelsPayload,
+    ) {
+        const { organizationUuid } = payload;
+
+        await this.logWrapper(
+            {
+                task: SCHEDULER_TASKS.SYNC_SLACK_CHANNELS,
+                jobId,
+                scheduledTime: new Date(),
+                details: {
+                    organizationUuid,
+                },
+            },
+            async () => this.slackClient.syncChannelsToCache(organizationUuid),
         );
     }
 }

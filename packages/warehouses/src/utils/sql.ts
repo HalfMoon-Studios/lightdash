@@ -21,6 +21,8 @@ export function getDefaultMetricSql(sql: string, type: MetricType): string {
         case MetricType.BOOLEAN:
         case MetricType.PERCENTILE:
         case MetricType.MEDIAN:
+        case MetricType.SUM_DISTINCT:
+        case MetricType.AVERAGE_DISTINCT:
             break;
         case MetricType.PERCENT_OF_PREVIOUS:
         case MetricType.PERCENT_OF_TOTAL:
@@ -41,5 +43,4 @@ export function getDefaultMetricSql(sql: string, type: MetricType): string {
 export const normalizeUnicode = (value: string): string =>
     value
         .normalize('NFC') // Normalize composition
-        .replace(/[\u2019\u2018]/g, "'") // Smart quotes to ASCII
         .replace(/[\uFEFF\u200B]/g, ''); // Remove zero-width chars

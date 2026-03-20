@@ -9,7 +9,7 @@ import { IncomingHttpHeaders } from 'http';
 import { nanoid } from 'nanoid';
 import { LightdashAnalytics } from '../../../analytics/LightdashAnalytics';
 import { fromSession } from '../../../auth/account';
-import { S3Client } from '../../../clients/Aws/S3Client';
+import { type FileStorageClient } from '../../../clients/FileStorage/FileStorageClient';
 import { LightdashConfig } from '../../../config/parseConfig';
 import { DashboardModel } from '../../../models/DashboardModel/DashboardModel';
 import { OrganizationModel } from '../../../models/OrganizationModel';
@@ -20,12 +20,14 @@ import { BaseService } from '../../../services/BaseService';
 import { ProjectService } from '../../../services/ProjectService/ProjectService';
 import { UnfurlService } from '../../../services/UnfurlService/UnfurlService';
 
+const SUPPORT_FILE_EXPIRATION_TIME = 604800; // 7 days in seconds
+
 type SupportServiceArguments = {
     dashboardModel: DashboardModel;
     savedChartModel: SavedChartModel;
     spaceModel: SpaceModel;
     projectModel: ProjectModel;
-    s3Client: S3Client;
+    fileStorageClient: FileStorageClient;
     organizationModel: OrganizationModel;
     unfurlService: UnfurlService;
     projectService: ProjectService;
@@ -42,7 +44,7 @@ export class SupportService extends BaseService {
 
     projectModel: ProjectModel;
 
-    s3Client: S3Client;
+    fileStorageClient: FileStorageClient;
 
     organizationModel: OrganizationModel;
 
@@ -58,7 +60,7 @@ export class SupportService extends BaseService {
         dashboardModel,
         savedChartModel,
         spaceModel,
-        s3Client,
+        fileStorageClient,
         organizationModel,
         unfurlService,
         projectService,
@@ -70,7 +72,7 @@ export class SupportService extends BaseService {
         this.dashboardModel = dashboardModel;
         this.savedChartModel = savedChartModel;
         this.spaceModel = spaceModel;
-        this.s3Client = s3Client;
+        this.fileStorageClient = fileStorageClient;
         this.organizationModel = organizationModel;
         this.unfurlService = unfurlService;
         this.projectService = projectService;
@@ -86,9 +88,10 @@ export class SupportService extends BaseService {
         try {
             if (text && text.length > 0) {
                 const networkBuffer = Buffer.from(text.join('\n'), 'utf-8');
-                return await this.s3Client.uploadTxt(
+                return await this.fileStorageClient.uploadTxt(
                     networkBuffer,
                     `support-${name}-${nanoid()}`,
+                    SUPPORT_FILE_EXPIRATION_TIME,
                 );
             }
         } catch (error) {
@@ -109,9 +112,10 @@ export class SupportService extends BaseService {
             'utf-8',
         );
 
-        const chartconfigS3Url = await this.s3Client.uploadTxt(
+        const chartconfigS3Url = await this.fileStorageClient.uploadTxt(
             chartkBuffer,
             `support-chartconfig-${nanoid()}`,
+            SUPPORT_FILE_EXPIRATION_TIME,
         );
 
         const query = await this.projectService.compileQuery({
@@ -121,9 +125,10 @@ export class SupportService extends BaseService {
             exploreName: savedChart.tableName,
         });
         const queryBuffer = Buffer.from(query.query, 'utf-8');
-        const sqlS3Url = await this.s3Client.uploadTxt(
+        const sqlS3Url = await this.fileStorageClient.uploadTxt(
             queryBuffer,
             `support-sql-${nanoid()}`,
+            SUPPORT_FILE_EXPIRATION_TIME,
         );
         return {
             type: 'section',
@@ -179,9 +184,10 @@ export class SupportService extends BaseService {
                 '',
             );
             const buffer = Buffer.from(base64Data, 'base64');
-            imageUrl = await this.s3Client.uploadImage(
+            imageUrl = await this.fileStorageClient.uploadImage(
                 buffer,
                 `support-screenshot-${nanoid()}`,
+                SUPPORT_FILE_EXPIRATION_TIME,
             );
         }
 

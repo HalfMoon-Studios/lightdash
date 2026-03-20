@@ -39,10 +39,10 @@ import {
     type FC,
     type UIEvent,
 } from 'react';
-import { useFeatureFlag } from '../../../hooks/useFeatureFlagEnabled';
 import { useCreateInviteLinkMutation } from '../../../hooks/useInviteLink';
 import { useUpsertOrganizationUserRoleAssignmentMutation } from '../../../hooks/useOrganizationRoles';
 import { useInfiniteOrganizationUsers } from '../../../hooks/useOrganizationUsers';
+import { useServerFeatureFlag } from '../../../hooks/useServerOrClientFeatureFlag';
 import useApp from '../../../providers/App/useApp';
 import MantineIcon from '../../common/MantineIcon';
 import InviteSuccess from './InviteSuccess';
@@ -73,7 +73,7 @@ const UsersTable: FC<UsersTableProps> = ({ onInviteClick }) => {
         setInviteSuccessFor(userUuid);
     }, []);
 
-    const userGroupsFeatureFlagQuery = useFeatureFlag(
+    const userGroupsFeatureFlagQuery = useServerFeatureFlag(
         FeatureFlags.UserGroupsEnabled,
     );
 
@@ -132,12 +132,8 @@ const UsersTable: FC<UsersTableProps> = ({ onInviteClick }) => {
 
     // Scroll to top when search changes
     useEffect(() => {
-        if (rowVirtualizerInstanceRef.current) {
-            try {
-                rowVirtualizerInstanceRef.current.scrollToIndex(0);
-            } catch (e) {
-                console.error(e);
-            }
+        if (tableContainerRef.current) {
+            tableContainerRef.current.scrollTop = 0;
         }
     }, [debouncedSearchValue]);
 
@@ -187,16 +183,8 @@ const UsersTable: FC<UsersTableProps> = ({ onInviteClick }) => {
                                             ? `${user.firstName} ${user.lastName}`
                                             : user.email}
                                     </Text>
-                                    <Badge
-                                        variant="filled"
-                                        color="red.4"
-                                        radius="xs"
-                                        style={{ textTransform: 'none' }}
-                                        px="xxs"
-                                    >
-                                        <Text fz="xs" fw={400} c="ldGray.8">
-                                            Inactive
-                                        </Text>
+                                    <Badge variant="light" color="red">
+                                        Inactive
                                     </Badge>
                                 </Stack>
                             ) : user.isPending ? (
@@ -207,18 +195,10 @@ const UsersTable: FC<UsersTableProps> = ({ onInviteClick }) => {
                                         </Text>
                                     )}
                                     <Group gap="xs">
-                                        <Badge
-                                            variant="filled"
-                                            color="orange.3"
-                                            radius="xs"
-                                            style={{ textTransform: 'none' }}
-                                            px="xxs"
-                                        >
-                                            <Text fz="xs" fw={400} c="gray.8">
-                                                {!user.isInviteExpired
-                                                    ? 'Pending'
-                                                    : 'Link expired'}
-                                            </Text>
+                                        <Badge variant="light" color="orange">
+                                            {!user.isInviteExpired
+                                                ? 'Pending'
+                                                : 'Link expired'}
                                         </Badge>
                                     </Group>
                                 </Stack>
@@ -229,16 +209,8 @@ const UsersTable: FC<UsersTableProps> = ({ onInviteClick }) => {
                                     </Text>
 
                                     {user.email && (
-                                        <Badge
-                                            variant="filled"
-                                            color="ldGray.2"
-                                            radius="xs"
-                                            style={{ textTransform: 'none' }}
-                                            px="xxs"
-                                        >
-                                            <Text fz="xs" fw={400} c="ldGray.8">
-                                                {user.email}
-                                            </Text>
+                                        <Badge variant="light" color="gray">
+                                            {user.email}
                                         </Badge>
                                     )}
                                 </Stack>

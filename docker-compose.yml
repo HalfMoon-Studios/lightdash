@@ -16,7 +16,7 @@ services:
         platform: linux/amd64
         image: lightdash/lightdash:latest
         depends_on:
-            - db
+            # - db
             - minio
         environment:
             - PGHOST=${PGHOST:-db}
@@ -113,20 +113,21 @@ services:
             - SIGNUP_URL=${SIGNUP_URL}
             - HELP_MENU_URL=${HELP_MENU_URL}
             - ATHENA_WAREHOUSE_IAM_ROLE_AUTH=${ATHENA_WAREHOUSE_IAM_ROLE_AUTH}
+            - SHOW_EXECUTION_TIME=TRUE
         volumes:
             - '${DBT_PROJECT_DIR}:/usr/app/dbt'
         ports:
             - ${PORT:-8080}:${PORT:-8080}
 
-    db:
-        image: postgres:15.4
-        restart: always
-        environment:
-            POSTGRES_PASSWORD: ${PGPASSWORD}
-            POSTGRES_USER: ${PGUSER:-postgres}
-            POSTGRES_DB: ${PGDATABASE:-postgres}
-        volumes:
-            - db-data:/var/lib/postgresql/data
+    # db:
+    #     image: postgres:15.4
+    #     restart: always
+    #     environment:
+    #         POSTGRES_PASSWORD: ${PGPASSWORD}
+    #         POSTGRES_USER: ${PGUSER:-postgres}
+    #         POSTGRES_DB: ${PGDATABASE:-postgres}
+    #     volumes:
+    #         - db-data:/var/lib/postgresql/data
 
     headless-browser:
         build:
@@ -135,5 +136,5 @@ services:
         ports:
             - '3001:3000'
 
-volumes:
-    db-data:
+# volumes:
+#     db-data:

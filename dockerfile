@@ -71,7 +71,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     "dbt-clickhouse~=1.5.0" \
     "psycopg2-binary==2.9.6" \
     && ln -s /usr/local/dbt1.5/bin/dbt /usr/local/bin/dbt1.5\
-    && python3 -m venv /usr/local/dbt1.6 \
+    python3 -m venv /usr/local/dbt1.6 \
     && /usr/local/dbt1.6/bin/pip install \
     "dbt-postgres~=1.6.0" \
     "dbt-redshift~=1.6.0" \

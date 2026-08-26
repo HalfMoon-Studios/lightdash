@@ -256,7 +256,7 @@ RUN rm -rf node_modules \
     && rm -rf packages/*/node_modules
 
 # Install production dependencies
-ENV NODE_ENV production
+ENV NODE_ENV=production
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     pnpm install --prod --frozen-lockfile --prefer-offline
 
@@ -290,7 +290,7 @@ RUN duckdb_version="$(cd /usr/app/packages/warehouses && node -e "process.stdout
 # context so a release version bump never rebuilds it.
 FROM pnpm-base AS runtime-base
 
-ENV NODE_ENV production
+ENV NODE_ENV=production
 ENV PLAYGROUND_DATA_DIR=/usr/app/packages/backend/assets/playground
 # Boot works fully offline because the standalone pnpm binary is baked in.
 

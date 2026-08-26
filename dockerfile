@@ -53,16 +53,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install the dbt version used by this fork.
 # Use pip cache to speed up subsequent builds
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m venv /usr/local/dbt1.6 \
-    && /usr/local/dbt1.6/bin/pip install \
-    "dbt-postgres~=1.6.0" \
-    "dbt-redshift~=1.6.0" \
-    "dbt-snowflake~=1.6.0" \
-    "dbt-bigquery~=1.6.0" \
-    "dbt-databricks~=1.6.0" \
-    "dbt-trino==1.6.0" \
-    "dbt-clickhouse~=1.6.0" \
-    "psycopg2-binary==2.9.6"
+    python3 -m venv /usr/local/dbt1.10 \
+    && /usr/local/dbt1.10/bin/pip install \
+    "dbt-core~=1.10.0" \
+    "dbt-postgres~=1.10.0" \
+    "dbt-redshift~=1.10.0" \
+    "dbt-snowflake~=1.10.0" \
+    "dbt-bigquery~=1.10.0" \
+    "dbt-databricks~=1.10.0" \
+    "dbt-trino~=1.10.0" \
+    "dbt-clickhouse~=1.9.0" \
+    "dbt-athena~=1.10.0" \
+    "dbt-duckdb~=1.10.0"
 
 # -----------------------------
 # Stage 1: stop here for dev environment
@@ -313,9 +315,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Taken from `base` rather than `prod-builder`: the virtualenvs are identical in
 # both, and sourcing them from `base` keeps this stage off the application build
 # graph entirely.
-COPY --link --from=base /usr/local/dbt1.6 /usr/local/dbt1.6
+COPY --link --from=base /usr/local/dbt1.10 /usr/local/dbt1.10
 
-RUN ln -s /usr/local/dbt1.6/bin/dbt /usr/local/bin/dbt1.6
+RUN ln -s /usr/local/dbt1.10/bin/dbt /usr/local/bin/dbt1.10
 
 # The runtime working directory is set here, not after the application layers.
 # WORKDIR compiles to a mkdir even when the path already exists, and any

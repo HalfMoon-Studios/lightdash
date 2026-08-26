@@ -10269,6 +10269,28 @@
                 "type": "object",
                 "additionalProperties": true
             },
+            "ScimCreateGroupRequest": {
+                "properties": {
+                    "schemas": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array"
+                    },
+                    "displayName": {
+                        "type": "string"
+                    },
+                    "members": {
+                        "items": {
+                            "$ref": "#/components/schemas/ScimGroupMember"
+                        },
+                        "type": "array"
+                    }
+                },
+                "required": ["schemas", "displayName"],
+                "type": "object",
+                "additionalProperties": true
+            },
             "SchedulerAiAugmentation": {
                 "anyOf": [
                     {
@@ -10445,7 +10467,8 @@
                     "recently-updated",
                     "pinned",
                     "favorites",
-                    "recently-viewed"
+                    "recently-viewed",
+                    "verified"
                 ],
                 "description": "Where a collection block's items come from.\n\n`manual` reads the block's own `items`. Every other source is a live rule\nresolved per viewer at render time — which is the point: a snapshot of\n\"most viewed\" is stale the week after it's taken, and a frozen copy of the\npin list stops tracking pins the moment it's published.\n\n`favorites` and `recently-viewed` are per-viewer; the rest are project-wide."
             },
@@ -56050,6 +56073,14 @@
             },
             "DeletedDataAppContentSummary": {
                 "properties": {
+                    "template": {
+                        "allOf": [
+                            {
+                                "$ref": "#/components/schemas/DataAppTemplate"
+                            }
+                        ],
+                        "nullable": true
+                    },
                     "organizationUuid": {
                         "type": "string"
                     },
@@ -56099,6 +56130,7 @@
                     }
                 },
                 "required": [
+                    "template",
                     "organizationUuid",
                     "projectUuid",
                     "spaceName",
@@ -56322,7 +56354,7 @@
     },
     "info": {
         "title": "Lightdash API",
-        "version": "2.5.0",
+        "version": "2.9.1",
         "description": "Open API documentation for all public Lightdash API endpoints. # Authentication Before you get started, you might need to create a Personal Access Token to authenticate via the API. You can create a token by following this guide: https://docs.lightdash.com/references/personal_tokens\n",
         "license": {
             "name": "MIT"
@@ -59969,7 +60001,14 @@
                     "content": {
                         "application/json": {
                             "schema": {
-                                "$ref": "#/components/schemas/ScimUpsertGroup",
+                                "anyOf": [
+                                    {
+                                        "$ref": "#/components/schemas/ScimUpsertGroup"
+                                    },
+                                    {
+                                        "$ref": "#/components/schemas/ScimCreateGroupRequest"
+                                    }
+                                ],
                                 "description": "Group to create"
                             }
                         }
@@ -91839,6 +91878,15 @@
                             "items": {
                                 "type": "string"
                             }
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "dataAppVizsFilter",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "enum": ["exclude", "only"]
                         }
                     }
                 ]

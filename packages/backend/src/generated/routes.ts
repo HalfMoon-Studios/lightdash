@@ -9606,6 +9606,23 @@ const models: TsoaRoute.Models = {
         additionalProperties: true,
     },
     // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
+    ScimCreateGroupRequest: {
+        dataType: 'refObject',
+        properties: {
+            schemas: {
+                dataType: 'array',
+                array: { dataType: 'string' },
+                required: true,
+            },
+            displayName: { dataType: 'string', required: true },
+            members: {
+                dataType: 'array',
+                array: { dataType: 'refObject', ref: 'ScimGroupMember' },
+            },
+        },
+        additionalProperties: true,
+    },
+    // WARNING: This file was auto-generated with tsoa. Please do not modify it. Re-run tsoa to re-generate this file: https://github.com/lukeautry/tsoa
     SchedulerAiAugmentation: {
         dataType: 'refAlias',
         type: {
@@ -9786,6 +9803,7 @@ const models: TsoaRoute.Models = {
                 { dataType: 'enum', enums: ['pinned'] },
                 { dataType: 'enum', enums: ['favorites'] },
                 { dataType: 'enum', enums: ['recently-viewed'] },
+                { dataType: 'enum', enums: ['verified'] },
             ],
             validators: {},
         },
@@ -55680,6 +55698,14 @@ const models: TsoaRoute.Models = {
         type: {
             dataType: 'nestedObjectLiteral',
             nestedProperties: {
+                template: {
+                    dataType: 'union',
+                    subSchemas: [
+                        { ref: 'DataAppTemplate' },
+                        { dataType: 'enum', enums: [null] },
+                    ],
+                    required: true,
+                },
                 organizationUuid: { dataType: 'string', required: true },
                 projectUuid: { dataType: 'string', required: true },
                 spaceName: {
@@ -60570,7 +60596,11 @@ export function RegisterRoutes(app: Router) {
             in: 'body',
             name: 'body',
             required: true,
-            ref: 'ScimUpsertGroup',
+            dataType: 'union',
+            subSchemas: [
+                { ref: 'ScimUpsertGroup' },
+                { ref: 'ScimCreateGroupRequest' },
+            ],
         },
     };
     app.post(
@@ -108359,6 +108389,15 @@ export function RegisterRoutes(app: Router) {
             name: 'deletedByUserUuids',
             dataType: 'array',
             array: { dataType: 'string' },
+        },
+        dataAppVizsFilter: {
+            in: 'query',
+            name: 'dataAppVizsFilter',
+            dataType: 'union',
+            subSchemas: [
+                { dataType: 'enum', enums: ['exclude'] },
+                { dataType: 'enum', enums: ['only'] },
+            ],
         },
     };
     app.get(

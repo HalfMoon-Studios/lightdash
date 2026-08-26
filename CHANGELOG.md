@@ -1,3 +1,69 @@
+## [2.9.1](https://github.com/lightdash/lightdash/compare/2.9.0...2.9.1) (2026-08-26)
+
+
+### Bug Fixes
+
+* resolve project slugs in minimal saved charts ([#28037](https://github.com/lightdash/lightdash/issues/28037)) ([07998be](https://github.com/lightdash/lightdash/commit/07998be07a10968569a4b03c2a8b4252a28fafb1))
+
+# [2.9.0](https://github.com/lightdash/lightdash/compare/2.8.0...2.9.0) (2026-08-26)
+
+
+### Bug Fixes
+
+* **recently-deleted:** distinguish custom chart types from data apps ([#28080](https://github.com/lightdash/lightdash/issues/28080)) ([fe3cd02](https://github.com/lightdash/lightdash/commit/fe3cd0285563ebec1a81b857b59ddd12577dc4ca))
+
+
+### Features
+
+* **auth:** add manage:VerifiedContent to lock verified edits ([#28072](https://github.com/lightdash/lightdash/issues/28072)) ([5ec0796](https://github.com/lightdash/lightdash/commit/5ec0796c72f3f5d872a1771ba2889f3e8fde9ca6))
+
+# [2.8.0](https://github.com/lightdash/lightdash/compare/2.7.0...2.8.0) (2026-08-26)
+
+
+### Bug Fixes
+
+* **apps:** drop deprecated baseUrl from the data app scaffold tsconfig ([#28079](https://github.com/lightdash/lightdash/issues/28079)) ([7ba1884](https://github.com/lightdash/lightdash/commit/7ba188492451ba8fff4b79a8d940018247129a77))
+* **explorer:** persist chart sidebar state in URL ([#28074](https://github.com/lightdash/lightdash/issues/28074)) ([b5f2f5f](https://github.com/lightdash/lightdash/commit/b5f2f5fa1fd6ddea108672d45105e9896b4fdaaf))
+
+
+### Features
+
+* add embedded dashboard interactions ([#28027](https://github.com/lightdash/lightdash/issues/28027)) ([f2c6828](https://github.com/lightdash/lightdash/commit/f2c682817676f33ef583f38465a2513fafd24525))
+
+# [2.7.0](https://github.com/lightdash/lightdash/compare/2.6.0...2.7.0) (2026-08-26)
+
+
+### Bug Fixes
+
+* **pgwire:** log describe failures so extended-protocol errors are visible ([#28073](https://github.com/lightdash/lightdash/issues/28073)) ([5e13d2a](https://github.com/lightdash/lightdash/commit/5e13d2aafcbefe9959b39a7a745ddcc99fc88e4d))
+* **search:** boost exact names and reserve verified results ([#28060](https://github.com/lightdash/lightdash/issues/28060)) ([f37907c](https://github.com/lightdash/lightdash/commit/f37907c64570334df2b70aed4602e77665302c05))
+
+
+### Features
+
+* **search:** add Verified filter and homepage section ([#28064](https://github.com/lightdash/lightdash/issues/28064)) ([b28f1ac](https://github.com/lightdash/lightdash/commit/b28f1ac5aaf9c9e48e6c9fe8a79e2f560a236429))
+
+# [2.6.0](https://github.com/lightdash/lightdash/compare/2.5.2...2.6.0) (2026-08-26)
+
+
+### Features
+
+* **cli:** download linked custom chart types with their charts ([#28058](https://github.com/lightdash/lightdash/issues/28058)) ([8aba1ba](https://github.com/lightdash/lightdash/commit/8aba1ba06f07f7371915ef52945cb3ca294fb2e9))
+
+## [2.5.2](https://github.com/lightdash/lightdash/compare/2.5.1...2.5.2) (2026-08-26)
+
+
+### Bug Fixes
+
+* **scim:** accept group schema extensions ([#28065](https://github.com/lightdash/lightdash/issues/28065)) ([dfba08a](https://github.com/lightdash/lightdash/commit/dfba08a7eb4e1bb91372ec62f2d1216700ebe53a))
+
+## [2.5.1](https://github.com/lightdash/lightdash/compare/2.5.0...2.5.1) (2026-08-26)
+
+
+### Bug Fixes
+
+* **frontend:** show dashboard action for editors ([#28067](https://github.com/lightdash/lightdash/issues/28067)) ([5d94eaa](https://github.com/lightdash/lightdash/commit/5d94eaa951615876690c2de507fd3536a41eae81))
+
 # [2.5.0](https://github.com/lightdash/lightdash/compare/2.4.0...2.5.0) (2026-08-26)
 
 

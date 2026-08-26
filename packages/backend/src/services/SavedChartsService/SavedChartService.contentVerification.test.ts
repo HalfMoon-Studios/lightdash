@@ -88,6 +88,7 @@ const adminUser = {
     role: OrganizationMemberRole.ADMIN,
     ability: new Ability<PossibleAbilities>([
         { subject: 'ContentVerification', action: 'manage' },
+        { subject: 'VerifiedContent', action: 'manage' },
         {
             subject: 'SavedChart',
             action: ['view', 'update', 'delete', 'create'],
@@ -135,6 +136,7 @@ const spacePermissionService = {
 
 const projectModel = {
     getExploreFromCache: vi.fn(async () => null),
+    getUuidBySlug: vi.fn(async () => 'resolved-project-uuid'),
     getSummary: vi.fn(async () => ({
         organizationUuid: 'org-uuid',
         projectUuid: 'project-uuid',
@@ -176,6 +178,33 @@ describe('SavedChartService - Content Verification', () => {
 
     afterEach(() => {
         vi.clearAllMocks();
+    });
+
+    it('resolves a project slug before loading a saved chart', async () => {
+        await service.get('orders', fromSession(adminUser, 'session-cookie'), {
+            projectUuid: 'my-project',
+        });
+
+        expect(projectModel.getUuidBySlug).toHaveBeenCalledWith(
+            'org-uuid',
+            'my-project',
+        );
+        expect(savedChartModel.get).toHaveBeenCalledWith('orders', undefined, {
+            projectUuid: 'resolved-project-uuid',
+        });
+    });
+
+    it('keeps a project uuid unchanged when loading a saved chart', async () => {
+        const projectUuid = '5b3c6f00-7d53-4f87-b43a-75d774b1651e';
+
+        await service.get('orders', fromSession(adminUser, 'session-cookie'), {
+            projectUuid,
+        });
+
+        expect(projectModel.getUuidBySlug).not.toHaveBeenCalled();
+        expect(savedChartModel.get).toHaveBeenCalledWith('orders', undefined, {
+            projectUuid,
+        });
     });
 
     it('returns split candidates when a saved chart uses an original explore name', async () => {
@@ -410,8 +439,28 @@ describe('SavedChartService - Content Verification', () => {
             expect(contentVerificationModel.unverify).not.toHaveBeenCalled();
         });
 
-        it('should auto-unverify chart when another editor edits metadata', async () => {
-            await service.update(editorUser, 'chart-uuid', {
+        it('should block editors without manage:VerifiedContent from editing verified charts', async () => {
+            await expect(
+                service.update(editorUser, 'chart-uuid', {
+                    name: 'updated chart name',
+                }),
+            ).rejects.toThrow(ForbiddenError);
+
+            expect(savedChartModel.update).not.toHaveBeenCalled();
+            expect(contentVerificationModel.unverify).not.toHaveBeenCalled();
+        });
+
+        it('should allow developers with manage:VerifiedContent to edit and auto-unverify', async () => {
+            const developerUser = {
+                ...editorUser,
+                userUuid: 'developer-uuid',
+                ability: new Ability<PossibleAbilities>([
+                    { subject: 'VerifiedContent', action: 'manage' },
+                    { subject: 'SavedChart', action: ['view', 'update'] },
+                ]),
+            };
+
+            await service.update(developerUser, 'chart-uuid', {
                 name: 'updated chart name',
             });
 

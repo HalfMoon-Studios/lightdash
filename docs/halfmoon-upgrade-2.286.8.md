@@ -51,4 +51,15 @@ extensions (`uuid-ossp`, `citext`, `ltree`) and the Lightdash encryption key.
 - Isolated schema restore succeeded with 431 existing migrations, 11 users,
   969 saved queries and 53 dashboards.
 - The RDS snapshot reached `available`.
-- Production deployment and new-version runtime validation are pending.
+- Rehearsal passed migrations, authenticated chart/dashboard listing, saved-chart
+  execution against Redshift, asynchronous SQL, CSV generation/download and
+  external invitation registration. dbt reports 1.10.19. The unchanged headless
+  browser generated a valid PDF; a full dashboard PDF was not tested.
+- Pinned deployment task: `lightdash:51`, image digest
+  `sha256:e8de8a7aff6f33e318aaa0ee402b62c267523ef0cd0d0caf3c7a1f6b8fc49249`.
+- Pinned rollback task: `lightdash:50` (use only with a compatible/restored database).
+- After the old task stopped, a fresh 21,392,661-byte schema backup was captured
+  at `.local/upgrade-backups/lightdash-before-2.286.8-20260922.dump` (ignored by Git,
+  restricted filesystem permissions). Its archive index is readable by pg_restore.
+- The public health endpoint reports 2.286.8 with no pending migrations, and
+  `/readyz` returns HTTP 200. Final ECS rollout verification is pending.

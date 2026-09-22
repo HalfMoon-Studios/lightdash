@@ -62,4 +62,11 @@ extensions (`uuid-ossp`, `citext`, `ltree`) and the Lightdash encryption key.
   at `.local/upgrade-backups/lightdash-before-2.286.8-20260922.dump` (ignored by Git,
   restricted filesystem permissions). Its archive index is readable by pg_restore.
 - The public health endpoint reports 2.286.8 with no pending migrations, and
-  `/readyz` returns HTTP 200. Final ECS rollout verification is pending.
+  `/readyz` returns HTTP 200. ECS revision 51 reached `COMPLETED` and its ALB
+  target is healthy. Automatic rollback protection was restored after completion.
+- Production retains 11 users, 969 saved queries and 53 dashboards; its migration
+  count is now 473. The unrelated `gameforge` schema still has 11 tables.
+- Temporary test containers, their anonymous volumes and the test network were
+  removed after validation. The production backup and RDS snapshot are retained.
+- Production authenticated smoke tests were not repeated because the saved CLI
+  credential was invalid; authenticated functional checks ran on the isolated copy.

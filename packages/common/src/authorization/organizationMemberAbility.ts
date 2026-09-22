@@ -6,7 +6,11 @@ import {
 import { ProjectType } from '../types/projects';
 import { SpaceMemberRole } from '../types/space';
 import { getPermissionsFromAbilityRules } from './abilityPermissions';
-import { type MemberAbility } from './types';
+import {
+    INTERACTIVE_VIEWER_EMBED_SUBJECTS,
+    VIEWER_EMBED_SUBJECTS,
+    type MemberAbility,
+} from './types';
 
 const applyOrganizationMemberDynamicAbilities = ({
     role,
@@ -41,7 +45,22 @@ export const applyOrganizationMemberStaticAbilities: Record<
     },
     viewer(member, { can }) {
         applyOrganizationMemberStaticAbilities.member(member, { can });
+        VIEWER_EMBED_SUBJECTS.forEach((resource) => {
+            can('view', resource, {
+                organizationUuid: member.organizationUuid,
+            });
+        });
         can('view', 'Dashboard', {
+            organizationUuid: member.organizationUuid,
+            inheritsFromOrgOrProject: true,
+        });
+        can('view', 'Document', {
+            organizationUuid: member.organizationUuid,
+            access: {
+                $elemMatch: { userUuid: member.userUuid },
+            },
+        });
+        can('view', 'Document', {
             organizationUuid: member.organizationUuid,
             inheritsFromOrgOrProject: true,
         });
@@ -102,6 +121,11 @@ export const applyOrganizationMemberStaticAbilities: Record<
     },
     interactive_viewer(member, { can }) {
         applyOrganizationMemberStaticAbilities.viewer(member, { can });
+        INTERACTIVE_VIEWER_EMBED_SUBJECTS.forEach((resource) => {
+            can('view', resource, {
+                organizationUuid: member.organizationUuid,
+            });
+        });
         can('create', 'Job');
         can('view', 'Job', { userUuid: member.userUuid });
         can('view', 'UnderlyingData', {
@@ -136,6 +160,17 @@ export const applyOrganizationMemberStaticAbilities: Record<
                 $elemMatch: {
                     userUuid: member.userUuid,
                     role: SpaceMemberRole.EDITOR,
+                },
+            },
+        });
+        can('manage', 'Document', {
+            organizationUuid: member.organizationUuid,
+            access: {
+                $elemMatch: {
+                    userUuid: member.userUuid,
+                    role: {
+                        $in: [SpaceMemberRole.EDITOR, SpaceMemberRole.ADMIN],
+                    },
                 },
             },
         });
@@ -421,6 +456,11 @@ export const applyOrganizationMemberStaticAbilities: Record<
         can('manage', 'ContentVerification', {
             organizationUuid: member.organizationUuid,
         });
+        // Paired with manage:ContentVerification: anyone who can unverify
+        // content can already bypass the edit lock, so grant it outright.
+        can('manage', 'VerifiedContent', {
+            organizationUuid: member.organizationUuid,
+        });
         can('create', 'AiDeepResearch', {
             organizationUuid: member.organizationUuid,
         });
@@ -428,13 +468,10 @@ export const applyOrganizationMemberStaticAbilities: Record<
     admin(member, { can }) {
         applyOrganizationMemberStaticAbilities.developer(member, { can });
 
-        // Project-restrictable edit lock: not granted to org developer so
-        // project custom roles can withhold it. Org admins always retain it.
-        can('manage', 'VerifiedContent', {
+        can('view', 'Roadmap', {
             organizationUuid: member.organizationUuid,
         });
-
-        can('view', 'Roadmap', {
+        can('manage', 'Roadmap', {
             organizationUuid: member.organizationUuid,
         });
 
@@ -457,6 +494,9 @@ export const applyOrganizationMemberStaticAbilities: Record<
         });
 
         can('manage', 'Dashboard', {
+            organizationUuid: member.organizationUuid,
+        });
+        can('manage', 'Document', {
             organizationUuid: member.organizationUuid,
         });
         can('manage', 'Space', {

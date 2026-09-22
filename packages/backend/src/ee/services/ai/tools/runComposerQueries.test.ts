@@ -3,6 +3,8 @@ import {
     type AiWebAppPrompt,
     type ToolComposerQueriesArgs,
 } from '@lightdash/common';
+import { EMPTY_QUERY_GUIDANCE } from '../decisions/queryReview';
+import type { QueryReviewer } from '../decisions/queryReview';
 import { getRunComposerQueries } from './runComposerQueries';
 
 type ComposerTool = ReturnType<typeof getRunComposerQueries>;
@@ -17,6 +19,7 @@ const makePrompt = (): AiWebAppPrompt => ({
     agentUuid: 'agent-uuid',
     promptUuid: 'prompt-uuid',
     threadUuid: 'thread-uuid',
+    threadCreatedFrom: 'web_app',
     createdByUserUuid: 'user-uuid',
     userUuid: 'user-uuid',
     prompt: 'Join revenue with signups',
@@ -86,12 +89,14 @@ const executeTool = (
     }) as Promise<ComposerOutput>;
 
 const makeTool = ({
+    reviewQuery,
     autoApproveSql = false,
     autoApproveSqlUserUuid = null,
     canRunSql = true,
     enableDataAccess = true,
     waitForSqlApproval = vi.fn().mockResolvedValue('approved'),
 }: {
+    reviewQuery?: QueryReviewer;
     autoApproveSql?: boolean;
     autoApproveSqlUserUuid?: string | null;
     canRunSql?: boolean;
@@ -99,6 +104,7 @@ const makeTool = ({
     waitForSqlApproval?: import('vitest').Mock;
 } = {}) => {
     const dependencies = {
+        reviewQuery,
         updateProgress: vi.fn().mockResolvedValue(undefined),
         runComposerQueries: vi.fn().mockResolvedValue({
             submissions: [
@@ -448,5 +454,64 @@ describe('getRunComposerQueries', () => {
         expect(output.metadata?.status).toBe('success');
         expect(output.result).not.toContain('```csv');
         expect(output.result).toContain('query-3');
+    });
+});
+
+describe('composer query review', () => {
+    it('reviews the complete executable pipeline and its resolved terminal in one call', async () => {
+        const reviewQuery = vi
+            .fn()
+            .mockResolvedValue(' Query/question review: check grain.');
+        const { tool, dependencies } = makeTool({ reviewQuery });
+        const args = makeArgs();
+        const before = structuredClone(args);
+        const output = await executeTool(tool, args);
+        expect(output.metadata?.status).toBe('success');
+        expect(output.result).toContain('check grain');
+        expect(dependencies.runComposerQueries).toHaveBeenCalledOnce();
+        expect(reviewQuery).toHaveBeenCalledExactlyOnceWith({
+            kind: 'composer',
+            queries: dependencies.runComposerQueries.mock.calls[0][0].queries,
+            terminalNodeId: 'joined',
+        });
+        expect(args).toEqual(before);
+    });
+    it.each(['disabled', 'rejected'] as const)(
+        'does not review composer queries when %s',
+        async (reason) => {
+            const reviewQuery = vi.fn().mockResolvedValue('advice');
+            const { tool } = makeTool({
+                reviewQuery,
+                enableDataAccess: reason !== 'disabled',
+                waitForSqlApproval: vi
+                    .fn()
+                    .mockResolvedValue(
+                        reason === 'rejected' ? 'rejected' : 'approved',
+                    ),
+            });
+            await executeTool(tool, makeArgs());
+            expect(reviewQuery).not.toHaveBeenCalled();
+        },
+    );
+    it('preserves scope and review advice for an empty terminal result', async () => {
+        const reviewQuery = vi
+            .fn()
+            .mockResolvedValueOnce(' Query/question review: check conditions.')
+            .mockResolvedValueOnce(
+                `${EMPTY_QUERY_GUIDANCE} Query/question review: check conditions.`,
+            );
+        const { tool, dependencies } = makeTool({ reviewQuery });
+        dependencies.runComposerQueries.mockResolvedValue({
+            submissions: [],
+            terminal: {
+                queryUuid: 'empty',
+                columns: {},
+                rows: [],
+                rowCount: 0,
+            },
+        });
+        const output = await executeTool(tool, makeArgs());
+        expect(output.result).toContain('Preserve the user’s scope');
+        expect(output.result).toContain('check conditions');
     });
 });

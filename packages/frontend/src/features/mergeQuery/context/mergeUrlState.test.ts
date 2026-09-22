@@ -8,6 +8,7 @@ import {
 
 const state: MergeUrlState = {
     focus: { kind: 'source', sourceId: 'subscriptions' },
+    primarySourceName: null,
     additionalSources: [
         {
             id: 'subscriptions',
@@ -32,11 +33,30 @@ const state: MergeUrlState = {
         },
     ],
     joinType: MergeJoinType.LEFT,
+    repeatValuesSourceIds: [],
 };
 
 describe('merge url state', () => {
     it('round-trips source-addressed editor state', () => {
         expect(parseMergeState(serializeMergeState(state))).toEqual(state);
+    });
+
+    it('round-trips which sources repeat their values and drops unknown ones', () => {
+        const repeating = {
+            ...state,
+            repeatValuesSourceIds: ['subscriptions'],
+        };
+        expect(parseMergeState(serializeMergeState(repeating))).toEqual(
+            repeating,
+        );
+
+        const serialized = JSON.parse(serializeMergeState(repeating));
+        expect(
+            parseMergeState(
+                JSON.stringify({ ...serialized, r: ['subscriptions', 'z'] }),
+            ),
+        ).toEqual(repeating);
+        expect('r' in JSON.parse(serializeMergeState(state))).toBe(false);
     });
 
     it('round-trips the relationship step', () => {
@@ -81,6 +101,7 @@ describe('merge url state', () => {
 
         expect(parsed).toEqual({
             focus: { kind: 'source', sourceId: 'b' },
+            primarySourceName: null,
             additionalSources: [
                 {
                     id: 'b',
@@ -107,12 +128,14 @@ describe('merge url state', () => {
                 },
             ],
             joinType: MergeJoinType.LEFT,
+            repeatValuesSourceIds: [],
         });
     });
 
     it('falls back to safe defaults for an empty legacy shape', () => {
         expect(parseMergeState('{}')).toEqual({
             focus: { kind: 'source', sourceId: 'a' },
+            primarySourceName: null,
             additionalSources: [
                 {
                     id: 'b',
@@ -126,6 +149,7 @@ describe('merge url state', () => {
             ],
             joinParts: [{ fieldIdBySourceId: { a: null, b: null } }],
             joinType: MergeJoinType.FULL,
+            repeatValuesSourceIds: [],
         });
     });
 

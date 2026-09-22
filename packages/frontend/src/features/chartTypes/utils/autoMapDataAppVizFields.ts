@@ -1,5 +1,6 @@
 import {
     assertUnreachable,
+    getDataAppVizFieldIds,
     getItemId,
     type DataAppVizField,
     type DataAppVizFieldMapping,
@@ -9,19 +10,22 @@ import { getDataAppVizFieldItems } from './getDataAppVizFieldItems';
 
 /**
  * Which of the query's column pools a slot draws from. `series` splits or
- * colours a measure, so it draws from the dimensions. Shared with the config
- * panel: if the two disagreed, auto-binding could set a column the select
- * cannot offer.
+ * colours a measure, so it draws from the dimensions; `column` accepts any
+ * result column, metrics first so auto-binding favours measures. Shared with
+ * the config panel: if the two disagreed, auto-binding could set a column the
+ * select cannot offer.
  */
 export const poolKeyForSlot = (
     field: DataAppVizField,
-): 'dimension' | 'metric' => {
+): 'dimension' | 'metric' | 'column' => {
     switch (field.type) {
         case 'metric':
             return 'metric';
         case 'dimension':
         case 'series':
             return 'dimension';
+        case 'column':
+            return 'column';
         default:
             return assertUnreachable(
                 field.type,
@@ -32,18 +36,31 @@ export const poolKeyForSlot = (
 
 // Column ids of each type, in result order. Ids rather than items, because
 // every binding is compared and stored as an id.
-type Pools = Record<'dimension' | 'metric', string[]>;
+type Pools = Record<'dimension' | 'metric' | 'column', string[]>;
 
 const poolsFor = (itemsMap: ItemsMap): Pools => {
     const { dimensions, metrics } = getDataAppVizFieldItems(itemsMap);
     return {
         dimension: dimensions.map(getItemId),
         metric: metrics.map(getItemId),
+        column: [...metrics, ...dimensions].map(getItemId),
     };
 };
 
 const poolFor = (pools: Pools, field: DataAppVizField): string[] =>
     pools[poolKeyForSlot(field)];
+
+const setBinding = (
+    mapping: DataAppVizFieldMapping,
+    field: DataAppVizField,
+    ids: string[],
+): void => {
+    if (field.multiple) {
+        mapping[field.name] = ids;
+    } else if (ids[0]) {
+        mapping[field.name] = ids[0];
+    }
+};
 
 /**
  * Give each still-unbound slot the first column of its type that nothing else
@@ -56,11 +73,29 @@ const fillSlots = (
     slots: DataAppVizField[],
 ): void => {
     for (const field of slots) {
-        if (mapping[field.name]) continue;
+        if (mapping[field.name] !== undefined) continue;
         const next = poolFor(pools, field).find((id) => !taken.has(id));
         if (!next) continue;
-        mapping[field.name] = next;
+        setBinding(mapping, field, [next]);
         taken.add(next);
+    }
+};
+
+const fillMultipleSlots = (
+    mapping: DataAppVizFieldMapping,
+    taken: Set<string>,
+    pools: Pools,
+    slots: DataAppVizField[],
+): void => {
+    for (const field of slots) {
+        if (!field.multiple || mapping[field.name] === undefined) continue;
+        const extras = poolFor(pools, field).filter((id) => !taken.has(id));
+        if (extras.length === 0) continue;
+        mapping[field.name] = [
+            ...getDataAppVizFieldIds(mapping[field.name]),
+            ...extras,
+        ];
+        extras.forEach((id) => taken.add(id));
     }
 };
 
@@ -89,7 +124,21 @@ export const autoMapDataAppVizFields = (
         pools,
         fields.filter((f) => f.required),
     );
+    // Required slots each get one column before a multiple slot consumes the
+    // remaining compatible columns. This keeps a sparse query renderable.
+    fillMultipleSlots(
+        mapping,
+        taken,
+        pools,
+        fields.filter((f) => f.required),
+    );
     fillSlots(
+        mapping,
+        taken,
+        pools,
+        fields.filter((f) => !f.required),
+    );
+    fillMultipleSlots(
         mapping,
         taken,
         pools,
@@ -128,11 +177,27 @@ export const reconcileDataAppVizFieldMapping = (
     const taken = new Set<string>();
 
     for (const field of fields) {
-        const bound = persisted[field.name];
-        if (!bound) continue;
-        if (!poolFor(pools, field).includes(bound)) continue;
-        mapping[field.name] = bound;
-        taken.add(bound);
+        const persistedValue = persisted[field.name];
+        if (persistedValue === undefined) continue;
+        const valid = getDataAppVizFieldIds(persistedValue).filter(
+            (id, index, ids) =>
+                poolFor(pools, field).includes(id) && ids.indexOf(id) === index,
+        );
+        // An explicit empty array is a user clear, including for required
+        // slots. Validation reports the missing requirement rather than silently
+        // undoing the clear.
+        if (field.multiple) {
+            if (
+                valid.length > 0 ||
+                (Array.isArray(persistedValue) && persistedValue.length === 0)
+            ) {
+                mapping[field.name] = valid;
+                valid.forEach((id) => taken.add(id));
+            }
+        } else if (valid[0]) {
+            mapping[field.name] = valid[0];
+            taken.add(valid[0]);
+        }
     }
 
     // Kept bindings are already in `mapping`, so this only reaches slots the
@@ -146,3 +211,14 @@ export const reconcileDataAppVizFieldMapping = (
 
     return mapping;
 };
+
+/** Required slots the mapping leaves empty, in declared order. */
+export const getUnboundRequiredDataAppVizFields = (
+    fields: DataAppVizField[],
+    mapping: DataAppVizFieldMapping,
+): DataAppVizField[] =>
+    fields.filter(
+        (field) =>
+            field.required &&
+            getDataAppVizFieldIds(mapping[field.name]).length === 0,
+    );

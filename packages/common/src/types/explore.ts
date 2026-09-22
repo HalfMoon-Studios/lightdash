@@ -109,6 +109,8 @@ export type PreAggregateSource = {
     externalTable?: string;
 };
 
+export type CustomMetaValue = string | number | boolean;
+
 export type Explore = {
     name: string; // Must be sql friendly (a-Z, 0-9, _)
     label: string; // Friendly name
@@ -140,6 +142,7 @@ export type Explore = {
         owner?: string; // model owner email (inherited by metrics)
     };
     aiHint?: string | string[];
+    customMeta?: Record<string, CustomMetaValue>;
     parameters?: LightdashProjectConfig['parameters'];
     /** Project `granularity_labels` overrides, keyed by TimeFrames. Consumed
      *  by the date zoom to relabel standard granularities. */
@@ -169,20 +172,36 @@ export const isExploreError = (
     explore: Explore | ExploreError,
 ): explore is ExploreError => 'errors' in explore;
 
+type ExploreSplitCandidateTable = Pick<CompiledTable, 'originalName'>;
+
+type ValidExploreSplitCandidateSource = {
+    name: string;
+    baseTable: string;
+    tables: Record<string, ExploreSplitCandidateTable>;
+};
+
+type FailedExploreSplitCandidateSource = {
+    name: string;
+    errors: unknown;
+    baseTable?: string;
+    tables?: Record<string, ExploreSplitCandidateTable>;
+};
+
+type ExploreSplitCandidateSource =
+    | ValidExploreSplitCandidateSource
+    | FailedExploreSplitCandidateSource;
+
 export const getExploreSplitCandidates = (
     exploreName: string,
-    explores: (Explore | ExploreError)[],
+    explores: ExploreSplitCandidateSource[],
 ): string[] => {
     const candidates = explores.flatMap((explore) => {
-        if (isExploreError(explore)) return [];
+        if ('errors' in explore) return [];
         const baseTable = explore.tables[explore.baseTable];
-        const separatorIndex = explore.name.indexOf('__');
-        const originalExploreName =
-            separatorIndex === -1
-                ? undefined
-                : explore.name.slice(separatorIndex + 2);
+        // Package names can contain `__`, so match the qualified suffix rather
+        // than treating the separator as something we can parse.
         return baseTable?.originalName === exploreName &&
-            originalExploreName === exploreName
+            explore.name.endsWith(`__${exploreName}`)
             ? [explore.name]
             : [];
     });
@@ -200,6 +219,7 @@ type SummaryExploreFields =
     | 'preAggregateSource'
     | 'externalSource'
     | 'aiHint'
+    | 'customMeta'
     | 'warnings';
 type SummaryExploreErrorFields =
     | 'name'
@@ -209,6 +229,7 @@ type SummaryExploreErrorFields =
     | 'groups'
     | 'type'
     | 'aiHint'
+    | 'customMeta'
     | 'errors';
 type SummaryExtraFields = {
     description?: string;

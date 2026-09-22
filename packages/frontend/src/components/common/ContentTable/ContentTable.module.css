@@ -6,6 +6,8 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    min-width: 0;
+    max-width: 100%;
     overflow: hidden;
     position: relative;
 }
@@ -15,6 +17,8 @@
     flex: 0 0 auto;
 }
 
+/* Overlays the container's top edge instead of taking a row of layout, so
+   toggling it between fetches never shifts the table. */
 .progress {
     background: linear-gradient(
         90deg,
@@ -23,8 +27,10 @@
         transparent
     );
     height: 1px;
+    margin-bottom: -1px;
     overflow: hidden;
     position: relative;
+    z-index: 3;
 }
 
 .progress::before {
@@ -46,9 +52,12 @@
 }
 
 .container {
+    -webkit-overflow-scrolling: touch;
     flex: 1 1 auto;
     min-height: 0;
+    overscroll-behavior: contain;
     overflow: auto;
+    touch-action: pan-x pan-y pinch-zoom;
 }
 
 .table {
@@ -209,8 +218,13 @@
     border-bottom: 0;
 }
 
+/* Neutral selection: one step over the hover grey, with an ink bar. */
 .rowSelected .bodyCell {
-    background: var(--mantine-color-blue-0);
+    background: var(--mantine-color-ldGray-1);
+}
+
+.rowSelected .bodyCell:first-child {
+    box-shadow: inset 2px 0 0 var(--mantine-color-text);
 }
 
 .headCellContent {
@@ -219,6 +233,16 @@
     gap: var(--mantine-spacing-xs);
     justify-content: inherit;
     min-width: 0;
+}
+
+.headCell[data-align='right'] .headCellContent,
+.headCell[data-align='right'] .sortButton {
+    justify-content: flex-end;
+}
+
+.headCell[data-align='center'] .headCellContent,
+.headCell[data-align='center'] .sortButton {
+    justify-content: center;
 }
 
 .headerLabel {
@@ -286,6 +310,14 @@
 .containerEmpty {
     display: flex;
     flex-direction: column;
+    container-type: inline-size;
+    width: 100%;
+}
+
+.containerEmpty .emptyCell > .emptyState {
+    position: sticky;
+    left: 0;
+    width: 100cqw;
 }
 
 .containerEmpty .tableEmpty {
@@ -378,10 +410,6 @@
 
     .highlightOnHover .bodyRow:hover .bodyCell {
         background: var(--mantine-color-ldDark-3);
-    }
-
-    .rowSelected .bodyCell {
-        background: var(--mantine-color-blue-9);
     }
 
     .progress {

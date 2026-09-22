@@ -9,6 +9,7 @@ import {
     type MetricQuery,
     type ParametersValuesMap,
     type PivotConfiguration,
+    type SortField,
     type WarehouseClient,
 } from '@lightdash/common';
 import { applyMergeTerminalWrapper } from './MergeQueryBuilder';
@@ -18,13 +19,15 @@ import { QueryComposer } from './QueryComposer';
 export type MergeQueryComposerArguments = {
     /** Composable merge SQL, before presentation pivot and terminal checks. */
     coreSql: string;
-    terminalWrapper: MergeTerminalWrapper;
+    terminalWrapper: Pick<MergeTerminalWrapper, 'orderBy' | 'limit'>;
     /** Every merged column as an ordinary field, keyed by field id. */
     itemsMap: ItemsMap;
     /** The compile's typed field list — the virtual view's column types. */
     typedColumns: MergeTypedColumn[];
     /** Field ids the merged result carries, in the order it returns them. */
     columnOrder: string[];
+    /** Sort of the merged result, by merged field id. */
+    sorts: SortField[];
     limit: number;
     parameterReferences: string[];
     usedParametersValues: ParametersValuesMap;
@@ -43,10 +46,12 @@ export type MergeQueryComposerArguments = {
 export const buildMergeResultMetricQuery = ({
     itemsMap,
     columnOrder,
+    sorts,
     limit,
 }: {
     itemsMap: ItemsMap;
     columnOrder: string[];
+    sorts: SortField[];
     limit: number;
 }): MetricQuery => {
     const dimensions = columnOrder.filter((fieldId) => {
@@ -59,7 +64,7 @@ export const buildMergeResultMetricQuery = ({
         dimensions,
         metrics: columnOrder.filter((fieldId) => !dimensions.includes(fieldId)),
         filters: {},
-        sorts: [],
+        sorts,
         limit,
         tableCalculations: [],
     };
@@ -84,7 +89,10 @@ export class MergeQueryComposer extends QueryComposer {
 
     private readonly mergedItemsMap: ItemsMap;
 
-    private readonly terminalWrapper: MergeTerminalWrapper;
+    private readonly terminalWrapper: Pick<
+        MergeTerminalWrapper,
+        'orderBy' | 'limit'
+    >;
 
     private readonly parameterReferences: Set<string>;
 
@@ -97,6 +105,7 @@ export class MergeQueryComposer extends QueryComposer {
             itemsMap,
             typedColumns,
             columnOrder,
+            sorts,
             limit,
             parameterReferences,
             usedParametersValues,
@@ -109,6 +118,7 @@ export class MergeQueryComposer extends QueryComposer {
                 metricQuery: buildMergeResultMetricQuery({
                     itemsMap,
                     columnOrder,
+                    sorts,
                     limit,
                 }),
                 pivotConfiguration,
@@ -148,12 +158,10 @@ export class MergeQueryComposer extends QueryComposer {
     }
 
     protected finalizeSql(sql: string, isPivoted: boolean): string {
-        return applyMergeTerminalWrapper(sql, {
-            ...this.terminalWrapper,
-            // PivotQueryBuilder owns presentation ordering and limiting once
-            // present. The source-cap assertion must remain outermost.
-            ...(isPivoted ? { orderBy: [], limit: null } : {}),
-        });
+        // PivotQueryBuilder owns presentation ordering and limiting once present
+        return isPivoted
+            ? sql
+            : applyMergeTerminalWrapper(sql, this.terminalWrapper);
     }
 
     /**

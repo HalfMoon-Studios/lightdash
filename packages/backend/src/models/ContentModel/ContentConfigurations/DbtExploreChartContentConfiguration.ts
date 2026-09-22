@@ -35,6 +35,8 @@ type SelectSavedChart = SummaryContentRow<{
 export const dbtExploreChartContentConfiguration: ContentConfiguration<SelectSavedChart> =
     {
         shouldQueryBeIncluded: (filters: ContentFilters) => {
+            // Only dashboards have owners
+            if (filters.ownerUserUuids) return false;
             const contentTypeMatch =
                 !filters.contentTypes ||
                 filters.contentTypes?.includes(ContentType.CHART);
@@ -142,6 +144,7 @@ export const dbtExploreChartContentConfiguration: ContentConfiguration<SelectSav
                     knex.raw(
                         `${SavedChartsTableName}.first_viewed_at::timestamp as first_viewed_at`,
                     ),
+                    knex.raw('null::timestamp as last_viewed_at'),
                     knex.raw(
                         `${SavedChartsTableName}.deleted_at::timestamp as deleted_at`,
                     ),
@@ -156,6 +159,10 @@ export const dbtExploreChartContentConfiguration: ContentConfiguration<SelectSav
                     `verifiedByUser.user_uuid as verified_by_user_uuid`,
                     `verifiedByUser.first_name as verified_by_user_first_name`,
                     `verifiedByUser.last_name as verified_by_user_last_name`,
+                    knex.raw(`null::uuid as owner_user_uuid`),
+                    knex.raw(`null as owner_user_first_name`),
+                    knex.raw(`null as owner_user_last_name`),
+                    knex.raw(`null as owner_user_email`),
                     knex.raw(`json_build_object(
                     'source','${ChartSourceType.DBT_EXPLORE}',
                     'chart_kind', ${SavedChartsTableName}.last_version_chart_kind,
@@ -234,6 +241,8 @@ export const dbtExploreChartContentConfiguration: ContentConfiguration<SelectSav
             }
             return {
                 contentType: ContentType.CHART,
+                // Filled in by ContentService for the requesting user.
+                directAccessRoles: [],
                 uuid: value.uuid,
                 slug: value.slug,
                 name: value.name,
@@ -282,6 +291,7 @@ export const dbtExploreChartContentConfiguration: ContentConfiguration<SelectSav
                     : null,
                 views: value.views,
                 firstViewedAt: value.first_viewed_at,
+                lastViewedAt: value.last_viewed_at,
                 verification:
                     value.verified_at !== null &&
                     value.verified_by_user_uuid !== null &&

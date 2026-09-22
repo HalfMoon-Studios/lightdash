@@ -12,12 +12,14 @@ import {
     IconCheck,
     IconChevronDown,
     IconCirclePlus,
+    IconSettings,
 } from '@tabler/icons-react';
 import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { LightdashUserAvatar } from '../../../../../components/Avatar';
 import MantineIcon from '../../../../../components/common/MantineIcon';
 import { useAiRouterConfig } from '../../hooks/useAiRouter';
+import { useAgentSettingsLinkState } from '../../utils/agentSettingsNavigation';
 import styles from './AgentSelector.module.css';
 import {
     AI_ROUTING_AUTO_VALUE,
@@ -30,16 +32,34 @@ type Props = {
     agents: Agent[];
     selectedAgent: Agent | 'auto';
     projectUuid: string;
-    variant?: 'default' | 'header';
+    variant?: 'default' | 'header' | 'drawer';
     /**
      * Render the target as an icon-only chip; the label reveals on hover,
      * focus, or while the dropdown is open. Used when toolbar space is
      * tight (e.g. the chat input).
      */
     compact?: boolean;
+    settingsHref?: string;
+};
+
+// The action belongs to the stable selector. Named agents are reusable options
+// in the path, so renaming one never removes a control's walkthrough marker.
+const viewAgentTourProps = {
+    'data-tour-scope': 'view:AiAgent',
+    'data-tour-step': '2',
+    'data-tour-route': '/projects/:projectUuid/ai-agents/:agentUuid',
+    'data-tour-label': 'Open the agent dropdown',
+    'data-tour-title': 'Explore an AI agent',
+    'data-tour-docs':
+        'agents/effective-analytics-with-agents.mdx#think-specialized-not-general:1',
+    'data-tour-interactive': 'true',
+    'data-tour-via': '[data-tour-nav="ask-ai"]',
+    'data-tour-then':
+        '[data-tour-anchor="agent-option"][data-tour-value="Jaffle analyst"]',
 };
 
 const AUTO_VALUE = '__auto__';
+const SETTINGS_VALUE = '__settings__';
 const DROPDOWN_MIN_WIDTH = 260;
 
 export const AgentSelector = ({
@@ -48,10 +68,12 @@ export const AgentSelector = ({
     projectUuid,
     variant = 'default',
     compact = false,
+    settingsHref,
 }: Props) => {
     const navigate = useNavigate();
     const { search } = useLocation();
     const [opened, setOpened] = useState(false);
+    const settingsLinkState = useAgentSettingsLinkState();
     const combobox = useCombobox({
         onOpenedChange: setOpened,
         onDropdownClose: () => combobox.resetSelectedOption(),
@@ -67,7 +89,9 @@ export const AgentSelector = ({
         agents.length > 1 && aiRouterConfig?.enabled === true;
 
     const handleOptionSubmit = (value: string) => {
-        if (value === 'new') {
+        if (value === SETTINGS_VALUE && settingsHref) {
+            void navigate(settingsHref, { state: settingsLinkState });
+        } else if (value === 'new') {
             void navigate(`/projects/${projectUuid}/ai-agents/new`, {
                 viewTransition: true,
             });
@@ -107,11 +131,16 @@ export const AgentSelector = ({
         >
             <Combobox.Target>
                 <UnstyledButton
+                    {...viewAgentTourProps}
                     type="button"
                     onClick={() => combobox.toggleDropdown()}
+                    // Anchor for scope walkthroughs (data-tour-via)
+                    data-tour-anchor="agent-selector"
+                    data-tour-hint="Open the agent dropdown"
                     className={`${styles.target} ${
                         compact ? styles.compact : ''
                     } ${variant === 'header' ? styles.headerTarget : ''}`}
+                    data-variant={variant}
                     data-open={opened ? 'true' : undefined}
                     data-auto={isAuto ? 'true' : undefined}
                 >
@@ -129,7 +158,7 @@ export const AgentSelector = ({
                         <MantineIcon
                             icon={IconChevronDown}
                             size="sm"
-                            color="ldGray.6"
+                            color="dimmed"
                         />
                     </Group>
                 </UnstyledButton>
@@ -141,7 +170,7 @@ export const AgentSelector = ({
                         <Combobox.Option value={AUTO_VALUE} p={2}>
                             <Group gap="xs" wrap="nowrap" miw={0} flex={1}>
                                 <Avatar size={22} color="ldGray" radius="xl">
-                                    <Text size="10px" fw={700} c="ldGray.6">
+                                    <Text size="10px" fw={600} c="dimmed">
                                         AI
                                     </Text>
                                 </Avatar>
@@ -167,6 +196,9 @@ export const AgentSelector = ({
                 <Combobox.Options>
                     {agentOptions.map((item) => (
                         <Combobox.Option
+                            data-tour-anchor="agent-option"
+                            data-tour-hint="Choose {value}"
+                            data-tour-value={item.label}
                             value={item.value}
                             key={item.value}
                             p={2}
@@ -196,7 +228,19 @@ export const AgentSelector = ({
                     ))}
 
                     <Combobox.Footer p={4} pr={6}>
-                        <Combobox.Option value="new" p={2}>
+                        <Combobox.Option
+                            value="new"
+                            p={2}
+                            // Anchor for scope walkthroughs (data-tour-via),
+                            // read first as a look at where agents start.
+                            data-tour-anchor="agent-new"
+                            data-tour-hint="Choose Create new agent"
+                            data-tour-scope="manage:AiAgent"
+                            data-tour-look="1"
+                            data-tour-after='[data-tour-anchor="agent-selector"]'
+                            data-tour-label="Every agent starts from this dropdown"
+                            data-tour-docs="agents/set-up-agents.mdx#create-a-new-agent:1"
+                        >
                             <Group gap="xs" wrap="nowrap" miw={0} flex={1}>
                                 <Center w={22} h={22}>
                                     <MantineIcon
@@ -210,6 +254,25 @@ export const AgentSelector = ({
                                 </Text>
                             </Group>
                         </Combobox.Option>
+                        {settingsHref && (
+                            <Combobox.Option
+                                value={SETTINGS_VALUE}
+                                p={2}
+                                className={styles.mobileSettingsOption}
+                            >
+                                <Group gap="xs" wrap="nowrap" miw={0} flex={1}>
+                                    <Center w={22} h={22}>
+                                        <MantineIcon
+                                            icon={IconSettings}
+                                            size="sm"
+                                        />
+                                    </Center>
+                                    <Text size="xs" truncate="end" flex={1}>
+                                        Agent settings
+                                    </Text>
+                                </Group>
+                            </Combobox.Option>
+                        )}
                     </Combobox.Footer>
                 </Combobox.Options>
             </Combobox.Dropdown>

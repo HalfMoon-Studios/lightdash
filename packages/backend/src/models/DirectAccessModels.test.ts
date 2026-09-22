@@ -1,76 +1,79 @@
 import { SpaceMemberRole } from '@lightdash/common';
 import knex, { type Knex } from 'knex';
 import { getTracker, MockClient, type Tracker } from 'knex-mock-client';
+import { randomUUID } from 'node:crypto';
 import { lightdashConfigMock } from '../config/lightdashConfig.mock';
-import {
-    AppGroupAccessTableName,
-    AppUserAccessTableName,
-} from '../database/entities/appAccess';
-import {
-    DashboardGroupAccessTableName,
-    DashboardUserAccessTableName,
-} from '../database/entities/dashboardAccess';
-import {
-    SavedChartGroupAccessTableName,
-    SavedChartUserAccessTableName,
-} from '../database/entities/savedChartAccess';
-import {
-    SavedSqlGroupAccessTableName,
-    SavedSqlUserAccessTableName,
-} from '../database/entities/savedSqlAccess';
+import { AppUserAccessTableName } from '../database/entities/appAccess';
+import { DashboardUserAccessTableName } from '../database/entities/dashboardAccess';
 import { type UtilRepository } from '../utils/UtilRepository';
 import { AppAccessModel } from './AppAccessModel';
 import { DashboardAccessModel } from './DashboardAccessModel';
-import { type DirectAccess } from './directAccessModelUtils';
 import { ModelRepository } from './ModelRepository';
 import { SavedChartAccessModel } from './SavedChartAccessModel';
 import { SavedSqlAccessModel } from './SavedSqlAccessModel';
 
-type AccessResult = Record<string, DirectAccess>;
-
-type AccessModel = {
-    getUserAccess(
-        resourceUuids: string[],
-        userUuid: string,
-        options: { trx?: Knex; organizationUuid: string },
-    ): Promise<AccessResult>;
-};
-
 const database = knex({ client: MockClient, dialect: 'pg' });
 
-const modelCases: Array<{
-    name: string;
-    model: AccessModel;
-    userAccessTable: string;
-    groupAccessTable: string;
-}> = [
-    {
-        name: 'dashboard',
-        model: new DashboardAccessModel(database),
-        userAccessTable: DashboardUserAccessTableName,
-        groupAccessTable: DashboardGroupAccessTableName,
-    },
-    {
-        name: 'saved chart',
-        model: new SavedChartAccessModel(database),
-        userAccessTable: SavedChartUserAccessTableName,
-        groupAccessTable: SavedChartGroupAccessTableName,
-    },
-    {
-        name: 'saved SQL',
-        model: new SavedSqlAccessModel(database),
-        userAccessTable: SavedSqlUserAccessTableName,
-        groupAccessTable: SavedSqlGroupAccessTableName,
-    },
-    {
-        name: 'app',
-        model: new AppAccessModel(database),
-        userAccessTable: AppUserAccessTableName,
-        groupAccessTable: AppGroupAccessTableName,
-    },
-];
+describe.each([
+    ['dashboard', DashboardAccessModel],
+    ['chart', SavedChartAccessModel],
+    ['SQL chart', SavedSqlAccessModel],
+    ['app', AppAccessModel],
+] as const)('%s resource list bindings', (_name, AccessModel) => {
+    afterEach(() => {
+        getTracker().reset();
+    });
 
-describe('direct access read models', () => {
+    it('skips eligibility queries when no user or group grants match', async () => {
+        const tracker = getTracker();
+        tracker.on
+            .select((query) => query.sql.startsWith('select 1 '))
+            .response([]);
+
+        await expect(
+            new AccessModel(database).getUserAccess(
+                [randomUUID()],
+                randomUUID(),
+                {
+                    organizationUuid: randomUUID(),
+                },
+            ),
+        ).resolves.toEqual({});
+        expect(tracker.history.select).toHaveLength(1);
+    });
+
+    it('keeps the bind count constant as the grant set grows', async () => {
+        const tracker = getTracker();
+        tracker.on
+            .select((query) => query.sql.startsWith('select 1 '))
+            .response([{}]);
+        tracker.on.select(() => true).response([]);
+        const model = new AccessModel(database);
+        const resourceUuids = Array.from({ length: 1000 }, () => randomUUID());
+        const userUuid = randomUUID();
+        const organizationUuid = randomUUID();
+
+        await model.getUserAccess(resourceUuids.slice(0, 1), userUuid, {
+            organizationUuid,
+        });
+        await model.getUserAccess(
+            [...resourceUuids, resourceUuids[0]],
+            userUuid,
+            {
+                organizationUuid,
+            },
+        );
+
+        const [, small, , large] = tracker.history.select;
+        expect(large.bindings).toHaveLength(small.bindings.length);
+        expect(large.bindings.filter(Array.isArray)).toEqual([
+            resourceUuids,
+            resourceUuids,
+        ]);
+    });
+});
+
+describe('dashboard direct access read model', () => {
     let tracker: Tracker;
 
     beforeAll(() => {
@@ -81,82 +84,145 @@ describe('direct access read models', () => {
         tracker.reset();
     });
 
-    it.each(modelCases)(
-        '$name does not query for an empty resource list',
-        async ({ model }) => {
-            await expect(
-                model.getUserAccess([], 'user-uuid', {
-                    organizationUuid: 'organization-uuid',
-                }),
-            ).resolves.toEqual({});
-            expect(tracker.history.select).toHaveLength(0);
-        },
-    );
+    it('does not query for an empty resource list', async () => {
+        await expect(
+            new DashboardAccessModel(database).getUserAccess([], 'user-uuid', {
+                organizationUuid: 'organization-uuid',
+            }),
+        ).resolves.toEqual({});
+        expect(tracker.history.select).toHaveLength(0);
+    });
 
-    it.each(modelCases)(
-        '$name resolves direct user and current group roles',
-        async ({ model, userAccessTable }) => {
-            tracker.on.select(userAccessTable).responseOnce([
-                {
-                    resourceUuid: 'resource-a',
-                    organizationUuid: 'organization-uuid',
-                    projectUuid: 'project-uuid',
-                    role: SpaceMemberRole.VIEWER,
-                    groupUuid: null,
-                },
-                {
-                    resourceUuid: 'resource-a',
-                    organizationUuid: 'organization-uuid',
-                    projectUuid: 'project-uuid',
-                    role: SpaceMemberRole.EDITOR,
-                    groupUuid: 'group-a',
-                },
-                {
-                    resourceUuid: 'resource-a',
-                    organizationUuid: 'organization-uuid',
-                    projectUuid: 'project-uuid',
-                    role: SpaceMemberRole.ADMIN,
-                    groupUuid: 'group-b',
-                },
-            ]);
+    it('resolves direct user and current group roles', async () => {
+        tracker.on
+            .select((query) => query.sql.startsWith('select 1 '))
+            .responseOnce([{}]);
+        tracker.on.select(DashboardUserAccessTableName).responseOnce([
+            {
+                resourceUuid: 'resource-a',
+                organizationUuid: 'organization-uuid',
+                projectUuid: 'project-uuid',
+                role: SpaceMemberRole.VIEWER,
+                groupUuid: null,
+            },
+            {
+                resourceUuid: 'resource-a',
+                organizationUuid: 'organization-uuid',
+                projectUuid: 'project-uuid',
+                role: SpaceMemberRole.EDITOR,
+                groupUuid: 'group-a',
+            },
+            {
+                resourceUuid: 'resource-a',
+                organizationUuid: 'organization-uuid',
+                projectUuid: 'project-uuid',
+                role: SpaceMemberRole.ADMIN,
+                groupUuid: 'group-b',
+            },
+        ]);
 
-            await expect(
-                model.getUserAccess(
-                    ['resource-a', 'resource-without-grants', 'resource-a'],
-                    'user-uuid',
-                    { organizationUuid: 'organization-uuid' },
-                ),
-            ).resolves.toEqual({
-                'resource-a': {
-                    organizationUuid: 'organization-uuid',
-                    projectUuid: 'project-uuid',
-                    userRole: SpaceMemberRole.VIEWER,
-                    groupRoles: [SpaceMemberRole.EDITOR, SpaceMemberRole.ADMIN],
-                },
-            });
-        },
-    );
+        await expect(
+            new DashboardAccessModel(database).getUserAccess(
+                ['resource-a', 'resource-without-grants', 'resource-a'],
+                'user-uuid',
+                { organizationUuid: 'organization-uuid' },
+            ),
+        ).resolves.toEqual({
+            'resource-a': {
+                organizationUuid: 'organization-uuid',
+                projectUuid: 'project-uuid',
+                userRole: SpaceMemberRole.VIEWER,
+                groupRoles: [SpaceMemberRole.EDITOR, SpaceMemberRole.ADMIN],
+            },
+        });
+    });
 });
 
-describe('direct access model wiring', () => {
-    it('exposes every concrete direct-access model with memoized getters', () => {
+describe('app direct access read model', () => {
+    let tracker: Tracker;
+
+    beforeAll(() => {
+        tracker = getTracker();
+    });
+
+    afterEach(() => {
+        tracker.reset();
+    });
+
+    it('does not query for an empty resource list', async () => {
+        await expect(
+            new AppAccessModel(database).getUserAccess([], 'user-uuid', {
+                organizationUuid: 'organization-uuid',
+            }),
+        ).resolves.toEqual({});
+        expect(tracker.history.select).toHaveLength(0);
+    });
+
+    it('preserves personal app location while grouping user and group roles', async () => {
+        tracker.on
+            .select((query) => query.sql.startsWith('select 1 '))
+            .responseOnce([{}]);
+        tracker.on.select(AppUserAccessTableName).responseOnce([
+            {
+                resourceUuid: 'app-a',
+                organizationUuid: 'organization-uuid',
+                projectUuid: 'project-uuid',
+                spaceUuid: null,
+                role: SpaceMemberRole.VIEWER,
+                groupUuid: null,
+            },
+            {
+                resourceUuid: 'app-a',
+                organizationUuid: 'organization-uuid',
+                projectUuid: 'project-uuid',
+                spaceUuid: null,
+                role: SpaceMemberRole.EDITOR,
+                groupUuid: 'group-a',
+            },
+        ]);
+
+        await expect(
+            new AppAccessModel(database).getUserAccess(
+                ['app-a', 'app-a'],
+                'user-uuid',
+                { organizationUuid: 'organization-uuid' },
+            ),
+        ).resolves.toEqual({
+            'app-a': {
+                organizationUuid: 'organization-uuid',
+                projectUuid: 'project-uuid',
+                spaceUuid: null,
+                userRole: SpaceMemberRole.VIEWER,
+                groupRoles: [SpaceMemberRole.EDITOR],
+            },
+        });
+    });
+});
+
+describe('dashboard direct access model wiring', () => {
+    it('exposes a memoized DashboardAccessModel', () => {
+        const models = new ModelRepository({
+            database: {} as Knex,
+            lightdashConfig: lightdashConfigMock,
+            utils: {} as UtilRepository,
+        });
+        expect(models.getDashboardAccessModel()).toBeInstanceOf(
+            DashboardAccessModel,
+        );
+        expect(models.getDashboardAccessModel()).toBe(
+            models.getDashboardAccessModel(),
+        );
+    });
+});
+
+describe('app direct access model wiring', () => {
+    it('exposes a memoized AppAccessModel', () => {
         const models = new ModelRepository({
             database: {} as Knex,
             lightdashConfig: lightdashConfigMock,
             utils: {} as UtilRepository,
         });
         expect(models.getAppAccessModel()).toBeInstanceOf(AppAccessModel);
-        expect(models.getDashboardAccessModel()).toBeInstanceOf(
-            DashboardAccessModel,
-        );
-        expect(models.getSavedChartAccessModel()).toBeInstanceOf(
-            SavedChartAccessModel,
-        );
-        expect(models.getSavedSqlAccessModel()).toBeInstanceOf(
-            SavedSqlAccessModel,
-        );
-        expect(models.getDashboardAccessModel()).toBe(
-            models.getDashboardAccessModel(),
-        );
+        expect(models.getAppAccessModel()).toBe(models.getAppAccessModel());
     });
 });

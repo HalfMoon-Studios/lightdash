@@ -13,7 +13,11 @@ import {
     Text,
     Tooltip,
     UnstyledButton,
+    ActionIcon,
+    Popover,
+    useMatches,
 } from '@mantine/core';
+import { useDisclosure } from '@mantine/hooks';
 import {
     IconCheck,
     IconClock,
@@ -31,6 +35,7 @@ import { useOptionalProjectRoute } from '../../../hooks/useProjectRoute';
 import { useTimeAgo } from '../../../hooks/useTimeAgo';
 import MantineIcon from '../MantineIcon';
 import InfoRow from '../PageHeader/InfoRow';
+import ViewsCountPopover from '../ViewsCountPopover';
 import { DashboardList } from './DashboardList';
 import styles from './ResourceInfoPopup.module.css';
 
@@ -52,6 +57,7 @@ export type ResourceInfoPopupProps = {
     spaceUuid?: string | null;
     projectUuid: string;
     viewStats?: number;
+    viewStatsResourceType?: 'chart' | 'dashboard';
     firstViewedAt?: Date | string | null;
     latestVersion?: { number: number; status: AppVersionStatus } | null;
 };
@@ -86,6 +92,7 @@ export const ResourceInfoPopupContent: FC<ResourceInfoPopupProps> = ({
     spaceUuid,
     projectUuid,
     viewStats,
+    viewStatsResourceType,
     firstViewedAt,
     withChartData = false,
     latestVersion,
@@ -130,7 +137,7 @@ export const ResourceInfoPopupContent: FC<ResourceInfoPopupProps> = ({
             {(title || description) && (
                 <Box>
                     {title && (
-                        <Text fz="sm" fw={600} c="ldGray.9" mb={4}>
+                        <Text fz="sm" fw={600} mb={4}>
                             {title}
                         </Text>
                     )}
@@ -151,13 +158,15 @@ export const ResourceInfoPopupContent: FC<ResourceInfoPopupProps> = ({
 
                 {viewStats !== undefined ? (
                     <InfoRow icon={IconEye} label="Views">
-                        <Tooltip
-                            position="top-start"
-                            label={label}
-                            disabled={!viewStats || !firstViewedAt}
+                        <ViewsCountPopover
+                            resourceType={viewStatsResourceType}
+                            resourceUuid={resourceUuid}
+                            projectUuid={projectUuid}
+                            views={viewStats}
+                            fallbackTooltip={label}
                         >
-                            <span>{viewStats.toLocaleString()}</span>
-                        </Tooltip>
+                            {viewStats.toLocaleString()}
+                        </ViewsCountPopover>
                     </InfoRow>
                 ) : null}
 
@@ -166,7 +175,7 @@ export const ResourceInfoPopupContent: FC<ResourceInfoPopupProps> = ({
                         <Anchor
                             component={Link}
                             to={`/projects/${projectUrlIdentifier}/spaces/${spaceUuid}`}
-                            fz={12}
+                            fz="xs"
                             fw={500}
                         >
                             {spaceName}
@@ -178,10 +187,10 @@ export const ResourceInfoPopupContent: FC<ResourceInfoPopupProps> = ({
                     <Group gap={6} wrap="nowrap">
                         <MantineIcon
                             icon={IconHistory}
-                            color="ldGray.6"
+                            color="dimmed"
                             size={14}
                         />
-                        <Text fz="xs" c="ldGray.6" fw={600}>
+                        <Text fz="xs" c="dimmed" fw={600}>
                             Version {latestVersion.number} (
                             {versionStatusLabel(latestVersion.status)})
                         </Text>
@@ -204,14 +213,12 @@ export const ResourceInfoPopupContent: FC<ResourceInfoPopupProps> = ({
                                 <Tooltip
                                     position="top-start"
                                     label={copied ? 'Copied slug' : 'Copy slug'}
-                                    withArrow
                                 >
                                     <UnstyledButton onClick={copy}>
                                         <Group gap={6} wrap="nowrap">
                                             <Text
-                                                fz={11}
+                                                fz="xs"
                                                 fw={500}
-                                                c="ldGray.9"
                                                 ff="monospace"
                                             >
                                                 {slug}
@@ -222,7 +229,7 @@ export const ResourceInfoPopupContent: FC<ResourceInfoPopupProps> = ({
                                                         ? IconCheck
                                                         : IconCopy
                                                 }
-                                                color="ldGray.6"
+                                                color="dimmed"
                                                 size="sm"
                                             />
                                         </Group>
@@ -238,12 +245,48 @@ export const ResourceInfoPopupContent: FC<ResourceInfoPopupProps> = ({
 };
 
 export const ResourceInfoPopup: FC<ResourceInfoPopupProps> = (props) => {
+    const compact = useMatches(
+        { base: true, sm: false },
+        { getInitialValueInEffect: false },
+    );
+    const [opened, { toggle, close }] = useDisclosure(false);
     if (!hasResourceInfoContent(props)) return null;
 
+    if (compact)
+        return (
+            <Popover
+                opened={opened}
+                onClose={close}
+                width="min(320px, calc(100vw - 24px))"
+                position="bottom"
+                withArrow
+            >
+                <Popover.Target>
+                    <ActionIcon
+                        variant="subtle"
+                        color="gray"
+                        size="lg"
+                        aria-label="Content details"
+                        aria-expanded={opened}
+                        onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            toggle();
+                        }}
+                    >
+                        <MantineIcon icon={IconInfoCircle} />
+                    </ActionIcon>
+                </Popover.Target>
+                <Popover.Dropdown>
+                    <ResourceInfoPopupContent {...props} />
+                </Popover.Dropdown>
+            </Popover>
+        );
+
     return (
-        <HoverCard offset={-1} position="bottom" shadow="md" withinPortal>
+        <HoverCard offset={-1} position="bottom">
             <HoverCard.Target>
-                <MantineIcon icon={IconInfoCircle} color="ldGray.6" />
+                <MantineIcon icon={IconInfoCircle} color="dimmed" />
             </HoverCard.Target>
             <HoverCard.Dropdown
                 w={320}

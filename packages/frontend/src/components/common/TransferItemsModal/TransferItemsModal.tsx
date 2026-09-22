@@ -86,6 +86,7 @@ const TransferItemsModal = <R extends ResourceViewItem, T extends Array<R>>({
                 return item.data.parentSpaceUuid ?? undefined;
             case ResourceViewItemType.CHART:
             case ResourceViewItemType.DASHBOARD:
+            case ResourceViewItemType.DOCUMENT:
                 return item.data.spaceUuid;
             case ResourceViewItemType.DATA_APP:
                 return item.data.spaceUuid ?? undefined;
@@ -95,6 +96,9 @@ const TransferItemsModal = <R extends ResourceViewItem, T extends Array<R>>({
     }, [isMovingSingleItem, items]);
 
     const singleItemType = useMemo(() => {
+        if (items.some((item) => item.type === ResourceViewItemType.DOCUMENT)) {
+            return ResourceViewItemType.DOCUMENT;
+        }
         if (!isMovingSingleItem) return undefined;
         return items[0].type;
     }, [isMovingSingleItem, items]);
@@ -147,7 +151,9 @@ const TransferItemsModal = <R extends ResourceViewItem, T extends Array<R>>({
 
     return (
         <MantineModal
-            title={title ?? `Move ${getItemsText(items).type}`}
+            title={
+                title ?? `Move ${getItemsText(items).type.replace(/_/g, ' ')}`
+            }
             opened={opened}
             onClose={onClose}
             icon={IconFolderShare}
@@ -182,6 +188,9 @@ const TransferItemsModal = <R extends ResourceViewItem, T extends Array<R>>({
                             !selectedSpaceUuid && !allSelectedItemsAreSpaces
                         }
                         onClick={handleConfirm}
+                        // Anchor for scope walkthroughs (data-tour-via)
+                        data-tour-anchor="transfer-confirm"
+                        data-tour-hint="Confirm the move"
                     >
                         {confirmLabel}
                     </Button>

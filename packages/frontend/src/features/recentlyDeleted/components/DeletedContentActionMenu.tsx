@@ -1,9 +1,14 @@
-import { type DeletedContentWithDescendants } from '@lightdash/common';
+import { subject } from '@casl/ability';
+import {
+    ContentType,
+    type DeletedContentWithDescendants,
+} from '@lightdash/common';
 import { ActionIcon, Menu } from '@mantine/core';
 import { IconDotsVertical, IconRestore, IconTrash } from '@tabler/icons-react';
 import { useState, type FC } from 'react';
 import MantineIcon from '../../../components/common/MantineIcon';
 import MantineModal from '../../../components/common/MantineModal';
+import useApp from '../../../providers/App/useApp';
 
 interface Props {
     item: DeletedContentWithDescendants;
@@ -19,14 +24,24 @@ const DeletedContentActionMenu: FC<Props> = ({
     isLoading,
 }) => {
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+    const { user } = useApp();
+    const canPermanentlyDelete =
+        item.contentType !== ContentType.DOCUMENT ||
+        (user.data?.ability.can(
+            'manage',
+            subject('Document', {
+                organizationUuid: item.organizationUuid,
+                projectUuid: item.projectUuid,
+            }),
+        ) ??
+            false);
 
     return (
         <>
-            <Menu position="bottom-end" withArrow withinPortal shadow="md">
+            <Menu position="bottom-end" withArrow>
                 <Menu.Target>
                     <ActionIcon
-                        variant="subtle"
-                        color="gray"
+                        aria-label={`Actions for ${item.name}`}
                         loading={isLoading}
                     >
                         <MantineIcon icon={IconDotsVertical} />
@@ -39,13 +54,15 @@ const DeletedContentActionMenu: FC<Props> = ({
                     >
                         Restore
                     </Menu.Item>
-                    <Menu.Item
-                        leftSection={<MantineIcon icon={IconTrash} />}
-                        color="red"
-                        onClick={() => setIsDeleteModalOpen(true)}
-                    >
-                        Delete permanently
-                    </Menu.Item>
+                    {canPermanentlyDelete && (
+                        <Menu.Item
+                            leftSection={<MantineIcon icon={IconTrash} />}
+                            color="red"
+                            onClick={() => setIsDeleteModalOpen(true)}
+                        >
+                            Delete permanently
+                        </Menu.Item>
+                    )}
                 </Menu.Dropdown>
             </Menu>
 

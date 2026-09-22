@@ -23,6 +23,7 @@ type SpaceContentRow = SummaryContentRow<{
     chartCount: number;
     childSpaceCount: number;
     appCount: number;
+    documentCount: number;
     nestedSpaceCount: number;
     schedulerCount: number;
     parentSpaceUuid: string | null;
@@ -31,9 +32,44 @@ type SpaceContentRow = SummaryContentRow<{
     pinnedListOrder: number;
 }>;
 
+const getDocumentCount = (
+    knex: Knex,
+    filters: ContentFilters,
+): Knex.Raw | Knex.QueryBuilder | number => {
+    if (!filters.documents) {
+        return 0;
+    }
+    if (filters.includeDescendantCounts) {
+        return knex.raw(`(
+            WITH RECURSIVE document_spaces AS (
+                SELECT spaces.space_id, spaces.space_uuid
+                UNION ALL
+                SELECT child.space_id, child.space_uuid
+                FROM spaces child
+                JOIN document_spaces parent ON child.parent_space_uuid = parent.space_uuid
+            )
+            SELECT count(*) FROM documents
+            WHERE documents.space_id IN (SELECT space_id FROM document_spaces)
+        )`);
+    }
+    if (filters.documents.allowedSpaceUuids.length === 0) {
+        return 0;
+    }
+    return knex('documents')
+        .count('*')
+        .whereRaw(`documents.space_id = ${SpaceTableName}.space_id`)
+        .whereNull('documents.deleted_at')
+        .whereIn(
+            `${SpaceTableName}.space_uuid`,
+            filters.documents.allowedSpaceUuids,
+        );
+};
+
 export const spaceContentConfiguration: ContentConfiguration<SpaceContentRow> =
     {
         shouldQueryBeIncluded: (filters: ContentFilters) => {
+            // Only dashboards have owners
+            if (filters.ownerUserUuids) return false;
             if (filters.contentTypes?.includes(ContentType.SPACE)) {
                 return true;
             }
@@ -109,6 +145,7 @@ export const spaceContentConfiguration: ContentConfiguration<SpaceContentRow> =
                     knex.raw(`null as last_updated_by_user_last_name`),
                     knex.raw(`0 as views`),
                     knex.raw(`null as first_viewed_at`),
+                    knex.raw('null::timestamp as last_viewed_at'),
                     `${SpaceTableName}.deleted_at`,
                     `${SpaceTableName}.deleted_by_user_uuid`,
                     'deleted_by_user.first_name as deleted_by_user_first_name',
@@ -117,7 +154,12 @@ export const spaceContentConfiguration: ContentConfiguration<SpaceContentRow> =
                     knex.raw(`null::uuid as verified_by_user_uuid`),
                     knex.raw(`null as verified_by_user_first_name`),
                     knex.raw(`null as verified_by_user_last_name`),
-                    knex.raw(`json_build_object(
+                    knex.raw(`null::uuid as owner_user_uuid`),
+                    knex.raw(`null as owner_user_first_name`),
+                    knex.raw(`null as owner_user_last_name`),
+                    knex.raw(`null as owner_user_email`),
+                    knex.raw(
+                        `json_build_object(
                         'dashboardCount', (${
                             filters.includeDescendantCounts
                                 ? `SELECT count(*) FROM ${DashboardsTableName} d
@@ -165,6 +207,7 @@ export const spaceContentConfiguration: ContentConfiguration<SpaceContentRow> =
                                     WHERE ${AppsTableName}.space_uuid = ${SpaceTableName}.space_uuid
                                     AND ${AppsTableName}.deleted_at IS NULL`
                         }),
+                        'documentCount', ?::bigint,
                         'parentSpaceUuid', ${SpaceTableName}.parent_space_uuid,
                         'path', ${SpaceTableName}.path,
                         'inheritParentPermissions', ${SpaceTableName}.inherit_parent_permissions,
@@ -192,7 +235,9 @@ export const spaceContentConfiguration: ContentConfiguration<SpaceContentRow> =
                                 )`
                                 : ''
                         }
-                    ) as metadata`),
+                    ) as metadata`,
+                        [getDocumentCount(knex, filters)],
+                    ),
                 ])
                 .where((builder) => {
                     if (filters.projectUuids) {
@@ -315,6 +360,7 @@ export const spaceContentConfiguration: ContentConfiguration<SpaceContentRow> =
                     : null,
                 views: value.views,
                 firstViewedAt: value.first_viewed_at,
+                lastViewedAt: value.last_viewed_at,
                 parentSpaceUuid: value.metadata.parentSpaceUuid,
                 path: value.metadata.path,
                 inheritParentPermissions:
@@ -323,6 +369,7 @@ export const spaceContentConfiguration: ContentConfiguration<SpaceContentRow> =
                 chartCount: value.metadata.chartCount,
                 childSpaceCount: value.metadata.childSpaceCount,
                 appCount: value.metadata.appCount,
+                documentCount: value.metadata.documentCount ?? 0,
                 verification: null,
             };
         },

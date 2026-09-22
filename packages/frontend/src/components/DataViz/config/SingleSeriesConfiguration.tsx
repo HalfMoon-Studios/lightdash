@@ -1,6 +1,9 @@
+import { type DraggableProvidedDragHandleProps } from '@hello-pangea/dnd';
 import {
     AxisSide,
+    CartesianSeriesType,
     getEChartsChartTypeFromChartKind,
+    getReadableTextColor,
     ValueLabelPositionOptions,
     type CartesianChartDisplay,
     type ChartKind,
@@ -16,14 +19,23 @@ import {
 } from '@mantine/core';
 import { IconAlignLeft, IconAlignRight } from '@tabler/icons-react';
 import MantineIcon from '../../common/MantineIcon';
+import {
+    SeriesDepthControl,
+    type SeriesDrawOrderControl,
+} from '../../VisualizationConfigs/ChartConfigPanel/Series/SeriesDrawOrder';
+import drawOrderStyles from '../../VisualizationConfigs/ChartConfigPanel/Series/seriesDrawOrder.module.css';
 import ColorSelector from '../../VisualizationConfigs/ColorSelector';
 import { Config } from '../../VisualizationConfigs/common/Config';
+import { GrabIcon } from '../../VisualizationConfigs/common/GrabIcon';
+import classes from './CartesianChartSeries.module.css';
 import { CartesianChartTypeConfig } from './CartesianChartTypeConfig';
 import { CartesianChartValueLabelConfig } from './CartesianChartValueLabelConfig';
 
 const LABEL_WIDTH = 120;
 
 type SingleSeriesConfigurationProps = {
+    dragHandleProps?: DraggableProvidedDragHandleProps | null;
+    drawOrder?: SeriesDrawOrderControl;
     reference: string;
     color: string | undefined;
     colors: string[];
@@ -31,6 +43,7 @@ type SingleSeriesConfigurationProps = {
     type: NonNullable<CartesianChartDisplay['series']>[number]['type'];
     whichYAxis?: number;
     valueLabelPosition: ValueLabelPositionOptions | undefined;
+    valueLabelColor?: string;
     selectedChartType: ChartKind;
     onColorChange: (reference: string, color: string) => void;
     onLabelChange: (reference: string, label: string) => void;
@@ -43,35 +56,54 @@ type SingleSeriesConfigurationProps = {
         reference: string,
         position: ValueLabelPositionOptions,
     ) => void;
+    onValueLabelColorChange: (
+        reference: string,
+        color: string | undefined,
+    ) => void;
 };
 
 export const SingleSeriesConfiguration = ({
     reference,
+    dragHandleProps,
+    drawOrder,
     color,
     colors,
     label,
     type,
     whichYAxis = 0,
     valueLabelPosition,
+    valueLabelColor,
     selectedChartType,
     onColorChange,
     onLabelChange,
     onTypeChange,
     onAxisChange,
     onValueLabelPositionChange,
+    onValueLabelColorChange,
 }: SingleSeriesConfigurationProps) => {
+    const resolvedType =
+        type ?? getEChartsChartTypeFromChartKind(selectedChartType);
+    const seriesColor = color ?? colors[0];
+    const automaticLabelColor =
+        resolvedType === CartesianSeriesType.BAR &&
+        valueLabelPosition === ValueLabelPositionOptions.INSIDE
+            ? getReadableTextColor(seriesColor)
+            : seriesColor;
+
     return (
         <Stack key={reference} gap="xs">
-            <Stack
-                pl="sm"
-                gap="xs"
-                style={{
-                    backgroundColor: 'var(--mantine-color-ldGray-0)',
-                    borderRadius: 'var(--mantine-radius-md)',
-                    padding: 'var(--mantine-spacing-xs)',
-                }}
-            >
-                <Config.Subheading>{reference}</Config.Subheading>
+            <Stack gap="xs" className={classes.seriesCard}>
+                <Group
+                    gap="xs"
+                    wrap="nowrap"
+                    className={drawOrderStyles.seriesHeader}
+                >
+                    {dragHandleProps && (
+                        <GrabIcon dragHandleProps={dragHandleProps} />
+                    )}
+                    <Config.Subheading>{reference}</Config.Subheading>
+                    {drawOrder && <SeriesDepthControl control={drawOrder} />}
+                </Group>
                 <Flex justify="flex-start" align="center" wrap="nowrap">
                     <Config.Label w={LABEL_WIDTH}>Label</Config.Label>
                     <Group
@@ -79,16 +111,9 @@ export const SingleSeriesConfiguration = ({
                         justify="flex-start"
                         wrap="nowrap"
                         grow
-                        style={{ flex: 3 }}
+                        flex={3}
                     >
-                        <Box
-                            style={{
-                                flex: 1,
-                                display: 'flex',
-                                flexDirection: 'row',
-                                alignItems: 'center',
-                            }}
-                        >
+                        <Group gap={0} flex={1} wrap="nowrap">
                             <Box w="20px">
                                 <ColorSelector
                                     color={color}
@@ -102,30 +127,21 @@ export const SingleSeriesConfiguration = ({
                             <TextInput
                                 size="xs"
                                 maw="100%"
-                                radius="md"
                                 value={label}
                                 onChange={(e) =>
                                     onLabelChange(reference, e.target.value)
                                 }
                                 flex={1}
                                 ml="xs"
-                                styles={(theme) => ({
-                                    input: {
-                                        border: `1px solid ${theme.colors.ldGray[2]}`,
-                                    },
-                                })}
                             />
-                        </Box>
+                        </Group>
                     </Group>
                 </Flex>
                 <Flex justify="flex-start" align="center" wrap="nowrap">
                     <Config.Label w={LABEL_WIDTH}>Chart Type</Config.Label>
                     <CartesianChartTypeConfig
                         canSelectDifferentTypeFromBaseChart={true}
-                        type={
-                            type ??
-                            getEChartsChartTypeFromChartKind(selectedChartType)
-                        }
+                        type={resolvedType}
                         onChangeType={(value) => onTypeChange(reference, value)}
                     />
                 </Flex>
@@ -134,7 +150,6 @@ export const SingleSeriesConfiguration = ({
                     <SegmentedControl
                         miw={130}
                         flex={1}
-                        radius="md"
                         fz="sm"
                         data={[
                             {
@@ -180,12 +195,18 @@ export const SingleSeriesConfiguration = ({
                 <Flex justify="flex-start" align="center" wrap="nowrap">
                     <Config.Label w={LABEL_WIDTH}>Value labels</Config.Label>
                     <CartesianChartValueLabelConfig
+                        colors={colors}
+                        defaultColor={automaticLabelColor}
+                        valueLabelColor={valueLabelColor}
                         valueLabelPosition={
                             valueLabelPosition ??
                             ValueLabelPositionOptions.HIDDEN
                         }
                         onChangeValueLabelPosition={(position) =>
                             onValueLabelPositionChange(reference, position)
+                        }
+                        onChangeValueLabelColor={(nextColor) =>
+                            onValueLabelColorChange(reference, nextColor)
                         }
                     />
                 </Flex>

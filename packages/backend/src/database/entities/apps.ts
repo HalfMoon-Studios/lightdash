@@ -1,8 +1,11 @@
 import {
+    type AppThreadOrigin,
     type AppVersionDependencies,
     type AppVersionResources,
     type AppVersionStatus,
     type AppVersionStatusHistoryEntry,
+    type DataAppAutoAnalysis,
+    type DataAppCodingAgent,
     type DataAppGenerationUsage,
     type DataAppTemplate,
     type DataAppVizSchema,
@@ -19,6 +22,7 @@ export {
 
 export const AppsTableName = 'apps';
 export const AppVersionsTableName = 'app_versions';
+export const AppThreadsTableName = 'app_threads';
 
 export type DbApp = {
     app_id: string;
@@ -35,11 +39,24 @@ export type DbApp = {
     // in-flight old code during a deploy.
     sandbox_id: string | null;
     template: Exclude<DataAppTemplate, 'custom'> | null;
+    // Curated icon name for a custom chart type (`ChartTypeIcon`); null when
+    // no icon is chosen or the app is not a chart type. Stored as text so an
+    // icon retired from the curated set does not fail to read back.
+    icon: string | null;
+    // Whether AI analysis runs when the app loads; 'inherit' takes the org
+    // default. Stored as text so an unknown value reads back, not fails.
+    auto_analysis: DataAppAutoAnalysis;
     design_uuid: string | null;
     // The production app this (preview) app was promoted into. Null until the
     // app is first promoted. Lives on the preview side so a single production
     // app can be the upstream of many preview apps.
     upstream_app_uuid: string | null;
+    // Slug/URL of the registry entry this app was installed from, if any.
+    registry_slug: string | null;
+    registry_url: string | null;
+    // The app this one was forked from, and the version forked at.
+    origin_app_uuid: string | null;
+    origin_app_version: number | null;
     created_at: Date;
     created_by_user_uuid: string;
     deleted_at: Date | null;
@@ -60,8 +77,14 @@ export type AppsTable = Knex.CompositeTableType<
                 | 'space_uuid'
                 | 'sandbox_id'
                 | 'template'
+                | 'icon'
+                | 'auto_analysis'
                 | 'design_uuid'
                 | 'upstream_app_uuid'
+                | 'registry_slug'
+                | 'registry_url'
+                | 'origin_app_uuid'
+                | 'origin_app_version'
             >
         >,
     Partial<
@@ -72,8 +95,14 @@ export type AppsTable = Knex.CompositeTableType<
             | 'slug'
             | 'space_uuid'
             | 'sandbox_id'
+            | 'icon'
+            | 'auto_analysis'
             | 'design_uuid'
             | 'upstream_app_uuid'
+            | 'registry_slug'
+            | 'registry_url'
+            | 'origin_app_uuid'
+            | 'origin_app_version'
             | 'deleted_at'
             | 'deleted_by_user_uuid'
             | 'views_count'
@@ -103,9 +132,53 @@ export type DbAppVersion = {
     // Token/cost spend for this version's generation. Null when the version
     // predates spend recording or never called the model.
     generation_usage: DataAppGenerationUsage | null;
+    // Registry version string this app version was installed/updated from.
+    registry_version: string | null;
+    // Thread the version belongs to. Null only for rows written before
+    // threads existed or by an old pod mid-rollout; reads coalesce to thread 1.
+    app_thread_uuid: string | null;
     created_at: Date;
     created_by_user_uuid: string;
 };
+
+/** A version as read back through AppModel: the thread is always resolved. */
+export type DbAppVersionWithThread = DbAppVersion & {
+    app_thread_uuid: string;
+    thread_number: number;
+};
+
+export type DbAppThread = {
+    app_thread_uuid: string;
+    app_id: string;
+    thread_number: number;
+    origin: AppThreadOrigin;
+    // Ask AI thread that created the app; no FK (EE table, OSS schema).
+    ai_thread_uuid: string | null;
+    coding_agent: DataAppCodingAgent;
+    coding_agent_session_id: string | null;
+    created_at: Date;
+    created_by_user_uuid: string;
+};
+
+export type AppThreadsTable = Knex.CompositeTableType<
+    DbAppThread,
+    Pick<
+        DbAppThread,
+        | 'app_id'
+        | 'thread_number'
+        | 'origin'
+        | 'ai_thread_uuid'
+        | 'coding_agent'
+        | 'created_by_user_uuid'
+    > &
+        Partial<
+            Pick<
+                DbAppThread,
+                'app_thread_uuid' | 'coding_agent_session_id' | 'created_at'
+            >
+        >,
+    Partial<Pick<DbAppThread, 'coding_agent_session_id'>>
+>;
 
 /**
  * One row of the org-wide generation activity log: an `app_versions` row joined
@@ -123,6 +196,7 @@ export type DbAppActivityRow = Pick<
     | 'created_by_user_uuid'
 > & {
     app_name: string;
+    app_template: DbApp['template'];
     app_deleted_at: Date | null;
     project_uuid: string;
     project_name: string;
@@ -139,7 +213,12 @@ export type AppVersionsTable = Knex.CompositeTableType<
         Partial<
             Pick<
                 DbAppVersion,
-                'app_version_id' | 'resources' | 'dependencies' | 'viz_schema'
+                | 'app_version_id'
+                | 'resources'
+                | 'dependencies'
+                | 'viz_schema'
+                | 'registry_version'
+                | 'app_thread_uuid'
             >
         >,
     Partial<
@@ -153,6 +232,8 @@ export type AppVersionsTable = Knex.CompositeTableType<
             | 'viz_schema'
             | 'data_references'
             | 'generation_usage'
+            | 'registry_version'
+            | 'app_thread_uuid'
         >
     >
 >;

@@ -63,6 +63,10 @@ export const MetricsLink: FC<Props> = ({ projectUuid, asMenu }) => {
                 to={`/projects/${projectUrlIdentifier}/metrics`}
                 leftSection={<MantineIcon icon={IconHash} />}
                 onClick={trackMetricsCatalogClick}
+                // Walkthrough anchor (data-tour-via); the same one on the
+                // bar button below, whichever the catalog shows.
+                data-tour-nav="metrics"
+                data-tour-hint="Open Metrics"
             >
                 Metrics
             </Menu.Item>
@@ -71,11 +75,14 @@ export const MetricsLink: FC<Props> = ({ projectUuid, asMenu }) => {
 
     return (
         <Button
+            aria-label="Metrics"
             variant="default"
             size="xs"
             fz="sm"
-            leftSection={<MantineIcon icon={IconHash} color="ldGray.6" />}
+            leftSection={<MantineIcon icon={IconHash} color="dimmed" />}
             onClick={handleMetricsCatalogClick}
+            data-tour-nav="metrics"
+            data-tour-hint="Open Metrics"
         >
             Metrics
         </Button>

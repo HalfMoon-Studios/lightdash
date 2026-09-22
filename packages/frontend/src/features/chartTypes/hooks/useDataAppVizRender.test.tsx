@@ -12,7 +12,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../../../api', () => ({ lightdashApi: mocks.lightdashApi }));
-vi.mock('@tanstack/react-query', () => ({ useQuery: mocks.useQuery }));
+vi.mock('@tanstack/react-query', () => ({
+    useQuery: mocks.useQuery,
+    useQueryClient: () => ({}),
+}));
 
 type CapturedQuery = {
     queryKey: unknown[];
@@ -64,6 +67,7 @@ describe('useDataAppVizRender', () => {
             'viz-1',
             'registered',
             'chart-1',
+            undefined,
             undefined,
         ]);
         expect(query.enabled).toBe(true);
@@ -137,6 +141,65 @@ describe('useDataAppVizRender', () => {
             method: 'GET',
             url: '/ee/projects/project-1/apps/visualizations/viz-1/versions/3/preview-token',
         });
+    });
+
+    it('requests an immutable chart-less artifact pin instead of the latest version', async () => {
+        const target = { isEmbedded: false, savedChartUuid: undefined };
+        const { result } = renderHook(() =>
+            useDataAppVizRenderMetadata('project-1', 'viz-1', target, 2),
+        );
+
+        await (result.current as unknown as CapturedQuery).queryFn();
+
+        expect(mocks.lightdashApi).toHaveBeenLastCalledWith({
+            method: 'GET',
+            url: '/ee/projects/project-1/apps/visualizations/viz-1/render-metadata?version=2',
+        });
+    });
+
+    it('requests the preview token for the exact version returned by pinned chartless metadata', async () => {
+        const target = { isEmbedded: false, savedChartUuid: undefined };
+        mocks.lightdashApi.mockResolvedValueOnce({
+            state: 'ready',
+            version: 2,
+            latestBuildInProgress: false,
+            schema: { fields: [], configOptions: [], colorPalette: null },
+        });
+        const { result: metadataResult } = renderHook(() =>
+            useDataAppVizRenderMetadata('project-1', 'viz-1', target, 2),
+        );
+        const metadata = (await (
+            metadataResult.current as unknown as CapturedQuery
+        ).queryFn()) as { version: number };
+
+        mocks.lightdashApi.mockResolvedValueOnce({ token: 'token-2' });
+        const { result: tokenResult } = renderHook(() =>
+            useDataAppVizPreviewToken(
+                'project-1',
+                'viz-1',
+                metadata.version,
+                target,
+                2,
+            ),
+        );
+        await expect(
+            (tokenResult.current as unknown as CapturedQuery).queryFn(),
+        ).resolves.toBe('token-2');
+
+        expect(mocks.lightdashApi.mock.calls).toEqual([
+            [
+                {
+                    method: 'GET',
+                    url: '/ee/projects/project-1/apps/visualizations/viz-1/render-metadata?version=2',
+                },
+            ],
+            [
+                {
+                    method: 'GET',
+                    url: '/ee/projects/project-1/apps/visualizations/viz-1/versions/2/preview-token',
+                },
+            ],
+        ]);
     });
 
     it('uses the saved-chart-bound embed routes for metadata and exact-version tokens', async () => {

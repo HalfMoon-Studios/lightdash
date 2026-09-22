@@ -40,6 +40,11 @@ const DbtSettingsForm: FC<DbtSettingsFormProps> = ({
     const type: DbtProjectType =
         form.values.dbt.type ?? (defaultType || DbtProjectType.GITHUB);
 
+    const isNative =
+        (form.values.dbt.type === DbtProjectType.GITHUB ||
+            form.values.dbt.type === DbtProjectType.BITBUCKET) &&
+        form.values.dbt.semanticLayer === 'lightdash';
+
     const warehouseType: WarehouseTypes =
         form.values.warehouse?.type ??
         selectedWarehouse ??
@@ -141,7 +146,7 @@ const DbtSettingsForm: FC<DbtSettingsFormProps> = ({
         <div
             style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
         >
-            <Stack style={{ marginTop: '8px' }}>
+            <Stack mt="xs">
                 <Select
                     allowDeselect={false}
                     name="dbt.type"
@@ -163,10 +168,10 @@ const DbtSettingsForm: FC<DbtSettingsFormProps> = ({
 
                 <DbtForm disabled={disabled} />
 
-                {type !== DbtProjectType.NONE && (
+                {type !== DbtProjectType.NONE && !isNative && (
                     <>
                         <FormSection name="target">
-                            <Stack style={{ marginTop: '8px' }}>
+                            <Stack mt="xs">
                                 <TextInput
                                     name="dbt.target"
                                     {...form.getInputProps('dbt.target')}
@@ -207,7 +212,7 @@ const DbtSettingsForm: FC<DbtSettingsFormProps> = ({
                             name="Advanced"
                             isOpen={isAdvancedSettingsOpen}
                         >
-                            <Stack style={{ marginTop: '8px' }}>
+                            <Stack mt="xs">
                                 {type !== DbtProjectType.DBT_CLOUD_IDE && (
                                     <TextInput
                                         name="dbt.selector"

@@ -17,6 +17,7 @@ import {
     collectionLimitOf,
     collectionSourceOf,
     ContentType,
+    FeatureFlags,
     contentToResourceViewItem,
     isPersonalCollectionSource,
     MAX_COLLECTION_LIMIT,
@@ -63,10 +64,11 @@ import { useFavorites } from '../../../../hooks/favorites/useFavorites';
 import { usePinnedItems } from '../../../../hooks/pinning/usePinnedItems';
 import { useInfiniteContent } from '../../../../hooks/useContent';
 import { useProject } from '../../../../hooks/useProject';
+import { useServerFeatureFlag } from '../../../../hooks/useServerOrClientFeatureFlag';
 import { useSpaceSummaries } from '../../../../hooks/useSpaces';
 import { reorderCollectionItems } from '../configOps';
 import layoutClasses from '../homepageLayout.module.css';
-import { useCollectionContent } from '../hooks/useCollectionContent';
+import { useCollectionItems } from '../hooks/useCollectionContent';
 import { useCollectionSourceContent } from '../hooks/useCollectionSourceContent';
 import { useReportRuntimeEmpty } from '../hooks/useRuntimeEmptyBlocks';
 import { BlockHeader } from './BlockShell';
@@ -76,16 +78,20 @@ import { ContentLayoutControl } from './ContentLayoutControl';
 import { PageGrid, PageGridItem } from './PageGrid';
 import { type BlockComponentProps, type BuildComponentProps } from './types';
 
-// Only charts and dashboards can be favorited — spaces and data apps have no
-// favorite toggle, so the star is hidden for them.
 const toFavoriteType = (
     content: SummaryContent,
-): ResourceViewItemType.CHART | ResourceViewItemType.DASHBOARD | null => {
+):
+    | ResourceViewItemType.CHART
+    | ResourceViewItemType.DASHBOARD
+    | ResourceViewItemType.DOCUMENT
+    | null => {
     switch (content.contentType) {
         case ContentType.CHART:
             return ResourceViewItemType.CHART;
         case ContentType.DASHBOARD:
             return ResourceViewItemType.DASHBOARD;
+        case ContentType.DOCUMENT:
+            return ResourceViewItemType.DOCUMENT;
         case ContentType.SPACE:
         case ContentType.DATA_APP:
             return null;
@@ -94,10 +100,9 @@ const toFavoriteType = (
     }
 };
 
-const toItemRef = (content: SummaryContent): HomepageCollectionItemRef => ({
-    contentType: content.contentType,
-    uuid: content.uuid,
-});
+const toItemRef = (content: SummaryContent): HomepageCollectionItemRef => {
+    return { contentType: content.contentType, uuid: content.uuid };
+};
 
 type SortKey = 'name' | 'updated' | 'type';
 
@@ -269,11 +274,9 @@ const SpaceContent: FC<{
     );
 };
 
-// A flat, search-driven list for a single content type (data apps),
-// which — unlike charts/dashboards — aren't naturally browsed by space.
 const SearchContentList: FC<{
     projectUuid: string;
-    contentType: ContentType.DATA_APP;
+    contentType: ContentType.DATA_APP | ContentType.DOCUMENT;
     placeholder: string;
     emptyLabel: string;
     selected: Map<string, HomepageCollectionItemRef>;
@@ -353,7 +356,7 @@ const SearchContentList: FC<{
     );
 };
 
-type PickerTab = 'content' | 'apps';
+type PickerTab = 'content' | 'apps' | 'documents';
 
 const CollectionPicker: FC<{
     projectUuid: string;
@@ -363,6 +366,7 @@ const CollectionPicker: FC<{
      * selection — the footer lives in MantineModal, outside this component. */
     registerApply: (commit: () => void) => void;
 }> = ({ projectUuid, initialSelected, onApply, registerApply }) => {
+    const documentsFlag = useServerFeatureFlag(FeatureFlags.Documents);
     const [tab, setTab] = useState<PickerTab>('content');
     const [selectedSpaceUuid, setSelectedSpaceUuid] = useState<string | null>(
         null,
@@ -424,6 +428,9 @@ const CollectionPicker: FC<{
                     data={[
                         { label: 'Charts & dashboards', value: 'content' },
                         { label: 'Data apps', value: 'apps' },
+                        ...(documentsFlag.data?.enabled
+                            ? [{ label: 'Documents', value: 'documents' }]
+                            : []),
                     ]}
                 />
                 <Text size="sm" c="dimmed">
@@ -467,6 +474,16 @@ const CollectionPicker: FC<{
                             )}
                         </Box>
                     </Group>
+                )}
+                {tab === 'documents' && documentsFlag.data?.enabled && (
+                    <SearchContentList
+                        projectUuid={projectUuid}
+                        contentType={ContentType.DOCUMENT}
+                        placeholder="Search documents..."
+                        emptyLabel="No documents found."
+                        selected={selected}
+                        onToggleItem={toggleItem}
+                    />
                 )}
                 {tab === 'apps' && (
                     <SearchContentList
@@ -728,12 +745,14 @@ const CONTENT_TYPE_OPTIONS: {
     { value: 'chart', label: 'Charts' },
     { value: 'data_app', label: 'Apps' },
     { value: 'space', label: 'Spaces' },
+    { value: 'document', label: 'Documents' },
 ];
 
 const CollectionSourceControls: FC<{
     config: HomepageCollectionBlock['config'];
     onChange: (config: HomepageCollectionBlock['config']) => void;
 }> = ({ config, onChange }) => {
+    const documentsFlag = useServerFeatureFlag(FeatureFlags.Documents);
     const source = collectionSourceOf(config);
     const hint = SOURCE_OPTIONS.find((o) => o.value === source)?.hint;
     return (
@@ -786,7 +805,11 @@ const CollectionSourceControls: FC<{
                             })
                         }
                     >
-                        {CONTENT_TYPE_OPTIONS.map(({ value, label }) => (
+                        {CONTENT_TYPE_OPTIONS.filter(
+                            ({ value }) =>
+                                value !== 'document' ||
+                                documentsFlag.data?.enabled,
+                        ).map(({ value, label }) => (
                             <Chip
                                 key={value}
                                 value={value}
@@ -869,11 +892,10 @@ export const CollectionBlockBuild: FC<BuildComponentProps> = ({
     const sensors = useSensors(
         useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     );
-    const uuids =
-        block.type === 'collection'
-            ? block.config.items.map((item) => item.uuid)
-            : [];
-    const { data: contents } = useCollectionContent(projectUuid, uuids);
+    const { data: contents } = useCollectionItems(
+        projectUuid,
+        block.type === 'collection' ? block.config.items : [],
+    );
     const { data: project } = useProject(projectUuid);
     const { data: pinnedItems } = usePinnedItems(
         projectUuid,

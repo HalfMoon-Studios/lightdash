@@ -1,6 +1,7 @@
 import { type AnyType } from '@lightdash/common';
 import {
     APICallError,
+    asSchema,
     generateText,
     streamText,
     type ModelMessage,
@@ -10,6 +11,9 @@ import {
     registerAiUsageTracker,
     type AiUsageEvent,
 } from '../../../../analytics/aiUsage';
+import { validExplore } from '../../../../services/ProjectService/ProjectService.mock';
+import { AiDecisionClient } from '../decisions/AiDecisionClient';
+import { getLoadAgentTools } from '../tools/loadAgentTools';
 import type {
     AiAgentArgs,
     AiAgentDependencies,
@@ -30,8 +34,13 @@ import {
     generateAgentResponse,
     getAgentMessages,
     getAgentTools,
+    getCandidateSeedKeywords,
+    getChartExportFastResponse,
+    getChartFollowupFastResponse,
+    getDataAppBuildFastResponse,
     getDeepResearchBudgetInstruction,
     getPromptMcpServers,
+    getRecentQueryFieldKeywords,
     getStepBudgetOverride,
     normalizeToolOutput,
     recordAgentStepUsage,
@@ -41,6 +50,7 @@ import {
     withEarlyToolProgress,
     type AgentMcpToolSetup,
 } from './agentV2';
+import { createIntentToolGate } from './referenceToolGating';
 
 vi.mock('ai', async (importOriginal) => ({
     ...(await importOriginal<typeof import('ai')>()),
@@ -123,6 +133,297 @@ const mcpToolSetup = () => ({
     closeMcpClients: vi.fn().mockResolvedValue(undefined),
 });
 
+describe('flags-off agent turns', () => {
+    it.each(['generate', 'stream'] as const)(
+        'preserves the legacy %s model, context and tool path',
+        async (mode) => {
+            const args = buildAgentArgs();
+            args.enableDataAccess = true;
+            args.projectContextEnabled = true;
+            args.projectContext = [
+                {
+                    id: 'revenue',
+                    kind: 'definition',
+                    terms: ['revenue'],
+                    objects: [],
+                    content: 'Revenue excludes refunds.',
+                },
+            ];
+            const evaluate = vi.spyOn(AiDecisionClient.prototype, 'evaluate');
+            const dependencies = buildAgentDependencies(
+                vi.fn().mockResolvedValue(undefined),
+            );
+            Object.assign(dependencies, {
+                consumePromptSteers: async () => [],
+            });
+            let options: AnyType;
+            try {
+                if (mode === 'generate') {
+                    vi.mocked(generateText).mockImplementationOnce((async (
+                        captured: AnyType,
+                    ) => {
+                        options = captured;
+                        return {
+                            text: 'Answer',
+                            steps: [{}],
+                            usage: { totalTokens: 1 },
+                            finishReason: 'stop',
+                        };
+                    }) as AnyType);
+                    await generateAgentResponse({
+                        args,
+                        dependencies,
+                        mcpToolSetup: mcpToolSetup(),
+                    });
+                } else {
+                    vi.mocked(streamText).mockImplementationOnce(((
+                        captured: AnyType,
+                    ) => {
+                        options = captured;
+                        return {};
+                    }) as AnyType);
+                    await streamAgentResponse({
+                        args,
+                        dependencies,
+                        mcpToolSetup: mcpToolSetup(),
+                    });
+                    expect(Array.isArray(options.experimental_transform)).toBe(
+                        false,
+                    );
+                }
+                expect(options.model).toBe(args.model);
+                expect(options.experimental_repairToolCall).toBeUndefined();
+                expect(options.tools).toHaveProperty('generateVisualization');
+                expect(options.tools).toHaveProperty('loadProjectContext');
+                for (const tool of [
+                    'runQuery',
+                    'exportChartAsCode',
+                    'loadAgentTools',
+                ])
+                    expect(options.tools).not.toHaveProperty(tool);
+                expect(JSON.stringify(options.messages)).toContain(
+                    'Call the `loadProjectContext` tool BEFORE grepFields',
+                );
+                expect(
+                    options.tools.generateVisualization.description,
+                ).not.toContain('server selects a validated default');
+                const firstStep = await options.prepareStep({
+                    stepNumber: 0,
+                    messages: options.messages,
+                });
+                expect(firstStep?.toolChoice).toBeUndefined();
+                if (mode === 'generate') {
+                    expect(firstStep?.model.modelId).toBe(args.model.modelId);
+                    expect(firstStep?.model.provider).toBe(args.model.provider);
+                } else {
+                    expect(firstStep?.model).toBeUndefined();
+                }
+                expect(firstStep?.activeTools).toBeUndefined();
+                expect(evaluate).not.toHaveBeenCalled();
+            } finally {
+                evaluate.mockRestore();
+            }
+        },
+    );
+});
+
+describe('MCP context preparation at the agent boundary', () => {
+    it.each(['generate', 'stream'] as const)(
+        'delivers project definitions in the first %s request without requiring a lookup',
+        async (mode) => {
+            const args = buildAgentArgs();
+            args.projectContextEnabled = true;
+            args.projectContext = [
+                {
+                    id: 'revenue',
+                    kind: 'definition',
+                    terms: ['revenue'],
+                    objects: [],
+                    content: 'Revenue excludes refunds.',
+                },
+            ];
+            const request = vi.fn<typeof fetch>().mockResolvedValue(
+                Response.json({
+                    model: 'test',
+                    answers: {
+                        context_0: { type: 'noul', noul: 0.99 },
+                        turnIntent: {
+                            type: 'choice',
+                            choice: 'reference_answer',
+                            confidence: 0.99,
+                            probabilities: { reference_answer: 1 },
+                        },
+                    },
+                }),
+            );
+            args.decisions = new AiDecisionClient(
+                { apiKey: 'test', model: 'test', timeoutMs: 100 },
+                request,
+            );
+            const dependencies = buildAgentDependencies(
+                vi.fn().mockResolvedValue(undefined),
+            );
+            const getProjectContextDocument = vi.fn();
+            const getAiAgentMemoryContextEntries = vi.fn();
+            Object.assign(dependencies, {
+                consumePromptSteers: async () => [],
+                updateProgress: vi.fn().mockResolvedValue(undefined),
+                getProjectContextDocument,
+                getAiAgentMemoryContextEntries,
+            });
+            let options: AnyType;
+            if (mode === 'generate') {
+                vi.mocked(generateText).mockImplementationOnce((async (
+                    captured: AnyType,
+                ) => {
+                    options = captured;
+                    return {
+                        text: 'Answer',
+                        steps: [{}],
+                        usage: { totalTokens: 1 },
+                        finishReason: 'stop',
+                    };
+                }) as AnyType);
+                await generateAgentResponse({
+                    args,
+                    dependencies,
+                    mcpToolSetup: mcpToolSetup(),
+                });
+            } else {
+                vi.mocked(streamText).mockImplementationOnce(((
+                    captured: AnyType,
+                ) => {
+                    options = captured;
+                    return {};
+                }) as AnyType);
+                await streamAgentResponse({
+                    args,
+                    dependencies,
+                    mcpToolSetup: mcpToolSetup(),
+                });
+            }
+            const messages = JSON.stringify(options.messages);
+            expect(messages).toContain('Revenue excludes refunds.');
+            expect(messages).toContain('partial selection');
+            expect(messages).not.toContain(
+                'Call the `loadProjectContext` tool BEFORE',
+            );
+            expect(options.tools).toHaveProperty('loadProjectContext');
+            expect(options.experimental_repairToolCall).toEqual(
+                expect.any(Function),
+            );
+            expect(getProjectContextDocument).not.toHaveBeenCalled();
+            expect(getAiAgentMemoryContextEntries).not.toHaveBeenCalled();
+            expect(request).toHaveBeenCalledTimes(1);
+            const firstStep = await options.prepareStep({
+                stepNumber: 0,
+                messages: options.messages,
+            });
+            expect(firstStep.activeTools).toContain('loadProjectContext');
+            expect(firstStep.activeTools).toContain('loadAgentTools');
+            expect(firstStep.activeTools).not.toContain(
+                'generateVisualization',
+            );
+            await options.tools.loadAgentTools.execute(
+                {},
+                { toolCallId: 'load', messages: options.messages },
+            );
+            const nextStep = await options.prepareStep({
+                stepNumber: 1,
+                messages: options.messages,
+            });
+            expect(nextStep.activeTools).toBeUndefined();
+        },
+    );
+
+    it.each(['generate', 'stream'] as const)(
+        'activates a selected tool in the first %s step without executing it',
+        async (mode) => {
+            const args = buildAgentArgs();
+            const request = vi.fn<typeof fetch>().mockResolvedValue(
+                Response.json({
+                    model: 'test',
+                    answers: {
+                        mcpTool: {
+                            type: 'choice',
+                            choice: 'tool_0',
+                            confidence: 0.99,
+                            probabilities: { tool_0: 1 },
+                        },
+                        turnIntent: {
+                            type: 'choice',
+                            choice: 'other',
+                            confidence: 0.99,
+                            probabilities: { other: 1 },
+                        },
+                    },
+                }),
+            );
+            args.decisions = new AiDecisionClient(
+                { apiKey: 'test', model: 'test', timeoutMs: 100 },
+                request,
+            );
+            const dependencies = buildAgentDependencies(
+                vi.fn().mockResolvedValue(undefined),
+            );
+            Object.assign(dependencies, {
+                consumePromptSteers: async () => [],
+            });
+            const execute = vi.fn();
+            const setup = {
+                ...mcpToolSetup(),
+                tools: {
+                    mcp_issues_search: {
+                        description: 'Search issues',
+                        execute,
+                    },
+                } as unknown as ToolSet,
+            };
+            let options: AnyType;
+            if (mode === 'generate') {
+                vi.mocked(generateText).mockImplementationOnce((async (
+                    captured: AnyType,
+                ) => {
+                    options = captured;
+                    return {
+                        text: 'Answer',
+                        steps: [{}],
+                        usage: { totalTokens: 1 },
+                        finishReason: 'stop',
+                    };
+                }) as AnyType);
+                await generateAgentResponse({
+                    args,
+                    dependencies,
+                    mcpToolSetup: setup,
+                });
+            } else {
+                vi.mocked(streamText).mockImplementationOnce(((
+                    captured: AnyType,
+                ) => {
+                    options = captured;
+                    return {};
+                }) as AnyType);
+                await streamAgentResponse({
+                    args,
+                    dependencies,
+                    mcpToolSetup: setup,
+                });
+            }
+            const step = await options.prepareStep({
+                stepNumber: 0,
+                messages: options.messages,
+            });
+            expect(step.activeTools).toContain('mcp_issues_search');
+            expect(JSON.stringify(options.messages)).toContain(
+                'MCP tool definition already loaded: mcp_issues_search',
+            );
+            expect(execute).not.toHaveBeenCalled();
+            expect(request).toHaveBeenCalledTimes(1);
+        },
+    );
+});
+
 describe('generateAgentResponse error persistence', () => {
     it('persists provider billing guidance for a self-managed key', async () => {
         const updatePrompt = vi.fn().mockResolvedValue(undefined);
@@ -153,6 +454,113 @@ describe('generateAgentResponse error persistence', () => {
         expect(updatePrompt).toHaveBeenCalledWith({
             promptUuid: 'prompt-1',
             errorMessage: PROVIDER_BILLING_MESSAGE,
+        });
+    });
+});
+
+describe('unknown error copy at the agent boundary', () => {
+    const setup = () => {
+        const request = vi.fn<typeof fetch>().mockImplementation(async () =>
+            Response.json({
+                model: 'test',
+                answers: {
+                    category: {
+                        type: 'choice',
+                        choice: 'permissions',
+                        confidence: 0.99,
+                        probabilities: { permissions: 1 },
+                    },
+                },
+            }),
+        );
+        const args = buildAgentArgs();
+        args.decisions = new AiDecisionClient(
+            { apiKey: 'test', model: 'test', timeoutMs: 100 },
+            request,
+        );
+        const updatePrompt = vi.fn().mockResolvedValue(undefined);
+        return {
+            args,
+            request,
+            updatePrompt,
+            dependencies: buildAgentDependencies(updatePrompt),
+        };
+    };
+
+    it.each(['generate', 'stream'] as const)(
+        'persists classified copy when %s fails before responding',
+        async (mode) => {
+            const { args, request, updatePrompt, dependencies } = setup();
+            const error = new Error(
+                'The configured role cannot access this resource',
+            );
+            if (mode === 'generate')
+                vi.mocked(generateText).mockRejectedValueOnce(error);
+            else
+                vi.mocked(streamText).mockImplementationOnce(() => {
+                    throw error;
+                });
+            const run =
+                mode === 'generate'
+                    ? generateAgentResponse
+                    : streamAgentResponse;
+            await expect(
+                run({
+                    args: args as AnyType,
+                    dependencies,
+                    mcpToolSetup: mcpToolSetup(),
+                }),
+            ).rejects.toBe(error);
+            expect(updatePrompt).toHaveBeenCalledWith({
+                promptUuid: 'prompt-1',
+                errorMessage: expect.stringContaining('Check your permissions'),
+            });
+            expect(request).toHaveBeenCalledTimes(2);
+        },
+    );
+
+    it('shares classification across repeated streaming error callbacks', async () => {
+        const { args, request, updatePrompt, dependencies } = setup();
+        let options: AnyType;
+        vi.mocked(streamText).mockImplementationOnce(((input: AnyType) => {
+            options = input;
+            return {} as AnyType;
+        }) as AnyType);
+        await streamAgentResponse({
+            args: args as AnyType,
+            dependencies,
+            mcpToolSetup: mcpToolSetup(),
+        });
+        const error = new Error(
+            'The configured role cannot access this resource',
+        );
+        await Promise.all([
+            options.onError({ error }),
+            options.onError({ error }),
+        ]);
+        expect(updatePrompt).toHaveBeenCalledWith({
+            promptUuid: 'prompt-1',
+            errorMessage: expect.stringContaining('Check your permissions'),
+        });
+        expect(request).toHaveBeenCalledTimes(2);
+    });
+
+    it('retains the existing final error when the classifier is unavailable', async () => {
+        const { args, request, updatePrompt, dependencies } = setup();
+        request.mockRejectedValue(new Error('offline'));
+        const error = new Error('Unfamiliar failure');
+        vi.mocked(generateText).mockRejectedValueOnce(error);
+        await expect(
+            generateAgentResponse({
+                args,
+                dependencies,
+                mcpToolSetup: mcpToolSetup(),
+            }),
+        ).rejects.toBe(error);
+        expect(updatePrompt).toHaveBeenCalledWith({
+            promptUuid: 'prompt-1',
+            errorMessage:
+                'Something went wrong while generating the response. Please try again.',
         });
     });
 });
@@ -234,13 +642,19 @@ describe('empty finishes and interrupts', () => {
             dependencies,
             mcpToolSetup: mcpToolSetup(),
         });
+        expect(capturedOptions.experimental_repairToolCall).toBeUndefined();
         await capturedOptions.onFinish({
             usage: { totalTokens: 10 },
-            totalUsage: { totalTokens: 10 },
+            totalUsage: { totalTokens: 100 },
             steps: [{ text: '' }],
             reasoning: [],
             finishReason: 'tool-calls',
         });
+        expect(updatePrompt).toHaveBeenCalledWith(
+            expect.objectContaining({
+                tokenUsage: { totalTokens: 100, finalStepTotalTokens: 10 },
+            }),
+        );
         return updatePrompt;
     };
 
@@ -361,6 +775,12 @@ describe('generateAgentResponse token usage persistence', () => {
                 text: 'Answer',
                 steps: stepTotals.map(() => ({})),
                 usage: { totalTokens: stepTotals.at(-1) ?? 0 },
+                totalUsage: {
+                    totalTokens: stepTotals.reduce(
+                        (total, value) => total + value,
+                        0,
+                    ),
+                },
                 finishReason: 'stop',
             };
         }) as AnyType);
@@ -404,7 +824,7 @@ describe('generateAgentResponse token usage persistence', () => {
         });
     });
 
-    it('persists matching figures for non-deep-research modes', async () => {
+    it('persists cumulative spend and final-step occupancy separately for standard mode', async () => {
         const updatePrompt = await runWithSteps(
             { mode: 'standard', maxSteps: 10 },
             [12000, 31000],
@@ -414,8 +834,21 @@ describe('generateAgentResponse token usage persistence', () => {
             promptUuid: 'prompt-1',
             response: 'Answer',
             tokenUsage: {
-                totalTokens: 31000,
+                totalTokens: 43000,
                 finalStepTotalTokens: 31000,
+            },
+            responseTiming: {
+                startedAt: expect.any(String),
+                firstTokenAt: null,
+                finishedAt: expect.any(String),
+                stages: expect.objectContaining({
+                    preparationMs: expect.any(Number),
+                    providerMs: expect.anything(),
+                    queryMs: expect.any(Number),
+                    apiMs: expect.any(Number),
+                    renderMs: expect.any(Number),
+                    queryCacheHits: expect.any(Number),
+                }),
             },
         });
     });
@@ -468,7 +901,8 @@ describe('recordAgentStepUsage', () => {
             event: 'ai.usage',
             properties: {
                 feature: 'agent',
-                inputTokens: 10,
+                // The total includes the cache tokens: 10 uncached + 4 read + 2 write.
+                inputTokens: 16,
                 outputTokens: 7,
                 cacheReadTokens: 4,
                 cacheWriteTokens: 2,
@@ -528,7 +962,8 @@ describe('recordAgentStepUsage', () => {
             runUuid: 'run-1',
             phase: 'investigating',
             tokens: {
-                inputTokens: 10,
+                // The total includes the cache tokens: 10 uncached + 4 read + 2 write.
+                inputTokens: 16,
                 outputTokens: 7,
                 cacheReadTokens: 4,
                 cacheWriteTokens: 2,
@@ -721,6 +1156,281 @@ describe('getStepBudgetOverride', () => {
 });
 
 describe('buildPrepareStep worker isolation', () => {
+    it('allows discovery before a classified data answer without downgrading the model', async () => {
+        const fastModel = {} as AiAgentArgs['model'];
+        const args = buildAgentArgs();
+        args.toolCallModel = {
+            model: fastModel,
+            providerOptions: { openai: {} },
+            keyManagement: 'self-managed',
+        };
+        const tools = {
+            loadAgentTools: getLoadAgentTools(),
+            runQuery: {} as never,
+            grepFields: {} as never,
+        };
+        const gate = createIntentToolGate(tools, 'data_answer');
+        const prepareStep = buildPrepareStep({
+            args,
+            dependencies: {
+                ...buildAgentDependencies(vi.fn()),
+                consumePromptSteers: vi.fn().mockResolvedValue([]),
+            },
+            tools: gate.tools,
+            mcpToolNames: [],
+            intentToolGate: gate,
+            logger: vi.fn(),
+            invalidToolCallIds: new Set(),
+        });
+
+        const first = await prepareStep({ stepNumber: 0, messages: [] });
+        expect(first).toMatchObject({
+            activeTools: expect.arrayContaining(['runQuery', 'grepFields']),
+        });
+        expect(first).not.toHaveProperty('toolChoice');
+        expect(first).not.toHaveProperty('model');
+        await expect(
+            prepareStep({ stepNumber: 1, messages: [] }),
+        ).resolves.toMatchObject({
+            activeTools: expect.arrayContaining(['runQuery', 'grepFields']),
+        });
+    });
+
+    it.each(['success', 'error', 'pending', null])(
+        'only shortcuts a chart after a successful query: %s',
+        async (status) => {
+            const fastModel = {} as AiAgentArgs['model'];
+            const args = buildAgentArgs();
+            args.messageHistory = [
+                { role: 'user', content: 'How many orders?' },
+                {
+                    role: 'assistant',
+                    content: [
+                        {
+                            type: 'tool-call',
+                            toolCallId: 'query-1',
+                            toolName: 'runQuery',
+                            input: {
+                                queryConfig: { metrics: ['orders_count'] },
+                            },
+                        },
+                    ],
+                },
+                {
+                    role: 'tool',
+                    content: [
+                        {
+                            type: 'tool-result',
+                            toolCallId: 'query-1',
+                            toolName: 'runQuery',
+                            output: {
+                                type: 'json',
+                                value: { status, result: 'query result' },
+                            },
+                        },
+                    ],
+                },
+                { role: 'assistant', content: 'Previous answer' },
+                { role: 'user', content: 'As a line chart' },
+            ];
+            args.toolCallModel = {
+                model: fastModel,
+                providerOptions: { anthropic: {} },
+                keyManagement: 'self-managed',
+            };
+            const tools = {
+                loadAgentTools: getLoadAgentTools(),
+                generateVisualization: {} as never,
+                grepFields: {} as never,
+            };
+            const gate = createIntentToolGate(tools, 'chart_from_previous');
+            const prepareStep = buildPrepareStep({
+                args,
+                dependencies: {
+                    ...buildAgentDependencies(vi.fn()),
+                    consumePromptSteers: vi.fn().mockResolvedValue([]),
+                },
+                tools: gate.tools,
+                mcpToolNames: [],
+                intentToolGate: gate,
+                logger: vi.fn(),
+                invalidToolCallIds: new Set(),
+            });
+
+            const first = await prepareStep({
+                stepNumber: 0,
+                messages: args.messageHistory,
+            });
+            if (status !== 'success') {
+                expect(first).not.toHaveProperty('toolChoice');
+                expect(first).not.toHaveProperty('model');
+                return;
+            }
+            expect(first).toMatchObject({
+                activeTools: ['generateVisualization'],
+                toolChoice: { type: 'tool', toolName: 'generateVisualization' },
+                model: fastModel,
+                providerOptions: { anthropic: {} },
+            });
+        },
+    );
+
+    it('forces the validated chart exporter only on the first export step', async () => {
+        const tools = {
+            loadAgentTools: getLoadAgentTools(),
+            exportChartAsCode: {} as never,
+            findContent: {} as never,
+        };
+        const gate = createIntentToolGate(tools, 'chart_export');
+        const prepareStep = buildPrepareStep({
+            args: buildAgentArgs(),
+            dependencies: {
+                ...buildAgentDependencies(vi.fn()),
+                consumePromptSteers: vi.fn().mockResolvedValue([]),
+            },
+            tools: gate.tools,
+            mcpToolNames: [],
+            intentToolGate: gate,
+            logger: vi.fn(),
+            invalidToolCallIds: new Set(),
+        });
+
+        await expect(
+            prepareStep({ stepNumber: 0, messages: [] }),
+        ).resolves.toMatchObject({
+            activeTools: ['exportChartAsCode'],
+            toolChoice: { type: 'tool', toolName: 'exportChartAsCode' },
+        });
+        await expect(
+            prepareStep({ stepNumber: 1, messages: [] }),
+        ).resolves.toMatchObject({
+            activeTools: ['loadAgentTools', 'exportChartAsCode'],
+        });
+    });
+
+    it.each([
+        ['data_app_create', 'generateDataApp'],
+        ['data_app_iterate', 'iterateDataApp'],
+    ] as const)(
+        'allows discovery before %s starts through %s',
+        async (intent, toolName) => {
+            const fastModel = {} as AiAgentArgs['model'];
+            const args = buildAgentArgs();
+            args.userQuestion = 'Build an app using our dark brand theme';
+            args.toolCallModel = {
+                model: fastModel,
+                providerOptions: { openai: {} },
+                keyManagement: 'self-managed',
+            };
+            const tools = {
+                loadAgentTools: getLoadAgentTools(),
+                generateDataApp: {} as never,
+                iterateDataApp: {} as never,
+                findContent: {} as never,
+                listDataAppThemes: {} as never,
+            };
+            const gate = createIntentToolGate(tools, intent);
+            const prepareStep = buildPrepareStep({
+                args,
+                dependencies: {
+                    ...buildAgentDependencies(vi.fn()),
+                    consumePromptSteers: vi.fn().mockResolvedValue([]),
+                },
+                tools: gate.tools,
+                mcpToolNames: [],
+                intentToolGate: gate,
+                logger: vi.fn(),
+                invalidToolCallIds: new Set(),
+            });
+
+            const step = await prepareStep({ stepNumber: 0, messages: [] });
+            expect(step).toMatchObject({
+                activeTools: expect.arrayContaining([
+                    toolName,
+                    'listDataAppThemes',
+                    'findContent',
+                    'loadAgentTools',
+                ]),
+            });
+            expect(step).not.toHaveProperty('toolChoice');
+            expect(step).not.toHaveProperty('model');
+        },
+    );
+
+    it('restores reference tools on new user guidance while preserving MCP lazy loading', async () => {
+        const tools = {
+            loadAgentTools: getLoadAgentTools(),
+            getKnowledgeDocumentContent: {} as never,
+            generateVisualization: {} as never,
+            mcp_external: {} as never,
+        };
+        const gate = createIntentToolGate(tools, 'reference_answer');
+        const consumePromptSteers = vi
+            .fn()
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([{ message: 'Now run the query.' }]);
+        const prepareStep = buildPrepareStep({
+            args: buildAgentArgs(),
+            dependencies: {
+                ...buildAgentDependencies(vi.fn()),
+                consumePromptSteers,
+            },
+            tools: gate.tools,
+            mcpToolNames: ['mcp_external'],
+            intentToolGate: gate,
+            logger: vi.fn(),
+            invalidToolCallIds: new Set(),
+        });
+        const first = await prepareStep({ stepNumber: 0, messages: [] });
+        expect(first).toMatchObject({
+            activeTools: expect.not.arrayContaining(['generateVisualization']),
+        });
+        const next = await prepareStep({ stepNumber: 1, messages: [] });
+        expect(next).toMatchObject({
+            activeTools: expect.arrayContaining(['generateVisualization']),
+        });
+        expect(next).toMatchObject({
+            activeTools: expect.not.arrayContaining(['mcp_external']),
+        });
+        expect(JSON.stringify(next)).toContain('Now run the query.');
+    });
+
+    it.each([0, 1])(
+        'keeps a preloaded MCP tool selectable on step %i',
+        async (stepNumber) => {
+            const tools = {
+                loadAgentTools: getLoadAgentTools(),
+                runQuery: {} as never,
+                grepFields: {} as never,
+                mcp_external: {} as never,
+            };
+            const gate = createIntentToolGate(tools, 'data_answer');
+            const prepareStep = buildPrepareStep({
+                args: buildAgentArgs(),
+                dependencies: {
+                    ...buildAgentDependencies(vi.fn()),
+                    consumePromptSteers: vi.fn().mockResolvedValue([]),
+                },
+                tools: gate.tools,
+                mcpToolNames: ['mcp_external'],
+                preloadedMcpToolNames: ['mcp_external'],
+                intentToolGate: gate,
+                logger: vi.fn(),
+                invalidToolCallIds: new Set(),
+            });
+
+            const step = await prepareStep({ stepNumber, messages: [] });
+            expect(step).toMatchObject({
+                activeTools: expect.arrayContaining([
+                    'runQuery',
+                    'mcp_external',
+                ]),
+            });
+            expect(step).not.toHaveProperty('toolChoice');
+            expect(step).not.toHaveProperty('model');
+        },
+    );
+
     it('does not consume or inject prompt-wide steers for a worker', async () => {
         const args = buildAgentArgs({
             mode: 'deep_research',
@@ -1010,31 +1720,43 @@ describe('getAgentTools workstream tool gate', () => {
         canRunSql?: boolean;
         enableComposerQueries?: boolean;
         enableContentTools?: boolean;
+        enableDocuments?: boolean;
         enableDataAccess?: boolean;
+        enableGenerateDataApp?: boolean;
+        enableFilterExpressions?: boolean;
     };
 
     const buildArgs = (flags: ToolFlags): AiAgentArgs =>
         ({
             canCreateDashboards: true,
-            agentSettings: { name: 'test-agent' },
+            agentSettings: {
+                uuid: 'agent-1',
+                name: 'test-agent',
+                projectUuid: 'project-1',
+            },
             autoApproveSql: false,
             autoApproveSqlUserUuid: null,
             availableSkills: [],
             callOptions: {},
+            compactionSummary: null,
             canManageAgent: false,
             canRunSql: true,
             debugLoggingEnabled: false,
             enableContentTools: false,
             enableDataAccess: false,
             enableEditProjectContext: false,
+            enableGenerateDataApp: false,
             enablePreviewDeploySetup: false,
             enableRepoDiscovery: false,
+            enableFilterExpressions: false,
             execution: {
                 mode: 'standard',
                 maxSteps: 10,
             },
             getDashboardChartsPageSize: 10,
             maxQueryLimit: 5000,
+            messageHistory: [{ role: 'user', content: 'Question' }],
+            mcpServers: [],
             model: {},
             organizationId: 'org-1',
             aiAgentMemoryEnabled: false,
@@ -1046,14 +1768,16 @@ describe('getAgentTools workstream tool gate', () => {
             telemetryEnabled: false,
             threadUuid: 'thread-1',
             toolDescriptionMaxChars: 1000,
+            toolHints: [],
             userId: 'user-1',
             useSlackStreamCard: false,
+            slackLinksOnly: false,
             ...flags,
         }) as unknown as AiAgentArgs;
 
-    const buildTools = (flags: ToolFlags) =>
+    const buildToolsForArgs = (args: AiAgentArgs) =>
         getAgentTools(
-            buildArgs(flags),
+            args,
             depsStub(),
             [],
             mcpStub,
@@ -1065,7 +1789,168 @@ describe('getAgentTools workstream tool gate', () => {
             },
         );
 
+    const buildTools = (flags: ToolFlags) =>
+        buildToolsForArgs(buildArgs(flags));
+
     const toolNames = (flags: ToolFlags) => Object.keys(buildTools(flags));
+
+    it.each([false, true])(
+        'gates source attribution metadata on fast decisions (enabled=%s)',
+        async (enabled) => {
+            const args = buildArgs({
+                enableDataAccess: true,
+                enableCodingAgent: false,
+                enableAiWriteback: false,
+            });
+            if (enabled)
+                args.decisions = new AiDecisionClient({
+                    apiKey: null,
+                    model: 'test',
+                    timeoutMs: 100,
+                });
+            const tools = getAgentTools(
+                args,
+                depsStub(),
+                [validExplore],
+                mcpStub,
+                new Map(),
+                {},
+                { types: [], totalCount: 0 },
+            );
+            const result = await tools.getMetadata.execute!(
+                {
+                    requests: [
+                        { type: 'explore', exploreIds: [validExplore.name] },
+                    ],
+                },
+                { toolCallId: 'metadata', messages: [] },
+            );
+            expect(JSON.stringify(result).includes('sqlOn')).toBe(enabled);
+        },
+    );
+
+    it.each([false, true])(
+        'offers chart export only with fast decisions and data access (data=%s)',
+        (enableDataAccess) => {
+            const args = buildArgs({
+                enableCodingAgent: false,
+                enableAiWriteback: false,
+                enableDataAccess,
+            });
+            expect(buildToolsForArgs(args)).not.toHaveProperty(
+                'exportChartAsCode',
+            );
+            const enabled = buildToolsForArgs({
+                ...args,
+                decisions: new AiDecisionClient({
+                    apiKey: null,
+                    model: 'test',
+                    timeoutMs: 100,
+                }),
+            });
+            expect('exportChartAsCode' in enabled).toBe(enableDataAccess);
+        },
+    );
+
+    it.each([
+        [false, false, false],
+        [false, false, true],
+        [false, true, false],
+        [false, true, true],
+        [true, false, false],
+        [true, false, true],
+        [true, true, false],
+        [true, true, true],
+    ])(
+        'gates Document schemas and instructions together (documents=%s, content=%s, data=%s)',
+        (enableDocuments, enableContentTools, enableDataAccess) => {
+            const args = buildArgs({
+                enableCodingAgent: false,
+                enableAiWriteback: false,
+                enableDocuments,
+                enableContentTools,
+                enableDataAccess,
+            });
+            const tools = buildToolsForArgs(args);
+            const contentEnabled = enableContentTools && enableDataAccess;
+            const documentsEnabled = contentEnabled && enableDocuments;
+            const systemMessage = getAgentMessages(
+                args,
+                [],
+                mcpStub,
+                tools,
+                new Map(),
+                null,
+                { types: [], totalCount: 0 },
+            ).find(({ role }) => role === 'system');
+            if (!systemMessage || typeof systemMessage.content !== 'string') {
+                throw new Error('Expected a string system message');
+            }
+
+            expect(
+                systemMessage.content.includes(
+                    'Create a Document only when the user explicitly asks',
+                ),
+            ).toBe(documentsEnabled);
+            for (const name of [
+                'createContent',
+                'readContent',
+                'editContent',
+            ]) {
+                expect(Object.hasOwn(tools, name)).toBe(contentEnabled);
+                if (contentEnabled) {
+                    expect(
+                        JSON.stringify(
+                            asSchema(tools[name].inputSchema).jsonSchema,
+                        ).includes('"document"'),
+                    ).toBe(documentsEnabled);
+                }
+            }
+        },
+    );
+
+    it.each([false, true])(
+        'matches the %s filter prompt to the selected tool contracts',
+        (enableFilterExpressions) => {
+            const args = buildArgs({
+                enableCodingAgent: false,
+                enableAiWriteback: false,
+                enableDataAccess: true,
+                enableFilterExpressions,
+            });
+            const tools = buildToolsForArgs(args);
+            const systemMessage = getAgentMessages(
+                args,
+                [],
+                mcpStub,
+                tools,
+                new Map(),
+                null,
+                { types: [], totalCount: 0 },
+            ).find(({ role }) => role === 'system');
+            if (!systemMessage || typeof systemMessage.content !== 'string') {
+                throw new Error('Expected a string system message');
+            }
+
+            expect({
+                promptUsesExpressions: systemMessage.content.includes(
+                    '## Filter expressions',
+                ),
+                visualizationUsesExpressions:
+                    tools.generateVisualization.description?.includes(
+                        'follow the Lightdash Agent system prompt',
+                    ) ?? false,
+                fieldValueSearchUsesExpressions:
+                    tools.searchFieldValues.description?.includes(
+                        'follow the Lightdash Agent system prompt',
+                    ) ?? false,
+            }).toEqual({
+                promptUsesExpressions: enableFilterExpressions,
+                visualizationUsesExpressions: enableFilterExpressions,
+                fieldValueSearchUsesExpressions: enableFilterExpressions,
+            });
+        },
+    );
 
     it('exposes listWorkstreams + closePullRequest when AI writeback is enabled (coding agent off)', () => {
         const names = toolNames({
@@ -1077,6 +1962,26 @@ describe('getAgentTools workstream tool gate', () => {
         expect(names).toContain('getPullRequestDiff');
         expect(names).toContain('editDbtProject');
         expect(names).not.toContain('editRepo');
+    });
+
+    it('exposes the data app tools only when the data app gate is satisfied', () => {
+        const withGate = toolNames({
+            enableCodingAgent: false,
+            enableAiWriteback: false,
+            enableGenerateDataApp: true,
+        });
+        const withoutGate = toolNames({
+            enableCodingAgent: false,
+            enableAiWriteback: false,
+            enableGenerateDataApp: false,
+        });
+
+        expect(withGate).toContain('generateDataApp');
+        expect(withGate).toContain('iterateDataApp');
+        expect(withGate).toContain('listDataAppThemes');
+        expect(withoutGate).not.toContain('generateDataApp');
+        expect(withoutGate).not.toContain('iterateDataApp');
+        expect(withoutGate).not.toContain('listDataAppThemes');
     });
 
     it('exposes loadProjectContext when AI agent memory is enabled', () => {
@@ -1414,6 +2319,215 @@ describe('getAgentTools workstream tool gate', () => {
 });
 
 describe('buildAgentMessages', () => {
+    it('builds a deterministic confirmation only for a successful chart result', () => {
+        const step = (output: unknown) => [
+            {
+                toolCalls: [
+                    {
+                        toolCallId: 'chart-1',
+                        toolName: 'generateVisualization',
+                        input: { title: 'Orders by month' },
+                    },
+                ],
+                toolResults: [
+                    {
+                        toolCallId: 'chart-1',
+                        toolName: 'generateVisualization',
+                        output,
+                    },
+                ],
+            },
+        ];
+        expect(
+            getChartFollowupFastResponse(
+                step({ result: 'rows', metadata: { status: 'success' } }),
+            ),
+        ).toBe(
+            "Created **Orders by month** using the preceding query's measure, filters and scope.",
+        );
+        expect(
+            getChartFollowupFastResponse(
+                step({ result: 'failed', metadata: { status: 'error' } }),
+            ),
+        ).toBeNull();
+    });
+
+    it('finishes a successful chart export from the server delivery token', () => {
+        const step = (output: unknown) => [
+            {
+                toolCalls: [
+                    {
+                        toolCallId: 'export-1',
+                        toolName: 'exportChartAsCode',
+                        input: {},
+                    },
+                ],
+                toolResults: [
+                    {
+                        toolCallId: 'export-1',
+                        toolName: 'exportChartAsCode',
+                        output,
+                    },
+                ],
+            },
+        ];
+        expect(
+            getChartExportFastResponse(
+                step({
+                    result: '```yaml\nname: Orders\n```',
+                    metadata: {
+                        status: 'success',
+                        deliveryToken: '  __chart_export_1__  ',
+                    },
+                }),
+            ),
+        ).toBe('__chart_export_1__');
+        expect(
+            getChartExportFastResponse(
+                step({
+                    result: '{"missingDestination":["slug"]}',
+                    metadata: { status: 'success' },
+                }),
+            ),
+        ).toBeNull();
+        expect(
+            getChartExportFastResponse(
+                step({ result: 'failed', metadata: { status: 'error' } }),
+            ),
+        ).toBeNull();
+    });
+
+    it('finishes immediately after a data app build starts', () => {
+        const step = (output: unknown) => [
+            {
+                toolCalls: [
+                    {
+                        toolCallId: 'app-1',
+                        toolName: 'generateDataApp',
+                        input: {},
+                    },
+                ],
+                toolResults: [
+                    {
+                        toolCallId: 'app-1',
+                        toolName: 'generateDataApp',
+                        output,
+                    },
+                ],
+            },
+        ];
+        expect(
+            getDataAppBuildFastResponse(
+                step({
+                    result: 'Started the data app build.',
+                    metadata: {
+                        status: 'pending',
+                        appUuid: 'app-uuid',
+                        version: 1,
+                    },
+                }),
+            ),
+        ).toBe('Started the data app build. It will take a few minutes.');
+        expect(
+            getDataAppBuildFastResponse(
+                step({ result: 'failed', metadata: { status: 'error' } }),
+            ),
+        ).toBeNull();
+    });
+
+    it.each(['success', 'error', 'pending', null])(
+        'only carries confirmed successful query fields: %s',
+        (status) => {
+            expect(
+                getRecentQueryFieldKeywords([
+                    { role: 'user', content: 'How many orders?' },
+                    {
+                        role: 'assistant',
+                        content: [
+                            {
+                                type: 'tool-call',
+                                toolCallId: 'query-1',
+                                toolName: 'runQuery',
+                                input: {
+                                    queryConfig: {
+                                        metrics: ['orders_unique_order_count'],
+                                        dimensions: [],
+                                        filters: {
+                                            dimensions: [
+                                                {
+                                                    fieldId:
+                                                        'orders_order_date',
+                                                },
+                                            ],
+                                        },
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                    {
+                        role: 'tool',
+                        content: [
+                            {
+                                type: 'tool-result',
+                                toolCallId: 'query-1',
+                                toolName: 'runQuery',
+                                output: {
+                                    type: 'json',
+                                    value: { result: 'query output', status },
+                                },
+                            },
+                        ],
+                    },
+                    { role: 'assistant', content: '151 orders.' },
+                    { role: 'user', content: 'As a line chart.' },
+                ]),
+            ).toEqual(
+                status === 'success'
+                    ? ['orders_unique_order_count', 'orders_order_date']
+                    : [],
+            );
+        },
+    );
+
+    it('prioritizes the follow-up request without discarding prior query scope', () => {
+        const previous = Array.from(
+            { length: 12 },
+            (_, index) => `patient_health_scores_previous_${index}`,
+        );
+        const keywords = getCandidateSeedKeywords(
+            'Break down these patients by cost tier',
+            previous,
+        );
+        const cost = keywords.find((keyword) => keyword.includes('cost'));
+        expect(cost).toBeDefined();
+        expect(keywords).toEqual(expect.arrayContaining(['tier', previous[0]]));
+        expect(keywords.indexOf(cost!)).toBeLessThan(
+            keywords.indexOf(previous[0]),
+        );
+        expect(keywords).toHaveLength(12);
+    });
+
+    it('can omit speculative catalog candidates without altering the reference question', () => {
+        const args = buildAgentArgs();
+        args.messageHistory = [{ role: 'user', content: 'Explain met1' }];
+        const messages = (seed?: string) =>
+            getAgentMessages(
+                args,
+                [validExplore],
+                mcpToolSetup(),
+                {},
+                new Map(),
+                null,
+                { types: [], totalCount: 0 },
+                seed,
+            );
+        expect(JSON.stringify(messages())).toContain('Candidate fields');
+        expect(messages('').at(-1)).toEqual({
+            role: 'user',
+            content: 'Explain met1',
+        });
+    });
     const systemPrompt: ModelMessage = {
         role: 'system',
         content: 'Cached system prompt',

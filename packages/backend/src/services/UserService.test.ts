@@ -2,6 +2,7 @@ import { Ability } from '@casl/ability';
 import {
     AnyType,
     AuthorizationError,
+    CommercialFeatureFlags,
     DeactivatedAccountError,
     defineUserAbility,
     EmailStatus,
@@ -16,12 +17,17 @@ import {
     OpenIdIdentityIssuerType,
     OrganizationMemberProfile,
     OrganizationMemberRole,
+    OrganizationSettings,
     OrganizationSsoProvider,
     ParameterError,
     PasswordResetLink,
     PossibleAbilities,
     ProjectMemberRole,
     SessionUser,
+    SnowflakeAuthenticationType,
+    WarehouseTypes,
+    type LearnProgress,
+    type RegisteredAccount,
 } from '@lightdash/common';
 import { analyticsMock } from '../analytics/LightdashAnalytics.mock';
 import EmailClient from '../clients/EmailClient/EmailClient';
@@ -44,6 +50,7 @@ import { ProjectModel } from '../models/ProjectModel/ProjectModel';
 import { RolesModel } from '../models/RolesModel';
 import { SessionModel } from '../models/SessionModel';
 import { UserAvatarModel } from '../models/UserAvatarModel';
+import { UserLearnProgressModel } from '../models/UserLearnProgressModel';
 import { UserModel } from '../models/UserModel';
 import { UserOAuthGrantsModel } from '../models/UserOAuthGrantsModel';
 import { UserOnboardingModel } from '../models/UserOnboardingModel';
@@ -99,7 +106,9 @@ const userModel = {
     createPendingUser: vi.fn<UserModel['createPendingUser']>(
         async () => newUser,
     ),
-    findSessionUserByPrimaryEmail: vi.fn(async () => sessionUser),
+    findSessionUserByPrimaryEmail: vi.fn<
+        UserModel['findSessionUserByPrimaryEmail']
+    >(async () => sessionUser),
     findSessionUserByPersonalAccessToken: vi.fn<
         UserModel['findSessionUserByPersonalAccessToken']
     >(async () => undefined),
@@ -193,10 +202,12 @@ const organizationSsoModel = {
 };
 
 const organizationSettingsModel = {
-    get: vi.fn(async () => ({
-        oidcLinkingEnabled: null,
-        oidcToEmailLinkingEnabled: null,
-    })),
+    get: vi.fn(
+        async (): Promise<Partial<OrganizationSettings>> => ({
+            oidcLinkingEnabled: null,
+            oidcToEmailLinkingEnabled: null,
+        }),
+    ),
     update: vi.fn(),
 };
 
@@ -222,7 +233,9 @@ const organizationMemberProfileModel = {
 };
 
 type UserServiceTestOverrides = {
+    userLearnProgressModel?: Partial<UserLearnProgressModel>;
     featureFlagModel?: Pick<FeatureFlagModel, 'get'>;
+    userWarehouseCredentialsModel?: Partial<UserWarehouseCredentialsModel>;
     personalAccessTokenModel?: Pick<
         PersonalAccessTokenModel,
         'delete' | 'updateUsedDate'
@@ -284,7 +297,9 @@ const createUserService = (
             organizationSsoModel as unknown as OrganizationSsoModel,
         organizationSettingsModel:
             organizationSettingsModel as unknown as OrganizationSettingsModel,
-        userWarehouseCredentialsModel: {} as UserWarehouseCredentialsModel,
+        userWarehouseCredentialsModel:
+            (overrides.userWarehouseCredentialsModel as UserWarehouseCredentialsModel) ??
+            ({} as UserWarehouseCredentialsModel),
         warehouseAvailableTablesModel: {} as WarehouseAvailableTablesModel,
         projectModel: projectModel as unknown as ProjectModel,
         featureFlagModel:
@@ -293,12 +308,20 @@ const createUserService = (
                 get: vi.fn<FeatureFlagModel['get']>(
                     async ({ featureFlagId }) => ({
                         id: featureFlagId,
-                        enabled: featureFlagId !== FeatureFlags.NewOnboarding,
+                        // Default to unflagged (main) behavior for the two
+                        // opt-out-shaped flags; every other flag defaults on.
+                        enabled:
+                            featureFlagId !== FeatureFlags.NewOnboarding &&
+                            featureFlagId !==
+                                CommercialFeatureFlags.PatScopeAuthoritative,
                     }),
                 ),
             } as unknown as FeatureFlagModel),
         userAvatarModel: {} as UserAvatarModel,
         userOnboardingModel: {} as UserOnboardingModel,
+        userLearnProgressModel:
+            (overrides.userLearnProgressModel as UserLearnProgressModel) ??
+            ({} as UserLearnProgressModel),
         rolesModel: {
             ...rolesModelWithoutExtraRoles,
             ...overrides.rolesModel,
@@ -639,10 +662,9 @@ describe('UserService', () => {
             });
         });
 
-        test('does not track an absent answer', async () => {
+        test('does not track when the referral answer is omitted (invited member)', async () => {
             await userService.completeUserSetup(sessionUser, {
                 jobTitle: '',
-                howDidYouHearAboutUs: 'a podcast',
                 enableEmailDomainAccess: false,
                 isMarketingOptedIn: true,
                 isTrackingAnonymized: false,
@@ -655,19 +677,14 @@ describe('UserService', () => {
                     isSetupComplete: true,
                     isTrackingAnonymized: false,
                     isMarketingOptedIn: true,
-                    howDidYouHearAboutUs: 'a podcast',
+                    howDidYouHearAboutUs: undefined,
                 },
             );
-            expect(vi.mocked(analyticsMock.track)).toHaveBeenCalledWith({
-                event: 'hear_about_us.submitted',
-                userId: sessionUser.userUuid,
-                properties: {
-                    organizationId: sessionUser.organizationUuid,
-                    onboardingFlow: 'legacy',
-                    answered: true,
-                    answer: 'a podcast',
-                },
-            });
+            expect(vi.mocked(analyticsMock.track)).not.toHaveBeenCalledWith(
+                expect.objectContaining({
+                    event: 'hear_about_us.submitted',
+                }),
+            );
         });
     });
 
@@ -1069,6 +1086,27 @@ describe('UserService', () => {
             });
         });
 
+        test('requires SSO instead of activating the invited user when local authentication is disabled', async () => {
+            vi.mocked(inviteLinkModel.getByCode).mockResolvedValueOnce(
+                validInviteLink,
+            );
+            const service = createUserService(lightdashConfigMock);
+            vi.spyOn(service, 'isLoginMethodAllowed').mockResolvedValue(false);
+
+            await expect(
+                service.activateUserFromInviteWithoutPassword(
+                    validInviteLink.inviteCode,
+                ),
+            ).rejects.toThrow(
+                new ForbiddenError('Your organisation requires SSO sign-in'),
+            );
+
+            expect(
+                userModel.activateUserWithoutPassword,
+            ).not.toHaveBeenCalled();
+            expect(inviteLinkModel.deleteByCode).not.toHaveBeenCalled();
+        });
+
         test('rejects an expired invite without activating the user', async () => {
             vi.mocked(inviteLinkModel.getByCode).mockRejectedValueOnce(
                 new ExpiredError('Invite link expired'),
@@ -1195,6 +1233,34 @@ describe('UserService', () => {
                 organizationAllowedEmailDomainsModel.findAllowedEmailDomains,
             ).not.toHaveBeenCalled();
             expect(userModel.addProjectMemberships).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('getInviteLinkWithAuthenticationOptions', () => {
+        test('returns the SSO provider and disables local invite flows when SSO is required', async () => {
+            vi.mocked(inviteLinkModel.getByCode).mockResolvedValueOnce(
+                inviteLink,
+            );
+            const service = createUserService(lightdashConfigMock);
+            vi.spyOn(service, 'getLoginOptions').mockResolvedValue({
+                showOptions: [OpenIdIdentityIssuerType.GOOGLE],
+                forceRedirect: true,
+                redirectUri: 'https://example.com/api/v1/login/google',
+            });
+            vi.spyOn(service, 'isLoginMethodAllowed').mockResolvedValue(false);
+
+            await expect(
+                service.getInviteLinkWithAuthenticationOptions(
+                    inviteLink.inviteCode,
+                ),
+            ).resolves.toEqual({
+                ...inviteLink,
+                authentication: {
+                    allowOneClickActivation: false,
+                    allowPasswordSignup: false,
+                    ssoProviders: [OpenIdIdentityIssuerType.GOOGLE],
+                },
+            });
         });
     });
 
@@ -2093,6 +2159,178 @@ describe('UserService', () => {
         });
     });
 
+    describe('getManagedSignIn', () => {
+        const withManagedSignIn = (
+            overrides: Partial<LightdashConfig['auth']> = {},
+        ): LightdashConfig => ({
+            ...lightdashConfigMock,
+            auth: {
+                ...lightdashConfigMock.auth,
+                microsoftManagedSignIn: {
+                    iosClientId: 'ios-registration',
+                    androidClientId: 'android-registration',
+                },
+                ...overrides,
+            },
+        });
+
+        const envTenantConfig = (tenantId: string) =>
+            withManagedSignIn({
+                azuread: {
+                    ...lightdashConfigMock.auth.azuread,
+                    oauth2TenantId: tenantId,
+                },
+            });
+
+        const azureMethod = (tenantId: string, organizationUuid = 'org-1') => ({
+            organizationUuid,
+            provider: OrganizationSsoProvider.AZUREAD,
+            config: {
+                oauth2ClientId: 'web-registration',
+                oauth2ClientSecret: 'secret',
+                oauth2TenantId: tenantId,
+            },
+            enabled: true,
+            overrideEmailDomains: false,
+            emailDomains: [],
+            allowPassword: false,
+        });
+
+        it('advertises the platform registration for the environment tenant', async () => {
+            const service = createUserService(envTenantConfig('tenant-abc'));
+
+            await expect(
+                service.getManagedSignIn('ios', 'user@example.com'),
+            ).resolves.toEqual({
+                provider: 'microsoft',
+                clientId: 'ios-registration',
+                authority: 'https://login.microsoftonline.com/tenant-abc',
+                tenantId: 'tenant-abc',
+                scopes: ['email'],
+            });
+
+            await expect(
+                service.getManagedSignIn('android', 'user@example.com'),
+            ).resolves.toMatchObject({
+                clientId: 'android-registration',
+            });
+        });
+
+        it('needs no email when the environment names the tenant', async () => {
+            const service = createUserService(envTenantConfig('tenant-abc'));
+
+            await expect(
+                service.getManagedSignIn('ios', undefined),
+            ).resolves.toMatchObject({ tenantId: 'tenant-abc' });
+        });
+
+        it('is absent without a platform', async () => {
+            const service = createUserService(envTenantConfig('tenant-abc'));
+
+            await expect(
+                service.getManagedSignIn(undefined, 'user@example.com'),
+            ).resolves.toBeUndefined();
+        });
+
+        it('is absent when the platform registration is not configured', async () => {
+            const service = createUserService({
+                ...envTenantConfig('tenant-abc'),
+                auth: {
+                    ...envTenantConfig('tenant-abc').auth,
+                    microsoftManagedSignIn: {
+                        iosClientId: undefined,
+                        androidClientId: 'android-registration',
+                    },
+                },
+            });
+
+            await expect(
+                service.getManagedSignIn('ios', 'user@example.com'),
+            ).resolves.toBeUndefined();
+            await expect(
+                service.getManagedSignIn('android', 'user@example.com'),
+            ).resolves.toMatchObject({ clientId: 'android-registration' });
+        });
+
+        it('is absent when the server names no tenant', async () => {
+            const service = createUserService(withManagedSignIn());
+
+            await expect(
+                service.getManagedSignIn('ios', 'user@example.com'),
+            ).resolves.toBeUndefined();
+        });
+
+        it('takes the tenant from the organization the email routes to', async () => {
+            organizationSsoModel.findEnabledMethodsForEmailDomain.mockResolvedValueOnce(
+                [azureMethod('tenant-from-org')],
+            );
+            const service = createUserService(withManagedSignIn());
+
+            await expect(
+                service.getManagedSignIn('android', 'user@example.com'),
+            ).resolves.toEqual({
+                provider: 'microsoft',
+                clientId: 'android-registration',
+                authority: 'https://login.microsoftonline.com/tenant-from-org',
+                tenantId: 'tenant-from-org',
+                scopes: ['email'],
+            });
+        });
+
+        it('is absent when two organizations claim the email domain with different tenants', async () => {
+            organizationSsoModel.findEnabledMethodsForEmailDomain.mockResolvedValueOnce(
+                [
+                    azureMethod('tenant-one', 'org-1'),
+                    azureMethod('tenant-two', 'org-2'),
+                ],
+            );
+            const service = createUserService(withManagedSignIn());
+
+            await expect(
+                service.getManagedSignIn('ios', 'user@example.com'),
+            ).resolves.toBeUndefined();
+        });
+
+        it('is absent when the routed method is not Microsoft', async () => {
+            organizationSsoModel.findEnabledMethodsForEmailDomain.mockResolvedValueOnce(
+                [
+                    {
+                        organizationUuid: 'org-1',
+                        provider: OrganizationSsoProvider.OKTA,
+                        config: {
+                            oauth2Issuer: 'https://okta.example.com',
+                            oktaDomain: 'okta.example.com',
+                            oauth2ClientId: 'client',
+                            oauth2ClientSecret: 'secret',
+                            authorizationServerId: null,
+                            extraScopes: null,
+                        },
+                        enabled: true,
+                        overrideEmailDomains: false,
+                        emailDomains: [],
+                        allowPassword: false,
+                    },
+                ],
+            );
+            const service = createUserService(withManagedSignIn());
+
+            await expect(
+                service.getManagedSignIn('ios', 'user@example.com'),
+            ).resolves.toBeUndefined();
+        });
+
+        it('is absent when the organization lookup fails', async () => {
+            organizationSsoModel.findEnabledMethodsForEmailDomain.mockRejectedValueOnce(
+                new Error('database is down'),
+            );
+            const service = createUserService(withManagedSignIn());
+
+            await expect(
+                service.getManagedSignIn('ios', 'user@example.com'),
+            ).resolves.toBeUndefined();
+        });
+    });
+
     describe('mobile login intent filtering', () => {
         const mixedConfig = {
             ...lightdashConfigMock,
@@ -2477,6 +2715,34 @@ describe('UserService', () => {
                 redirectUri:
                     'https://test.lightdash.cloud/api/v1/login/azuread?login_hint=user%40acme.com',
                 showOptions: ['azuread'],
+            });
+        });
+
+        test('passwordless user keeps email OTP alongside per-org SSO when local login is allowed', async () => {
+            const method = {
+                ...googleMethod,
+                organizationUuid: sessionUser.organizationUuid!,
+                allowPassword: true,
+            };
+            (
+                organizationSsoModel.findEnabledMethodsForEmailDomain as import('vitest').Mock
+            )
+                .mockResolvedValueOnce([method])
+                .mockResolvedValueOnce([method]);
+            vi.mocked(userModel.findUserByEmail)
+                .mockResolvedValueOnce(sessionUser)
+                .mockResolvedValueOnce(sessionUser);
+            vi.mocked(userModel.hasPasswordByEmail).mockResolvedValueOnce(
+                false,
+            );
+            vi.mocked(userModel.hasPassword).mockResolvedValueOnce(false);
+            vi.mocked(userModel.hasOpenIdIdentity).mockResolvedValueOnce(false);
+
+            const service = createUserService(configWithGoogleEnv);
+            expect(await service.getLoginOptions(sessionUser.email)).toEqual({
+                forceRedirect: false,
+                redirectUri: undefined,
+                showOptions: ['emailOtp', 'google'],
             });
         });
 
@@ -3437,6 +3703,49 @@ describe('UserService', () => {
     });
 
     describe('loginWithOpenId', () => {
+        const allowedLoginEvents = () =>
+            auditLogSpy.mock.calls.filter(
+                ([event]) =>
+                    (event as { action?: string; status?: string }).action ===
+                        'login' &&
+                    (event as { action?: string; status?: string }).status ===
+                        'allowed',
+            );
+
+        test('records the allowed audit event for browser sign-in', async () => {
+            userModel.findSessionUserByPrimaryEmail.mockResolvedValueOnce(
+                undefined,
+            );
+
+            await userService.loginWithOpenId(openIdUser, undefined, undefined);
+
+            expect(allowedLoginEvents()).toHaveLength(1);
+        });
+
+        test('defers the allowed audit event when the caller commits it', async () => {
+            userModel.findSessionUserByPrimaryEmail.mockResolvedValueOnce(
+                undefined,
+            );
+
+            const user = await userService.loginWithOpenId(
+                openIdUser,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                { deferSuccessAudit: true },
+            );
+
+            expect(allowedLoginEvents()).toHaveLength(0);
+
+            userService.recordOpenIdLoginAllowed(
+                user,
+                OpenIdIdentityIssuerType.AZUREAD,
+            );
+
+            expect(allowedLoginEvents()).toHaveLength(1);
+        });
+
         test('should throw error if provider not allowed', async () => {
             await expect(
                 userService.loginWithOpenId(
@@ -3449,6 +3758,9 @@ describe('UserService', () => {
             );
         });
         test('should create user', async () => {
+            userModel.findSessionUserByPrimaryEmail.mockResolvedValueOnce(
+                undefined,
+            );
             await userService.loginWithOpenId(openIdUser, undefined, undefined);
             expect(
                 openIdIdentityModel.updateIdentityByOpenId as import('vitest').Mock,
@@ -3542,6 +3854,305 @@ describe('UserService', () => {
                 userModel.activateUser as import('vitest').Mock,
             ).toHaveBeenCalledTimes(0);
         });
+        describe('managed Azure identity linking', () => {
+            const tenantId = '11111111-2222-3333-4444-555555555555';
+            const issuer = `https://login.microsoftonline.com/${tenantId}/v2.0`;
+            const mobileUser = {
+                openId: {
+                    ...openIdUser.openId,
+                    issuer,
+                    issuerType: OpenIdIdentityIssuerType.AZUREAD,
+                    subject: 'mobile-object-id',
+                },
+            };
+            const webIdentity = {
+                ...openIdIdentity,
+                issuer,
+                issuerType: OpenIdIdentityIssuerType.AZUREAD,
+                subject: 'web-pairwise-subject',
+                email: mobileUser.openId.email,
+            };
+            const managedOptions = {
+                managedAzureIdentityLink: {
+                    tenantId,
+                    organizationUuid: sessionUser.organizationUuid!,
+                },
+            };
+            const configWithLinking = (enabled: boolean) => ({
+                ...lightdashConfigMock,
+                auth: {
+                    ...lightdashConfigMock.auth,
+                    enableOidcLinking: enabled,
+                    enableOidcToEmailLinking: false,
+                },
+            });
+
+            test.each([null, sessionUser.organizationUuid!])(
+                'links the same-tenant web identity with linking off and organisation %s',
+                async (organizationUuid) => {
+                    vi.mocked(
+                        openIdIdentityModel.findIdentitiesByEmail,
+                    ).mockResolvedValueOnce([webIdentity]);
+                    const service = createUserService(configWithLinking(false));
+
+                    await expect(
+                        service.loginWithOpenId(
+                            mobileUser,
+                            undefined,
+                            undefined,
+                            undefined,
+                            undefined,
+                            {
+                                managedAzureIdentityLink: {
+                                    tenantId,
+                                    organizationUuid,
+                                },
+                            },
+                        ),
+                    ).resolves.toEqual(sessionUser);
+
+                    expect(
+                        vi.mocked(openIdIdentityModel.findIdentitiesByEmail),
+                    ).toHaveBeenCalledWith(mobileUser.openId.email);
+                    expect(
+                        vi.mocked(openIdIdentityModel.createIdentity),
+                    ).toHaveBeenCalledExactlyOnceWith(
+                        expect.objectContaining({
+                            userId: sessionUser.userId,
+                            issuer,
+                            issuerType: OpenIdIdentityIssuerType.AZUREAD,
+                            subject: 'mobile-object-id',
+                            email: mobileUser.openId.email,
+                        }),
+                    );
+                    expect(
+                        vi.mocked(userModel.createUser),
+                    ).not.toHaveBeenCalled();
+                },
+            );
+
+            test.each([
+                [
+                    'another tenant',
+                    {
+                        ...webIdentity,
+                        issuer: 'https://login.microsoftonline.com/99999999-8888-7777-6666-555555555555/v2.0',
+                    },
+                ],
+                [
+                    'another provider',
+                    {
+                        ...webIdentity,
+                        issuerType: OpenIdIdentityIssuerType.GOOGLE,
+                    },
+                ],
+                [
+                    'an issuer without a tenant',
+                    {
+                        ...webIdentity,
+                        issuer: 'https://login.microsoftonline.com',
+                    },
+                ],
+                [
+                    'a common issuer',
+                    {
+                        ...webIdentity,
+                        issuer: 'https://login.microsoftonline.com/common/v2.0',
+                    },
+                ],
+                [
+                    'an issuer on another host',
+                    {
+                        ...webIdentity,
+                        issuer: `https://example.com/${tenantId}/v2.0`,
+                    },
+                ],
+                [
+                    'another email',
+                    { ...webIdentity, email: 'other@example.com' },
+                ],
+            ])(
+                'does not bypass linking for %s',
+                async (_description, identity) => {
+                    vi.mocked(
+                        openIdIdentityModel.findIdentitiesByEmail,
+                    ).mockResolvedValueOnce([identity]);
+                    const service = createUserService(configWithLinking(false));
+
+                    await expect(
+                        service.loginWithOpenId(
+                            mobileUser,
+                            undefined,
+                            undefined,
+                            undefined,
+                            undefined,
+                            managedOptions,
+                        ),
+                    ).rejects.toBeInstanceOf(ForbiddenError);
+                    expect(
+                        vi.mocked(openIdIdentityModel.createIdentity),
+                    ).not.toHaveBeenCalled();
+                },
+            );
+
+            test('does not bypass linking for a user outside the resolved organisation', async () => {
+                vi.mocked(
+                    openIdIdentityModel.findIdentitiesByEmail,
+                ).mockResolvedValueOnce([webIdentity]);
+                const service = createUserService(configWithLinking(false));
+
+                await expect(
+                    service.loginWithOpenId(
+                        mobileUser,
+                        undefined,
+                        undefined,
+                        undefined,
+                        undefined,
+                        {
+                            managedAzureIdentityLink: {
+                                tenantId,
+                                organizationUuid: 'another-organisation',
+                            },
+                        },
+                    ),
+                ).rejects.toBeInstanceOf(ForbiddenError);
+                expect(
+                    vi.mocked(openIdIdentityModel.createIdentity),
+                ).not.toHaveBeenCalled();
+            });
+
+            test.each([
+                [
+                    'another incoming provider',
+                    {
+                        ...mobileUser.openId,
+                        issuerType: OpenIdIdentityIssuerType.GOOGLE,
+                    },
+                ],
+                [
+                    'another incoming tenant',
+                    {
+                        ...mobileUser.openId,
+                        issuer: 'https://login.microsoftonline.com/99999999-8888-7777-6666-555555555555/v2.0',
+                    },
+                ],
+            ])(
+                'does not bypass linking for %s',
+                async (_description, incomingIdentity) => {
+                    vi.mocked(
+                        openIdIdentityModel.findIdentitiesByEmail,
+                    ).mockResolvedValueOnce([webIdentity]);
+                    const service = createUserService(configWithLinking(false));
+
+                    await expect(
+                        service.loginWithOpenId(
+                            { openId: incomingIdentity },
+                            undefined,
+                            undefined,
+                            undefined,
+                            undefined,
+                            managedOptions,
+                        ),
+                    ).rejects.toBeInstanceOf(ForbiddenError);
+                    expect(
+                        vi.mocked(openIdIdentityModel.createIdentity),
+                    ).not.toHaveBeenCalled();
+                },
+            );
+
+            test('does not link an ambiguous email shared by two users', async () => {
+                vi.mocked(
+                    openIdIdentityModel.findIdentitiesByEmail,
+                ).mockResolvedValueOnce([
+                    webIdentity,
+                    { ...webIdentity, userUuid: 'another-user' },
+                ]);
+                const service = createUserService(configWithLinking(false));
+
+                await expect(
+                    service.loginWithOpenId(
+                        mobileUser,
+                        undefined,
+                        undefined,
+                        undefined,
+                        undefined,
+                        managedOptions,
+                    ),
+                ).rejects.toBeInstanceOf(ForbiddenError);
+                expect(
+                    vi.mocked(openIdIdentityModel.createIdentity),
+                ).not.toHaveBeenCalled();
+            });
+
+            test('does not link a deactivated user', async () => {
+                vi.mocked(
+                    openIdIdentityModel.findIdentitiesByEmail,
+                ).mockResolvedValueOnce([webIdentity]);
+                vi.mocked(
+                    userModel.findSessionUserByUUID,
+                ).mockResolvedValueOnce({ ...sessionUser, isActive: false });
+                const service = createUserService(configWithLinking(false));
+
+                await expect(
+                    service.loginWithOpenId(
+                        mobileUser,
+                        undefined,
+                        undefined,
+                        undefined,
+                        undefined,
+                        managedOptions,
+                    ),
+                ).rejects.toBeInstanceOf(DeactivatedAccountError);
+                expect(
+                    vi.mocked(openIdIdentityModel.createIdentity),
+                ).not.toHaveBeenCalled();
+            });
+
+            test('keeps browser linking disabled without the exchange option', async () => {
+                vi.mocked(
+                    openIdIdentityModel.findIdentitiesByEmail,
+                ).mockResolvedValueOnce([webIdentity]);
+                const service = createUserService(configWithLinking(false));
+
+                await expect(
+                    service.loginWithOpenId(mobileUser, undefined, undefined),
+                ).rejects.toBeInstanceOf(ForbiddenError);
+                expect(
+                    vi.mocked(openIdIdentityModel.createIdentity),
+                ).not.toHaveBeenCalled();
+            });
+
+            test.each([undefined, managedOptions])(
+                'keeps enabled linking for another provider with options %j',
+                async (options) => {
+                    vi.mocked(
+                        openIdIdentityModel.findIdentitiesByEmail,
+                    ).mockResolvedValueOnce([
+                        {
+                            ...webIdentity,
+                            issuerType: OpenIdIdentityIssuerType.GOOGLE,
+                        },
+                    ]);
+                    const service = createUserService(configWithLinking(true));
+
+                    await expect(
+                        service.loginWithOpenId(
+                            mobileUser,
+                            undefined,
+                            undefined,
+                            undefined,
+                            undefined,
+                            options,
+                        ),
+                    ).resolves.toEqual(sessionUser);
+                    expect(
+                        vi.mocked(openIdIdentityModel.createIdentity),
+                    ).toHaveBeenCalledExactlyOnceWith(
+                        expect.objectContaining({ userId: sessionUser.userId }),
+                    );
+                },
+            );
+        });
         test('should link openid to an existing user that has the same verified email', async () => {
             const service = createUserService({
                 ...lightdashConfigMock,
@@ -3615,6 +4226,85 @@ describe('UserService', () => {
             expect(
                 userModel.createUser as import('vitest').Mock,
             ).toHaveBeenCalledTimes(0);
+        });
+        describe('when an account with the same email already exists and is not linked', () => {
+            const unverifiedEmail = {
+                email: openIdUser.openId.email,
+                isVerified: false,
+            };
+
+            test('tells a pending user to activate with a one-time code or an invite', async () => {
+                emailModel.getPrimaryEmailStatus.mockResolvedValueOnce(
+                    unverifiedEmail,
+                );
+
+                await expect(
+                    userService.loginWithOpenId(
+                        openIdUser,
+                        undefined,
+                        undefined,
+                    ),
+                ).rejects.toThrowError(
+                    new ForbiddenError(
+                        'An account for test@test.com is waiting to be activated. Sign in with your email to get a one-time code, or ask your admin for an invite link. After that, SSO sign-in will be enabled.',
+                    ),
+                );
+
+                expect(userModel.createUser).not.toHaveBeenCalled();
+                expect(
+                    openIdIdentityModel.createIdentity,
+                ).not.toHaveBeenCalled();
+            });
+
+            test('tells a pending user to get an invite when one-time-code login is unavailable', async () => {
+                const service = createUserService({
+                    ...lightdashConfigMock,
+                    auth: {
+                        ...lightdashConfigMock.auth,
+                        disablePasswordAuthentication: true,
+                    },
+                });
+                emailModel.getPrimaryEmailStatus.mockResolvedValueOnce(
+                    unverifiedEmail,
+                );
+
+                await expect(
+                    service.loginWithOpenId(openIdUser, undefined, undefined),
+                ).rejects.toThrowError(
+                    new ForbiddenError(
+                        "An account for test@test.com already exists but hasn't been activated. Ask your admin for an invite link. After that, SSO sign-in will be enabled.",
+                    ),
+                );
+
+                expect(userModel.createUser).not.toHaveBeenCalled();
+                expect(
+                    openIdIdentityModel.createIdentity,
+                ).not.toHaveBeenCalled();
+            });
+
+            test('tells a verified user to sign in with email when linking by email is disabled', async () => {
+                emailModel.getPrimaryEmailStatus.mockResolvedValueOnce({
+                    email: openIdUser.openId.email,
+                    isVerified: true,
+                });
+
+                await expect(
+                    userService.loginWithOpenId(
+                        openIdUser,
+                        undefined,
+                        undefined,
+                    ),
+                ).rejects.toThrowError(
+                    new ForbiddenError(
+                        'An account for test@test.com already exists. Sign in with your email, then connect this sign-in method from your account settings, or ask your admin to enable linking SSO logins by email.',
+                    ),
+                );
+
+                expect(userModel.createUser).not.toHaveBeenCalled();
+                expect(
+                    openIdIdentityModel.createIdentity,
+                ).not.toHaveBeenCalled();
+            });
         });
         test('rejects a link flow when the identity belongs to another user', async () => {
             const currentUser: SessionUser = {
@@ -3880,6 +4570,7 @@ describe('UserService', () => {
                 } as unknown as FeatureFlagModel,
                 userAvatarModel: {} as UserAvatarModel,
                 userOnboardingModel: {} as UserOnboardingModel,
+                userLearnProgressModel: {} as UserLearnProgressModel,
                 rolesModel: {} as RolesModel,
             });
 
@@ -3958,6 +4649,7 @@ describe('UserService', () => {
                 } as unknown as FeatureFlagModel,
                 userAvatarModel: {} as UserAvatarModel,
                 userOnboardingModel: {} as UserOnboardingModel,
+                userLearnProgressModel: {} as UserLearnProgressModel,
                 rolesModel: {} as RolesModel,
             });
 
@@ -4015,11 +4707,14 @@ describe('UserService', () => {
                 InviteLinkPurpose.Member,
             );
         });
-        test('should cap invite expiry at three days', async () => {
+        test('should cap invite expiry at the organization setting', async () => {
             const now = new Date('2026-08-11T12:00:00.000Z');
             const dateNowSpy = vi
                 .spyOn(Date, 'now')
                 .mockReturnValue(now.getTime());
+            vi.mocked(organizationSettingsModel.get).mockResolvedValueOnce({
+                inviteLinkExpirationDays: 7,
+            });
 
             await userService.createPendingUserAndInviteLink(sessionUser, {
                 ...inviteUser,
@@ -4028,14 +4723,14 @@ describe('UserService', () => {
 
             expect(vi.mocked(inviteLinkModel.upsert)).toHaveBeenCalledWith(
                 expect.any(String),
-                new Date('2026-08-14T12:00:00.000Z'),
+                new Date('2026-08-18T12:00:00.000Z'),
                 sessionUser.organizationUuid,
                 newUser.userUuid,
                 InviteLinkPurpose.Member,
             );
             dateNowSpy.mockRestore();
         });
-        test('should replace a past invite expiry with three days', async () => {
+        test('should replace a past invite expiry with the default three days', async () => {
             const now = new Date('2026-08-11T12:00:00.000Z');
             const dateNowSpy = vi
                 .spyOn(Date, 'now')
@@ -4070,6 +4765,42 @@ describe('UserService', () => {
                 newUser.userUuid,
                 InviteLinkPurpose.Member,
             );
+        });
+        test('should use a changed organization setting for subsequent links only', async () => {
+            const now = new Date('2026-08-11T12:00:00.000Z');
+            const dateNowSpy = vi
+                .spyOn(Date, 'now')
+                .mockReturnValue(now.getTime());
+            vi.mocked(organizationSettingsModel.get)
+                .mockResolvedValueOnce({ inviteLinkExpirationDays: 3 })
+                .mockResolvedValueOnce({ inviteLinkExpirationDays: 7 });
+
+            await userService.createPendingUserAndInviteLink(sessionUser, {
+                ...inviteUser,
+                expiresAt: undefined,
+            });
+            await userService.createPendingUserAndInviteLink(sessionUser, {
+                ...inviteUser,
+                expiresAt: undefined,
+            });
+
+            expect(vi.mocked(inviteLinkModel.upsert)).toHaveBeenNthCalledWith(
+                1,
+                expect.any(String),
+                new Date('2026-08-14T12:00:00.000Z'),
+                sessionUser.organizationUuid,
+                newUser.userUuid,
+                InviteLinkPurpose.Member,
+            );
+            expect(vi.mocked(inviteLinkModel.upsert)).toHaveBeenNthCalledWith(
+                2,
+                expect.any(String),
+                new Date('2026-08-18T12:00:00.000Z'),
+                sessionUser.organizationUuid,
+                newUser.userUuid,
+                InviteLinkPurpose.Member,
+            );
+            dateNowSpy.mockRestore();
         });
         test('should force setup invites to use the admin role', async () => {
             const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
@@ -4187,7 +4918,10 @@ describe('UserService', () => {
                 }).builder.build(),
             });
 
-            const buildLimitedManagerService = (patEnabled: boolean = false) =>
+            const buildLimitedManagerService = (
+                patEnabled: boolean = false,
+                patScopeAuthoritative: boolean = false,
+            ) =>
                 createUserService(
                     {
                         ...lightdashConfigMock,
@@ -4202,6 +4936,19 @@ describe('UserService', () => {
                                 .fn()
                                 .mockResolvedValue(limitedManagerRole),
                         } as unknown as RolesModel,
+                        featureFlagModel: {
+                            get: vi.fn<FeatureFlagModel['get']>(
+                                async ({ featureFlagId }) => ({
+                                    id: featureFlagId,
+                                    enabled:
+                                        featureFlagId ===
+                                        CommercialFeatureFlags.PatScopeAuthoritative
+                                            ? patScopeAuthoritative
+                                            : featureFlagId !==
+                                              FeatureFlags.NewOnboarding,
+                                }),
+                            ),
+                        },
                     },
                 );
 
@@ -4345,6 +5092,41 @@ describe('UserService', () => {
                 ).not.toHaveBeenCalled();
                 expect(
                     vi.mocked(inviteLinkModel.upsert),
+                ).not.toHaveBeenCalled();
+            });
+
+            // A caller whose own ability denies tokens must still be blocked
+            // from an invite that would carry token access from config. This
+            // ceiling never relaxes: config-derived token access is still
+            // self-escalation via an invited system role (#26771).
+            test('flag off: rejects an invite that would carry token access from config when the caller lacks it', async () => {
+                await expect(
+                    buildLimitedManagerService(
+                        true,
+                    ).createPendingUserAndInviteLink(
+                        limitedManagerUser(false),
+                        { ...inviteUser, role: OrganizationMemberRole.MEMBER },
+                    ),
+                ).rejects.toBeInstanceOf(ForbiddenError);
+
+                expect(
+                    vi.mocked(userModel.createPendingUser),
+                ).not.toHaveBeenCalled();
+            });
+
+            test('flag on: still rejects the same invite — the ceiling does not relax', async () => {
+                await expect(
+                    buildLimitedManagerService(
+                        true,
+                        true,
+                    ).createPendingUserAndInviteLink(
+                        limitedManagerUser(false),
+                        { ...inviteUser, role: OrganizationMemberRole.MEMBER },
+                    ),
+                ).rejects.toBeInstanceOf(ForbiddenError);
+
+                expect(
+                    vi.mocked(userModel.createPendingUser),
                 ).not.toHaveBeenCalled();
             });
         });
@@ -4669,6 +5451,133 @@ describe('UserService', () => {
         });
     });
 
+    const createSnowflakeCredentialsModel = () => ({
+        getAllByUserUuid: vi.fn().mockResolvedValue([
+            {
+                uuid: 'password-credentials-uuid',
+                name: 'Default',
+                credentials: {
+                    type: WarehouseTypes.SNOWFLAKE,
+                    user: 'snowflake-user',
+                    authenticationType: SnowflakeAuthenticationType.PASSWORD,
+                },
+                project: null,
+            },
+            {
+                uuid: 'sso-credentials-uuid',
+                name: 'My Snowflake login',
+                credentials: {
+                    type: WarehouseTypes.SNOWFLAKE,
+                    authenticationType: SnowflakeAuthenticationType.SSO,
+                },
+                project: null,
+            },
+        ]),
+        update: vi.fn().mockResolvedValue('sso-credentials-uuid'),
+        getByUuid: vi.fn().mockResolvedValue({ uuid: 'sso-credentials-uuid' }),
+        create: vi.fn(),
+    });
+
+    describe('createSnowflakeWarehouseCredentials', () => {
+        it('updates only an existing Snowflake SSO credential', async () => {
+            const credentialsModel = createSnowflakeCredentialsModel();
+            const service = createUserService(lightdashConfigMock, {
+                userWarehouseCredentialsModel:
+                    credentialsModel as unknown as UserWarehouseCredentialsModel,
+            });
+
+            await service.createSnowflakeWarehouseCredentials(
+                sessionUser,
+                'new-refresh-token',
+            );
+
+            expect(credentialsModel.update).toHaveBeenCalledWith(
+                sessionUser.userUuid,
+                'sso-credentials-uuid',
+                expect.objectContaining({
+                    credentials: expect.objectContaining({
+                        authenticationType: SnowflakeAuthenticationType.SSO,
+                        refreshToken: 'new-refresh-token',
+                    }),
+                }),
+            );
+            expect(credentialsModel.create).not.toHaveBeenCalled();
+        });
+
+        it('keeps the name the user gave the existing credential', async () => {
+            const credentialsModel = createSnowflakeCredentialsModel();
+            const service = createUserService(lightdashConfigMock, {
+                userWarehouseCredentialsModel:
+                    credentialsModel as unknown as UserWarehouseCredentialsModel,
+            });
+
+            await service.createSnowflakeWarehouseCredentials(
+                sessionUser,
+                'new-refresh-token',
+            );
+
+            expect(credentialsModel.update).toHaveBeenCalledWith(
+                sessionUser.userUuid,
+                'sso-credentials-uuid',
+                expect.objectContaining({ name: 'My Snowflake login' }),
+            );
+        });
+
+        it('refreshes the credential queries actually resolve when duplicates exist', async () => {
+            const credentialsModel = createSnowflakeCredentialsModel();
+            // Oldest first, matching getAllByUserUuid's ordering.
+            credentialsModel.getAllByUserUuid.mockResolvedValue([
+                {
+                    uuid: 'stale-sso-credentials-uuid',
+                    name: 'Default',
+                    credentials: {
+                        type: WarehouseTypes.SNOWFLAKE,
+                        authenticationType: SnowflakeAuthenticationType.SSO,
+                    },
+                    project: null,
+                },
+                {
+                    uuid: 'newest-sso-credentials-uuid',
+                    name: 'Default',
+                    credentials: {
+                        type: WarehouseTypes.SNOWFLAKE,
+                        authenticationType: SnowflakeAuthenticationType.SSO,
+                    },
+                    project: null,
+                },
+            ]);
+            const service = createUserService(lightdashConfigMock, {
+                userWarehouseCredentialsModel:
+                    credentialsModel as unknown as UserWarehouseCredentialsModel,
+            });
+
+            await service.createSnowflakeWarehouseCredentials(
+                sessionUser,
+                'new-refresh-token',
+            );
+
+            expect(credentialsModel.update).toHaveBeenCalledWith(
+                sessionUser.userUuid,
+                'newest-sso-credentials-uuid',
+                expect.anything(),
+            );
+        });
+
+        it('rejects a callback without a refresh token instead of writing', async () => {
+            const credentialsModel = createSnowflakeCredentialsModel();
+            const service = createUserService(lightdashConfigMock, {
+                userWarehouseCredentialsModel:
+                    credentialsModel as unknown as UserWarehouseCredentialsModel,
+            });
+
+            await expect(
+                service.createSnowflakeWarehouseCredentials(sessionUser, ''),
+            ).rejects.toThrow(ParameterError);
+            expect(credentialsModel.update).not.toHaveBeenCalled();
+            expect(credentialsModel.create).not.toHaveBeenCalled();
+        });
+    });
+
     describe('loginWithPersonalAccessToken', () => {
         const patAbility = new Ability<PossibleAbilities>([
             { subject: 'PersonalAccessToken', action: ['view'] },
@@ -4762,6 +5671,93 @@ describe('UserService', () => {
                 service.loginWithPersonalAccessToken('token'),
             ).rejects.toBeInstanceOf(AuthorizationError);
             expect(patModel.delete).toHaveBeenCalledWith('pat-uuid');
+        });
+    });
+});
+
+describe('UserService learn progress (CS-186)', () => {
+    const account = {
+        user: { userUuid: 'user-1' },
+    } as unknown as RegisteredAccount;
+    const stored: LearnProgress = {
+        completed: ['view:Dashboard'],
+        started: ['view:Dashboard', 'manage:Space'],
+        lastStarted: 'manage:Space',
+    };
+    const learnModel = {
+        get: vi.fn(async () => stored),
+        markStarted: vi.fn(async () => {}),
+        markCompleted: vi.fn(async () => {}),
+        merge: vi.fn(async () => {}),
+    };
+    const service = () =>
+        createUserService(lightdashConfigMock, {
+            userLearnProgressModel: learnModel,
+        });
+
+    beforeEach(() => {
+        learnModel.get.mockClear();
+        learnModel.markStarted.mockClear();
+        learnModel.markCompleted.mockClear();
+        learnModel.merge.mockClear();
+    });
+
+    it('reads the progress the instance holds for the caller', async () => {
+        await expect(service().getLearnProgress(account)).resolves.toEqual(
+            stored,
+        );
+        expect(learnModel.get).toHaveBeenCalledWith('user-1');
+    });
+
+    it('records a start and a completion for a registry scope', async () => {
+        await expect(
+            service().markLearnScopeStarted(account, 'view:Dashboard'),
+        ).resolves.toEqual(stored);
+        expect(learnModel.markStarted).toHaveBeenCalledWith(
+            'user-1',
+            'view:Dashboard',
+        );
+        await service().markLearnScopeCompleted(account, 'view:Dashboard');
+        expect(learnModel.markCompleted).toHaveBeenCalledWith(
+            'user-1',
+            'view:Dashboard',
+        );
+    });
+
+    it('rejects a scope the registry does not know and stores nothing', async () => {
+        await expect(
+            service().markLearnScopeStarted(account, 'manage:Invented'),
+        ).rejects.toThrow(ParameterError);
+        await expect(
+            service().markLearnScopeCompleted(account, 'manage:Invented'),
+        ).rejects.toThrow(ParameterError);
+        expect(learnModel.markStarted).not.toHaveBeenCalled();
+        expect(learnModel.markCompleted).not.toHaveBeenCalled();
+    });
+
+    it('merges only registry scopes from a browser and drops the rest', async () => {
+        await service().mergeLearnProgress(account, {
+            completed: ['view:Dashboard', 'manage:Invented'],
+            started: ['view:Dashboard', 'manage:Space', 'manage:Retired'],
+            lastStarted: 'manage:Retired',
+        });
+        expect(learnModel.merge).toHaveBeenCalledWith('user-1', {
+            completed: ['view:Dashboard'],
+            started: ['view:Dashboard', 'manage:Space'],
+            lastStarted: null,
+        });
+    });
+
+    it('treats a malformed merge body as empty rather than failing', async () => {
+        await service().mergeLearnProgress(account, {
+            completed: 'view:Dashboard',
+            started: undefined,
+            lastStarted: 7,
+        } as unknown as LearnProgress);
+        expect(learnModel.merge).toHaveBeenCalledWith('user-1', {
+            completed: [],
+            started: [],
+            lastStarted: null,
         });
     });
 });

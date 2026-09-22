@@ -4,10 +4,11 @@ import { type ViewStatistics } from './analytics';
 import { type DateZoom } from './api/paginatedQuery';
 import { type ConditionalFormattingConfig } from './conditionalFormatting';
 import { type ChartSourceType } from './content';
+import { type ContentDraftStaleness } from './contentAsCode/draftRebase';
 import { type ContentVerificationInfo } from './contentVerification';
 import { type CompactOrAlias, type FieldId } from './field';
 import { type KnexPaginatedData } from './knex-paginate';
-import { type SavedMergeQuery } from './mergeQuery';
+import { type SavedMergeDefinition, type SavedMergeQuery } from './mergeQuery';
 import { type MetricQuery, type MetricQueryRequest } from './metricQuery';
 import { type ResolvedProjectColorPalette } from './organization';
 import { type ParametersValuesMap } from './parameters';
@@ -99,6 +100,7 @@ export type PieChartValueOptions = {
     valueLabel: PieChartValueLabel;
     showValue: boolean;
     showPercentage: boolean;
+    valueLabelColor?: string;
 };
 
 export const PieChartLegendPositions = {
@@ -130,6 +132,8 @@ export type PieChart = {
     showValue?: PieChartValueOptions['showValue'];
     /** Show percentage on slices */
     showPercentage?: PieChartValueOptions['showPercentage'];
+    /** Custom color for value labels */
+    valueLabelColor?: PieChartValueOptions['valueLabelColor'];
     /** Custom labels for each group/slice */
     groupLabelOverrides?: Record<string, string>;
     /** Custom colors for each group/slice */
@@ -563,6 +567,8 @@ export type Series = {
     label?: {
         /** Show data labels on points */
         show?: boolean;
+        /** Custom data label color (hex code) */
+        color?: string;
         /** Position of data labels */
         position?: 'left' | 'top' | 'right' | 'bottom' | 'inside';
         /** Show labels even when they overlap */
@@ -786,8 +792,8 @@ export type CustomVis = {
     spec?: Record<string, unknown>;
 };
 
-/** Maps a data app viz's field name → the host query field id bound to it. */
-export type DataAppVizFieldMapping = Record<string, string>;
+/** Maps a viz field name to one query field id or an ordered collection. */
+export type DataAppVizFieldMapping = Record<string, string | string[]>;
 
 /** Maps a declared config option's name → the value the user chose for it. */
 export type DataAppVizOptionValues = Record<string, DataAppVizOptionValue>;
@@ -799,6 +805,12 @@ export type DataAppVizChart = {
      * see DataAppVizChartAsCode.
      */
     dataAppVizUuid: string;
+    /**
+     * The version of the project chart type this saved chart renders.
+     * @isInt
+     * @minimum 1
+     */
+    dataAppVizVersion?: number;
     fieldMapping: DataAppVizFieldMapping;
     /**
      * Only options the user explicitly changed — declared defaults are never
@@ -938,11 +950,8 @@ export type SavedChart = {
         /** Ordered fields to render on the pivot row axis */
         rows?: string[];
     };
-    /**
-     * Second query this chart's query is merged with, when it has one. Absent
-     * on the overwhelming majority of charts.
-     */
-    merge?: SavedMergeQuery | null;
+    /** Named source queries, join keys, and ordering of the merged result. */
+    merge?: SavedMergeDefinition | null;
     /** Visualization configuration for the chart */
     chartConfig: ChartConfig;
     /** Table view configuration */
@@ -987,6 +996,19 @@ export type SavedChart = {
     /** Unique identifier slug for this chart */
     slug: string;
     verification: ContentVerificationInfo | null;
+    /** The caller's unpublished content-as-code draft is applied. */
+    hasUnpublishedChanges?: boolean;
+    /** Open drafts from other authors visible to content-as-code reviewers. */
+    draftsAwaitingReview?: number;
+    /** The caller's latest dismissed draft, available to reopen. */
+    dismissedDraftUuid?: string;
+    /** The caller's draft started from an upload snapshot the repo has since moved past. */
+    draftStaleness?: ContentDraftStaleness;
+    /** The caller's draft could not be safely applied. */
+    draftOverlayError?: {
+        code: 'invalid_chart_draft';
+        draftUuid: string;
+    };
     deletedAt?: Date;
     deletedBy?: {
         userUuid: string;
@@ -995,18 +1017,18 @@ export type SavedChart = {
     } | null;
 };
 
-type CreateChartBase = Pick<
-    SavedChart,
-    | 'name'
-    | 'description'
-    | 'tableName'
-    | 'metricQuery'
-    | 'pivotConfig'
-    | 'chartConfig'
-    | 'tableConfig'
-    | 'parameters'
-    | 'merge'
->;
+type CreateChartBase = {
+    name: SavedChart['name'];
+    description?: SavedChart['description'];
+    tableName: SavedChart['tableName'];
+    metricQuery: SavedChart['metricQuery'];
+    pivotConfig?: SavedChart['pivotConfig'];
+    chartConfig: SavedChart['chartConfig'];
+    tableConfig: SavedChart['tableConfig'];
+    parameters?: SavedChart['parameters'];
+    /** Accepts schema v2 uploads; saved charts return the named schema v3 shape. */
+    merge?: SavedMergeDefinition | SavedMergeQuery | null;
+};
 
 // colorPaletteUuid is on each member to avoid an allOf in the OpenAPI schema.
 export type CreateChartInSpace = CreateChartBase & {
@@ -1025,6 +1047,7 @@ export type CreateSavedChart = CreateChartInSpace | CreateChartInDashboard;
 
 export type CreateSavedChartVersion = Omit<
     SavedChart,
+    | 'merge'
     | 'uuid'
     | 'name'
     | 'updatedAt'
@@ -1049,6 +1072,7 @@ export type CreateSavedChartVersion = Omit<
     // For Charts created within a dashboard
     Partial<Pick<SavedChart, 'dashboardUuid' | 'dashboardName'>> & {
         preserveVerification?: boolean;
+        merge?: SavedMergeDefinition | SavedMergeQuery | null;
     };
 
 export type UpdateSavedChart = Partial<

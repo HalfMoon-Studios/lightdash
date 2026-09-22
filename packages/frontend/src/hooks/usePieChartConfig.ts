@@ -10,6 +10,7 @@ import {
     type Dimension,
     type ItemsMap,
     type Metric,
+    type MetricQuery,
     type ParametersValuesMap,
     type PieChart,
     type PieChartLegendPosition,
@@ -33,7 +34,7 @@ type PieChartConfig = {
     validConfig: PieChart;
 
     groupFieldIds: (string | null)[];
-    groupAdd: () => void;
+    groupAdd: (dimensionId?: string) => void;
     groupChange: (prevDimensionId: string, newDimensionId: string) => void;
     groupRemove: (dimensionId: string) => void;
 
@@ -46,6 +47,8 @@ type PieChartConfig = {
 
     valueLabel: PieChartValueOptions['valueLabel'];
     valueLabelChange: (valueLabel: PieChartValueOptions['valueLabel']) => void;
+    valueLabelColor: PieChartValueOptions['valueLabelColor'];
+    valueLabelColorChange: (color: string | undefined) => void;
     showValue: PieChartValueOptions['showValue'];
     toggleShowValue: () => void;
     showPercentage: PieChartValueOptions['showPercentage'];
@@ -96,6 +99,9 @@ export type PieChartConfigFn = (
     colorPalette: string[],
     tableCalculationsMetadata?: TableCalculationMetadata[],
     parameters?: ParametersValuesMap,
+    /** The not-yet-run metric query; its fields count as valid group/metric
+     *  references so a just-added field survives until results land. */
+    unsavedMetricQuery?: MetricQuery,
 ) => PieChartConfig;
 
 const usePieChartConfig: PieChartConfigFn = (
@@ -107,6 +113,7 @@ const usePieChartConfig: PieChartConfigFn = (
     colorPalette,
     tableCalculationsMetadata,
     parameters,
+    unsavedMetricQuery,
 ) => {
     const [groupFieldIds, setGroupFieldIds] = useState(
         pieChartConfig?.groupFieldIds ?? [],
@@ -125,6 +132,9 @@ const usePieChartConfig: PieChartConfigFn = (
 
     const [showPercentage, setShowPercentage] = useState(
         pieChartConfig?.showPercentage ?? true,
+    );
+    const [valueLabelColor, setValueLabelColor] = useState(
+        pieChartConfig?.valueLabelColor,
     );
 
     const [groupLabelOverrides, setGroupLabelOverrides] = useState(
@@ -187,11 +197,24 @@ const usePieChartConfig: PieChartConfigFn = (
 
     const isLoading = !resultsData;
 
+    // The pools above only know the last run; a field just added from the
+    // config picker must not be dropped before its results land.
+    const pendingDimensionIds = useMemo(
+        () => new Set(unsavedMetricQuery?.dimensions),
+        [unsavedMetricQuery?.dimensions],
+    );
+    const pendingMetricIds = useMemo(
+        () => new Set(unsavedMetricQuery?.metrics),
+        [unsavedMetricQuery?.metrics],
+    );
+
     useEffect(() => {
         if (isLoading || dimensionIds.length === 0) return;
 
-        const newGroupFieldIds = groupFieldIds.filter((id) =>
-            dimensionIds.includes(id),
+        const newGroupFieldIds = groupFieldIds.filter(
+            (id) =>
+                dimensionIds.includes(id) ||
+                (!!id && pendingDimensionIds.has(id)),
         );
 
         const firstDimensionId = dimensionIds[0];
@@ -203,11 +226,22 @@ const usePieChartConfig: PieChartConfigFn = (
         if (isEqual(newGroupFieldIds, groupFieldIds)) return;
 
         setGroupFieldIds(newGroupFieldIds);
-    }, [isLoading, dimensionIds, groupFieldIds, pieChartConfig?.groupFieldIds]);
+    }, [
+        isLoading,
+        dimensionIds,
+        groupFieldIds,
+        pendingDimensionIds,
+        pieChartConfig?.groupFieldIds,
+    ]);
 
     useEffect(() => {
         if (isLoading || allNumericMetricIds.length === 0) return;
-        if (metricId && allNumericMetricIds.includes(metricId)) return;
+        if (
+            metricId &&
+            (allNumericMetricIds.includes(metricId) ||
+                pendingMetricIds.has(metricId))
+        )
+            return;
 
         /**
          * When table calculations update, their name changes, so we need to update the selected fields
@@ -225,7 +259,13 @@ const usePieChartConfig: PieChartConfigFn = (
         }
 
         setMetricId(allNumericMetricIds[0] ?? null);
-    }, [allNumericMetricIds, isLoading, metricId, tableCalculationsMetadata]);
+    }, [
+        allNumericMetricIds,
+        isLoading,
+        metricId,
+        pendingMetricIds,
+        tableCalculationsMetadata,
+    ]);
 
     const isValueLabelOverriden = useMemo(() => {
         return Object.values(groupValueOptionOverrides).some(
@@ -349,16 +389,21 @@ const usePieChartConfig: PieChartConfigFn = (
         [],
     );
 
-    const handleGroupAdd = useCallback(() => {
-        setGroupFieldIds((prev) => {
-            const nextId = dimensionIds.find((id) => !prev.includes(id));
-            if (!nextId) return prev;
+    const handleGroupAdd = useCallback(
+        (dimensionId?: string) => {
+            setGroupFieldIds((prev) => {
+                const nextId =
+                    dimensionId ??
+                    dimensionIds.find((id) => !prev.includes(id));
+                if (!nextId) return prev;
 
-            const newSet = new Set(prev);
-            newSet.add(nextId);
-            return [...newSet.values()];
-        });
-    }, [dimensionIds]);
+                const newSet = new Set(prev);
+                newSet.add(nextId);
+                return [...newSet.values()];
+            });
+        },
+        [dimensionIds],
+    );
 
     const handleRemoveGroup = useCallback((dimensionId: string) => {
         setGroupFieldIds((prev) => {
@@ -395,6 +440,19 @@ const usePieChartConfig: PieChartConfigFn = (
         );
     }, []);
 
+    const handleValueLabelColorChange = useCallback(
+        (color: string | undefined) => {
+            setValueLabelColor(color);
+
+            setGroupValueOptionOverrides((prev) =>
+                mapValues(prev, ({ valueLabelColor: _, ...rest }) => ({
+                    ...rest,
+                })),
+            );
+        },
+        [],
+    );
+
     const handleGroupLabelChange = useCallback((key: string, value: string) => {
         setGroupLabelOverrides(({ [key]: _, ...rest }) => {
             return value === '' ? rest : { ...rest, [key]: value };
@@ -410,7 +468,17 @@ const usePieChartConfig: PieChartConfigFn = (
     const handleGroupValueOptionChange = useCallback(
         (label: string, value: Partial<PieChartValueOptions>) => {
             setGroupValueOptionOverrides((prev) => {
-                return { ...prev, [label]: { ...prev[label], ...value } };
+                const nextOptions = omitBy(
+                    { ...prev[label], ...value },
+                    (option) => option === undefined,
+                );
+
+                if (isEmpty(nextOptions)) {
+                    const { [label]: _, ...rest } = prev;
+                    return rest;
+                }
+
+                return { ...prev, [label]: nextOptions };
             });
         },
         [],
@@ -452,6 +520,7 @@ const usePieChartConfig: PieChartConfigFn = (
             valueLabel,
             showValue,
             showPercentage,
+            valueLabelColor,
             groupLabelOverrides: pick(
                 debouncedGroupLabelOverrides,
                 groupLabels,
@@ -478,6 +547,7 @@ const usePieChartConfig: PieChartConfigFn = (
             valueLabel,
             showValue,
             showPercentage,
+            valueLabelColor,
             groupLabels,
             debouncedGroupLabelOverrides,
             debouncedGroupColorOverrides,
@@ -506,6 +576,8 @@ const usePieChartConfig: PieChartConfigFn = (
 
         valueLabel,
         valueLabelChange: handleValueLabelChange,
+        valueLabelColor,
+        valueLabelColorChange: handleValueLabelColorChange,
         showValue,
         toggleShowValue: handleToggleShowValue,
         showPercentage,

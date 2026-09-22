@@ -66,9 +66,11 @@ type FakeRows = {
 const buildFakeDatabase = (rows: FakeRows): Knex => {
     const makeBuilder = (table: string) => {
         const filters = new Set<string>();
+        const values = new Map<string, unknown>();
         const builder = {
-            where(column: string) {
+            where(column: string, value?: unknown) {
                 filters.add(column);
+                values.set(column, value);
                 return builder;
             },
             whereNull(column: string) {
@@ -84,6 +86,12 @@ const buildFakeDatabase = (rows: FakeRows): Knex => {
                         return Promise.resolve(rows.userOverride);
                     }
                     if (filters.has('user_uuid:null')) {
+                        if (
+                            rows.orgOverride?.organization_uuid &&
+                            rows.orgOverride.organization_uuid !==
+                                values.get('organization_uuid')
+                        )
+                            return Promise.resolve(undefined);
                         return Promise.resolve(rows.orgOverride);
                     }
                 }
@@ -147,6 +155,119 @@ const buildFakeWriteDatabase = ({
 };
 
 describe('FeatureFlagModel', () => {
+    describe.each([
+        FeatureFlags.AiAgentFastDecisions,
+        FeatureFlags.AiAgentAdaptiveModels,
+    ])('%s production rollout', (featureFlagId) => {
+        const config = {
+            previewFeatureFlags: { enabled: false },
+            enabledFeatureFlags: new Set<string>(),
+            disabledFeatureFlags: new Set<string>(),
+        };
+        it('supports Console enable, disable and re-enable without restart and isolates organizations', async () => {
+            const rows: FakeRows = { flag: { default_enabled: false } };
+            const model = buildModel(config, buildFakeDatabase(rows));
+            const get = (organizationUuid = dbUser.organizationUuid) =>
+                model.get({
+                    featureFlagId,
+                    user: { ...dbUser, organizationUuid },
+                });
+            expect((await get()).enabled).toBe(false);
+            rows.orgOverride = {
+                organization_uuid: dbUser.organizationUuid,
+                enabled: true,
+            };
+            expect((await get()).enabled).toBe(true);
+            expect((await get('other-org')).enabled).toBe(false);
+            rows.orgOverride.enabled = false;
+            expect((await get()).enabled).toBe(false);
+            rows.orgOverride.enabled = true;
+            expect((await get()).enabled).toBe(true);
+        });
+        it.each([
+            { enable: true, disable: false, expected: true },
+            { enable: false, disable: true, expected: false },
+            { enable: true, disable: true, expected: true },
+        ])(
+            'honors ENV precedence $enable / $disable',
+            async ({ enable, disable, expected }) => {
+                const model = buildModel(
+                    {
+                        ...config,
+                        enabledFeatureFlags: new Set(
+                            enable ? [featureFlagId] : [],
+                        ),
+                        disabledFeatureFlags: new Set(
+                            disable ? [featureFlagId] : [],
+                        ),
+                    },
+                    buildFakeDatabase({ orgOverride: { enabled: true } }),
+                );
+                expect(
+                    (await model.get({ featureFlagId, user: dbUser })).enabled,
+                ).toBe(expected);
+            },
+        );
+    });
+    describe('Learn', () => {
+        it('is off by default', async () => {
+            const model = buildModel({}, buildFakeDatabase({}));
+            await expect(
+                model.get({
+                    user: dbUser,
+                    featureFlagId: FeatureFlags.EnableLearn,
+                }),
+            ).resolves.toEqual({
+                id: FeatureFlags.EnableLearn,
+                enabled: false,
+            });
+        });
+
+        it.each([true, false])(
+            'honors an organization override of %s',
+            async (enabled) => {
+                const model = buildModel(
+                    {},
+                    buildFakeDatabase({
+                        flag: { default_enabled: false },
+                        orgOverride: { enabled },
+                    }),
+                );
+                await expect(
+                    model.get({
+                        user: dbUser,
+                        featureFlagId: FeatureFlags.EnableLearn,
+                    }),
+                ).resolves.toEqual({ id: FeatureFlags.EnableLearn, enabled });
+            },
+        );
+
+        it('can be enabled through the self-hosted allowlist', async () => {
+            const model = buildModel({
+                enabledFeatureFlags: new Set([FeatureFlags.EnableLearn]),
+            });
+            await expect(
+                model.get({
+                    user: dbUser,
+                    featureFlagId: FeatureFlags.EnableLearn,
+                }),
+            ).resolves.toEqual({ id: FeatureFlags.EnableLearn, enabled: true });
+        });
+
+        it('is enabled automatically in previews', async () => {
+            const model = buildModel(
+                { previewFeatureFlags: { enabled: true } },
+                buildFakeDatabase({}),
+            );
+            await expect(
+                model.get({
+                    user: dbUser,
+                    featureFlagId: FeatureFlags.EnableLearn,
+                }),
+            ).resolves.toEqual({ id: FeatureFlags.EnableLearn, enabled: true });
+        });
+    });
+
     describe('check telemetry', () => {
         beforeEach(() => {
             vi.mocked(record).mockReset();

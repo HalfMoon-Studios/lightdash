@@ -45,6 +45,8 @@ import {
     DashboardTileTarget,
     DashboardTileTypes,
     DimensionType,
+    DirectAccessPrincipalType,
+    DirectAccessResourceType,
     Explore,
     ExploreType,
     ForbiddenError,
@@ -53,7 +55,9 @@ import {
     getContentAsCodePathFromLtreePath,
     getLtreePathFromContentAsCodePath,
     getParameterReferences,
+    hasChartsInDashboard,
     isChartScheduler,
+    isDashboardChartTileType,
     isDashboardScheduler,
     isEmailTarget,
     isExploreError,
@@ -63,6 +67,8 @@ import {
     isSchedulerGsheetsOptions,
     isSchedulerImageOptions,
     isSlackTarget,
+    normalizeContentAsCodePath,
+    normalizeSavedMergeDefinition,
     NotFoundError,
     NotificationFrequency,
     NotImplementedError,
@@ -88,8 +94,13 @@ import {
     UpdatedByUser,
     validateEmail,
     VirtualViewAsCode,
+    type ContentAsCodeDirectAccess,
+    type ContentAsCodeProjectSettings,
+    type ContentAsCodeSettingsStamp,
     type ContentVerificationInfo,
     type DashboardTileWithSlug,
+    type DirectAccessAssignment,
+    type DirectAccessPrincipalRef,
     type Filters,
     type GoogleSheetsSyncAsCode,
     type SpaceSummaryBase,
@@ -98,9 +109,14 @@ import type { Knex } from 'knex';
 import isEqual from 'lodash/isEqual';
 import { v4 as uuidv4 } from 'uuid';
 import { LightdashAnalytics } from '../../analytics/LightdashAnalytics';
-import { getAccountApiAccessContext } from '../../auth/account';
+import { fromSession, getAccountApiAccessContext } from '../../auth/account';
 import { LightdashConfig } from '../../config/parseConfig';
 import { AppModel } from '../../models/AppModel';
+import { ContentAsCodeProjectSettingsModel } from '../../models/ContentAsCodeProjectSettingsModel';
+import {
+    ContentAsCodeSnapshotModel,
+    type ContentAsCodeSnapshotType,
+} from '../../models/ContentAsCodeSnapshotModel';
 import { ContentVerificationModel } from '../../models/ContentVerificationModel';
 import { DashboardModel } from '../../models/DashboardModel/DashboardModel';
 import { GroupsModel } from '../../models/GroupsModel';
@@ -118,16 +134,25 @@ import { UserModel } from '../../models/UserModel';
 import { SchedulerClient } from '../../scheduler/SchedulerClient';
 import { BaseService } from '../BaseService';
 import { DashboardService } from '../DashboardService/DashboardService';
+import type { DirectAccessService } from '../DirectAccess/DirectAccessService';
 import { ProjectService } from '../ProjectService/ProjectService';
 import { PromoteService } from '../PromoteService/PromoteService';
+import { mergeDraftIntoChart } from '../SavedChartsService/chartDraftOverlay';
 import { SavedChartService } from '../SavedChartsService/SavedChartService';
 import { SchedulerService } from '../SchedulerService/SchedulerService';
-import type { SpacePermissionService } from '../SpaceService/SpacePermissionService';
+import {
+    spaceContextsByUuid,
+    type SpacePermissionService,
+} from '../SpaceService/SpacePermissionService';
 import {
     getChartContentAsCodePermissionChecks,
     type ContentAsCodeSqlPermissionCheckResult,
     type CurrentChartSqlItems,
 } from './chartPermissions';
+import {
+    buildContentAsCodeSnapshot,
+    type SnapshotAsCodeContent,
+} from './contentAsCodeSnapshot';
 import {
     getConfigWithDateZoomTileSlugs,
     getConfigWithDateZoomTileUuids,
@@ -151,6 +176,10 @@ import {
     getScheduledDeliveryTargetsAsCode,
 } from './scheduledContent';
 
+type RuntimeChartAsCode = Omit<ChartAsCode, 'chartConfig'> & {
+    chartConfig: ChartConfig;
+};
+
 type ContentAsCodeSpaceContentMetadata = {
     savedChartUuid?: string;
     dashboardUuid?: string;
@@ -173,11 +202,14 @@ type CoderServiceArguments = {
     schedulerClient: SchedulerClient;
     promoteService: PromoteService;
     spacePermissionService: SpacePermissionService;
+    contentAsCodeSnapshotModel: ContentAsCodeSnapshotModel;
+    contentAsCodeProjectSettingsModel: ContentAsCodeProjectSettingsModel;
     contentVerificationModel: ContentVerificationModel;
     projectService?: ProjectService;
     groupsModel: GroupsModel;
     organizationMemberProfileModel: OrganizationMemberProfileModel;
     userModel: UserModel;
+    directAccessService: DirectAccessService;
 };
 
 type UpsertContentAsCodeOptions = {
@@ -186,6 +218,13 @@ type UpsertContentAsCodeOptions = {
     force?: boolean;
     spaceNames?: Record<string, string>;
     mode?: 'upsert' | 'create';
+    // Mirrors content_as_code.sync from the caller's lightdash.config.yml.
+    // Gates snapshot recording: a project that never opts into sync has no
+    // use for a last-applied baseline.
+    syncEnabled?: boolean;
+    // Repo file the document came from, relative to the project dir, so
+    // write-back returns to the same place
+    filePath?: string;
 };
 
 export class CoderService extends BaseService {
@@ -219,6 +258,9 @@ export class CoderService extends BaseService {
 
     spacePermissionService: SpacePermissionService;
 
+    contentAsCodeSnapshotModel: ContentAsCodeSnapshotModel;
+    contentAsCodeProjectSettingsModel: ContentAsCodeProjectSettingsModel;
+
     contentVerificationModel: ContentVerificationModel;
 
     projectService?: ProjectService;
@@ -240,6 +282,8 @@ export class CoderService extends BaseService {
         return getChartContentAsCodePermissionChecks(nextChart, currentChart);
     }
 
+    directAccessService: DirectAccessService;
+
     constructor({
         lightdashConfig,
         analytics,
@@ -256,11 +300,14 @@ export class CoderService extends BaseService {
         schedulerClient,
         promoteService,
         spacePermissionService,
+        contentAsCodeSnapshotModel,
+        contentAsCodeProjectSettingsModel,
         contentVerificationModel,
         projectService,
         groupsModel,
         organizationMemberProfileModel,
         userModel,
+        directAccessService,
     }: CoderServiceArguments) {
         super();
         this.lightdashConfig = lightdashConfig;
@@ -278,9 +325,13 @@ export class CoderService extends BaseService {
         this.schedulerClient = schedulerClient;
         this.promoteService = promoteService;
         this.spacePermissionService = spacePermissionService;
+        this.contentAsCodeSnapshotModel = contentAsCodeSnapshotModel;
+        this.contentAsCodeProjectSettingsModel =
+            contentAsCodeProjectSettingsModel;
         this.contentVerificationModel = contentVerificationModel;
         this.projectService = projectService;
         this.groupsModel = groupsModel;
+        this.directAccessService = directAccessService;
         this.organizationMemberProfileModel = organizationMemberProfileModel;
         this.userModel = userModel;
         this.virtualViewCoder = new VirtualViewCoder({
@@ -848,9 +899,9 @@ export class CoderService extends BaseService {
 
         if (access.inheritParentPermissions && parentSpaceUuid !== null) {
             const parentContext =
-                await this.spacePermissionService.getSpaceAccessContext(
+                await this.spacePermissionService.resolveAccess(
                     user.userUuid,
-                    parentSpaceUuid,
+                    { type: 'space', spaceUuid: parentSpaceUuid },
                     { trx },
                 );
             inheritsFromOrgOrProject = parentContext.inheritsFromOrgOrProject;
@@ -939,10 +990,23 @@ export class CoderService extends BaseService {
         }
     }
 
-    private async validateSpaceAccessPrincipals(
+    /**
+     * Resolve portable as-code principals (organization email / group name) to
+     * concrete uuids, rejecting anything that is missing or ambiguous. Shared
+     * by space access blocks and resource direct-access blocks — the identity
+     * rules are the same, only the error prefix differs.
+     */
+    private async resolveAsCodeAccessPrincipals(
         organizationUuid: string,
-        access: NonNullable<SpaceAsCode['access']>,
-    ): Promise<void> {
+        access: {
+            users: { email: string; role: SpaceMemberRole }[];
+            groups: { name: string; role: SpaceMemberRole }[];
+        },
+        errorPrefix: string = '',
+    ): Promise<{
+        users: { userUuid: string; role: SpaceMemberRole }[];
+        groups: { groupUuid: string; role: SpaceMemberRole }[];
+    }> {
         const members =
             await this.organizationMemberProfileModel.findOrganizationMembersByEmails(
                 organizationUuid,
@@ -956,43 +1020,41 @@ export class CoderService extends BaseService {
             },
             new Map(),
         );
-        access.users.forEach(({ email }) => {
-            const matches = membersByEmail.get(email) ?? [];
+        const resolvedUsers = access.users.map(({ email, role }) => {
+            const matches = membersByEmail.get(email.toLowerCase()) ?? [];
             if (matches.length === 0) {
                 throw new ParameterError(
-                    `User ${email} is not a member of this organization`,
+                    `${errorPrefix}User ${email} is not a member of this organization`,
                 );
             }
             if (matches.length > 1) {
                 throw new ParameterError(
-                    `User email ${email} is ambiguous in this organization`,
+                    `${errorPrefix}User email ${email} is ambiguous in this organization`,
                 );
             }
+            return { userUuid: matches[0].userUuid, role };
         });
 
-        const groupMatches = await Promise.all(
-            access.groups.map(async ({ name }) => ({
-                name,
-                matches: (
-                    await this.groupsModel.find({
-                        organizationUuid,
-                        name,
-                    })
-                ).data,
-            })),
+        const resolvedGroups = await Promise.all(
+            access.groups.map(async ({ name, role }) => {
+                const matches = (
+                    await this.groupsModel.find({ organizationUuid, name })
+                ).data;
+                if (matches.length === 0) {
+                    throw new ParameterError(
+                        `${errorPrefix}Group ${name} does not exist in this organization`,
+                    );
+                }
+                if (matches.length > 1) {
+                    throw new ParameterError(
+                        `${errorPrefix}Group name ${name} is ambiguous in this organization`,
+                    );
+                }
+                return { groupUuid: matches[0].uuid, role };
+            }),
         );
-        groupMatches.forEach(({ name, matches }) => {
-            if (matches.length === 0) {
-                throw new ParameterError(
-                    `Group ${name} does not exist in this organization`,
-                );
-            }
-            if (matches.length > 1) {
-                throw new ParameterError(
-                    `Group name ${name} is ambiguous in this organization`,
-                );
-            }
-        });
+
+        return { users: resolvedUsers, groups: resolvedGroups };
     }
 
     private async hasNonPortableDirectSpaceAccess(
@@ -1043,6 +1105,276 @@ export class CoderService extends BaseService {
             }),
         );
         return portableGroups.some((portable) => !portable);
+    }
+
+    /**
+     * Portable access blocks for one resource type, keyed by resource uuid.
+     * Mirrors the space export rules: principals are identified by unique
+     * organization email or unique group name, and a policy containing any
+     * principal without a portable identity is omitted entirely — a file
+     * never half-represents a policy. Resources without direct assignments
+     * get no entry, so their files carry no access block and an upload of
+     * that file leaves the target environment's policy untouched.
+     *
+     * Public because the data-app bundle export (AppGenerateService) shares
+     * it — app manifests carry the same portable access block.
+     */
+    async getPortableDirectAccessByUuid(
+        user: SessionUser,
+        organizationUuid: string,
+        resourceType: DirectAccessResourceType,
+        resourceUuids: string[],
+    ): Promise<Map<string, ContentAsCodeDirectAccess>> {
+        const policies = await this.directAccessService.listPoliciesForExport(
+            { userUuid: user.userUuid, organizationUuid },
+            resourceType,
+            resourceUuids,
+        );
+        const assignmentsByUuid = Object.entries(policies);
+        if (assignmentsByUuid.length === 0) {
+            return new Map();
+        }
+
+        const allAssignments = assignmentsByUuid.flatMap(
+            ([, assignments]) => assignments,
+        );
+        const userEmails = [
+            ...new Set(
+                allAssignments.flatMap(({ principal }) =>
+                    principal.type === DirectAccessPrincipalType.USER &&
+                    principal.email !== null
+                        ? [principal.email.toLowerCase()]
+                        : [],
+                ),
+            ),
+        ];
+        const members =
+            await this.organizationMemberProfileModel.findOrganizationMembersByEmails(
+                organizationUuid,
+                userEmails,
+            );
+        const membersByUuid = new Map(
+            members.map((member) => [member.userUuid, member]),
+        );
+        const memberEmailCounts = members.reduce<Map<string, number>>(
+            (counts, member) => {
+                const email = member.email.toLowerCase();
+                counts.set(email, (counts.get(email) ?? 0) + 1);
+                return counts;
+            },
+            new Map(),
+        );
+
+        const uniqueGroups = [
+            ...new Map(
+                allAssignments.flatMap(({ principal }) =>
+                    principal.type === DirectAccessPrincipalType.GROUP
+                        ? [[principal.groupUuid, principal] as const]
+                        : [],
+                ),
+            ).values(),
+        ];
+        const portableGroupUuids = new Set(
+            (
+                await Promise.all(
+                    uniqueGroups.map(async (group) => {
+                        const matches = (
+                            await this.groupsModel.find({
+                                organizationUuid,
+                                name: group.name,
+                            })
+                        ).data;
+                        return matches.length === 1 &&
+                            matches[0].uuid === group.groupUuid
+                            ? group.groupUuid
+                            : null;
+                    }),
+                )
+            ).filter((groupUuid): groupUuid is string => groupUuid !== null),
+        );
+
+        const isPortable = (assignment: DirectAccessAssignment): boolean => {
+            const { principal } = assignment;
+            if (principal.type === DirectAccessPrincipalType.USER) {
+                if (principal.email === null) return false;
+                const normalizedEmail = principal.email.toLowerCase();
+                const member = membersByUuid.get(principal.userUuid);
+                return (
+                    member !== undefined &&
+                    member.email.toLowerCase() === normalizedEmail &&
+                    memberEmailCounts.get(normalizedEmail) === 1
+                );
+            }
+            return portableGroupUuids.has(principal.groupUuid);
+        };
+
+        return assignmentsByUuid.reduce<Map<string, ContentAsCodeDirectAccess>>(
+            (map, [resourceUuid, assignments]) => {
+                if (
+                    assignments.length === 0 ||
+                    !assignments.every(isPortable)
+                ) {
+                    return map;
+                }
+                const users = assignments.flatMap(({ principal, role }) =>
+                    principal.type === DirectAccessPrincipalType.USER
+                        ? [{ email: principal.email!.toLowerCase(), role }]
+                        : [],
+                );
+                const groups = assignments.flatMap(({ principal, role }) =>
+                    principal.type === DirectAccessPrincipalType.GROUP
+                        ? [{ name: principal.name, role }]
+                        : [],
+                );
+                map.set(resourceUuid, {
+                    users: users.sort((left, right) =>
+                        left.email.localeCompare(right.email),
+                    ),
+                    groups: groups.sort((left, right) =>
+                        left.name.localeCompare(right.name),
+                    ),
+                });
+                return map;
+            },
+            new Map(),
+        );
+    }
+
+    /**
+     * Preflight for an as-code access block: shape and role validation,
+     * duplicate rejection, and portable-identity resolution to concrete
+     * principal refs — all before any content write, so a bad block fails
+     * the upload with the target environment fully untouched. Returns null
+     * when the block is absent (existing policy preserved on upload).
+     *
+     * Public because the data-app bundle import (AppGenerateService) shares
+     * it.
+     */
+    async prepareDirectAccessReplace({
+        user,
+        organizationUuid,
+        access,
+        contentLabel,
+    }: {
+        user: SessionUser;
+        organizationUuid: string;
+        access: ContentAsCodeDirectAccess | undefined;
+        contentLabel: string;
+    }): Promise<
+        | {
+              principal: DirectAccessPrincipalRef;
+              role: SpaceMemberRole;
+          }[]
+        | null
+    > {
+        if (access === undefined) {
+            return null;
+        }
+        // Fail closed before any write: with sharing disabled the policy
+        // could never be applied, and importing the content first would
+        // leave the upload half-done.
+        await this.directAccessService.assertEnabled(fromSession(user));
+
+        if (!Array.isArray(access.users) || !Array.isArray(access.groups)) {
+            throw new ParameterError(
+                `${contentLabel} access users and groups must be arrays`,
+            );
+        }
+        const validRoles = new Set<string>(Object.values(SpaceMemberRole));
+        access.users.forEach(({ email, role }) => {
+            if (typeof email !== 'string' || email.trim() === '') {
+                throw new ParameterError(
+                    `${contentLabel} access contains a user without an email`,
+                );
+            }
+            if (!validRoles.has(role)) {
+                throw new ParameterError(
+                    `${contentLabel} access user ${email} has an invalid role`,
+                );
+            }
+        });
+        access.groups.forEach(({ name, role }) => {
+            if (typeof name !== 'string' || name.trim() === '') {
+                throw new ParameterError(
+                    `${contentLabel} access contains a group without a name`,
+                );
+            }
+            if (!validRoles.has(role)) {
+                throw new ParameterError(
+                    `${contentLabel} access group ${name} has an invalid role`,
+                );
+            }
+        });
+
+        const normalizedUsers = access.users.map(({ email, role }) => ({
+            email: email.trim().toLowerCase(),
+            role,
+        }));
+        const userEmails = normalizedUsers.map(({ email }) => email);
+        if (new Set(userEmails).size !== userEmails.length) {
+            throw new ParameterError(
+                `${contentLabel} access contains duplicate user emails`,
+            );
+        }
+        const groupNames = access.groups.map(({ name }) => name);
+        if (new Set(groupNames).size !== groupNames.length) {
+            throw new ParameterError(
+                `${contentLabel} access contains duplicate group names`,
+            );
+        }
+
+        const resolved = await this.resolveAsCodeAccessPrincipals(
+            organizationUuid,
+            { users: normalizedUsers, groups: access.groups },
+            `${contentLabel} access: `,
+        );
+
+        return [
+            ...resolved.users.map(({ userUuid, role }) => ({
+                principal: {
+                    type: DirectAccessPrincipalType.USER,
+                    uuid: userUuid,
+                },
+                role,
+            })),
+            ...resolved.groups.map(({ groupUuid, role }) => ({
+                principal: {
+                    type: DirectAccessPrincipalType.GROUP,
+                    uuid: groupUuid,
+                },
+                role,
+            })),
+        ];
+    }
+
+    /**
+     * Apply a preflighted access block to a resource that now exists:
+     * authorization, atomic replacement, and audit all run inside
+     * DirectAccessService.replacePolicy. No-op for null (block absent).
+     * An empty array clears the policy.
+     *
+     * Public because the data-app bundle import (AppGenerateService) shares
+     * it.
+     */
+    async applyDirectAccessPolicy(
+        user: SessionUser,
+        projectUuid: string,
+        resourceType: DirectAccessResourceType,
+        resourceUuid: string,
+        assignments:
+            | { principal: DirectAccessPrincipalRef; role: SpaceMemberRole }[]
+            | null,
+    ): Promise<void> {
+        if (assignments === null) {
+            return;
+        }
+        await this.directAccessService.replacePolicy(
+            fromSession(user),
+            projectUuid,
+            resourceType,
+            resourceUuid,
+            assignments,
+        );
     }
 
     async upsertSpace(
@@ -1243,7 +1575,7 @@ export class CoderService extends BaseService {
                 : [];
 
         if (desiredSpace.access) {
-            await this.validateSpaceAccessPrincipals(
+            await this.resolveAsCodeAccessPrincipals(
                 project.organizationUuid,
                 desiredSpace.access,
             );
@@ -1400,7 +1732,7 @@ export class CoderService extends BaseService {
         spaceSummary: Pick<SpaceSummaryBase, 'uuid' | 'name' | 'path'>[],
         dashboardSlugs: Record<string, string>,
         verificationMap: Map<string, ContentVerificationInfo>,
-    ): ChartAsCode {
+    ): RuntimeChartAsCode {
         const contentSpace = spaceSummary.find(
             (space) => space.uuid === chart.spaceUuid,
         );
@@ -1431,6 +1763,7 @@ export class CoderService extends BaseService {
             },
             chartConfig: chart.chartConfig,
             pivotConfig: chart.pivotConfig,
+            ...(chart.merge ? { merge: chart.merge } : {}),
             dashboardSlug: chart.dashboardUuid
                 ? dashboardSlugs[chart.dashboardUuid]
                 : undefined,
@@ -1651,6 +1984,7 @@ export class CoderService extends BaseService {
             version: currentVersion,
             contentType: ContentAsCodeType.DASHBOARD,
             downloadedAt: new Date(),
+            ownerEmail: dashboard.owner?.email ?? undefined,
             verified: verificationMap.has(dashboard.uuid) ? true : undefined,
             verification: verificationMap.get(dashboard.uuid) ?? null,
         };
@@ -1800,6 +2134,12 @@ export class CoderService extends BaseService {
                     tabUuid,
                     uuid: tile.uuid ?? uuidv4(),
                 } as DashboardTileWithSlug;
+            }
+
+            if (tile.properties.chartSlug != null && chartInfo === undefined) {
+                warnings.push(
+                    `Chart "${tile.properties.chartSlug}" was not found in this project — the tile was saved without a chart. Upload the chart first, then re-upload the dashboard.`,
+                );
             }
 
             const isSqlChart =
@@ -1995,31 +2335,73 @@ export class CoderService extends BaseService {
     @param dashboardIds: Dashboard ids can be uuids or slugs, if undefined return all dashboards, if [] we return no dashboards
     @returns: DashboardAsCode[]
     */
-    async getDashboards(
+    async getDashboardsForExport(
         user: SessionUser,
         projectUuid: string,
         dashboardIds: string[] | undefined,
         offset?: number,
         languageMap?: boolean,
     ): Promise<ApiDashboardAsCodeListResponse['results']> {
-        const project = await this.projectModel.get(projectUuid);
-        if (!project) {
-            throw new NotFoundError(`Project ${projectUuid} not found`);
-        }
+        await this.assertCanDownloadContentAsCode(
+            user,
+            projectUuid,
+            'You are not allowed to download dashboards',
+        );
+        return this.findDashboardsAsCode(
+            user,
+            projectUuid,
+            dashboardIds,
+            offset,
+            languageMap,
+            { includeAccess: true },
+        );
+    }
 
+    // Single-item read for AI/MCP read_content: no export gate; callers
+    // enforce per-item view access and private-space filtering still applies.
+    async getDashboardsForRead(
+        user: SessionUser,
+        projectUuid: string,
+        slugs: string[],
+    ): Promise<ApiDashboardAsCodeListResponse['results']> {
+        return this.findDashboardsAsCode(user, projectUuid, slugs);
+    }
+
+    private async assertCanDownloadContentAsCode(
+        user: SessionUser,
+        projectUuid: string,
+        forbiddenMessage: string,
+    ): Promise<void> {
+        const { organizationUuid } =
+            await this.projectModel.getSummary(projectUuid);
         const auditedAbility = this.createAuditedAbility(user);
         if (
             auditedAbility.cannot(
                 'view',
                 subject('ContentAsCode', {
-                    projectUuid: project.projectUuid,
-                    organizationUuid: project.organizationUuid,
+                    projectUuid,
+                    organizationUuid,
                 }),
             )
         ) {
-            throw new ForbiddenError(
-                'You are not allowed to download dashboards',
-            );
+            throw new ForbiddenError(forbiddenMessage);
+        }
+    }
+
+    private async findDashboardsAsCode(
+        user: SessionUser,
+        projectUuid: string,
+        dashboardIds: string[] | undefined,
+        offset?: number,
+        languageMap?: boolean,
+        // Access blocks are export-only: the AI/MCP read path enforces
+        // per-item view access, which is not enough to see who a resource
+        // is shared with.
+        { includeAccess = false }: { includeAccess?: boolean } = {},
+    ): Promise<ApiDashboardAsCodeListResponse['results']> {
+        const project = await this.projectModel.get(projectUuid);
+        if (!project) {
+            throw new NotFoundError(`Project ${projectUuid} not found`);
         }
 
         const slugs = await this.convertIdsToSlugs('dashboard', dashboardIds);
@@ -2069,7 +2451,14 @@ export class CoderService extends BaseService {
         );
         const dashboards = await Promise.all(dashboardPromises);
 
-        const missingIds = CoderService.getMissingIds(dashboardIds, dashboards);
+        const aliases = await this.dashboardModel.getSlugAliasesForUuids(
+            dashboards.map((dashboard) => dashboard.uuid),
+        );
+        const missingIds = CoderService.getMissingIds(
+            dashboardIds,
+            dashboards,
+            aliases,
+        );
         if (missingIds.length > 0) {
             this.logger.warn(
                 `Missing filtered dashboards for project ${projectUuid} with ids ${missingIds.join(
@@ -2102,10 +2491,29 @@ export class CoderService extends BaseService {
             ),
         );
 
+        const dashboardAccessByUuid = includeAccess
+            ? await this.getPortableDirectAccessByUuid(
+                  user,
+                  project.organizationUuid,
+                  DirectAccessResourceType.DASHBOARD,
+                  dashboardsWithAccess.map((dashboard) => dashboard.uuid),
+              )
+            : new Map<string, ContentAsCodeDirectAccess>();
+        const dashboardsWithPolicies = transformedDashboards.map(
+            (dashboard, index) => {
+                const access = dashboardAccessByUuid.get(
+                    dashboardsWithAccess[index].uuid,
+                );
+                return access === undefined
+                    ? dashboard
+                    : { ...dashboard, access };
+            },
+        );
+
         return {
-            dashboards: transformedDashboards,
+            dashboards: dashboardsWithPolicies,
             languageMap: languageMap
-                ? transformedDashboards.map((dashboard) => {
+                ? dashboardsWithPolicies.map((dashboard) => {
                       try {
                           return new DashboardAsCodeInternalization().getLanguageMap(
                               dashboard,
@@ -2137,7 +2545,7 @@ export class CoderService extends BaseService {
      * within its source project.
      */
     private static withDataAppVizSlugs(
-        charts: ChartAsCode[],
+        charts: RuntimeChartAsCode[],
         dataAppVizSlugByUuid: ReadonlyMap<string, string>,
     ): ChartAsCode[] {
         return charts.map((chart) => {
@@ -2147,20 +2555,18 @@ export class CoderService extends BaseService {
             ) {
                 return chart;
             }
-            const { dataAppVizUuid, ...configWithoutUuid } =
+            const { dataAppVizUuid, ...portableConfig } =
                 chart.chartConfig.config;
             const dataAppVizSlug =
                 dataAppVizUuid !== undefined
                     ? dataAppVizSlugByUuid.get(dataAppVizUuid)
                     : undefined;
-            if (dataAppVizSlug === undefined) {
-                return chart;
-            }
+            if (dataAppVizSlug === undefined) return chart;
             return {
                 ...chart,
                 chartConfig: {
                     ...chart.chartConfig,
-                    config: { ...configWithoutUuid, dataAppVizSlug },
+                    config: { ...portableConfig, dataAppVizSlug },
                 },
             };
         });
@@ -2170,9 +2576,11 @@ export class CoderService extends BaseService {
      * Convert a chart YAML's viz binding to the runtime shape: resolve the
      * portable dataAppVizSlug against the target project's chart types and
      * rewrite the config with the resolved uuid. A slug missing in the target
-     * fails loudly (upload the chart type first) unless the file also carries
-     * a legacy uuid to fall back to; uuid-only legacy files are accepted
-     * verbatim.
+     * fails loudly (upload the chart type first). A legacy dataAppVizUuid —
+     * whether it stands alone or backs up a missing slug — is accepted only
+     * when it resolves to a chart type in the target project; uuids are
+     * project-specific, so keeping a foreign one would create a dangling
+     * cross-project reference.
      */
     private async resolveDataAppVizBinding(
         projectUuid: string,
@@ -2184,8 +2592,54 @@ export class CoderService extends BaseService {
         if (chartConfig.config === undefined) {
             return { type: ChartType.DATA_APP_VIZ, config: undefined };
         }
-        const { dataAppVizSlug, dataAppVizUuid, ...configRest } =
-            chartConfig.config;
+        const {
+            dataAppVizSlug,
+            dataAppVizUuid,
+            dataAppVizVersion,
+            ...configRest
+        } = chartConfig.config;
+        const withTargetVersion = async (
+            targetDataAppVizUuid: string,
+        ): Promise<ChartConfig> => {
+            const targetVersion =
+                dataAppVizVersion === undefined
+                    ? await this.appModel.getLatestRenderableDataAppVizVersion(
+                          targetDataAppVizUuid,
+                      )
+                    : await this.appModel.getVersion(
+                          targetDataAppVizUuid,
+                          dataAppVizVersion,
+                      );
+            if (
+                targetVersion === null ||
+                targetVersion.status !== 'ready' ||
+                targetVersion.viz_schema === null
+            ) {
+                throw new NotFoundError(
+                    dataAppVizVersion === undefined
+                        ? `Custom chart type ${targetDataAppVizUuid} has no renderable version`
+                        : `Custom chart type "${dataAppVizSlug ?? targetDataAppVizUuid}" version ${dataAppVizVersion} is not renderable in this project. Upload a renderable version of this chart type, then re-upload this chart.`,
+                );
+            }
+            return {
+                type: ChartType.DATA_APP_VIZ,
+                config: {
+                    ...configRest,
+                    dataAppVizUuid: targetDataAppVizUuid,
+                    dataAppVizVersion: targetVersion.version,
+                },
+            };
+        };
+        // The 'only' filter also rejects uuids pointing at regular data apps.
+        const uuidResolvesInTargetProject = async (): Promise<boolean> =>
+            dataAppVizUuid !== undefined &&
+            (
+                await this.appModel.findAppsByUuids(
+                    projectUuid,
+                    [dataAppVizUuid],
+                    { dataAppVizsFilter: 'only' },
+                )
+            ).length > 0;
         if (dataAppVizSlug !== undefined) {
             const [vizRow] = await this.appModel.findAppsBySlugs(
                 projectUuid,
@@ -2193,61 +2647,82 @@ export class CoderService extends BaseService {
                 { dataAppVizsFilter: 'only' },
             );
             if (vizRow !== undefined) {
-                return {
-                    ...chartConfig,
-                    config: { ...configRest, dataAppVizUuid: vizRow.app_id },
-                };
+                return withTargetVersion(vizRow.app_id);
             }
-            // Interim files carry both identities — fall back to the uuid.
-            if (dataAppVizUuid !== undefined) {
+            // Interim files carry both identities — fall back to the uuid,
+            // but only when it names a chart type in this project.
+            if (
+                dataAppVizUuid !== undefined &&
+                (await uuidResolvesInTargetProject())
+            ) {
                 this.logger.warn(
                     `Chart type "${dataAppVizSlug}" was not found in project ${projectUuid}; keeping the chart's existing dataAppVizUuid reference.`,
                 );
-                return {
-                    ...chartConfig,
-                    config: { ...configRest, dataAppVizUuid },
-                };
+                return withTargetVersion(dataAppVizUuid);
             }
             throw new NotFoundError(
                 `Custom chart type "${dataAppVizSlug}" was not found in this project. Upload it first (lightdash upload --chart-types ${dataAppVizSlug}), then re-upload this chart.`,
             );
         }
         if (dataAppVizUuid !== undefined) {
-            // Legacy pre-slug file: accept the uuid verbatim.
-            return {
-                ...chartConfig,
-                config: { ...configRest, dataAppVizUuid },
-            };
+            if (await uuidResolvesInTargetProject()) {
+                return withTargetVersion(dataAppVizUuid);
+            }
+            throw new ParameterError(
+                `Custom chart type ${dataAppVizUuid} was not found in this project. Chart type uuids are project-specific: re-download the chart with a current CLI to get a portable dataAppVizSlug, upload the chart type into this project, then re-upload this chart.`,
+            );
         }
         throw new ParameterError(
             'Chart uses a custom chart type but carries neither dataAppVizSlug nor dataAppVizUuid.',
         );
     }
 
-    async getCharts(
+    async getChartsForExport(
         user: SessionUser,
         projectUuid: string,
         chartIds?: string[],
         offset?: number,
         languageMap?: boolean,
     ): Promise<ApiChartAsCodeListResponse['results']> {
+        await this.assertCanDownloadContentAsCode(
+            user,
+            projectUuid,
+            'You are not allowed to download charts',
+        );
+        return this.findChartsAsCode(
+            user,
+            projectUuid,
+            chartIds,
+            offset,
+            languageMap,
+            { includeAccess: true },
+        );
+    }
+
+    // Single-item read for AI/MCP read_content: no export gate; callers
+    // enforce per-item view access and private-space filtering still applies.
+    async getChartsForRead(
+        user: SessionUser,
+        projectUuid: string,
+        slugs: string[],
+    ): Promise<ApiChartAsCodeListResponse['results']> {
+        return this.findChartsAsCode(user, projectUuid, slugs);
+    }
+
+    private async findChartsAsCode(
+        user: SessionUser,
+        projectUuid: string,
+        chartIds?: string[],
+        offset?: number,
+        languageMap?: boolean,
+        // Access blocks are export-only: the AI/MCP read path enforces
+        // per-item view access, which is not enough to see who a resource
+        // is shared with.
+        { includeAccess = false }: { includeAccess?: boolean } = {},
+    ): Promise<ApiChartAsCodeListResponse['results']> {
         const project = await this.projectModel.get(projectUuid);
         if (!project) {
             throw new NotFoundError(`Project ${projectUuid} not found`);
-        }
-
-        // Filter charts based on user permissions (from private spaces)
-        const auditedAbility = this.createAuditedAbility(user);
-        if (
-            auditedAbility.cannot(
-                'view',
-                subject('ContentAsCode', {
-                    projectUuid: project.projectUuid,
-                    organizationUuid: project.organizationUuid,
-                }),
-            )
-        ) {
-            throw new ForbiddenError('You are not allowed to download charts');
         }
 
         const slugs = await this.convertIdsToSlugs('chart', chartIds);
@@ -2349,6 +2824,23 @@ export class CoderService extends BaseService {
             dataAppVizSlugByUuid,
         );
 
+        // Dashboard-owned chart definitions are not grantable, so only
+        // independently saved charts can carry an access block.
+        const chartAccessByUuid = includeAccess
+            ? await this.getPortableDirectAccessByUuid(
+                  user,
+                  project.organizationUuid,
+                  DirectAccessResourceType.CHART,
+                  charts.flatMap((chart) =>
+                      chart.dashboardUuid ? [] : [chart.uuid],
+                  ),
+              )
+            : new Map<string, ContentAsCodeDirectAccess>();
+        const chartsWithPolicies = transformedCharts.map((chart, index) => {
+            const access = chartAccessByUuid.get(charts[index].uuid);
+            return access === undefined ? chart : { ...chart, access };
+        });
+
         const missingIds = CoderService.getMissingIds(
             chartIds,
             charts,
@@ -2356,9 +2848,9 @@ export class CoderService extends BaseService {
         );
 
         return {
-            charts: transformedCharts,
+            charts: chartsWithPolicies,
             languageMap: languageMap
-                ? transformedCharts.map((chart) => {
+                ? chartsWithPolicies.map((chart) => {
                       try {
                           return new ChartAsCodeInternalization().getLanguageMap(
                               chart,
@@ -2556,6 +3048,28 @@ export class CoderService extends BaseService {
             ),
         );
 
+        // getSqlCharts is the export path itself (gated above), so access
+        // blocks always ride along. Dashboard-owned SQL charts never reach
+        // this listing (the space join excludes them) and are not grantable.
+        const sqlChartAccessByUuid = await this.getPortableDirectAccessByUuid(
+            user,
+            project.organizationUuid,
+            DirectAccessResourceType.SQL_CHART,
+            paginatedSqlChartRows.flatMap((row) =>
+                row.space_uuid ? [row.saved_sql_uuid] : [],
+            ),
+        );
+        const sqlChartsWithPolicies = transformedSqlCharts.map(
+            (sqlChart, index) => {
+                const access = sqlChartAccessByUuid.get(
+                    paginatedSqlChartRows[index].saved_sql_uuid,
+                );
+                return access === undefined
+                    ? sqlChart
+                    : { ...sqlChart, access };
+            },
+        );
+
         // Calculate missing IDs
         const foundSlugs = new Set(sqlChartRows.map((c) => c.slug));
         const missingIds = chartIds
@@ -2563,7 +3077,7 @@ export class CoderService extends BaseService {
             : [];
 
         return {
-            sqlCharts: transformedSqlCharts,
+            sqlCharts: sqlChartsWithPolicies,
             missingIds,
             spaces: CoderService.transformSpaces(
                 sqlChartSpaces.filter((s) =>
@@ -2747,6 +3261,436 @@ export class CoderService extends BaseService {
         }
     }
 
+    private async recordAppliedSnapshot(
+        projectUuid: string,
+        contentType: ContentAsCodeSnapshotType,
+        content: SnapshotAsCodeContent,
+        appliedByUserUuid: string,
+        filePath: string | undefined,
+    ): Promise<void> {
+        const { snapshot, snapshotHash } = buildContentAsCodeSnapshot(content);
+        await this.contentAsCodeSnapshotModel.upsert({
+            projectUuid,
+            contentType,
+            slug: content.slug,
+            snapshot,
+            snapshotHash,
+            appliedByUserUuid,
+            filePath: CoderService.sourceFilePath(filePath),
+        });
+    }
+
+    // A malformed path from a client is not worth failing the upload over
+    private static sourceFilePath(filePath: string | undefined): string | null {
+        if (filePath === undefined) return null;
+        try {
+            const normalized = normalizeContentAsCodePath(filePath);
+            return normalized === '' ? null : normalized;
+        } catch {
+            return null;
+        }
+    }
+
+    // The instance content in its canonical as-code form — the same document
+    // an upload of the current state would have applied.
+    async getCurrentChartAsCode(
+        chartUuid: string,
+    ): Promise<RuntimeChartAsCode> {
+        const chart = await this.savedChartModel.get(chartUuid);
+        const spaces = await this.spaceModel.find({
+            spaceUuids: chart.spaceUuid ? [chart.spaceUuid] : [],
+        });
+        const dashboardSlugs = chart.dashboardUuid
+            ? await this.dashboardModel.getSlugsForUuids([chart.dashboardUuid])
+            : {};
+        const verificationMap =
+            await this.contentVerificationModel.getByContentUuids(
+                ContentType.CHART,
+                [chart.uuid],
+            );
+        return CoderService.transformChart(
+            chart,
+            spaces,
+            dashboardSlugs,
+            verificationMap,
+        );
+    }
+
+    // The repo form uses portable dataAppVizSlug bindings rather than
+    // instance-local UUIDs.
+    async getPortableChartAsCode(
+        projectUuid: string,
+        chartUuid: string,
+    ): Promise<ChartAsCode> {
+        const chartAsCode = await this.getCurrentChartAsCode(chartUuid);
+        return this.makeChartAsCodePortable(projectUuid, chartAsCode);
+    }
+
+    private async makeChartAsCodePortable(
+        projectUuid: string,
+        chartAsCode: RuntimeChartAsCode,
+    ): Promise<ChartAsCode> {
+        const dataAppVizUuid =
+            chartAsCode.chartConfig.type === ChartType.DATA_APP_VIZ
+                ? chartAsCode.chartConfig.config?.dataAppVizUuid
+                : undefined;
+        if (dataAppVizUuid === undefined) return chartAsCode;
+        const dataAppVizRows = await this.appModel.findAppsByUuids(
+            projectUuid,
+            [dataAppVizUuid],
+            { dataAppVizsFilter: 'only' },
+        );
+        const [transformed] = CoderService.withDataAppVizSlugs(
+            [chartAsCode],
+            new Map(dataAppVizRows.map((row) => [row.app_id, row.slug])),
+        );
+        return transformed;
+    }
+
+    async getPortableChartAsCodeWithOverlay(
+        projectUuid: string,
+        chartUuid: string,
+        overlay: object,
+    ): Promise<ChartAsCode> {
+        const chart = await this.savedChartModel.get(chartUuid);
+        const fields = overlay as Partial<typeof chart> & {
+            verified?: boolean;
+        };
+        const merged = mergeDraftIntoChart(chart, overlay);
+        const spaces = await this.spaceModel.find({
+            spaceUuids: merged.spaceUuid ? [merged.spaceUuid] : [],
+        });
+        const dashboardSlugs = merged.dashboardUuid
+            ? await this.dashboardModel.getSlugsForUuids([merged.dashboardUuid])
+            : {};
+        const verificationMap =
+            await this.contentVerificationModel.getByContentUuids(
+                ContentType.CHART,
+                [merged.uuid],
+            );
+        const chartAsCode = CoderService.transformChart(
+            merged,
+            spaces,
+            dashboardSlugs,
+            verificationMap,
+        );
+        if (fields.verified !== undefined) {
+            chartAsCode.verified = fields.verified;
+        }
+        return this.makeChartAsCodePortable(projectUuid, chartAsCode);
+    }
+
+    async getCurrentDashboardAsCode(
+        dashboardUuid: string,
+    ): Promise<DashboardAsCode> {
+        const dashboard =
+            await this.dashboardModel.getByIdOrSlug(dashboardUuid);
+        const spaces = await this.spaceModel.find({
+            spaceUuids: dashboard.spaceUuid ? [dashboard.spaceUuid] : [],
+        });
+        const verificationMap =
+            await this.contentVerificationModel.getByContentUuids(
+                ContentType.DASHBOARD,
+                [dashboard.uuid],
+            );
+        return CoderService.transformDashboard(
+            dashboard,
+            spaces,
+            verificationMap,
+        );
+    }
+
+    async getContentAsCodeSettings(
+        user: SessionUser,
+        projectUuid: string,
+    ): Promise<ContentAsCodeProjectSettings | null> {
+        const project = await this.projectModel.getSummary(projectUuid);
+        const auditedAbility = this.createAuditedAbility(user);
+        if (
+            auditedAbility.cannot(
+                'view',
+                subject('Project', {
+                    organizationUuid: project.organizationUuid,
+                    projectUuid,
+                }),
+            )
+        ) {
+            throw new ForbiddenError();
+        }
+        const settings =
+            await this.contentAsCodeProjectSettingsModel.get(projectUuid);
+        return settings ?? null;
+    }
+
+    // Drafts review: render the dashboard's as-code document with an
+    // unpublished draft's fields applied on top of the published version
+    async getDashboardAsCodeWithOverlay(
+        dashboardUuid: string,
+        overlay: object,
+    ): Promise<DashboardAsCode> {
+        const dashboard =
+            await this.dashboardModel.getByIdOrSlug(dashboardUuid);
+        const fields = overlay as Partial<typeof dashboard>;
+        const merged = {
+            ...dashboard,
+            ...(fields.name !== undefined && { name: fields.name }),
+            ...(fields.description !== undefined && {
+                description: fields.description,
+            }),
+            ...(fields.tiles !== undefined && { tiles: fields.tiles }),
+            ...(fields.filters !== undefined && { filters: fields.filters }),
+            ...(fields.tabs !== undefined && { tabs: fields.tabs }),
+            ...(fields.config !== undefined && { config: fields.config }),
+            ...(fields.spaceUuid !== undefined && {
+                spaceUuid: fields.spaceUuid,
+            }),
+        };
+        const spaces = await this.spaceModel.find({
+            spaceUuids: merged.spaceUuid ? [merged.spaceUuid] : [],
+        });
+        const verificationMap =
+            await this.contentVerificationModel.getByContentUuids(
+                ContentType.DASHBOARD,
+                [merged.uuid],
+            );
+        return CoderService.transformDashboard(merged, spaces, verificationMap);
+    }
+
+    // The repo's content_as_code flags travel with uploads; stamping them as
+    // project-level state is how the instance (settings UI, write-back)
+    // learns what the repo has opted into.
+    async stampContentAsCodeSettings(
+        user: SessionUser,
+        projectUuid: string,
+        settings: ContentAsCodeSettingsStamp,
+    ): Promise<void> {
+        const project = await this.projectModel.get(projectUuid);
+        const auditedAbility = this.createAuditedAbility(user);
+        if (
+            auditedAbility.cannot(
+                'manage',
+                subject('ContentAsCode', {
+                    projectUuid: project.projectUuid,
+                    organizationUuid: project.organizationUuid,
+                    upstreamProjectUuid: project.upstreamProjectUuid,
+                    type: project.type,
+                    createdByUserUuid: project.createdByUserUuid,
+                    metadata: { slug: '' },
+                }),
+            )
+        ) {
+            throw new ForbiddenError(
+                `You don't have permission to update content-as-code settings on this project`,
+            );
+        }
+        await this.contentAsCodeProjectSettingsModel.upsert({
+            projectUuid,
+            syncEnabled: settings.sync,
+            path:
+                settings.path === undefined
+                    ? null
+                    : normalizeContentAsCodePath(settings.path),
+        });
+        this.analytics.track({
+            event: 'content_as_code.settings_stamped',
+            userId: user.userUuid,
+            properties: {
+                projectId: projectUuid,
+                syncEnabled: settings.sync,
+                pathConfigured: settings.path !== undefined,
+            },
+        });
+    }
+
+    // Stamped project settings keep snapshot recording consistent for callers
+    // that do not send the repo-owned sync flag on every request.
+    private async resolveSyncEnabled(
+        projectUuid: string,
+        options: UpsertContentAsCodeOptions,
+    ): Promise<boolean> {
+        if (options.syncEnabled === true) return true;
+        try {
+            const settings =
+                await this.contentAsCodeProjectSettingsModel.get(projectUuid);
+            return settings?.syncEnabled === true;
+        } catch (error) {
+            this.logger.warn(
+                `Could not read content-as-code settings for project ${projectUuid}; treating sync as request-flag only`,
+                error,
+            );
+            return false;
+        }
+    }
+
+    // Snapshot stamping marks uploaded content as Git-backed. It never fails
+    // an upload and only runs for repos opted into content_as_code.sync.
+    private async stampAppliedChartSnapshot(
+        user: SessionUser,
+        projectUuid: string,
+        chartUuid: string,
+        syncEnabled: boolean,
+        filePath: string | undefined,
+    ): Promise<void> {
+        if (!syncEnabled) return;
+        try {
+            const chart = await this.savedChartModel.get(chartUuid);
+            const spaces = await this.spaceModel.find({
+                spaceUuids: chart.spaceUuid ? [chart.spaceUuid] : [],
+            });
+            const dashboardSlugs = chart.dashboardUuid
+                ? await this.dashboardModel.getSlugsForUuids([
+                      chart.dashboardUuid,
+                  ])
+                : {};
+            const verificationMap =
+                await this.contentVerificationModel.getByContentUuids(
+                    ContentType.CHART,
+                    [chart.uuid],
+                );
+            await this.recordAppliedSnapshot(
+                projectUuid,
+                ContentAsCodeType.CHART,
+                CoderService.transformChart(
+                    chart,
+                    spaces,
+                    dashboardSlugs,
+                    verificationMap,
+                ),
+                user.userUuid,
+                filePath,
+            );
+        } catch (error) {
+            this.logger.warn(
+                `Failed to record as-code snapshot for chart ${chartUuid} on project ${projectUuid}`,
+                error,
+            );
+        }
+    }
+
+    private async stampAppliedDashboardSnapshot(
+        user: SessionUser,
+        projectUuid: string,
+        dashboardUuid: string,
+        syncEnabled: boolean,
+        filePath: string | undefined,
+    ): Promise<void> {
+        if (!syncEnabled) return;
+        try {
+            const dashboard =
+                await this.dashboardModel.getByIdOrSlug(dashboardUuid);
+            const spaces = await this.spaceModel.find({
+                spaceUuids: dashboard.spaceUuid ? [dashboard.spaceUuid] : [],
+            });
+            const verificationMap =
+                await this.contentVerificationModel.getByContentUuids(
+                    ContentType.DASHBOARD,
+                    [dashboard.uuid],
+                );
+            await this.recordAppliedSnapshot(
+                projectUuid,
+                ContentAsCodeType.DASHBOARD,
+                CoderService.transformDashboard(
+                    dashboard,
+                    spaces,
+                    verificationMap,
+                ),
+                user.userUuid,
+                filePath,
+            );
+        } catch (error) {
+            this.logger.warn(
+                `Failed to record as-code snapshot for dashboard ${dashboardUuid} on project ${projectUuid}`,
+                error,
+            );
+        }
+    }
+
+    private async stampAppliedSqlChartSnapshot(
+        user: SessionUser,
+        projectUuid: string,
+        slug: string,
+        syncEnabled: boolean,
+    ): Promise<void> {
+        if (!syncEnabled) return;
+        try {
+            const [row] = await this.savedSqlModel.find({
+                projectUuid,
+                slugs: [slug],
+            });
+            if (row === undefined) return;
+            await this.recordAppliedSnapshot(
+                projectUuid,
+                ContentAsCodeType.SQL_CHART,
+                CoderService.transformSqlChart(
+                    {
+                        name: row.name,
+                        description: row.description,
+                        slug: row.slug,
+                        sql: row.sql,
+                        limit: row.limit,
+                        config: row.config as SqlChartAsCode['config'],
+                        chartKind: row.chart_kind,
+                        lastUpdatedAt: row.last_version_updated_at,
+                    },
+                    row.path,
+                ),
+                user.userUuid,
+                undefined,
+            );
+        } catch (error) {
+            this.logger.warn(
+                `Failed to record as-code snapshot for SQL chart ${slug} on project ${projectUuid}`,
+                error,
+            );
+        }
+    }
+
+    /**
+     * Applies the declarative `ownerEmail` from dashboard-as-code: a string
+     * assigns the matching organization member as owner, null unassigns the
+     * owner, undefined leaves the current owner untouched.
+     * Returns warnings when the email does not match any organization member.
+     */
+    private async syncDashboardOwner({
+        organizationUuid,
+        dashboardUuid,
+        currentOwnerUserUuid,
+        ownerEmail,
+    }: {
+        organizationUuid: string;
+        dashboardUuid: string;
+        currentOwnerUserUuid: string | null;
+        ownerEmail: string | null | undefined;
+    }): Promise<string[]> {
+        if (ownerEmail === undefined) return [];
+
+        if (ownerEmail === null) {
+            if (currentOwnerUserUuid !== null) {
+                await this.dashboardModel.update(dashboardUuid, {
+                    ownerUserUuid: null,
+                });
+            }
+            return [];
+        }
+
+        const [member] =
+            await this.organizationMemberProfileModel.findOrganizationMembersByEmails(
+                organizationUuid,
+                [ownerEmail],
+            );
+        if (!member) {
+            return [
+                `Dashboard owner email "${ownerEmail}" does not match any organization member; owner left unchanged.`,
+            ];
+        }
+        if (member.userUuid !== currentOwnerUserUuid) {
+            await this.dashboardModel.update(dashboardUuid, {
+                ownerUserUuid: member.userUuid,
+            });
+        }
+        return [];
+    }
+
     async upsertChart(
         user: SessionUser,
         projectUuid: string,
@@ -2763,6 +3707,7 @@ export class CoderService extends BaseService {
         } = options;
         const shouldUpdateExistingContent = mode === 'upsert';
         const shouldUseExactSlug = mode === 'upsert';
+        const syncEnabled = await this.resolveSyncEnabled(projectUuid, options);
         const project = await this.projectModel.get(projectUuid);
 
         const auditedAbility = this.createAuditedAbility(user);
@@ -2772,6 +3717,17 @@ export class CoderService extends BaseService {
                 project,
                 slug,
             });
+
+        const metricQuery = {
+            ...chartAsCode.metricQuery,
+            filters: normalizeFilterIds(chartAsCode.metricQuery.filters),
+        };
+        const merge = chartAsCode.merge
+            ? normalizeSavedMergeDefinition(chartAsCode.merge, metricQuery)
+            : chartAsCode.merge;
+        if (chartAsCode.merge && !merge) {
+            throw new ParameterError('Invalid saved merge definition.');
+        }
 
         // Default optional fields when missing (e.g. user-authored YAML)
         const chartWithDefaults = {
@@ -2783,11 +3739,26 @@ export class CoderService extends BaseService {
                 projectUuid,
                 chartAsCode.chartConfig,
             ),
-            metricQuery: {
-                ...chartAsCode.metricQuery,
-                filters: normalizeFilterIds(chartAsCode.metricQuery.filters),
-            },
+            metricQuery,
+            merge,
         };
+
+        // Access block preflight runs before any write; dashboard-owned
+        // chart definitions are not grantable and reject one outright.
+        if (
+            chartAsCode.access !== undefined &&
+            chartAsCode.dashboardSlug !== undefined
+        ) {
+            throw new ParameterError(
+                `Chart ${slug} is saved in a dashboard and cannot carry an access block`,
+            );
+        }
+        const directAccessAssignments = await this.prepareDirectAccessReplace({
+            user,
+            organizationUuid: project.organizationUuid,
+            access: chartAsCode.access,
+            contentLabel: `Chart ${slug}`,
+        });
 
         // Create mode treats the requested slug as a base for a new unique
         // slug instead of updating content that already owns it.
@@ -2818,16 +3789,15 @@ export class CoderService extends BaseService {
                     project,
                     slug,
                 });
-
-                await this.assertCreateAccessForSpaceSlug({
-                    user,
-                    auditedAbility,
-                    projectUuid,
-                    spaceSlug: chartWithDefaults.spaceSlug,
-                    subjectType: 'SavedChart',
-                    errorMessage: `You don't have access to create charts in space "${chartWithDefaults.spaceSlug}"`,
-                });
             }
+            await this.assertContentAccessForMissingSpace({
+                user,
+                auditedAbility,
+                projectUuid,
+                spaceSlug: chartWithDefaults.spaceSlug,
+                subjectType: 'SavedChart',
+                errorMessage: `You don't have access to create charts in space "${chartWithDefaults.spaceSlug}"`,
+            });
 
             const { space, created: spaceCreated } =
                 await this.getOrCreateSpace(
@@ -2840,23 +3810,20 @@ export class CoderService extends BaseService {
                     allowSpaceCreate,
                 );
             // Fetched once, reused by the placeholder-dashboard check below
-            const spaceAccessContexts = canUploadAnyContent
-                ? null
-                : await this.spacePermissionService.getSpacesAccessContext(
-                      user.userUuid,
-                      [space.uuid],
-                  );
-            if (spaceAccessContexts !== null) {
-                await this.assertSpaceContentAccess({
-                    userUuid: user.userUuid,
-                    auditedAbility,
-                    action: 'create',
-                    subjectType: 'SavedChart',
-                    spaceUuids: [space.uuid],
-                    errorMessage: `You don't have access to create charts in space "${chartWithDefaults.spaceSlug}"`,
-                    accessContexts: spaceAccessContexts,
-                });
-            }
+            const spaceAccessContexts =
+                await this.spacePermissionService.resolveAccessBatch(
+                    user.userUuid,
+                    [{ type: 'space', spaceUuid: space.uuid }],
+                );
+            await this.assertSpaceContentAccess({
+                userUuid: user.userUuid,
+                auditedAbility,
+                action: 'create',
+                subjectType: 'SavedChart',
+                spaceUuids: [space.uuid],
+                errorMessage: `You don't have access to create charts in space "${chartWithDefaults.spaceSlug}"`,
+                accessContexts: spaceAccessContexts,
+            });
 
             console.info(
                 `Creating chart "${chartWithDefaults.name}" on project ${projectUuid}`,
@@ -2876,17 +3843,15 @@ export class CoderService extends BaseService {
 
                 let dashboardUuid: string = dashboard?.uuid;
                 if (!dashboard) {
-                    if (spaceAccessContexts !== null) {
-                        await this.assertSpaceContentAccess({
-                            userUuid: user.userUuid,
-                            auditedAbility,
-                            action: 'create',
-                            subjectType: 'Dashboard',
-                            spaceUuids: [space.uuid],
-                            errorMessage: `You don't have access to create dashboards in space "${chartWithDefaults.spaceSlug}"`,
-                            accessContexts: spaceAccessContexts,
-                        });
-                    }
+                    await this.assertSpaceContentAccess({
+                        userUuid: user.userUuid,
+                        auditedAbility,
+                        action: 'create',
+                        subjectType: 'Dashboard',
+                        spaceUuids: [space.uuid],
+                        errorMessage: `You don't have access to create dashboards in space "${chartWithDefaults.spaceSlug}"`,
+                        accessContexts: spaceAccessContexts,
+                    });
                     // Charts within dashboards need a dashboard first,
                     // so we will create a placeholder dashboard for this
                     // which we can update later
@@ -2908,7 +3873,7 @@ export class CoderService extends BaseService {
                     );
 
                     dashboardUuid = newDashboard.uuid;
-                } else if (!canUploadAnyContent) {
+                } else {
                     // Chart lives in the dashboard, not the YAML space.
                     // Mirrors SavedChartService: only SavedChart create in
                     // the dashboard's space is required.
@@ -2958,6 +3923,24 @@ export class CoderService extends BaseService {
                 verified: chartAsCode.verified,
             });
 
+            if (mode === 'upsert') {
+                await this.stampAppliedChartSnapshot(
+                    user,
+                    projectUuid,
+                    newChart.uuid,
+                    syncEnabled,
+                    options.filePath,
+                );
+            }
+
+            await this.applyDirectAccessPolicy(
+                user,
+                projectUuid,
+                DirectAccessResourceType.CHART,
+                newChart.uuid,
+                directAccessAssignments,
+            );
+
             console.info(
                 `Finished creating chart "${chartWithDefaults.name}" on project ${projectUuid}`,
             );
@@ -2985,45 +3968,43 @@ export class CoderService extends BaseService {
         console.info(
             `Updating chart "${chartWithDefaults.name}" on project ${projectUuid}`,
         );
-        const targetSpace = !canUploadAnyContent
-            ? await this.findAccessibleSpace(
-                  projectUuid,
-                  chartWithDefaults.spaceSlug,
-                  user,
-              )
-            : undefined;
+        const targetSpace = await this.findAccessibleSpace(
+            projectUuid,
+            chartWithDefaults.spaceSlug,
+            user,
+        );
+        if (
+            targetSpace === undefined &&
+            !skipSpaceCreate &&
+            !allowSpaceCreate
+        ) {
+            throw new ForbiddenError(
+                `You don't have access to create space "${chartWithDefaults.spaceSlug}"`,
+            );
+        }
+
+        // find() coalesces spaceUuid to the dashboard's space for
+        // dashboard-contained charts, so this covers both kinds
+        if (!chart.spaceUuid) {
+            throw new ForbiddenError(
+                `You don't have access to update chart "${slug}"`,
+            );
+        }
+
+        await this.assertSpaceContentAccess({
+            userUuid: user.userUuid,
+            auditedAbility,
+            action: 'update',
+            subjectType: 'SavedChart',
+            spaceUuids: [
+                ...(targetSpace ? [targetSpace.uuid] : []),
+                ...(chart.spaceUuid ? [chart.spaceUuid] : []),
+            ],
+            metadata: { savedChartUuid: chart.uuid },
+            errorMessage: `You don't have access to update chart "${slug}"`,
+        });
+
         if (!canUploadAnyContent) {
-            if (
-                targetSpace === undefined &&
-                !skipSpaceCreate &&
-                !allowSpaceCreate
-            ) {
-                throw new ForbiddenError(
-                    `You don't have access to create space "${chartWithDefaults.spaceSlug}"`,
-                );
-            }
-
-            // find() coalesces spaceUuid to the dashboard's space for
-            // dashboard-contained charts, so this covers both kinds
-            if (!chart.spaceUuid) {
-                throw new ForbiddenError(
-                    `You don't have access to update chart "${slug}"`,
-                );
-            }
-
-            await this.assertSpaceContentAccess({
-                userUuid: user.userUuid,
-                auditedAbility,
-                action: 'update',
-                subjectType: 'SavedChart',
-                spaceUuids: [
-                    ...(targetSpace ? [targetSpace.uuid] : []),
-                    ...(chart.spaceUuid ? [chart.spaceUuid] : []),
-                ],
-                metadata: { savedChartUuid: chart.uuid },
-                errorMessage: `You don't have access to update chart "${slug}"`,
-            });
-
             const currentChart = await this.savedChartModel.get(chart.uuid);
             CoderService.handleContentAsCodeSqlPermissionChecks({
                 checks: CoderService.getChartContentAsCodePermissionChecks(
@@ -3036,6 +4017,19 @@ export class CoderService extends BaseService {
             });
         }
 
+        if (targetSpace === undefined && !skipSpaceCreate) {
+            await this.assertContentAccessForMissingSpace({
+                user,
+                auditedAbility,
+                projectUuid,
+                spaceSlug: chartWithDefaults.spaceSlug,
+                subjectType: 'SavedChart',
+                action: 'update',
+                metadata: { savedChartUuid: chart.uuid },
+                errorMessage: `You don't have access to update chart "${slug}"`,
+            });
+        }
+
         const { space } = await this.getOrCreateSpace(
             projectUuid,
             chartWithDefaults.spaceSlug,
@@ -3045,7 +4039,7 @@ export class CoderService extends BaseService {
             spaceNames,
             allowSpaceCreate,
         );
-        if (!canUploadAnyContent && space.uuid !== targetSpace?.uuid) {
+        if (space.uuid !== targetSpace?.uuid) {
             await this.assertSpaceContentAccess({
                 userUuid: user.userUuid,
                 auditedAbility,
@@ -3083,7 +4077,18 @@ export class CoderService extends BaseService {
                 updatedChart,
                 upstreamChart,
             );
-        if (force) {
+        const resolvedConfig = chartWithDefaults.chartConfig;
+        const existingConfig = promotedChart.chart.chartConfig;
+        const vizBindingChanged =
+            resolvedConfig.type === ChartType.DATA_APP_VIZ &&
+            (existingConfig?.type !== ChartType.DATA_APP_VIZ ||
+                existingConfig.config?.dataAppVizUuid !==
+                    resolvedConfig.config?.dataAppVizUuid ||
+                existingConfig.config?.dataAppVizVersion !==
+                    resolvedConfig.config?.dataAppVizVersion);
+        // Promotion compares chart metadata and timestamps, not chart config.
+        // An as-code upload can change only the resolved chart-type pin.
+        if (force || vizBindingChanged) {
             promotionChanges = {
                 ...promotionChanges,
                 charts: promotionChanges.charts.map((c) =>
@@ -3106,6 +4111,24 @@ export class CoderService extends BaseService {
             contentUuid: chart.uuid,
             verified: chartAsCode.verified,
         });
+
+        if (mode === 'upsert') {
+            await this.stampAppliedChartSnapshot(
+                user,
+                projectUuid,
+                chart.uuid,
+                syncEnabled,
+                options.filePath,
+            );
+        }
+
+        await this.applyDirectAccessPolicy(
+            user,
+            projectUuid,
+            DirectAccessResourceType.CHART,
+            chart.uuid,
+            directAccessAssignments,
+        );
 
         console.info(
             `Finished updating chart "${chartWithDefaults.name}" on project ${projectUuid}: ${promotionChanges.charts[0].action}`,
@@ -3133,45 +4156,41 @@ export class CoderService extends BaseService {
 
         const project = await this.projectModel.get(projectUuid);
         const auditedAbility = this.createAuditedAbility(user);
-        const { canUploadAnyContent } =
-            CoderService.checkContentAsCodeWriteAccess({
-                auditedAbility,
-                project,
-                slug: from,
-            });
+        CoderService.checkContentAsCodeWriteAccess({
+            auditedAbility,
+            project,
+            slug: from,
+        });
 
         switch (resourceType) {
             case ContentType.CHART: {
                 const chart = await this.savedChartModel.get(from, undefined, {
                     projectUuid,
                 });
-                if (!canUploadAnyContent) {
-                    const { inheritsFromOrgOrProject, access } =
-                        await this.spacePermissionService.getSpaceAccessContext(
-                            user.userUuid,
-                            chart.spaceUuid,
-                        );
-                    if (
-                        auditedAbility.cannot(
-                            'update',
-                            subject('SavedChart', {
-                                organizationUuid: project.organizationUuid,
-                                projectUuid,
-                                inheritsFromOrgOrProject,
-                                access,
-                                metadata: {
-                                    savedChartUuid: chart.uuid,
-                                    savedChartName: chart.name,
-                                },
-                            }),
-                        )
-                    ) {
-                        throw new ForbiddenError(
-                            `You don't have access to rename chart "${from}"`,
-                        );
-                    }
+                const { inheritsFromOrgOrProject, access } =
+                    await this.spacePermissionService.resolveAccess(
+                        user.userUuid,
+                        { type: 'space', spaceUuid: chart.spaceUuid },
+                    );
+                if (
+                    auditedAbility.cannot(
+                        'update',
+                        subject('SavedChart', {
+                            organizationUuid: project.organizationUuid,
+                            projectUuid,
+                            inheritsFromOrgOrProject,
+                            access,
+                            metadata: {
+                                savedChartUuid: chart.uuid,
+                                savedChartName: chart.name,
+                            },
+                        }),
+                    )
+                ) {
+                    throw new ForbiddenError(
+                        `You don't have access to rename chart "${from}"`,
+                    );
                 }
-
                 await this.savedChartModel.renameSlug({
                     projectUuid,
                     savedChartUuid: chart.uuid,
@@ -3180,9 +4199,29 @@ export class CoderService extends BaseService {
                 });
                 return;
             }
-            case ContentType.DASHBOARD:
+            case ContentType.DASHBOARD: {
+                const dashboard = await this.dashboardModel.getByIdOrSlug(
+                    from,
+                    {
+                        projectUuid,
+                    },
+                );
+                await this.assertDashboardUpdateAccess({
+                    userUuid: user.userUuid,
+                    auditedAbility,
+                    dashboard,
+                });
+                await this.dashboardModel.renameSlug({
+                    projectUuid,
+                    dashboardUuid: dashboard.uuid,
+                    from,
+                    to,
+                });
+                return;
+            }
             case ContentType.SPACE:
             case ContentType.DATA_APP:
+            case ContentType.DOCUMENT:
                 throw new NotImplementedError(
                     `Slug renaming is not supported for resource type "${resourceType}" yet`,
                 );
@@ -3207,18 +4246,27 @@ export class CoderService extends BaseService {
         const project = await this.projectModel.get(projectUuid);
 
         const auditedAbility = this.createAuditedAbility(user);
-        const { canUploadAnyContent, allowSpaceCreate } =
-            CoderService.checkContentAsCodeWriteAccess({
+        const { allowSpaceCreate } = CoderService.checkContentAsCodeWriteAccess(
+            {
                 auditedAbility,
                 project,
                 slug,
-            });
+            },
+        );
 
         // Default updatedAt to now when missing (e.g. user-authored YAML)
         const sqlChartWithDefaults = {
             ...sqlChartAsCode,
             updatedAt: sqlChartAsCode.updatedAt ?? new Date(),
         };
+
+        // Access block preflight runs before any write.
+        const directAccessAssignments = await this.prepareDirectAccessReplace({
+            user,
+            organizationUuid: project.organizationUuid,
+            access: sqlChartAsCode.access,
+            contentLabel: `SQL chart ${slug}`,
+        });
 
         const sqlChartRows = await this.savedSqlModel.find({
             slugs: [slug],
@@ -3245,15 +4293,29 @@ export class CoderService extends BaseService {
             throw new ForbiddenError();
         }
 
-        if (!isUpdate && !canUploadAnyContent) {
-            await this.assertCreateAccessForSpaceSlug({
+        if (existingSqlChart !== undefined) {
+            await this.assertSpaceContentAccess({
+                userUuid: user.userUuid,
+                auditedAbility,
+                action: 'update',
+                subjectType: 'SavedChart',
+                spaceUuids: [existingSqlChart.space_uuid],
+                metadata: { savedSqlUuid: existingSqlChart.saved_sql_uuid },
+                errorMessage: `You don't have access to update Saved SQL chart "${slug}"`,
+            });
+        }
+        if (!skipSpaceCreate) {
+            await this.assertContentAccessForMissingSpace({
                 user,
                 auditedAbility,
                 projectUuid,
                 spaceSlug: sqlChartWithDefaults.spaceSlug,
                 subjectType: 'SavedChart',
-                metadata: { savedSqlUuid: null },
-                errorMessage: `You don't have access to create Saved SQL chart "${slug}"`,
+                action: isUpdate ? 'update' : 'create',
+                metadata: {
+                    savedSqlUuid: existingSqlChart?.saved_sql_uuid ?? null,
+                },
+                errorMessage: `You don't have access to ${isUpdate ? 'update' : 'create'} Saved SQL chart "${slug}"`,
             });
         }
 
@@ -3307,6 +4369,15 @@ export class CoderService extends BaseService {
                 `Finished creating SQL chart "${sqlChartAsCode.name}" on project ${projectUuid}`,
             );
 
+            // SQL charts do not record Git-backed snapshots yet because their
+            // positional upsert arguments do not carry sync settings.
+            await this.stampAppliedSqlChartSnapshot(
+                user,
+                projectUuid,
+                sqlChartAsCode.slug,
+                false,
+            );
+
             // Note: We use a minimal object for the promotion changes since SQL charts
             // don't have the same structure as regular charts. The CLI only uses the action.
             const promotionChanges: PromotionChanges = {
@@ -3326,6 +4397,13 @@ export class CoderService extends BaseService {
                     : [],
                 dashboards: [],
             };
+            await this.applyDirectAccessPolicy(
+                user,
+                projectUuid,
+                DirectAccessResourceType.SQL_CHART,
+                savedSqlUuid,
+                directAccessAssignments,
+            );
             return promotionChanges;
         }
 
@@ -3355,6 +4433,9 @@ export class CoderService extends BaseService {
             `Finished updating SQL chart "${sqlChartAsCode.name}" on project ${projectUuid}`,
         );
 
+        // See the create-path comment above: no sync support for SQL charts yet.
+        await this.stampAppliedSqlChartSnapshot(user, projectUuid, slug, false);
+
         const promotionChanges: PromotionChanges = {
             charts: [
                 {
@@ -3372,6 +4453,13 @@ export class CoderService extends BaseService {
                 : [],
             dashboards: [],
         };
+        await this.applyDirectAccessPolicy(
+            user,
+            projectUuid,
+            DirectAccessResourceType.SQL_CHART,
+            existingSqlChart.saved_sql_uuid,
+            directAccessAssignments,
+        );
         return promotionChanges;
     }
 
@@ -3409,15 +4497,14 @@ export class CoderService extends BaseService {
         if (spaceUuid === null) return undefined;
 
         const accessContexts =
-            await this.spacePermissionService.getSpacesAccessContext(userUuid, [
-                spaceUuid,
+            await this.spacePermissionService.resolveAccessBatch(userUuid, [
+                { type: 'space', spaceUuid },
             ]);
-        return accessContexts[spaceUuid];
+        // One result per target, input-ordered — the contract guarantees it.
+        return accessContexts[0]?.context;
     }
 
-    // Throws unless the caller can write content as code. `canUploadAnyContent`
-    // (manage:ContentAsCode) allows uploading any content, so the granular
-    // space/SQL checks below don't apply.
+    // Broad content-as-code grants bypass SQL checks, not content/space access.
     private static checkContentAsCodeWriteAccess({
         auditedAbility,
         project,
@@ -3451,15 +4538,13 @@ export class CoderService extends BaseService {
                 `You don't have permission to upload content as code to this project (content slug "${slug}")`,
             );
         }
-        const allowSpaceCreate =
-            canUploadAnyContent ||
-            auditedAbility.can(
-                'create',
-                subject('Space', {
-                    organizationUuid: project.organizationUuid,
-                    projectUuid: project.projectUuid,
-                }),
-            );
+        const allowSpaceCreate = auditedAbility.can(
+            'create',
+            subject('Space', {
+                organizationUuid: project.organizationUuid,
+                projectUuid: project.projectUuid,
+            }),
+        );
         return { canUploadAnyContent, allowSpaceCreate };
     }
 
@@ -3482,44 +4567,62 @@ export class CoderService extends BaseService {
         errorMessage: string;
         // Pre-fetched contexts to avoid refetching for the same spaces
         accessContexts?: Awaited<
-            ReturnType<SpacePermissionService['getSpacesAccessContext']>
+            ReturnType<SpacePermissionService['resolveAccessBatch']>
         >;
     }): Promise<void> {
         const uniqueSpaceUuids = [...new Set(spaceUuids)];
         if (uniqueSpaceUuids.length === 0) return;
         const spaceAccessContexts =
             accessContexts ??
-            (await this.spacePermissionService.getSpacesAccessContext(
+            (await this.spacePermissionService.resolveAccessBatch(
                 userUuid,
-                uniqueSpaceUuids,
+                uniqueSpaceUuids.map((spaceUuid) => ({
+                    type: 'space' as const,
+                    spaceUuid,
+                })),
             ));
-        const lacksAccess = auditedAbility
-            .canBulk(
-                action,
-                uniqueSpaceUuids.map((spaceUuid) =>
-                    subject(subjectType, {
-                        ...spaceAccessContexts[spaceUuid],
-                        metadata: {
-                            spaceUuid,
-                            ...(metadata ?? {}),
-                        },
-                    }),
-                ),
-            )
-            .some((allowed) => !allowed);
+        // Coverage is checked by key, not by count: every REQUESTED space must
+        // have resolved a context, so a pre-fetched batch for a different (but
+        // equally sized) set of spaces can never satisfy the check.
+        const contextBySpaceUuid = new Map(
+            spaceAccessContexts.map(({ target, context }) => [
+                target.spaceUuid,
+                context,
+            ]),
+        );
+        const resolvedContexts = uniqueSpaceUuids.flatMap((spaceUuid) => {
+            const context = contextBySpaceUuid.get(spaceUuid);
+            return context ? [{ context, spaceUuid }] : [];
+        });
+        const lacksAccess =
+            resolvedContexts.length !== uniqueSpaceUuids.length ||
+            auditedAbility
+                .canBulk(
+                    action,
+                    resolvedContexts.map(({ context, spaceUuid }) =>
+                        subject(subjectType, {
+                            ...context,
+                            metadata: {
+                                spaceUuid,
+                                ...(metadata ?? {}),
+                            },
+                        }),
+                    ),
+                )
+                .some((allowed) => !allowed);
         if (lacksAccess) {
             throw new ForbiddenError(errorMessage);
         }
     }
 
-    // Target space missing: gate create on the closest existing ancestor
-    // BEFORE creating the space, so a denied create can't orphan a space.
-    private async assertCreateAccessForSpaceSlug({
+    // Authorize the closest existing ancestor before creating missing spaces.
+    private async assertContentAccessForMissingSpace({
         user,
         auditedAbility,
         projectUuid,
         spaceSlug,
         subjectType,
+        action = 'create',
         metadata,
         errorMessage,
     }: {
@@ -3528,6 +4631,7 @@ export class CoderService extends BaseService {
         projectUuid: string;
         spaceSlug: string;
         subjectType: 'SavedChart' | 'Dashboard';
+        action?: 'create' | 'update';
         metadata?: ContentAsCodeSpaceContentMetadata;
         errorMessage: string;
     }): Promise<void> {
@@ -3546,7 +4650,7 @@ export class CoderService extends BaseService {
         if (
             ancestorSpaceAccessContext !== undefined &&
             auditedAbility.cannot(
-                'create',
+                action,
                 subject(subjectType, {
                     ...ancestorSpaceAccessContext,
                     ...(metadata !== undefined ? { metadata } : {}),
@@ -3604,22 +4708,42 @@ export class CoderService extends BaseService {
         ];
         if (referencedCharts.length === 0) return;
 
-        const spaceAccessContexts =
-            await this.spacePermissionService.getSpacesAccessContext(userUuid, [
-                ...new Set(referencedCharts.map((chart) => chart.spaceUuid)),
-            ]);
+        const uniqueSpaceUuids = [
+            ...new Set(referencedCharts.map((chart) => chart.spaceUuid)),
+        ];
+        const resolvedSpaceContexts =
+            await this.spacePermissionService.resolveAccessBatch(
+                userUuid,
+                uniqueSpaceUuids.map((spaceUuid) => ({
+                    type: 'space' as const,
+                    spaceUuid,
+                })),
+            );
+        const spaceAccessContexts = spaceContextsByUuid(resolvedSpaceContexts);
+        const chartsWithContext = referencedCharts.flatMap((chart) => {
+            const context = spaceAccessContexts[chart.spaceUuid];
+            return context ? [{ chart, context }] : [];
+        });
         const accessResults = auditedAbility.canBulk(
             'view',
-            referencedCharts.map((chart) =>
+            chartsWithContext.map(({ chart, context }) =>
                 subject('SavedChart', {
-                    ...spaceAccessContexts[chart.spaceUuid],
+                    ...context,
                     metadata: chart.metadata,
                 }),
             ),
         );
-        const inaccessibleChartSlugs = referencedCharts
-            .filter((_, index) => !accessResults[index])
-            .map((chart) => chart.slug);
+        const inaccessibleChartSlugs = [
+            ...referencedCharts
+                .filter(
+                    (chart) =>
+                        spaceAccessContexts[chart.spaceUuid] === undefined,
+                )
+                .map((chart) => chart.slug),
+            ...chartsWithContext
+                .filter((_, index) => !accessResults[index])
+                .map(({ chart }) => chart.slug),
+        ];
         if (inaccessibleChartSlugs.length > 0) {
             throw new ForbiddenError(
                 `You don't have access to chart(s) referenced by this dashboard: ${inaccessibleChartSlugs.join(
@@ -3797,6 +4921,7 @@ export class CoderService extends BaseService {
                 dashboardCount: 0,
                 childSpaceCount: 0,
                 appCount: 0,
+                documentCount: 0,
             },
             created: true,
         };
@@ -3812,21 +4937,22 @@ export class CoderService extends BaseService {
         const {
             skipSpaceCreate,
             publicSpaceCreate,
-            force,
             spaceNames,
             mode = 'upsert',
         } = options;
         const shouldUpdateExistingContent = mode === 'upsert';
         const shouldUseExactSlug = mode === 'upsert';
+        const syncEnabled = await this.resolveSyncEnabled(projectUuid, options);
         const project = await this.projectModel.get(projectUuid);
 
         const auditedAbility = this.createAuditedAbility(user);
-        const { canUploadAnyContent, allowSpaceCreate } =
-            CoderService.checkContentAsCodeWriteAccess({
+        const { allowSpaceCreate } = CoderService.checkContentAsCodeWriteAccess(
+            {
                 auditedAbility,
                 project,
                 slug,
-            });
+            },
+        );
 
         // Default optional fields when missing (e.g. user-authored YAML)
         const dashboardWithDefaults = {
@@ -3839,6 +4965,14 @@ export class CoderService extends BaseService {
                     dashboardAsCode.filters?.tableCalculations ?? [],
             },
         };
+
+        // Access block preflight runs before any write.
+        const directAccessAssignments = await this.prepareDirectAccessReplace({
+            user,
+            organizationUuid: project.organizationUuid,
+            access: dashboardAsCode.access,
+            contentLabel: `Dashboard ${slug}`,
+        });
 
         // Create mode treats the requested slug as a base for a new unique
         // slug instead of updating content that already owns it.
@@ -3866,14 +5000,12 @@ export class CoderService extends BaseService {
                 dashboardWithResolvedTabs.tiles,
                 tabUuidsBySlug,
             );
-        if (!canUploadAnyContent) {
-            await this.assertTileChartsViewAccess({
-                userUuid: user.userUuid,
-                auditedAbility,
-                projectUuid,
-                tiles: dashboardWithDefaults.tiles,
-            });
-        }
+        await this.assertTileChartsViewAccess({
+            userUuid: user.userUuid,
+            auditedAbility,
+            projectUuid,
+            tiles: dashboardWithDefaults.tiles,
+        });
 
         const dashboardFilters = CoderService.getFiltersWithTileUuids(
             dashboardWithResolvedTabs,
@@ -3888,16 +5020,14 @@ export class CoderService extends BaseService {
         // If chart does not exist, we can't use promoteService,
         // since it relies on information that's not available in ChartAsCode, and other uuids
         if (dashboardSummary === undefined) {
-            if (!canUploadAnyContent) {
-                await this.assertCreateAccessForSpaceSlug({
-                    user,
-                    auditedAbility,
-                    projectUuid,
-                    spaceSlug: dashboardWithDefaults.spaceSlug,
-                    subjectType: 'Dashboard',
-                    errorMessage: `You don't have access to create dashboards in space "${dashboardWithDefaults.spaceSlug}"`,
-                });
-            }
+            await this.assertContentAccessForMissingSpace({
+                user,
+                auditedAbility,
+                projectUuid,
+                spaceSlug: dashboardWithDefaults.spaceSlug,
+                subjectType: 'Dashboard',
+                errorMessage: `You don't have access to create dashboards in space "${dashboardWithDefaults.spaceSlug}"`,
+            });
 
             const { space, created: spaceCreated } =
                 await this.getOrCreateSpace(
@@ -3909,18 +5039,16 @@ export class CoderService extends BaseService {
                     spaceNames,
                     allowSpaceCreate,
                 );
-            if (!canUploadAnyContent) {
-                await this.assertSpaceContentAccess({
-                    userUuid: user.userUuid,
-                    auditedAbility,
-                    action: 'create',
-                    subjectType: 'Dashboard',
-                    spaceUuids: [space.uuid],
-                    errorMessage: `You don't have access to create dashboards in space "${dashboardWithDefaults.spaceSlug}"`,
-                });
-            }
+            await this.assertSpaceContentAccess({
+                userUuid: user.userUuid,
+                auditedAbility,
+                action: 'create',
+                subjectType: 'Dashboard',
+                spaceUuids: [space.uuid],
+                errorMessage: `You don't have access to create dashboards in space "${dashboardWithDefaults.spaceSlug}"`,
+            });
 
-            const newDashboard = await this.dashboardModel.create(
+            let newDashboard = await this.dashboardModel.create(
                 space.uuid,
                 {
                     ...dashboardWithResolvedTabs,
@@ -3933,6 +5061,39 @@ export class CoderService extends BaseService {
                 projectUuid,
             );
 
+            if (hasChartsInDashboard(newDashboard)) {
+                const copiedTiles = await Promise.all(
+                    newDashboard.tiles.map(async (tile) => {
+                        if (
+                            !isDashboardChartTileType(tile) ||
+                            !tile.properties.belongsToDashboard ||
+                            !tile.properties.savedChartUuid
+                        ) {
+                            return tile;
+                        }
+                        const savedChartUuid =
+                            await this.dashboardService.duplicateChartForDashboard(
+                                {
+                                    user,
+                                    projectUuid,
+                                    dashboardUuid: newDashboard.uuid,
+                                    chartUuid: tile.properties.savedChartUuid,
+                                },
+                            );
+                        return {
+                            ...tile,
+                            properties: { ...tile.properties, savedChartUuid },
+                        };
+                    }),
+                );
+                newDashboard = await this.dashboardModel.addVersion(
+                    newDashboard.uuid,
+                    { ...newDashboard, tiles: copiedTiles },
+                    user,
+                    projectUuid,
+                );
+            }
+
             await this.syncVerification({
                 user,
                 projectUuid,
@@ -3941,6 +5102,31 @@ export class CoderService extends BaseService {
                 contentUuid: newDashboard.uuid,
                 verified: dashboardAsCode.verified,
             });
+
+            const createOwnerWarnings = await this.syncDashboardOwner({
+                organizationUuid: project.organizationUuid,
+                dashboardUuid: newDashboard.uuid,
+                currentOwnerUserUuid: newDashboard.owner?.userUuid ?? null,
+                ownerEmail: dashboardAsCode.ownerEmail,
+            });
+
+            if (mode === 'upsert') {
+                await this.stampAppliedDashboardSnapshot(
+                    user,
+                    projectUuid,
+                    newDashboard.uuid,
+                    syncEnabled,
+                    options.filePath,
+                );
+            }
+
+            await this.applyDirectAccessPolicy(
+                user,
+                projectUuid,
+                DirectAccessResourceType.DASHBOARD,
+                newDashboard.uuid,
+                directAccessAssignments,
+            );
 
             return withTileWarnings(
                 {
@@ -3961,7 +5147,7 @@ export class CoderService extends BaseService {
                         ? [{ action: PromotionAction.CREATE, data: space }]
                         : [],
                 },
-                tileWarnings,
+                [...tileWarnings, ...createOwnerWarnings],
             );
         }
         // Use promote service to update existing dashboard
@@ -3972,33 +5158,42 @@ export class CoderService extends BaseService {
             `Updating dashboard "${dashboard.name}" on project ${projectUuid}`,
         );
 
-        const targetSpace = !canUploadAnyContent
-            ? await this.findAccessibleSpace(
-                  projectUuid,
-                  dashboardWithDefaults.spaceSlug,
-                  user,
-              )
-            : undefined;
-        if (!canUploadAnyContent) {
-            if (
-                targetSpace === undefined &&
-                !skipSpaceCreate &&
-                !allowSpaceCreate
-            ) {
-                throw new ForbiddenError(
-                    `You don't have access to create space "${dashboardWithDefaults.spaceSlug}"`,
-                );
-            }
-            await this.assertDashboardUpdateAccess({
-                userUuid: user.userUuid,
+        const targetSpace = await this.findAccessibleSpace(
+            projectUuid,
+            dashboardWithDefaults.spaceSlug,
+            user,
+        );
+        if (
+            targetSpace === undefined &&
+            !skipSpaceCreate &&
+            !allowSpaceCreate
+        ) {
+            throw new ForbiddenError(
+                `You don't have access to create space "${dashboardWithDefaults.spaceSlug}"`,
+            );
+        }
+        await this.assertDashboardUpdateAccess({
+            userUuid: user.userUuid,
+            auditedAbility,
+            dashboard,
+            additionalSpaceUuids: targetSpace ? [targetSpace.uuid] : [],
+        });
+        if (targetSpace === undefined && !skipSpaceCreate) {
+            await this.assertContentAccessForMissingSpace({
+                user,
                 auditedAbility,
-                dashboard,
-                additionalSpaceUuids: targetSpace ? [targetSpace.uuid] : [],
+                projectUuid,
+                spaceSlug: dashboardWithDefaults.spaceSlug,
+                subjectType: 'Dashboard',
+                action: 'update',
+                metadata: { dashboardUuid: dashboard.uuid },
+                errorMessage: `You don't have access to update dashboard "${slug}"`,
             });
         }
 
         const dashboardWithUuids = {
             ...dashboardWithResolvedTabs,
+            slug: dashboard.slug,
             tiles: tilesWithUuids,
             config: dashboardConfig,
         };
@@ -4031,7 +5226,7 @@ export class CoderService extends BaseService {
             spaceNames,
             allowSpaceCreate,
         );
-        if (!canUploadAnyContent && space.uuid !== targetSpace?.uuid) {
+        if (space.uuid !== targetSpace?.uuid) {
             await this.assertSpaceContentAccess({
                 userUuid: user.userUuid,
                 auditedAbility,
@@ -4060,16 +5255,10 @@ export class CoderService extends BaseService {
         // TODO: Right now dashboards on promote service always update dashboards
         // See isDashboardUpdated for more details
 
-        if (force) {
-            promotionChanges = {
-                ...promotionChanges,
-                charts: promotionChanges.charts.map((c) =>
-                    c.action === PromotionAction.NO_CHANGES
-                        ? { ...c, action: PromotionAction.UPDATE }
-                        : c,
-                ),
-            };
-        }
+        // Unlike upsertChart, force must not flip NO_CHANGES tile charts to
+        // UPDATE here: promoted and upstream both resolve to this project's
+        // DB rows, so a forced update writes an identical duplicate chart
+        // version. Chart file changes are applied by the chart upload path.
 
         promotionChanges = await this.promoteService.getOrCreateDashboard(
             user,
@@ -4096,9 +5285,37 @@ export class CoderService extends BaseService {
             verified: dashboardAsCode.verified,
         });
 
+        const ownerWarnings = await this.syncDashboardOwner({
+            organizationUuid: project.organizationUuid,
+            dashboardUuid: dashboard.uuid,
+            currentOwnerUserUuid: dashboard.owner?.userUuid ?? null,
+            ownerEmail: dashboardAsCode.ownerEmail,
+        });
+
+        if (mode === 'upsert') {
+            await this.stampAppliedDashboardSnapshot(
+                user,
+                projectUuid,
+                dashboard.uuid,
+                syncEnabled,
+                options.filePath,
+            );
+        }
+
+        await this.applyDirectAccessPolicy(
+            user,
+            projectUuid,
+            DirectAccessResourceType.DASHBOARD,
+            dashboard.uuid,
+            directAccessAssignments,
+        );
+
         console.info(
             `Finished updating dashboard "${dashboard.name}" on project ${projectUuid}: ${promotionChanges.dashboards[0].action}`,
         );
-        return withTileWarnings(promotionChanges, tileWarnings);
+        return withTileWarnings(promotionChanges, [
+            ...tileWarnings,
+            ...ownerWarnings,
+        ]);
     }
 }

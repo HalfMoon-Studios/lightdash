@@ -8,6 +8,7 @@
 import { createApiTransport } from './apiTransport';
 import { applyColorSchemeSeed, mountColorScheme } from './colorScheme';
 import { mountInspector } from './inspector';
+import { mountInsights } from './insights';
 import { mountLineage } from './lineage';
 import { createPostMessageTransport } from './postMessageTransport';
 import { QueryBuilder } from './query';
@@ -42,7 +43,8 @@ export class LightdashClient {
      *
      * Supply only the connection `alias` and a relative request — Lightdash
      * resolves the alias to a stored connection, attaches its credentials,
-     * and proxies the call. The app never sees the URL, headers, or secrets.
+     * and proxies the call. The app never sees the request URL, request
+     * headers, or secrets. Safe response headers are available on `res.headers`.
      *
      *   const res = await lightdash.externalFetch('stripe', {
      *       path: '/v1/charges',
@@ -104,15 +106,21 @@ function configFromEnv(): LightdashClientConfig | null {
 export function createClient(): LightdashClient {
     // 1. postMessage transport (iframe hosted by Lightdash parent)
     if (typeof window !== 'undefined' && window.location.hash) {
-        const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+        const params = new URLSearchParams(
+            window.location.hash.replace(/^#/, ''),
+        );
         if (params.get('transport') === 'postMessage') {
             const projectUuid = params.get('projectUuid') ?? '';
             mountInspector(window.parent);
             mountLineage(window.parent);
             mountColorScheme(window.parent);
+            mountInsights(window.parent);
             return new LightdashClient(
                 { apiKey: '', baseUrl: '', projectUuid },
-                createPostMessageTransport({ targetWindow: window.parent, projectUuid }),
+                createPostMessageTransport({
+                    targetWindow: window.parent,
+                    projectUuid,
+                }),
             );
         }
     }

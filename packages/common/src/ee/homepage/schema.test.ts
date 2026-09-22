@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { parseHomepageConfig, sanitizeHomepageConfig } from './schema';
+import {
+    collectionBlockSchema,
+    parseHomepageConfig,
+    sanitizeHomepageConfig,
+} from './schema';
 import { defaultHomepageConfig, type HomepageConfig } from './types';
 
 const validConfig: HomepageConfig = {
@@ -38,6 +42,12 @@ const validConfig: HomepageConfig = {
                                 dashboardUuid: 'd2',
                                 label: 'KPIs',
                             },
+                            {
+                                type: 'space',
+                                spaceUuid: 's1',
+                                label: 'Finance',
+                            },
+                            { type: 'my-space' },
                         ],
                     },
                 },
@@ -117,6 +127,31 @@ describe('parseHomepageConfig', () => {
                                     type: 'link' as const,
                                     url: 'https://example.com/survey',
                                 },
+                            },
+                        },
+                    ],
+                },
+                {
+                    id: 'row-2',
+                    blocks: [
+                        {
+                            id: 'b3',
+                            type: 'cta' as const,
+                            config: {
+                                buttonLabel: 'Finance space',
+                                target: {
+                                    type: 'space' as const,
+                                    spaceUuid: 's1',
+                                    label: 'Finance',
+                                },
+                            },
+                        },
+                        {
+                            id: 'b4',
+                            type: 'cta' as const,
+                            config: {
+                                buttonLabel: 'My space',
+                                target: { type: 'my-space' as const },
                             },
                         },
                     ],
@@ -324,5 +359,25 @@ describe('sanitizeHomepageConfig', () => {
         expect(() => sanitizeHomepageConfig({ rows: 'nope' })).toThrow(
             /Corrupt/,
         );
+    });
+});
+
+describe('Document collections', () => {
+    it('preserves Document references mixed with existing content and the Document type filter', () => {
+        const block = {
+            id: 'mixed',
+            type: 'collection',
+            config: {
+                title: 'Documents',
+                source: 'manual',
+                items: [
+                    { contentType: 'document', uuid: 'first-document' },
+                    { contentType: 'dashboard', uuid: 'dashboard' },
+                    { contentType: 'document', uuid: 'second-document' },
+                ],
+                contentTypes: ['document'],
+            },
+        };
+        expect(collectionBlockSchema.parse(block)).toEqual(block);
     });
 });

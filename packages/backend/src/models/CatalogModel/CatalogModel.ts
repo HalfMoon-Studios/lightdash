@@ -42,6 +42,7 @@ import {
     type UserAttributeValueMap,
 } from '@lightdash/common';
 import { Knex } from 'knex';
+import { chunk } from 'lodash';
 import { validate as isValidUuid } from 'uuid';
 import type { LightdashConfig } from '../../config/parseConfig';
 import {
@@ -66,8 +67,15 @@ import { EmailTableName } from '../../database/entities/emails';
 import { CachedExploreTableName } from '../../database/entities/projects';
 import { DbTag, TagsTableName } from '../../database/entities/tags';
 import { UserTableName } from '../../database/entities/users';
-import KnexPaginate from '../../database/pagination';
+import KnexPaginate, {
+    type KnexPaginateQueryMeasurer,
+} from '../../database/pagination';
+import {
+    newCatalogSearchExploreCacheReadContext,
+    summarizeCatalogSearchExploreRead,
+} from '../../logging/exploreCacheReadMetrics';
 import Logger from '../../logging/logger';
+import { measureTime } from '../../logging/measureTime';
 import { wrapSentryTransaction } from '../../utils';
 import {
     getFullTextSearchQuery,
@@ -100,6 +108,24 @@ type DbMetricsTreeWithLock = DbMetricsTree & {
     lock_user_last_name: string | null;
     lock_acquired_at: Date | null;
 };
+
+type CatalogSearchPageRow = DbCatalog & {
+    search_rank: number;
+    owner_first_name?: string;
+    owner_last_name?: string;
+    owner_email?: string;
+};
+
+type HydratedCatalogSearchPageRow = CatalogSearchPageRow & {
+    __page_ordinal: string;
+    hydrated_explores: Record<string, Explore> | null;
+};
+
+const getHydratedExplores = (
+    rows: HydratedCatalogSearchPageRow[],
+): Record<string, Explore> =>
+    rows.find(({ hydrated_explores }) => hydrated_explores !== null)
+        ?.hydrated_explores ?? {};
 
 const parseLockInfo = (
     row: DbMetricsTreeWithLock,
@@ -498,13 +524,14 @@ export class CatalogModel {
                 `${CatalogTableName}.label`,
                 'description',
                 'type',
-                `${CachedExploreTableName}.explore`,
+                `${CatalogTableName}.cached_explore_uuid`,
                 `required_attributes`,
                 `any_attributes`,
                 `chart_usage`,
                 `${CatalogTableName}.joined_tables`,
                 `${CatalogTableName}.table_name`,
                 `${CatalogTableName}.yaml_tags`,
+                `${CatalogTableName}.ai_hints`,
                 `icon`,
                 `${CatalogTableName}.owner_user_uuid`,
                 `owner_user.first_name as owner_first_name`,
@@ -927,27 +954,176 @@ export class CatalogModel {
             }
         }
 
-        catalogItemsQuery = catalogItemsQuery.orderBy('search_rank', 'desc');
-
-        if (sortArgs) {
-            const { sort, order } = sortArgs;
-            catalogItemsQuery = catalogItemsQuery.orderBy(
-                getDbCatalogColumnFromCatalogProperty(
-                    sort as keyof CatalogItem, // Can be cast here since we have an exhaustive switch/case in getDbCatalogColumnFromCatalogProperty
+        const normalizedSortOrder =
+            sortArgs?.order === 'desc' ? ('desc' as const) : ('asc' as const);
+        const pageOrder = [
+            { column: 'filtered_catalog.search_rank', order: 'desc' as const },
+            ...(sortArgs
+                ? [
+                      {
+                          column: `filtered_catalog.${getDbCatalogColumnFromCatalogProperty(
+                              sortArgs.sort as keyof CatalogItem,
+                          )}`,
+                          order: normalizedSortOrder,
+                      },
+                  ]
+                : []),
+        ];
+        const ordinalOrderSql = pageOrder
+            .map(({ order }) => `?? ${order}`)
+            .join(', ');
+        const selectedPageQuery = this.database
+            .select('filtered_catalog.*')
+            .select(
+                this.database.raw(
+                    `ROW_NUMBER() OVER (ORDER BY ${ordinalOrderSql}) AS ??`,
+                    [
+                        ...pageOrder.map(({ column }) => column),
+                        '__page_ordinal',
+                    ],
                 ),
-                order,
-            );
-        }
+            )
+            .from(catalogItemsQuery.clone().as('filtered_catalog'))
+            .orderBy(pageOrder);
+        const countQuery = catalogItemsQuery
+            .clone()
+            .clearSelect()
+            .clearOrder()
+            .select(`${CatalogTableName}.catalog_search_uuid`);
+        const executePageQuery = () => {
+            const boundedPageQuery = selectedPageQuery.clone();
+            if (paginateArgs) {
+                boundedPageQuery
+                    .offset((paginateArgs.page - 1) * paginateArgs.pageSize)
+                    .limit(paginateArgs.pageSize);
+            }
 
-        const paginatedCatalogItems = await KnexPaginate.paginate(
-            catalogItemsQuery.select<
-                (DbCatalog & { explore: Explore; search_rank: number })[]
-            >(),
+            return this.database
+                .withMaterialized('selected_page', boundedPageQuery)
+                .with('selected_explore_ids', (query) =>
+                    query.distinct('cached_explore_uuid').from('selected_page'),
+                )
+                .withMaterialized('hydrated_explores', (query) =>
+                    query
+                        .select(
+                            this.database.raw(
+                                `COALESCE(jsonb_object_agg(??, ??), '{}'::jsonb) AS ??`,
+                                [
+                                    'cached_explore.cached_explore_uuid',
+                                    'cached_explore.explore',
+                                    'explore_map',
+                                ],
+                            ),
+                        )
+                        .from(`${CachedExploreTableName} as cached_explore`)
+                        .innerJoin(
+                            'selected_explore_ids',
+                            'selected_explore_ids.cached_explore_uuid',
+                            'cached_explore.cached_explore_uuid',
+                        ),
+                )
+                .select<HydratedCatalogSearchPageRow[]>(
+                    'selected_page.*',
+                    this.database.raw(
+                        `CASE WHEN ?? = (SELECT MIN(??) FROM ??) THEN ?? ELSE NULL END AS ??`,
+                        [
+                            'selected_page.__page_ordinal',
+                            'selected_page.__page_ordinal',
+                            'selected_page',
+                            'hydrated_explores.explore_map',
+                            'hydrated_explores',
+                        ],
+                    ),
+                )
+                .from('selected_page')
+                .joinRaw('CROSS JOIN ??', ['hydrated_explores'])
+                .orderBy('selected_page.__page_ordinal');
+        };
+
+        const pageReadContext = newCatalogSearchExploreCacheReadContext(
+            paginateArgs?.page,
+            paginateArgs?.pageSize,
+        );
+        pageReadContext.readStrategy =
+            'catalog-search-distinct-explore-hydration';
+        const measureQuery: KnexPaginateQueryMeasurer = async (
+            query,
+            queryType,
+        ) => {
+            const readContext =
+                queryType === 'page'
+                    ? pageReadContext
+                    : newCatalogSearchExploreCacheReadContext(
+                          paginateArgs?.page,
+                          paginateArgs?.pageSize,
+                      );
+            const name = `CatalogModel.search.${queryType}.driverRead`;
+            const { result, durationMs } = await measureTime(
+                () => Promise.resolve(query()),
+                name,
+                Logger,
+                undefined,
+                false,
+            );
+            readContext.dbReadMs = durationMs;
+
+            if (queryType === 'page' && Array.isArray(result)) {
+                const rows = result as HydratedCatalogSearchPageRow[];
+                Object.assign(
+                    readContext,
+                    summarizeCatalogSearchExploreRead(
+                        rows.length,
+                        getHydratedExplores(rows),
+                    ),
+                );
+            } else if (
+                queryType === 'count' &&
+                typeof result === 'object' &&
+                result !== null &&
+                'rows' in result &&
+                Array.isArray(result.rows)
+            ) {
+                readContext.readStrategy = 'catalog-search-count';
+                readContext.totalResultCount =
+                    Number(result.rows[0]?.count) || 0;
+            }
+
+            Logger.info(
+                `${name} - operation completed in ${durationMs.toFixed(
+                    2,
+                )}ms - Context: ${JSON.stringify(readContext)}`,
+                { name, duration: durationMs, context: readContext },
+            );
+
+            return result;
+        };
+        const paginatedCatalogItems = await KnexPaginate.paginate<
+            DbCatalog,
+            CatalogSearchPageRow[],
+            HydratedCatalogSearchPageRow[]
+        >(
+            catalogItemsQuery.select<CatalogSearchPageRow[]>(),
             paginateArgs,
+            countQuery,
+            measureQuery,
+            executePageQuery,
+        );
+        const hydratedExplores = getHydratedExplores(
+            paginatedCatalogItems.data,
+        );
+        const catalogRows = paginatedCatalogItems.data.map(
+            ({ __page_ordinal: _pageOrdinal, hydrated_explores, ...item }) =>
+                item,
         );
 
-        const tagsPerItem = await this.getTagsPerItem(
-            paginatedCatalogItems.data.map((item) => item.catalog_search_uuid),
+        const { result: tagsPerItem } = await measureTime(
+            () =>
+                this.getTagsPerItem(
+                    catalogRows.map((item) => item.catalog_search_uuid),
+                ),
+            'CatalogModel.search.tags',
+            Logger,
+            { ...pageReadContext },
         );
 
         // When using filteredExplores, we need to match each catalog item to the correct explore.
@@ -959,41 +1135,57 @@ export class CatalogModel {
               )
             : undefined;
 
-        const catalog = await wrapSentryTransaction(
-            'CatalogModel.search.parse',
-            {
-                catalogSize: paginatedCatalogItems.data.length,
-            },
-            async () =>
-                paginatedCatalogItems.data
-                    .map((item) => {
-                        // Use the explore from filteredExplores if available, otherwise use from DB.
-                        // We match by explore name (from item.explore) since each catalog entry
-                        // is indexed under a specific explore via cached_explore_uuid.
-                        let explore = exploreByName
-                            ? exploreByName.get(item.explore.name)
-                            : undefined;
+        const itemBuildContext = { ...pageReadContext };
+        const { result: catalog } = await measureTime(
+            () =>
+                wrapSentryTransaction(
+                    'CatalogModel.search.parse',
+                    {
+                        catalogSize: catalogRows.length,
+                    },
+                    async () => {
+                        const catalogItems = catalogRows
+                            .map((item) => {
+                                const hydratedExplore =
+                                    hydratedExplores[item.cached_explore_uuid];
+                                let explore: Explore | undefined;
+                                if (exploreByName && hydratedExplore) {
+                                    explore = exploreByName.get(
+                                        hydratedExplore.name,
+                                    );
+                                }
 
-                        if (!explore) {
-                            explore = item.explore;
-                        }
+                                if (!explore) {
+                                    explore = hydratedExplore;
+                                }
 
-                        if (!explore) {
-                            throw new Error(
-                                `Explore not found for field ${item.name} in table ${item.table_name}`,
+                                if (!explore) {
+                                    throw new Error(
+                                        `Explore not found for field ${item.name} in table ${item.table_name}`,
+                                    );
+                                }
+
+                                return parseCatalog({
+                                    ...item,
+                                    explore,
+                                    catalog_tags:
+                                        tagsPerItem[item.catalog_search_uuid] ??
+                                        [],
+                                });
+                            })
+                            // Filter out null results from stale catalog entries
+                            // (fields/tables that exist in catalog but were removed from the explore)
+                            .filter(
+                                (item): item is CatalogItem => item !== null,
                             );
-                        }
-
-                        return parseCatalog({
-                            ...item,
-                            explore,
-                            catalog_tags:
-                                tagsPerItem[item.catalog_search_uuid] ?? [],
-                        });
-                    })
-                    // Filter out null results from stale catalog entries
-                    // (fields/tables that exist in catalog but were removed from the explore)
-                    .filter((item): item is CatalogItem => item !== null),
+                        itemBuildContext.returnedCatalogRowCount =
+                            catalogItems.length;
+                        return catalogItems;
+                    },
+                ),
+            'CatalogModel.search.itemBuild',
+            Logger,
+            itemBuildContext,
         );
 
         return {
@@ -1019,25 +1211,39 @@ export class CatalogModel {
     }
 
     async setChartUsages(projectUuid: string, chartUsages: ChartUsageIn[]) {
-        await this.database.transaction(async (trx) => {
-            const updatePromises = chartUsages.map(
-                ({ fieldName, chartUsage, cachedExploreUuid }) =>
-                    trx(CatalogTableName)
-                        .where(`${CatalogTableName}.name`, fieldName)
-                        .andWhere(
-                            `${CatalogTableName}.cached_explore_uuid`,
-                            cachedExploreUuid,
-                        )
-                        .andWhere(
-                            `${CatalogTableName}.project_uuid`,
-                            projectUuid,
-                        )
-                        .update({
-                            chart_usage: chartUsage,
-                        }),
+        if (chartUsages.length === 0) return;
+        // PostgreSQL UPDATE ... FROM must have only one source row per target key.
+        const uniqueUsages = new Map<string, ChartUsageIn>();
+        chartUsages.forEach((usage) => {
+            uniqueUsages.set(
+                JSON.stringify([usage.cachedExploreUuid, usage.fieldName]),
+                usage,
             );
-
-            await Promise.all(updatePromises);
+        });
+        await this.database.transaction(async (trx) => {
+            for (const batch of chunk([...uniqueUsages.values()], 500)) {
+                const values = batch
+                    .map(() => '(?::uuid, ?::text, ?::integer)')
+                    .join(', ');
+                const bindings = batch.flatMap(
+                    ({ cachedExploreUuid, fieldName, chartUsage }) => [
+                        cachedExploreUuid,
+                        fieldName,
+                        chartUsage,
+                    ],
+                );
+                // Keep the whole refresh atomic while bounding query size and round trips.
+                // eslint-disable-next-line no-await-in-loop
+                await trx.raw(
+                    `UPDATE ?? AS catalog
+                     SET chart_usage = usage.chart_usage
+                     FROM (VALUES ${values}) AS usage(cached_explore_uuid, name, chart_usage)
+                     WHERE catalog.project_uuid = ?::uuid
+                       AND catalog.cached_explore_uuid = usage.cached_explore_uuid
+                       AND catalog.name = usage.name`,
+                    [CatalogTableName, ...bindings, projectUuid],
+                );
+            }
         });
     }
 

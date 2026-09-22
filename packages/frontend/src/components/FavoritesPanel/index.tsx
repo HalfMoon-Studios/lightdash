@@ -28,7 +28,7 @@ const FavoritesPanel: FC<Props> = ({
     if (!favoriteItems || favoriteItems.length === 0) {
         if (showEmptyState) {
             return (
-                <Card withBorder variant="dotted">
+                <Card variant="dotted">
                     <Group justify="flex-start" gap="xxs" my="xs" ml="xs">
                         <MantineIcon
                             icon={IconStar}
@@ -61,12 +61,13 @@ const FavoritesPanel: FC<Props> = ({
                             ResourceViewItemType.CHART,
                         ],
                         [ResourceViewItemType.DATA_APP],
+                        [ResourceViewItemType.DOCUMENT],
                     ],
                 }}
                 headerProps={{
                     title: 'My favorites',
                     description:
-                        'Your personally favorited spaces, dashboards, charts, and data apps.',
+                        'Your personally favorited spaces, dashboards, charts, data apps, and documents.',
                 }}
             />
         </PinnedItemsContext.Provider>

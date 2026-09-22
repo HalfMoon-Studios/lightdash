@@ -1,4 +1,5 @@
 import {
+    ActionIcon,
     Box,
     Button,
     Group,
@@ -8,16 +9,12 @@ import {
     Text,
     Tooltip,
 } from '@mantine/core';
-import {
-    IconBrush,
-    IconCheck,
-    IconChevronDown,
-    IconSettings,
-} from '@tabler/icons-react';
-import { useState, type FC } from 'react';
-import { useNavigate } from 'react-router';
+import { useUncontrolled } from '@mantine/hooks';
+import { IconBrush, IconCheck, IconChevronDown } from '@tabler/icons-react';
+import { type FC } from 'react';
 import MantineIcon from '../../../components/common/MantineIcon';
 import { useOrganizationDesigns } from '../hooks/useOrganizationDesigns';
+import { ManageThemesMenuItem } from './ManageThemesMenuItem';
 import classes from './ThemePicker.module.css';
 
 const LIGHTDASH_DEFAULT_LABEL = 'No theme';
@@ -40,6 +37,12 @@ type Props = {
      */
     lockedAfterCreation?: boolean;
     compact?: boolean;
+    iconOnly?: boolean;
+    opened?: boolean;
+    onOpenedChange?: (opened: boolean) => void;
+    /** Name from a saved snapshot, or a loading/error label. */
+    fallbackLabel?: string;
+    selectionHint?: string;
 };
 
 export const ThemePicker: FC<Props> = ({
@@ -48,81 +51,125 @@ export const ThemePicker: FC<Props> = ({
     disabled,
     lockedAfterCreation,
     compact,
+    iconOnly = false,
+    opened: openedProp,
+    onOpenedChange,
+    fallbackLabel,
+    selectionHint,
 }) => {
-    const navigate = useNavigate();
-    const [opened, setOpened] = useState(false);
+    const [opened, setOpened] = useUncontrolled({
+        value: openedProp,
+        defaultValue: false,
+        onChange: onOpenedChange,
+    });
     const { data: themes = [] } = useOrganizationDesigns();
 
     const selected = value ? themes.find((t) => t.designUuid === value) : null;
-    const label = selected?.name ?? LIGHTDASH_DEFAULT_LABEL;
+    const label = selected?.name ?? fallbackLabel ?? LIGHTDASH_DEFAULT_LABEL;
+    const hasSelection = value !== null;
     const description = selected
         ? selected.description || null
         : LIGHTDASH_DEFAULT_DESCRIPTION;
 
     // Compact trigger reads as a call to action until a theme is picked, then
     // switches to showing the selected theme's name.
-    const compactLabel = selected ? label : COMPACT_EMPTY_LABEL;
-    const button = compact ? (
-        <Button
-            variant="subtle"
-            size="xs"
-            radius="xl"
-            color="gray"
-            h="auto"
-            py={6}
-            className={classes.compactTrigger}
-            data-selected={!!selected}
-            onClick={() => setOpened((o) => !o)}
-            disabled={disabled || lockedAfterCreation}
-            leftSection={<MantineIcon icon={IconBrush} size={14} />}
-            rightSection={<MantineIcon icon={IconChevronDown} size={12} />}
-            aria-label={selected ? `Theme: ${label}` : COMPACT_EMPTY_LABEL}
-        >
-            <Group gap={5} wrap="nowrap">
-                {selected && (
-                    <Text
-                        span
-                        size="xs"
-                        fw={500}
-                        lh={1.2}
-                        className={classes.compactPrefix}
-                    >
-                        Theme:
+    const compactLabel = hasSelection
+        ? label
+        : (fallbackLabel ?? COMPACT_EMPTY_LABEL);
+    const button =
+        compact && iconOnly ? (
+            <ActionIcon
+                variant="subtle"
+                color="gray"
+                size={32}
+                radius="xl"
+                className={classes.compactTrigger}
+                data-selected={hasSelection}
+                onClick={() => setOpened(!opened)}
+                disabled={disabled || lockedAfterCreation}
+                aria-label={
+                    hasSelection || fallbackLabel
+                        ? `Theme: ${label}`
+                        : COMPACT_EMPTY_LABEL
+                }
+                title={
+                    hasSelection || fallbackLabel
+                        ? `Theme: ${label}`
+                        : COMPACT_EMPTY_LABEL
+                }
+            >
+                <MantineIcon icon={IconBrush} size={16} />
+            </ActionIcon>
+        ) : compact ? (
+            <Button
+                variant="subtle"
+                size="xs"
+                radius="xl"
+                color="gray"
+                h="auto"
+                py={6}
+                className={classes.compactTrigger}
+                data-selected={hasSelection}
+                onClick={() => setOpened(!opened)}
+                disabled={disabled || lockedAfterCreation}
+                leftSection={<MantineIcon icon={IconBrush} size={14} />}
+                rightSection={<MantineIcon icon={IconChevronDown} size={12} />}
+                aria-label={
+                    hasSelection || fallbackLabel
+                        ? `Theme: ${label}`
+                        : COMPACT_EMPTY_LABEL
+                }
+            >
+                <Group gap={5} wrap="nowrap">
+                    {hasSelection && (
+                        <Text
+                            span
+                            size="xs"
+                            fw={500}
+                            lh={1.2}
+                            className={classes.compactPrefix}
+                        >
+                            Theme:
+                        </Text>
+                    )}
+                    <Text span size="xs" fw={600} lh={1.2} lineClamp={1}>
+                        {compactLabel}
                     </Text>
-                )}
-                <Text span size="xs" fw={600} lh={1.2} lineClamp={1}>
-                    {compactLabel}
-                </Text>
-            </Group>
-        </Button>
-    ) : (
-        <Button
-            variant="default"
-            size="xs"
-            radius="md"
-            color="gray"
-            miw={200}
-            h="auto"
-            py="xs"
-            justify="space-between"
-            onClick={() => setOpened((o) => !o)}
-            disabled={disabled || lockedAfterCreation}
-            rightSection={<MantineIcon icon={IconChevronDown} size={12} />}
-            aria-label={`Theme: ${label}`}
-            classNames={{ label: classes.triggerWrap }}
-        >
-            <Stack gap={2} align="flex-start" w="100%">
-                <Text size="sm" fw={600} lh={1.2} ta="left">
-                    {label}
-                </Text>
-                {description && (
-                    <Text size="xs" c="dimmed" lh={1.3} lineClamp={3} ta="left">
-                        {description}
+                </Group>
+            </Button>
+        ) : (
+            <Button
+                variant="default"
+                size="xs"
+                color="gray"
+                miw={200}
+                h="auto"
+                py="xs"
+                justify="space-between"
+                onClick={() => setOpened(!opened)}
+                disabled={disabled || lockedAfterCreation}
+                rightSection={<MantineIcon icon={IconChevronDown} size={12} />}
+                aria-label={`Theme: ${label}`}
+                classNames={{ label: classes.triggerWrap }}
+            >
+                <Stack gap={2} align="flex-start" w="100%">
+                    <Text size="sm" fw={600} lh={1.2} ta="left">
+                        {label}
                     </Text>
-                )}
-            </Stack>
-        </Button>
-    );
+                    {description && (
+                        <Text
+                            size="xs"
+                            c="dimmed"
+                            lh={1.3}
+                            lineClamp={3}
+                            ta="left"
+                        >
+                            {description}
+                        </Text>
+                    )}
+                </Stack>
+            </Button>
+        );
 
     const themeOption = (
         key: string,
@@ -134,6 +181,7 @@ export const ThemePicker: FC<Props> = ({
     ) => (
         <Menu.Item
             key={key}
+            disabled={disabled || lockedAfterCreation}
             onClick={onSelect}
             aria-current={isActive}
             className={classes.option}
@@ -168,9 +216,7 @@ export const ThemePicker: FC<Props> = ({
             onDismiss={() => setOpened(false)}
             position={compact ? 'top-start' : 'bottom-start'}
             offset={8}
-            shadow="md"
             width={300}
-            withinPortal
             closeOnItemClick
         >
             <Menu.Target>
@@ -178,7 +224,6 @@ export const ThemePicker: FC<Props> = ({
                     <Tooltip
                         label="Theme can't be changed after creation"
                         position="top"
-                        withArrow
                     >
                         {/* Tooltip needs a non-disabled wrapper to listen for
                             hover; Box renders the disabled Button inside. */}
@@ -189,6 +234,7 @@ export const ThemePicker: FC<Props> = ({
                 )}
             </Menu.Target>
             <Menu.Dropdown className={classes.dropdown}>
+                {selectionHint && <Menu.Label>{selectionHint}</Menu.Label>}
                 <ScrollArea.Autosize mah={280} type="scroll">
                     {themeOption(
                         'none',
@@ -209,14 +255,7 @@ export const ThemePicker: FC<Props> = ({
                     )}
                 </ScrollArea.Autosize>
                 <Menu.Divider />
-                <Menu.Item
-                    leftSection={<MantineIcon icon={IconSettings} size={14} />}
-                    onClick={() =>
-                        void navigate('/generalSettings/dataApps/themes')
-                    }
-                >
-                    <Text size="xs">Manage themes</Text>
-                </Menu.Item>
+                <ManageThemesMenuItem />
             </Menu.Dropdown>
         </Menu>
     );

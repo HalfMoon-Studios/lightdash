@@ -6,6 +6,7 @@ import {
     IconChartBar,
     IconFolder,
     IconLayoutDashboard,
+    IconFileText,
 } from '@tabler/icons-react';
 import { type FC, type ReactNode } from 'react';
 import { useServerFeatureFlag } from '../../../../hooks/useServerOrClientFeatureFlag';
@@ -35,13 +36,13 @@ const ResourceViewGridSpaceItem: FC<ResourceViewGridSpaceItemProps> = ({
     const [opened, handlers] = useDisclosure(false);
     const dataAppsFlag = useServerFeatureFlag(FeatureFlags.EnableDataApps);
     const dataAppsEnabled = dataAppsFlag.data?.enabled ?? false;
+    const documentsFlag = useServerFeatureFlag(FeatureFlags.Documents);
 
     return (
         <Paper
             ref={ref}
             pos="relative"
             p={0}
-            withBorder
             className={classes.gridCard}
             h="100%"
         >
@@ -60,6 +61,15 @@ const ResourceViewGridSpaceItem: FC<ResourceViewGridSpaceItemProps> = ({
                     </Text>
 
                     <Group gap="sm">
+                        {documentsFlag.data?.enabled &&
+                            !documentsFlag.isError &&
+                            item.data.documentCount !== undefined && (
+                                <AttributeCount
+                                    Icon={IconFileText}
+                                    count={item.data.documentCount}
+                                    name="Documents"
+                                />
+                            )}
                         <AttributeCount
                             Icon={IconLayoutDashboard}
                             count={item.data.dashboardCount}

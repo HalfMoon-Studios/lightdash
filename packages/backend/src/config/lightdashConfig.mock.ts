@@ -59,6 +59,10 @@ export const lightdashConfigMock: LightdashConfig = {
             privateKeyFile: undefined,
             openIdConnectMetadataEndpoint: undefined,
         },
+        microsoftManagedSignIn: {
+            iosClientId: undefined,
+            androidClientId: undefined,
+        },
         oidc: {
             authMethod: undefined,
             authSigningAlg: undefined,
@@ -91,6 +95,12 @@ export const lightdashConfigMock: LightdashConfig = {
         },
     },
     lightdashCloudInstance: 'test-instance',
+    mobileAppAssociation: {
+        appleTeamId: 'TEAMID',
+        appleBundleId: 'com.lightdash.mobile',
+        androidPackageName: 'com.lightdash.mobile',
+        androidCertificateFingerprints: [],
+    },
     openaiAppsChallengeToken: undefined,
     k8s: {
         podNamespace: undefined,
@@ -111,6 +121,7 @@ export const lightdashConfigMock: LightdashConfig = {
     },
     dbt: {
         environmentVariableAllowlist: [],
+        sourceFetchConcurrency: undefined,
     },
     dashboard: {
         maxTilesPerTab: 50,
@@ -173,6 +184,7 @@ export const lightdashConfigMock: LightdashConfig = {
             region: 'mock_region',
         },
     },
+    staticAssets: {},
     natsWorker: {
         enabled: false,
         url: undefined,
@@ -188,6 +200,7 @@ export const lightdashConfigMock: LightdashConfig = {
         enabled: false,
         pollInterval: 1000,
         jobTimeout: 0,
+        shutdownTimeout: 60_000,
         tasks: ALL_TASK_NAMES,
         quiesce: {
             pollInterval: 2_000,
@@ -203,6 +216,15 @@ export const lightdashConfigMock: LightdashConfig = {
                 delayMs: 100,
                 maxBatches: 100,
                 schedule: '0 2 * * *',
+            },
+        },
+        scimRequestLogs: {
+            cleanup: {
+                enabled: true,
+                retentionDays: 30,
+                batchSize: 1000,
+                delayMs: 100,
+                maxBatches: 100,
             },
         },
     },
@@ -236,8 +258,20 @@ export const lightdashConfigMock: LightdashConfig = {
             ios: null,
         },
     },
+    mobilePushNotifications: {
+        enabled: false,
+        bundleId: 'com.lightdash.mobile',
+        teamId: undefined,
+        sandbox: undefined,
+        production: undefined,
+        fcm: undefined,
+    },
     license: {
         licenseKey: null,
+        licenseCertificate: null,
+    },
+    roadmap: {
+        baseUrl: 'https://roadmap.lightdash.com',
     },
     groups: {
         enabled: false,
@@ -260,8 +294,10 @@ export const lightdashConfigMock: LightdashConfig = {
         timezone: undefined,
         retryQueryOnTransientErrors: true,
         enableTimezoneSupport: undefined,
+        exploreSummaryProjectionMinStoredBytesPerExplore: 2048,
     },
     ai: {
+        decisions: { apiKey: null, model: 'jev-1.13.0', timeoutMs: 900 },
         copilot: {
             enabled: false,
             debugLoggingEnabled: false,
@@ -273,7 +309,7 @@ export const lightdashConfigMock: LightdashConfig = {
             askAiButtonEnabled: false,
             embeddingEnabled: true,
             defaultProvider: 'openai',
-            selfManagedProviders: [],
+            lightdashManagedProviders: [],
             providers: {
                 openai: {
                     apiKey: 'mock_api_key',
@@ -292,6 +328,9 @@ export const lightdashConfigMock: LightdashConfig = {
         },
         agentMemory: {
             consolidationDryRun: false,
+        },
+        promptInputRequestClassifier: {
+            enabled: false,
         },
     },
     embedding: {
@@ -354,13 +393,13 @@ export const lightdashConfigMock: LightdashConfig = {
         projectId: 'test-project-id',
     },
     managedAgent: {
-        anthropicApiKey: null,
-        skillIds: [],
+        validatedModels: [],
         schedule: '0 0 * * *',
         sessionTimeoutMs: 300000,
+        maxSteps: 120,
     },
     aiWriteback: {
-        anthropicApiKey: null,
+        legacyAnthropicApiKey: null,
         codingAgentMaxRepoSizeMb: 500,
     },
     mcp: {
@@ -501,6 +540,7 @@ export const lightdashConfigMock: LightdashConfig = {
         // Off in the test fixture (real default is `true`) so tests never make
         // a live OSV call.
         dependencyMalwareCheckEnabled: false,
+        chartRegistry: { url: null, allowInsecure: false, channel: 'stable' },
     },
     enabledFeatureFlags: new Set<string>(),
     disabledFeatureFlags: new Set<string>(),

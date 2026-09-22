@@ -1,4 +1,5 @@
 export const chartTypeBuilderPath = (
-    projectUuid: string,
-    dataAppVizUuid: string | null = null,
-) => `/projects/${projectUuid}/chart-types/${dataAppVizUuid ?? 'new'}`;
+    projectUuidOrSlug: string,
+    dataAppVizUuidOrSlug: string | null = null,
+) =>
+    `/projects/${projectUuidOrSlug}/chart-types/${dataAppVizUuidOrSlug ?? 'new'}`;

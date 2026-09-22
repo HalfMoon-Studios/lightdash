@@ -23,7 +23,9 @@ import { ManagedAgentSetupModal } from '../../ee/features/managedAgent/ManagedAg
 import { useServerFeatureFlag } from '../../hooks/useServerOrClientFeatureFlag';
 import useApp from '../../providers/App/useApp';
 import MantineIcon from '../common/MantineIcon';
+import AppColorSchemeScope from './AppColorSchemeScope';
 import classes from './AutopilotNavButton.module.css';
+import { useNavBarPortalTarget } from './NavBarPortalContext';
 
 const resumeSettings = async (projectUuid: string, schedule: string) =>
     lightdashApi({
@@ -34,6 +36,7 @@ const resumeSettings = async (projectUuid: string, schedule: string) =>
 
 type Props = {
     projectUuid: string;
+    withLabel?: boolean;
 };
 
 const formatRelative = (dateInput: Date | string) => {
@@ -69,19 +72,14 @@ const CAPABILITIES = [
 ];
 
 /**
- * Autopilot cell in the primary nav group, right after Ask AI. Always a plain
- * icon button (no hover-expand) — the hovercards below carry the explanation
- * instead. Managers only, gated on the AiAutopilot flag.
- *
- * - Never configured: hovering opens a promo card; clicking opens the setup
- *   modal.
- * - Configured but disabled: same card, but clicking resumes it directly
- *   (PATCHes the existing settings row back to enabled) rather than
- *   navigating away.
- * - Active: hovering opens a compact status card (status, last-run action
- *   summary, link to the full activity page).
+ * Autopilot setup, resume and status in the primary nav, gated by feature
+ * flag, permissions and project settings.
  */
-export const AutopilotNavButton = ({ projectUuid }: Props) => {
+export const AutopilotNavButton = ({
+    projectUuid,
+    withLabel = false,
+}: Props) => {
+    const portalTarget = useNavBarPortalTarget();
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const { user } = useApp();
@@ -121,10 +119,10 @@ export const AutopilotNavButton = ({ projectUuid }: Props) => {
     if (!active) return null;
 
     if (!isEnabled) {
-        // A settings row already exists (it was configured before, just
-        // switched off) — resume it directly. No row yet — walk them
-        // through the setup modal first.
         const hasExistingSettings = !!settings;
+        const actionLabel = hasExistingSettings
+            ? 'Resume Autopilot'
+            : 'Set up Autopilot';
         const handleCellClick = hasExistingSettings
             ? () => resumeMutation.mutate()
             : () => setSetupOpen(true);
@@ -132,35 +130,34 @@ export const AutopilotNavButton = ({ projectUuid }: Props) => {
         return (
             <HoverCard
                 width={280}
-                shadow="xl"
                 position="bottom-start"
                 offset={8}
                 openDelay={120}
                 closeDelay={80}
-                withinPortal
-                portalProps={{ target: '#navbar-header' }}
+                portalProps={{ target: portalTarget }}
             >
                 <HoverCard.Target>
                     <Button
                         size="xs"
                         variant="default"
+                        data-icon-only={!withLabel || undefined}
                         classNames={{
                             root: classes.cell,
                             label: classes.cellLabel,
+                            section: classes.cellSection,
                         }}
+                        leftSection={
+                            <MantineIcon
+                                icon={IconTarget}
+                                size={16}
+                                color="dimmed"
+                            />
+                        }
                         onClick={handleCellClick}
                         loading={resumeMutation.isLoading}
-                        aria-label={
-                            hasExistingSettings
-                                ? 'Resume Autopilot'
-                                : 'Set up Autopilot'
-                        }
+                        aria-label={actionLabel}
                     >
-                        <MantineIcon
-                            icon={IconTarget}
-                            size={16}
-                            color="dimmed"
-                        />
+                        {withLabel && actionLabel}
                     </Button>
                 </HoverCard.Target>
                 <HoverCard.Dropdown className={classes.promoDropdown}>
@@ -194,22 +191,22 @@ export const AutopilotNavButton = ({ projectUuid }: Props) => {
                         >
                             {resumeMutation.isLoading
                                 ? 'Resuming…'
-                                : hasExistingSettings
-                                  ? 'Resume Autopilot'
-                                  : 'Set up Autopilot'}
+                                : actionLabel}
                             <MantineIcon icon={IconArrowRight} size={14} />
                         </button>
                     </div>
                 </HoverCard.Dropdown>
-                <ManagedAgentSetupModal
-                    projectUuid={projectUuid}
-                    opened={setupOpen}
-                    onClose={() => setSetupOpen(false)}
-                    onEnabled={() => {
-                        setSetupOpen(false);
-                        goToAutopilot();
-                    }}
-                />
+                <AppColorSchemeScope>
+                    <ManagedAgentSetupModal
+                        projectUuid={projectUuid}
+                        opened={setupOpen}
+                        onClose={() => setSetupOpen(false)}
+                        onEnabled={() => {
+                            setSetupOpen(false);
+                            goToAutopilot();
+                        }}
+                    />
+                </AppColorSchemeScope>
             </HoverCard>
         );
     }
@@ -237,32 +234,35 @@ export const AutopilotNavButton = ({ projectUuid }: Props) => {
     return (
         <HoverCard
             width={240}
-            shadow="xl"
             position="bottom-start"
             offset={8}
             openDelay={120}
             closeDelay={80}
-            withinPortal
-            portalProps={{ target: '#navbar-header' }}
+            portalProps={{ target: portalTarget }}
         >
             <HoverCard.Target>
                 <Button
                     size="xs"
                     variant="default"
+                    data-icon-only={!withLabel || undefined}
                     classNames={{
                         root: classes.cell,
                         label: classes.cellLabel,
+                        section: classes.cellSection,
                     }}
+                    leftSection={
+                        <span className={classes.iconWrap}>
+                            <MantineIcon icon={IconTarget} size={16} />
+                            <span
+                                className={`${classes.dotCorner} ${dotClass}`}
+                                aria-hidden="true"
+                            />
+                        </span>
+                    }
                     onClick={goToAutopilot}
                     aria-label="Autopilot"
                 >
-                    <span className={classes.iconWrap}>
-                        <MantineIcon icon={IconTarget} size={16} />
-                        <span
-                            className={`${classes.dotCorner} ${dotClass}`}
-                            aria-hidden="true"
-                        />
-                    </span>
+                    {withLabel && 'Autopilot'}
                 </Button>
             </HoverCard.Target>
             <HoverCard.Dropdown className={classes.promoDropdown}>

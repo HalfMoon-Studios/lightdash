@@ -7,11 +7,14 @@ import {
     generateSlug,
     NotFoundError,
     ProjectType,
+    type AppThreadOrigin,
     type AppVersionDependencies,
     type AppVersionResources,
     type AppVersionStatusHistoryEntryKind,
     type ChartConfig,
     type DataAppActivityFilters,
+    type DataAppAutoAnalysis,
+    type DataAppCodingAgent,
     type DataAppGenerationUsage,
     type DataAppVizSchema,
     type DataAppVizsFilter,
@@ -25,12 +28,15 @@ import { validate as isValidUuid, v4 as uuidv4 } from 'uuid';
 import {
     APP_VERSION_TERMINAL_STATUSES,
     AppsTableName,
+    AppThreadsTableName,
     AppVersionsTableName,
     isAppVersionInProgress,
     type AppVersionStatus,
     type DbApp,
     type DbAppActivityRow,
+    type DbAppThread,
     type DbAppVersion,
+    type DbAppVersionWithThread,
 } from '../database/entities/apps';
 import {
     DashboardsTableName,
@@ -56,6 +62,51 @@ import { getFullTextSearchFilterSql } from './SearchModel/utils/search';
 
 type AppModelArguments = {
     database: Knex;
+    // Coding agent stamped on new threads; deployment-wide setting.
+    dataAppCodingAgent?: DataAppCodingAgent;
+};
+
+export type CreateAppThreadArgs = {
+    appUuid: string;
+    origin: AppThreadOrigin;
+    // Ask AI thread the app was created from; null for every other origin.
+    aiThreadUuid: string | null;
+    createdByUserUuid: string;
+};
+
+// Extra columns `joinVersionThreads` selects to resolve a version's thread.
+type ThreadJoinColumns = {
+    version_thread_number: number | null;
+    first_thread_uuid: string | null;
+};
+
+type VersionRowWithThreadJoin = Pick<
+    DbAppVersion,
+    'app_id' | 'app_thread_uuid'
+> &
+    ThreadJoinColumns;
+
+/** A null `app_thread_uuid` reads back as thread 1; `threadOneUuid` covers an app with no thread row yet. */
+const resolveVersionThread = <T extends VersionRowWithThreadJoin>(
+    {
+        version_thread_number: versionThreadNumber,
+        first_thread_uuid: firstThreadUuid,
+        ...row
+    }: T,
+    threadOneUuid: string,
+): Omit<T, keyof ThreadJoinColumns> & {
+    app_thread_uuid: string;
+    thread_number: number;
+} => ({
+    ...row,
+    app_thread_uuid: row.app_thread_uuid ?? firstThreadUuid ?? threadOneUuid,
+    thread_number: versionThreadNumber ?? 1,
+});
+
+export type PreviewChartVizBindingMapping = {
+    sourceAppUuid: string;
+    previewAppUuid: string;
+    previewAppVersion: number;
 };
 
 const AppSlugSequence = 'apps_slug_sequence';
@@ -69,8 +120,11 @@ type AppWithOrgAndPin = DbApp & {
 export class AppModel {
     private readonly database: Knex;
 
-    constructor({ database }: AppModelArguments) {
+    private readonly dataAppCodingAgent: DataAppCodingAgent;
+
+    constructor({ database, dataAppCodingAgent }: AppModelArguments) {
         this.database = database;
+        this.dataAppCodingAgent = dataAppCodingAgent ?? 'claude';
     }
 
     async createWithVersion(
@@ -83,8 +137,13 @@ export class AppModel {
                     | 'name'
                     | 'description'
                     | 'template'
+                    | 'icon'
                     | 'space_uuid'
                     | 'design_uuid'
+                    | 'registry_slug'
+                    | 'registry_url'
+                    | 'origin_app_uuid'
+                    | 'origin_app_version'
                 >
             >,
         version: Pick<DbAppVersion, 'version' | 'prompt'>,
@@ -97,8 +156,13 @@ export class AppModel {
         // silently minting suffixed duplicates. Default: app.slug is a base
         // hint — normalized and dedupe-suffixed (duplication derives copies'
         // slugs from the source slug this way).
-        opts?: { forceSlug?: boolean },
-    ): Promise<{ app: DbApp; version: DbAppVersion }> {
+        opts?: {
+            forceSlug?: boolean;
+            registryVersion?: string;
+            // Defaults to a builder-originated thread 1.
+            thread?: Pick<CreateAppThreadArgs, 'origin' | 'aiThreadUuid'>;
+        },
+    ): Promise<{ app: DbApp; version: DbAppVersion; thread: DbAppThread }> {
         return this.database.transaction(async (trx) => {
             const appId = app.app_id ?? uuidv4();
             let slug: string;
@@ -146,10 +210,18 @@ export class AppModel {
                     slug,
                 })
                 .returning('*');
+            const thread = await this.insertThread(trx, {
+                appUuid: appRow.app_id,
+                origin: opts?.thread?.origin ?? 'builder',
+                aiThreadUuid: opts?.thread?.aiThreadUuid ?? null,
+                createdByUserUuid: appRow.created_by_user_uuid,
+                threadNumber: 1,
+            });
             const [versionRow] = await trx(AppVersionsTableName)
                 .insert({
                     ...version,
                     app_id: appRow.app_id,
+                    app_thread_uuid: thread.app_thread_uuid,
                     status,
                     created_by_user_uuid: appRow.created_by_user_uuid,
                     ...(resources
@@ -173,10 +245,152 @@ export class AppModel {
                               ) as unknown as DataAppVizSchema,
                           }
                         : {}),
+                    registry_version: opts?.registryVersion ?? null,
                 })
                 .returning('*');
-            return { app: appRow, version: versionRow };
+            return { app: appRow, version: versionRow, thread };
         });
+    }
+
+    private async lockApp(trx: Knex, appUuid: string): Promise<DbApp> {
+        const app = await trx(AppsTableName)
+            .where({ app_id: appUuid })
+            .forUpdate()
+            .first();
+        if (!app) {
+            throw new NotFoundError(`App not found: ${appUuid}`);
+        }
+        return app;
+    }
+
+    private async insertThread(
+        trx: Knex,
+        thread: CreateAppThreadArgs & { threadNumber: number },
+    ): Promise<DbAppThread> {
+        const [row] = await trx(AppThreadsTableName)
+            .insert({
+                app_id: thread.appUuid,
+                thread_number: thread.threadNumber,
+                origin: thread.origin,
+                ai_thread_uuid: thread.aiThreadUuid,
+                coding_agent: this.dataAppCodingAgent,
+                created_by_user_uuid: thread.createdByUserUuid,
+            })
+            .returning('*');
+        return row;
+    }
+
+    // Locks the app row so concurrent calls never share a thread number.
+    async createThread(
+        thread: CreateAppThreadArgs,
+        trx?: Knex,
+    ): Promise<DbAppThread> {
+        return (trx ?? this.database).transaction(async (t) => {
+            await this.lockApp(t, thread.appUuid);
+            const max = await t(AppThreadsTableName)
+                .where({ app_id: thread.appUuid })
+                .max('thread_number as thread_number')
+                .first<{ thread_number: number | null }>();
+            return this.insertThread(t, {
+                ...thread,
+                threadNumber: (max?.thread_number ?? 0) + 1,
+            });
+        });
+    }
+
+    // Newest thread; an app written by a pod predating threads gets thread 1 here.
+    async getCurrentThread(appUuid: string, trx?: Knex): Promise<DbAppThread> {
+        const db = trx ?? this.database;
+        const newestThread = (conn: Knex) =>
+            conn(AppThreadsTableName)
+                .where({ app_id: appUuid })
+                .orderBy('thread_number', 'desc')
+                .first();
+        const current = await newestThread(db);
+        if (current) return current;
+        return db.transaction(async (t) => {
+            const app = await this.lockApp(t, appUuid);
+            const raced = await newestThread(t);
+            if (raced) return raced;
+            return this.insertThread(t, {
+                appUuid,
+                origin: 'builder',
+                aiThreadUuid: null,
+                createdByUserUuid: app.created_by_user_uuid,
+                threadNumber: 1,
+            });
+        });
+    }
+
+    async findThreadByUuid(appThreadUuid: string): Promise<DbAppThread | null> {
+        const row = await this.database(AppThreadsTableName)
+            .where({ app_thread_uuid: appThreadUuid })
+            .first();
+        return row ?? null;
+    }
+
+    // Compare-and-set on the stored id so a stale writer can't clobber a newer one.
+    async setThreadCodingAgentSessionId(
+        appThreadUuid: string,
+        args: { replacing: string | null; sessionId: string },
+    ): Promise<boolean> {
+        const updated = await this.database(AppThreadsTableName)
+            .where({ app_thread_uuid: appThreadUuid })
+            .whereRaw('coding_agent_session_id IS NOT DISTINCT FROM ?', [
+                args.replacing,
+            ])
+            .update({ coding_agent_session_id: args.sessionId });
+        return updated > 0;
+    }
+
+    // Joins a version's own thread and the app's thread 1 (`appIdColumn` names the app).
+    private static joinVersionThreads(
+        query: Knex.QueryBuilder,
+        appIdColumn: string,
+    ): Knex.QueryBuilder {
+        return query
+            .leftJoin(
+                { version_thread: AppThreadsTableName },
+                'version_thread.app_thread_uuid',
+                `${AppVersionsTableName}.app_thread_uuid`,
+            )
+            .leftJoin(
+                { first_thread: AppThreadsTableName },
+                function firstThreadJoin() {
+                    void this.on(
+                        'first_thread.app_id',
+                        '=',
+                        appIdColumn,
+                    ).andOnVal('first_thread.thread_number', '=', 1);
+                },
+            )
+            .select(
+                `${AppVersionsTableName}.*`,
+                'version_thread.thread_number as version_thread_number',
+                'first_thread.app_thread_uuid as first_thread_uuid',
+            );
+    }
+
+    // Callers must qualify version columns in `where` clauses.
+    private versionsWithThread(): Knex.QueryBuilder {
+        return AppModel.joinVersionThreads(
+            this.database(AppVersionsTableName),
+            `${AppVersionsTableName}.app_id`,
+        );
+    }
+
+    private async firstVersionWithThread(
+        query: Knex.QueryBuilder,
+    ): Promise<DbAppVersionWithThread | null> {
+        const row: (DbAppVersion & ThreadJoinColumns) | undefined =
+            await query.first();
+        if (!row) return null;
+        // An app with no thread row yet gets its thread 1 created here.
+        const threadOneUuid =
+            row.app_thread_uuid ??
+            row.first_thread_uuid ??
+            (await this.getCurrentThread(row.app_id)).app_thread_uuid;
+        return resolveVersionThread(row, threadOneUuid);
     }
 
     /**
@@ -589,38 +803,79 @@ export class AppModel {
     async getVersion(
         appId: string,
         version: number,
-    ): Promise<DbAppVersion | null> {
-        const row = await this.database(AppVersionsTableName)
-            .where({ app_id: appId, version })
-            .first();
-        return row ?? null;
+    ): Promise<DbAppVersionWithThread | null> {
+        return this.firstVersionWithThread(
+            this.versionsWithThread().where({
+                [`${AppVersionsTableName}.app_id`]: appId,
+                [`${AppVersionsTableName}.version`]: version,
+            }),
+        );
     }
 
-    async getLatestVersion(appId: string): Promise<DbAppVersion | null> {
-        const row = await this.database(AppVersionsTableName)
+    async getLatestVersion(
+        appId: string,
+    ): Promise<DbAppVersionWithThread | null> {
+        return this.firstVersionWithThread(
+            this.versionsWithThread()
+                .where(`${AppVersionsTableName}.app_id`, appId)
+                .orderBy(`${AppVersionsTableName}.version`, 'desc'),
+        );
+    }
+
+    async countVersions(appId: string): Promise<number> {
+        const [row] = await this.database(AppVersionsTableName)
             .where({ app_id: appId })
-            .orderBy('version', 'desc')
+            .count<{ count: string }[]>({ count: '*' });
+        return parseInt(row.count, 10);
+    }
+
+    /** null when the creator's user row is gone (hard-deleted user). */
+    async findAppCreator(appId: string): Promise<{
+        userUuid: string;
+        firstName: string;
+        lastName: string;
+    } | null> {
+        const row = await this.database(AppsTableName)
+            .innerJoin(
+                UserTableName,
+                `${UserTableName}.user_uuid`,
+                `${AppsTableName}.created_by_user_uuid`,
+            )
+            .where(`${AppsTableName}.app_id`, appId)
+            .select({
+                userUuid: `${UserTableName}.user_uuid`,
+                firstName: `${UserTableName}.first_name`,
+                lastName: `${UserTableName}.last_name`,
+            })
             .first();
         return row ?? null;
     }
 
-    async getLatestReadyVersion(appId: string): Promise<DbAppVersion | null> {
-        const row = await this.database(AppVersionsTableName)
-            .where({ app_id: appId, status: 'ready' })
-            .orderBy('version', 'desc')
-            .first();
-        return row ?? null;
+    async getLatestReadyVersion(
+        appId: string,
+    ): Promise<DbAppVersionWithThread | null> {
+        return this.firstVersionWithThread(
+            this.versionsWithThread()
+                .where({
+                    [`${AppVersionsTableName}.app_id`]: appId,
+                    [`${AppVersionsTableName}.status`]: 'ready',
+                })
+                .orderBy(`${AppVersionsTableName}.version`, 'desc'),
+        );
     }
 
     async getLatestRenderableDataAppVizVersion(
         appId: string,
-    ): Promise<DbAppVersion | null> {
-        const row = await this.database(AppVersionsTableName)
-            .where({ app_id: appId, status: 'ready' })
-            .whereNotNull('viz_schema')
-            .orderBy('version', 'desc')
-            .first();
-        return row ?? null;
+    ): Promise<DbAppVersionWithThread | null> {
+        return this.firstVersionWithThread(
+            this.versionsWithThread()
+                .where({
+                    [`${AppVersionsTableName}.app_id`]: appId,
+                    [`${AppVersionsTableName}.status`]: 'ready',
+                })
+                .whereNotNull(`${AppVersionsTableName}.viz_schema`)
+                .orderBy(`${AppVersionsTableName}.version`, 'desc'),
+        );
     }
 
     /**
@@ -651,6 +906,68 @@ export class AppModel {
         return cancelled !== undefined;
     }
 
+    // Thread 1 predates threads, so its legacy versions carry a null thread uuid.
+    private versionsInThread(thread: {
+        app_id: string;
+        app_thread_uuid: string;
+        thread_number: number;
+    }) {
+        return this.database(AppVersionsTableName)
+            .where('app_id', thread.app_id)
+            .andWhere((q) => {
+                void q.where('app_thread_uuid', thread.app_thread_uuid);
+                if (thread.thread_number === 1) {
+                    void q.orWhereNull('app_thread_uuid');
+                }
+            });
+    }
+
+    // Newest terminal version before `beforeVersion` in the same thread; the
+    // compaction trigger's input. Thread-scoped so a cleared context starts clean.
+    async findPreviousFinishedVersionInThread(
+        appThreadUuid: string,
+        beforeVersion: number,
+    ): Promise<{
+        version: number;
+        generationUsage: DataAppGenerationUsage | null;
+    } | null> {
+        const thread = await this.findThreadByUuid(appThreadUuid);
+        if (!thread) return null;
+        const row = await this.versionsInThread(thread)
+            .whereIn('status', [...APP_VERSION_TERMINAL_STATUSES])
+            .andWhere('version', '<', beforeVersion)
+            .orderBy('version', 'desc')
+            .select('version', 'generation_usage')
+            .first();
+        if (!row) return null;
+        return { version: row.version, generationUsage: row.generation_usage };
+    }
+
+    // Whether a version other than `excludeVersion` ran the agent in this thread.
+    // Thread 1 predates narration, so any other version counts there.
+    async threadHasVersionThatReachedCodingAgent(
+        appThreadUuid: string,
+        excludeVersion: number | null,
+    ): Promise<boolean> {
+        const thread = await this.findThreadByUuid(appThreadUuid);
+        if (!thread) return false;
+        const isThreadOne = thread.thread_number === 1;
+        const row = await this.versionsInThread(thread)
+            .modify((q) => {
+                if (excludeVersion !== null) {
+                    void q.whereNot('version', excludeVersion);
+                }
+                if (!isThreadOne) {
+                    void q.whereRaw(
+                        `(status_history @> '[{"kind":"thinking"}]'::jsonb OR status_history @> '[{"kind":"tool"}]'::jsonb)`,
+                    );
+                }
+            })
+            .select('version')
+            .first();
+        return row !== undefined;
+    }
+
     async appImageExists(appId: string, imageId: string): Promise<boolean> {
         const row = await this.database(AppVersionsTableName)
             .where('app_id', appId)
@@ -662,6 +979,7 @@ export class AppModel {
         return !!row;
     }
 
+    /** Appends to the app's current thread unless `appThreadUuid` is given. */
     async createVersion(
         appId: string,
         version: Pick<DbAppVersion, 'version' | 'prompt'>,
@@ -670,13 +988,19 @@ export class AppModel {
         resources?: AppVersionResources,
         dependencies?: AppVersionDependencies,
         vizSchema?: DataAppVizSchema,
+        opts?: { registryVersion?: string; appThreadUuid?: string },
     ): Promise<DbAppVersion> {
+        const appThreadUuid =
+            opts?.appThreadUuid ??
+            (await this.getCurrentThread(appId)).app_thread_uuid;
         const [row] = await this.database(AppVersionsTableName)
             .insert({
                 ...version,
                 app_id: appId,
+                app_thread_uuid: appThreadUuid,
                 status,
                 created_by_user_uuid: createdByUserUuid,
+                registry_version: opts?.registryVersion ?? null,
                 ...(resources
                     ? {
                           resources: JSON.stringify(
@@ -710,6 +1034,8 @@ export class AppModel {
     ): Promise<{
         name: string;
         description: string;
+        icon: string | null;
+        autoAnalysis: DataAppAutoAnalysis;
         createdByUserUuid: string;
         organizationUuid: string;
         spaceUuid: string | null;
@@ -719,13 +1045,16 @@ export class AppModel {
         pinnedListOrder: number | null;
         slug: string;
         viewsCount: number;
-        versions: (DbAppVersion & {
+        currentThread: DbAppThread;
+        versions: (DbAppVersionWithThread & {
             created_by_user_first_name: string | null;
             created_by_user_last_name: string | null;
         })[];
         hasMore: boolean;
+        registrySlug: string | null;
     }> {
         const limit = opts.limit ?? 20;
+        const currentThread = await this.getCurrentThread(appId);
         const query = this.database(AppsTableName)
             .innerJoin(
                 ProjectTableName,
@@ -752,6 +1081,9 @@ export class AppModel {
                 `${UserTableName}.user_uuid`,
                 `${AppVersionsTableName}.created_by_user_uuid`,
             )
+            .modify((q) =>
+                AppModel.joinVersionThreads(q, `${AppsTableName}.app_id`),
+            )
             .leftJoin(
                 PinnedAppTableName,
                 `${PinnedAppTableName}.app_uuid`,
@@ -768,15 +1100,17 @@ export class AppModel {
             .andWhere(`${AppsTableName}.project_uuid`, projectUuid)
             .whereNull(`${AppsTableName}.deleted_at`)
             .select(
-                `${AppVersionsTableName}.*`,
                 `${AppsTableName}.name`,
                 `${AppsTableName}.description`,
+                `${AppsTableName}.icon`,
+                `${AppsTableName}.auto_analysis`,
                 `${AppsTableName}.created_by_user_uuid`,
                 `${AppsTableName}.space_uuid`,
                 `${SpaceTableName}.name as space_name`,
                 `${AppsTableName}.template`,
                 `${AppsTableName}.slug`,
                 `${AppsTableName}.views_count`,
+                `${AppsTableName}.registry_slug`,
                 `${OrganizationTableName}.organization_uuid`,
                 `${PinnedAppTableName}.pinned_list_uuid`,
                 `${PinnedAppTableName}.order as pinned_list_order`,
@@ -794,21 +1128,25 @@ export class AppModel {
             );
         }
 
-        const rows: ((DbAppVersion | Record<string, null>) & {
-            name: string;
-            description: string;
-            created_by_user_uuid: string;
-            space_uuid: string | null;
-            space_name: string | null;
-            template: DbApp['template'];
-            slug: string;
-            views_count: number;
-            organization_uuid: string;
-            pinned_list_uuid: string | null;
-            pinned_list_order: number | null;
-            created_by_user_first_name: string | null;
-            created_by_user_last_name: string | null;
-        })[] = await query;
+        const rows: ((DbAppVersion | Record<string, null>) &
+            ThreadJoinColumns & {
+                name: string;
+                description: string;
+                icon: string | null;
+                auto_analysis: DataAppAutoAnalysis;
+                created_by_user_uuid: string;
+                space_uuid: string | null;
+                space_name: string | null;
+                template: DbApp['template'];
+                slug: string;
+                views_count: number;
+                registry_slug: string | null;
+                organization_uuid: string;
+                pinned_list_uuid: string | null;
+                pinned_list_order: number | null;
+                created_by_user_first_name: string | null;
+                created_by_user_last_name: string | null;
+            })[] = await query;
 
         // Left join: if app doesn't exist, zero rows → 404
         if (rows.length === 0) {
@@ -819,12 +1157,15 @@ export class AppModel {
         const {
             name,
             description,
+            icon,
+            auto_analysis: autoAnalysis,
             created_by_user_uuid: createdByUserUuid,
             space_uuid: spaceUuid,
             space_name: spaceName,
             template,
             slug,
             views_count: viewsCount,
+            registry_slug: registrySlug,
             organization_uuid: organizationUuid,
             pinned_list_uuid: pinnedListUuid,
             pinned_list_order: pinnedListOrder,
@@ -834,26 +1175,32 @@ export class AppModel {
         const versions = rows.filter(
             (
                 r,
-            ): r is DbAppVersion & {
-                name: string;
-                description: string;
-                created_by_user_uuid: string;
-                space_uuid: string | null;
-                space_name: string | null;
-                template: DbApp['template'];
-                slug: string;
-                views_count: number;
-                organization_uuid: string;
-                pinned_list_uuid: string | null;
-                pinned_list_order: number | null;
-                created_by_user_first_name: string | null;
-                created_by_user_last_name: string | null;
-            } => r.version !== null,
+            ): r is DbAppVersion &
+                ThreadJoinColumns & {
+                    name: string;
+                    description: string;
+                    icon: string | null;
+                    auto_analysis: DataAppAutoAnalysis;
+                    created_by_user_uuid: string;
+                    space_uuid: string | null;
+                    space_name: string | null;
+                    template: DbApp['template'];
+                    slug: string;
+                    views_count: number;
+                    registry_slug: string | null;
+                    organization_uuid: string;
+                    pinned_list_uuid: string | null;
+                    pinned_list_order: number | null;
+                    created_by_user_first_name: string | null;
+                    created_by_user_last_name: string | null;
+                } => r.version !== null,
         );
         const hasMore = versions.length > limit;
         return {
             name,
             description,
+            icon,
+            autoAnalysis,
             createdByUserUuid,
             organizationUuid,
             spaceUuid,
@@ -863,15 +1210,24 @@ export class AppModel {
             viewsCount,
             pinnedListUuid,
             pinnedListOrder,
-            versions: versions.slice(0, limit),
+            currentThread,
+            // getCurrentThread above created thread 1 if it was missing.
+            versions: versions
+                .slice(0, limit)
+                .map((v) =>
+                    resolveVersionThread(v, currentThread.app_thread_uuid),
+                ),
             hasMore,
+            registrySlug,
         };
     }
 
     async updateApp(
         appId: string,
         projectUuid: string,
-        update: Partial<Pick<DbApp, 'name' | 'description'>>,
+        update: Partial<
+            Pick<DbApp, 'name' | 'description' | 'icon' | 'auto_analysis'>
+        >,
     ): Promise<DbApp> {
         const [row] = await this.database(AppsTableName)
             .where({ app_id: appId, project_uuid: projectUuid })
@@ -994,7 +1350,7 @@ export class AppModel {
                 Pick<DbAppVersion, 'data_references'>
         >
     > {
-        return this.joinLatestReadyVersion(this.database(AppsTableName))
+        const query = this.joinLatestReadyVersion(this.database(AppsTableName))
             .where(`${AppsTableName}.project_uuid`, projectUuid)
             .whereNull(`${AppsTableName}.deleted_at`)
             .whereNotNull(`${AppVersionsTableName}.app_version_id`)
@@ -1003,6 +1359,11 @@ export class AppModel {
                 `${AppsTableName}.name`,
                 `${AppVersionsTableName}.data_references`,
             );
+        // Chart types don't run queries of their own (fields arrive via the
+        // host chart's binding), so validating them as data apps would only
+        // report a broken viz as a broken *app*.
+        AppModel.applyDataAppVizsFilter(query, 'exclude');
+        return query;
     }
 
     /**
@@ -1038,6 +1399,77 @@ export class AppModel {
             );
         }
         return KnexPaginate.paginate(query, paginateArgs);
+    }
+
+    /** Registry-installed apps in the project, with their latest ready registry version. */
+    async listRegistryInstalledApps(projectUuid: string): Promise<
+        Array<{
+            app_id: string;
+            registry_slug: string;
+            latest_ready_registry_version: string | null;
+            created_by_user_uuid: string | null;
+        }>
+    > {
+        return this.joinLatestReadyVersion(this.database(AppsTableName))
+            .where(`${AppsTableName}.project_uuid`, projectUuid)
+            .whereNotNull(`${AppsTableName}.registry_slug`)
+            .whereNull(`${AppsTableName}.deleted_at`)
+            .orderBy(`${AppsTableName}.created_at`)
+            .select<
+                Array<{
+                    app_id: string;
+                    registry_slug: string;
+                    latest_ready_registry_version: string | null;
+                    created_by_user_uuid: string | null;
+                }>
+            >(
+                `${AppsTableName}.app_id`,
+                `${AppsTableName}.registry_slug`,
+                `${AppsTableName}.created_by_user_uuid`,
+                this.database
+                    .ref(`${AppVersionsTableName}.registry_version`)
+                    .as('latest_ready_registry_version'),
+            );
+    }
+
+    /**
+     * Newest soft-deleted registry install of this slug in the project — the
+     * revive target when the chart type is reinstalled from the library.
+     * Shaped like a `listRegistryInstalledApps` row.
+     */
+    async findNewestDeletedRegistryApp(
+        projectUuid: string,
+        registrySlug: string,
+    ): Promise<
+        | {
+              app_id: string;
+              registry_slug: string;
+              latest_ready_registry_version: string | null;
+              created_by_user_uuid: string | null;
+          }
+        | undefined
+    > {
+        return this.joinLatestReadyVersion(this.database(AppsTableName))
+            .where(`${AppsTableName}.project_uuid`, projectUuid)
+            .andWhere(`${AppsTableName}.registry_slug`, registrySlug)
+            .whereNotNull(`${AppsTableName}.deleted_at`)
+            .orderBy(`${AppsTableName}.deleted_at`, 'desc')
+            .select<
+                Array<{
+                    app_id: string;
+                    registry_slug: string;
+                    latest_ready_registry_version: string | null;
+                    created_by_user_uuid: string | null;
+                }>
+            >(
+                `${AppsTableName}.app_id`,
+                `${AppsTableName}.registry_slug`,
+                `${AppsTableName}.created_by_user_uuid`,
+                this.database
+                    .ref(`${AppVersionsTableName}.registry_version`)
+                    .as('latest_ready_registry_version'),
+            )
+            .first();
     }
 
     /**
@@ -1173,7 +1605,7 @@ export class AppModel {
      */
     async remapPreviewChartVizBindings(
         previewProjectUuid: string,
-        mappings: { sourceAppUuid: string; previewAppUuid: string }[],
+        mappings: PreviewChartVizBindingMapping[],
     ): Promise<void> {
         if (mappings.length === 0) {
             return;
@@ -1211,25 +1643,75 @@ export class AppModel {
             .where(`${ProjectTableName}.project_uuid`, previewProjectUuid)
             .whereNull(`${SavedChartsTableName}.deleted_at`)
             .select(`${SavedChartsTableName}.saved_query_id`);
+        const [spaceCharts, dashboardCharts] = await Promise.all([
+            spaceChartIds,
+            dashboardChartIds,
+        ]);
+        const previewChartIds = [
+            ...new Set(
+                [...spaceCharts, ...dashboardCharts].map(
+                    (row) => row.saved_query_id,
+                ),
+            ),
+        ];
+        if (previewChartIds.length === 0) {
+            return;
+        }
+
+        // Narrow by the indexed chart id first: chart_type and chart_config
+        // are unindexed, so filtering the whole table on them is a full scan.
+        const candidates = await this.database(SavedChartVersionsTableName)
+            .select<
+                {
+                    saved_queries_version_id: number;
+                    source_app_uuid: string | null;
+                }[]
+            >(
+                'saved_queries_version_id',
+                this.database.raw(
+                    `chart_config->>'dataAppVizUuid' as source_app_uuid`,
+                ),
+            )
+            .whereRaw('?? = ANY(?::int[])', ['saved_query_id', previewChartIds])
+            .where('chart_type', ChartType.DATA_APP_VIZ);
+        const versionIdsBySourceApp = candidates.reduce<Map<string, number[]>>(
+            (acc, { saved_queries_version_id, source_app_uuid }) => {
+                if (source_app_uuid === null) {
+                    return acc;
+                }
+                const ids = acc.get(source_app_uuid) ?? [];
+                ids.push(saved_queries_version_id);
+                acc.set(source_app_uuid, ids);
+                return acc;
+            },
+            new Map(),
+        );
 
         /* eslint-disable no-await-in-loop */
-        for (const { sourceAppUuid, previewAppUuid } of mappings) {
-            await this.database(SavedChartVersionsTableName)
-                .where('chart_type', ChartType.DATA_APP_VIZ)
-                .whereRaw(`chart_config->>'dataAppVizUuid' = ?`, [
-                    sourceAppUuid,
-                ])
-                .where((chartScope) => {
-                    void chartScope
-                        .whereIn('saved_query_id', spaceChartIds.clone())
-                        .orWhereIn('saved_query_id', dashboardChartIds.clone());
-                })
-                .update({
-                    chart_config: this.database.raw(
-                        `jsonb_set(chart_config, '{dataAppVizUuid}', to_jsonb(?::text))`,
-                        [previewAppUuid],
-                    ) as unknown as ChartConfig['config'],
-                });
+        for (const {
+            sourceAppUuid,
+            previewAppUuid,
+            previewAppVersion,
+        } of mappings) {
+            const versionIds = versionIdsBySourceApp.get(sourceAppUuid);
+            if (versionIds) {
+                await this.database(SavedChartVersionsTableName)
+                    .whereRaw('?? = ANY(?::int[])', [
+                        'saved_queries_version_id',
+                        versionIds,
+                    ])
+                    .update({
+                        chart_config: this.database.raw(
+                            `jsonb_set(
+                                jsonb_set(chart_config, '{dataAppVizUuid}', to_jsonb(?::text)),
+                                '{dataAppVizVersion}',
+                                to_jsonb(?::integer),
+                                true
+                            )`,
+                            [previewAppUuid, previewAppVersion],
+                        ) as unknown as ChartConfig['config'],
+                    });
+            }
         }
         /* eslint-enable no-await-in-loop */
     }
@@ -1243,7 +1725,7 @@ export class AppModel {
         appId: string,
         update: Pick<
             DbApp,
-            'name' | 'description' | 'space_uuid' | 'design_uuid'
+            'name' | 'description' | 'icon' | 'space_uuid' | 'design_uuid'
         >,
     ): Promise<DbApp> {
         const [row] = await this.database(AppsTableName)
@@ -1265,7 +1747,7 @@ export class AppModel {
     async setMetadataIfUnset(
         appId: string,
         projectUuid: string,
-        metadata: { name: string; description: string },
+        metadata: { name: string; description: string; icon?: string | null },
     ): Promise<DbApp> {
         return this.database.transaction(async (trx) => {
             const app = await trx(AppsTableName)
@@ -1278,13 +1760,18 @@ export class AppModel {
             }
 
             const update: Partial<
-                Pick<DbApp, 'name' | 'description' | 'slug'>
+                Pick<DbApp, 'name' | 'description' | 'slug' | 'icon'>
             > = {
                 description: trx.raw(
                     `CASE WHEN ${AppsTableName}.description = '' THEN ? ELSE ${AppsTableName}.description END`,
                     [metadata.description],
                 ) as unknown as string,
             };
+
+            // An icon the author already chose is never overwritten.
+            if (metadata.icon !== undefined && app.icon === null) {
+                update.icon = metadata.icon;
+            }
 
             if (app.name === '') {
                 const baseSlug = generateSlug(metadata.name).slice(0, 255);
@@ -1561,6 +2048,10 @@ export class AppModel {
                         filters.dateTo,
                     );
                 }
+                AppModel.applyDataAppVizsFilter(
+                    queryBuilder,
+                    filters?.dataAppVizsFilter,
+                );
             })
             .select<DbAppActivityRow[]>(
                 `${AppVersionsTableName}.app_id`,
@@ -1572,6 +2063,7 @@ export class AppModel {
                 `${AppVersionsTableName}.created_at`,
                 `${AppVersionsTableName}.created_by_user_uuid`,
                 `${AppsTableName}.name as app_name`,
+                `${AppsTableName}.template as app_template`,
                 `${AppsTableName}.deleted_at as app_deleted_at`,
                 `${AppsTableName}.project_uuid`,
                 `${ProjectTableName}.name as project_name`,

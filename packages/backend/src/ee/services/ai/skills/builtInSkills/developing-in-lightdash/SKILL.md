@@ -5,6 +5,8 @@ description: Use when reading, creating, and editing Lightdash dashboards and ch
 
 # Developing in Lightdash
 
+For in-process agents and MCP clients working with JSON content tools; Autopilot reuses the chart references with its own workflow.
+
 Use this skill when working with Lightdash dashboards and charts.
 
 ## MCP tool names
@@ -21,6 +23,7 @@ This skill is shared with Lightdash's native agent, so its workflows use camelCa
 | Task                          | Tools/Action                                                    | References                            |
 | ----------------------------- | --------------------------------------------------------------- | ------------------------------------- |
 | Read dashboards and charts    | `readContent`                                                   | `dashboard-reference`, chart refs     |
+| Read data apps (read-only)    | `readContent` with `type: data_app`                             | manifest-shaped JSON, no source code  |
 | Edit dashboards               | `editContent` with RFC6902 JSON Patch                           | `dashboard-reference`                 |
 | Edit charts and tiles         | `editContent`, then update referencing dashboards if needed     | Chart refs, `dashboard-reference`     |
 | Create charts                 | `grepFields`, `getMetadata`, `runContentQuery`, `createContent` | Chart refs                            |

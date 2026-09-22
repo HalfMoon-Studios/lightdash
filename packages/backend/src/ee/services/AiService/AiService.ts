@@ -23,6 +23,8 @@ import {
     UnexpectedServerError,
 } from '@lightdash/common';
 import { generateText } from 'ai';
+import NodeCache from 'node-cache';
+import { createHash } from 'node:crypto';
 import { LightdashAnalytics } from '../../../analytics/LightdashAnalytics';
 import { fromSession } from '../../../auth/account';
 import { LightdashConfig } from '../../../config/parseConfig';
@@ -40,7 +42,17 @@ import {
 } from '../../analytics';
 import OpenAi from '../../clients/OpenAi';
 import { generateChartMetadata as generateChartMetadataFromContext } from '../ai/agents/chartMetadataGenerator';
+import {
+    compareChartQueries,
+    type ChartSimilarityInput,
+    type ChartSimilarityMatch,
+} from '../ai/agents/chartSimilarity';
 import { generateCustomDimension as generateCustomDimensionFromContext } from '../ai/agents/customDimensionGenerator';
+import {
+    detectDataAppAnomalies,
+    type DataAppDetection,
+} from '../ai/agents/dataAppAnomalyDetector';
+import { answerDataAppPrompt } from '../ai/agents/dataAppPromptAnswerer';
 import {
     generateFormulaTableCalculation as generateFormulaTableCalculationFromContext,
     sanitizeCustomFormat as sanitizeFormulaCustomFormat,
@@ -50,10 +62,19 @@ import {
     sanitizeCustomFormat,
 } from '../ai/agents/tableCalculationGenerator';
 import { generateTooltip as generateTooltipFromContext } from '../ai/agents/tooltipGenerator';
-import { getModel, pickAmbientAnthropicPreset } from '../ai/models';
+import { resolveAiDecisionClient } from '../ai/decisions/AiDecisionClient';
+import {
+    getModel,
+    pickAmbientAnthropicPreset,
+    resolveKeyManagement,
+} from '../ai/models';
 import { getAnthropicModel } from '../ai/models/anthropic-claude';
 import { OrgAiCopilotConfigResolver } from '../ai/OrgAiCopilotConfigResolver';
-import { AiCallAttribution } from '../ai/utils/aiCallTelemetry';
+import {
+    AiCallAttribution,
+    getGeneratorTelemetry,
+    getLanguageModelAttribution,
+} from '../ai/utils/aiCallTelemetry';
 import { DEFAULT_CUSTOM_VIZ_PROMPT } from './utils/prompts';
 import { getTotalTokenUsage } from './utils/tokens';
 
@@ -78,6 +99,87 @@ export class AiService extends BaseService {
     private readonly featureFlagService: FeatureFlagService;
 
     private readonly orgAiCopilotConfigResolver: OrgAiCopilotConfigResolver;
+
+    private readonly chartSimilarityCache = new NodeCache({
+        stdTTL: 60,
+        checkperiod: 60,
+        maxKeys: 100,
+    });
+
+    private readonly chartSimilarityInFlight = new Map<
+        string,
+        Promise<ChartSimilarityMatch[]>
+    >();
+
+    async isAmbientAiEnabled(user: SessionUser): Promise<boolean> {
+        try {
+            const config =
+                await this.orgAiCopilotConfigResolver.getCopilotConfig(
+                    user.organizationUuid ?? null,
+                );
+            // Configuration only: cached review submissions must not contact providers.
+            if (config.providers.anthropic?.apiKey) return true;
+            const flag = await this.featureFlagService.get({
+                user,
+                featureFlagId: CommercialFeatureFlags.AiCopilot,
+            });
+            if (!flag.enabled) return false;
+            getModel(config, { enableReasoning: false, useFastModel: true });
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    // Caller supplies freshly authorized chart definitions. Keys include the
+    // caller and complete query context, so revisions and permissions are re-read.
+    async compareCharts(
+        user: SessionUser,
+        projectUuid: string,
+        input: ChartSimilarityInput,
+        cachedOnly = false,
+    ): Promise<ChartSimilarityMatch[] | undefined> {
+        const decisions = await resolveAiDecisionClient(
+            this.lightdashConfig.ai.decisions,
+            () =>
+                this.featureFlagService.get({
+                    user,
+                    featureFlagId: FeatureFlags.AiAgentFastDecisions,
+                }),
+        );
+        const key = createHash('sha256')
+            .update(
+                JSON.stringify([
+                    user.organizationUuid,
+                    user.userUuid,
+                    projectUuid,
+                    decisions?.modelName ?? null,
+                    input,
+                ]),
+            )
+            .digest('hex');
+        const cached =
+            this.chartSimilarityCache.get<ChartSimilarityMatch[]>(key);
+        if (cached !== undefined || cachedOnly) return cached;
+        const inFlight = this.chartSimilarityInFlight.get(key);
+        if (inFlight) return inFlight;
+        // Bound concurrent work as well as context and model output.
+        if (this.chartSimilarityInFlight.size >= 20) return undefined;
+        const operation = (async () => {
+            const model = await this.getAmbientAiModel(user, { projectUuid });
+            const matches = await compareChartQueries(model, input, decisions);
+            if (this.chartSimilarityCache.getStats().keys < 100) {
+                this.chartSimilarityCache.set(key, matches);
+            }
+            return matches;
+        })();
+        this.chartSimilarityInFlight.set(key, operation);
+        try {
+            return await operation;
+        } finally {
+            this.chartSimilarityInFlight.delete(key);
+        }
+    }
 
     constructor(dependencies: Dependencies) {
         super();
@@ -139,6 +241,10 @@ export class AiService extends BaseService {
                 ...getAnthropicModel(anthropicConfig, preset, {
                     enableReasoning: false,
                 }),
+                // getAnthropicModel does not use getModel and withKeyManagement.
+                // Set keyManagement here. If you do not, the ambient calls
+                // record a null key origin.
+                keyManagement: resolveKeyManagement(copilotConfig, 'anthropic'),
                 telemetry: attribution,
             };
         }
@@ -518,6 +624,67 @@ export class AiService extends BaseService {
     }
 
     /**
+     * Single-shot anomaly detection over the query results behind a data app
+     * view, on the ambient fast model. Content is already filtered to what the
+     * viewer may see; the model never re-queries the warehouse.
+     */
+    async detectDataAppAnomalies(
+        user: SessionUser,
+        {
+            content,
+            instructions,
+            projectUuid,
+        }: {
+            content: string;
+            instructions: string | null;
+            projectUuid: string;
+        },
+    ): Promise<{ detection: DataAppDetection; modelId: string | null }> {
+        const modelOptions = await this.getAmbientAiModel(user, {
+            projectUuid,
+        });
+        const detection = await detectDataAppAnomalies(modelOptions, {
+            content,
+            instructions,
+            today: new Date().toISOString().slice(0, 10),
+        });
+        return {
+            detection,
+            modelId:
+                getLanguageModelAttribution(modelOptions.model).model ?? null,
+        };
+    }
+
+    async answerDataAppPrompt(
+        user: SessionUser,
+        {
+            content,
+            prompt,
+            focus,
+            projectUuid,
+        }: {
+            content: string;
+            prompt: string;
+            focus: Record<string, string> | null;
+            projectUuid: string;
+        },
+    ): Promise<{ text: string; modelId: string | null }> {
+        const modelOptions = await this.getAmbientAiModel(user, {
+            projectUuid,
+        });
+        const text = await answerDataAppPrompt(modelOptions, {
+            content,
+            prompt,
+            focus,
+        });
+        return {
+            text,
+            modelId:
+                getLanguageModelAttribution(modelOptions.model).model ?? null,
+        };
+    }
+
+    /**
      * Single-shot summary of a scheduled delivery's already-rendered content
      * using the ambient fast model. The content is the data the delivery sends
      * (filters and parameters already applied upstream), so the model never
@@ -543,6 +710,11 @@ export class AiService extends BaseService {
             model: modelOptions.model,
             ...modelOptions.callOptions,
             providerOptions: modelOptions.providerOptions,
+            experimental_telemetry: getGeneratorTelemetry(
+                modelOptions,
+                'generateDeliverySummary',
+                'delivery-summary',
+            ),
             messages: [
                 {
                     role: 'system',

@@ -5,6 +5,10 @@
  * If the feature flag is no longer in use, remove it from this enum.
  */
 export enum FeatureFlags {
+    /** Independent Documents containing narrative and saved chart definitions. */
+    Documents = 'documents',
+    /** Backend-provisioned usage analytics projects. */
+    AnalyticsProject = 'analytics-project',
     /* Show user groups */
     UserGroupsEnabled = 'user-groups-enabled',
 
@@ -14,31 +18,11 @@ export enum FeatureFlags {
     EnableTimezoneSupport = 'enable-timezone-support',
 
     /**
-     * Rebase RAW timestamp filter columns to instants when a data timezone is
-     * set, so sub-day filters return the rows the SELECT displays. Wrapping
-     * the filter column defeats partition pruning/index scans on BigQuery and
-     * Postgres-family warehouses, so this is off by default — enable per-org
-     * for data-timezone users who need filter correctness. Temporary: goes
-     * away once filters convert the literal into the column's domain instead.
-     */
-    NaiveTimestampFilterRebase = 'naive-timestamp-filter-rebase',
-
-    /**
-     * Enable scheduler task that replaces custom metrics after project compile
-     */
-    ReplaceCustomMetricsOnCompile = 'replace-custom-metrics-on-compile',
-
-    /**
      * Enable the dynamic calculation of series color, when not manually set on the chart config.
      * This aims to make the colors more consistent, depending on the groups, but this could cause the opposite effect.
      * For more details, see https://github.com/lightdash/lightdash/issues/13831
      */
     CalculateSeriesColor = 'calculate-series-color',
-
-    /**
-     * Enable the ability to write back custom bin dimensions to dbt.
-     */
-    WriteBackCustomBinDimensions = 'write-back-custom-bin-dimensions',
 
     /**
      * Enable the ability to show the warehouse execution time and total time in the chart tile.
@@ -54,11 +38,6 @@ export enum FeatureFlags {
      * Enable viewing and editing YAML source files in the Explore UI
      */
     EditYamlInUi = 'edit-yaml-in-ui',
-
-    /**
-     * Enable Google Chat as a scheduled delivery destination
-     */
-    GoogleChatEnabled = 'google-chat-enabled',
 
     /**
      * On multi-org (shared-tenant) instances, route an organization's recurring
@@ -86,6 +65,12 @@ export enum FeatureFlags {
     ChangeChartExplore = 'change-chart-explore',
 
     /**
+     * Compile repeated (array) warehouse columns as unnested virtual tables
+     * instead of leaving their leaves as unqueryable dotted dimensions.
+     */
+    UnnestRepeatedColumns = 'unnest-repeated-columns',
+
+    /**
      * Keep visited dashboard tabs mounted in the DOM (hidden) for instant
      * re-switching. Enabled by default; disabled per-org for orgs where
      * large dashboards spiked browser memory to 3 GB+ from accumulated
@@ -106,12 +91,8 @@ export enum FeatureFlags {
      * is true. Disabled by default.
      */
     EnableDataApps = 'enable-data-apps',
-
-    /**
-     * Keep Explorer fields mounted on the left while chart selection and
-     * configuration render in a right sidebar.
-     */
-    ExplorerChartGallery = 'explorer-chart-gallery',
+    // Enable the Learn library, walkthroughs and training project per org.
+    EnableLearn = 'enable-learn',
 
     /**
      * Per-organization gate for declaring custom npm dependencies in data
@@ -119,6 +100,23 @@ export enum FeatureFlags {
      * via LIGHTDASH_ENABLE_FEATURE_FLAGS.
      */
     EnableDataAppCustomDependencies = 'enable-data-app-custom-dependencies',
+
+    /**
+     * Per-organization rollout of AI analysis in data apps (detect anomalies,
+     * investigate with an agent). Gates the endpoints and the admin toggle;
+     * the org's `dataAppRuntimeAiEnabled` setting is the separate customer
+     * consent. Disabled by default.
+     */
+    EnableDataAppAnalysis = 'enable-data-app-analysis',
+
+    /**
+     * Per-organization gate for the data apps coding agent's cost levers: a
+     * 1-hour prompt cache instead of the 5-minute default, and compaction of
+     * long sessions before a build that starts on a cold cache. Claude Code on
+     * the Anthropic API only; Bedrock and Codex builds ignore it. Disabled by
+     * default; read once per build so a flip applies to the next build.
+     */
+    DataAppAgentCostOptimizations = 'data-app-agent-cost-optimizations',
 
     /**
      * Enable Autopilot project health agent.
@@ -153,16 +151,6 @@ export enum FeatureFlags {
      * opt in per-org without a redeploy.
      */
     ResultsCacheEnabled = 'results-cache-enabled',
-
-    /**
-     * Allow dashboard editors to mark individual dashboard filters as locked.
-     * Locked filters are visible to viewers but cannot be edited from view
-     * mode, and URL/embed filter overrides targeting a locked filter's field
-     * are ignored. Gates the authoring UI; the override-stripping behaviour
-     * always runs regardless of the flag so saved-locked filters stay safe
-     * if the flag is later turned off.
-     */
-    LockDashboardFilters = 'lock-dashboard-filters',
 
     /**
      * Show a persistent trial warning banner for an organization on shared
@@ -210,22 +198,6 @@ export enum FeatureFlags {
     ProLimits = 'pro-limits',
 
     /**
-     * Show the organization roadmap and enable its read-only API proxy.
-     */
-    OrganizationRoadmap = 'organization-roadmap',
-
-    /**
-     * Guard the agent's `searchFieldValues` tool against pathological warehouse
-     * scans. When on, an empty/whitespace query — which compiles to
-     * `LIKE '%%'`, i.e. "distinct the entire column" — is rejected immediately
-     * with an actionable message instead of running a leading-wildcard full
-     * scan that can take minutes on high-cardinality fields. Default off, so
-     * behaviour is byte-identical to today when disabled; a live toggle lets the
-     * new behaviour be trialled per-org without a redeploy. Experimental.
-     */
-    AiFieldValueSearchGuard = 'ai-field-value-search-guard',
-
-    /**
      * Allow a single Lightdash project to connect to multiple dbt sources
      * (repos/CLI deploys). Each source stores its latest compiled manifest in
      * S3; on every deploy or preview the backend merges all sources' manifests
@@ -254,11 +226,6 @@ export enum FeatureFlags {
      * the CLI, APIs, and installed skills remain available independently.
      */
     CodingAgentOnboarding = 'coding-agent-onboarding',
-
-    /**
-     * Let org admins set their own Anthropic/OpenAI API keys for AI agents.
-     */
-    OrgAiProviderApiKeys = 'org-ai-provider-api-keys',
 
     /**
      * Allow storing long-lived GitHub personal access tokens as GitHub MCP
@@ -293,6 +260,13 @@ export enum FeatureFlags {
      */
     EmailWhitelabel = 'email-whitelabel',
 
+    /**
+     * Advertise compact filter expressions to AI agent and MCP metric-query
+     * tools, resolving them to the existing filter model at the tool boundary.
+     * Off by default while the public contract is rolled out per organization.
+     */
+    AiFilterExpressions = 'ai-filter-expressions',
+
     /* Merge two or more queries into one warehouse statement from the
        explorer. Gated because it compiles novel SQL shapes (multi-CTE joins,
        conditional-aggregation widening) that no other path exercises. */
@@ -325,14 +299,6 @@ export enum FeatureFlags {
     QueryHistory = 'query-history',
 
     /**
-     * Run merges as composition: each source executes separately against
-     * the warehouse and the DuckDB compose engine joins the results. Falls
-     * back to the single-statement warehouse merge when the compose engine
-     * is unavailable or the merge needs a pivot. Off by default.
-     */
-    MergeOnCompose = 'merge-on-compose',
-
-    /**
      * Configurable retention for AI agent threads. Off by default; enabled
      * per-org on demand for enterprise customers.
      */
@@ -352,6 +318,41 @@ export enum FeatureFlags {
      * still delete threads from the agent admin threads view. Off by default.
      */
     AiDisableThreadDeletion = 'ai-disable-thread-deletion',
+
+    /**
+     * Enables the chart type library — browsing and installing official
+     * chart types from the configured chart registry — and, together with
+     * `EnableDataApps` as an either/or gate, usage of installed chart types
+     * (picking, configuring, rendering). Authoring, editing, and forking
+     * chart types stay behind `EnableDataApps`. Default: off.
+     */
+    ChartTypeRegistry = 'chart-type-registry',
+
+    /**
+     * Custom metrics created while building a chart inside a dashboard are
+     * kept on the dashboard and offered when building later charts there.
+     * Off by default.
+     */
+    DashboardCustomMetrics = 'dashboard-custom-metrics',
+    /**
+     * Build and edit charts in a full-screen modal over the dashboard
+     * instead of navigating away. Off by default.
+     */
+    InDashboardChartEditor = 'in-dashboard-chart-editor',
+
+    /**
+     * AI agent battle mode: send one prompt to two models in paired threads
+     * and compare the answers side by side with response timings. Internal
+     * experiment, off by default.
+     */
+    AiAgentBattleMode = 'ai-agent-battle-mode',
+    /**
+     * Organization-scoped master rollout switch for bounded semantic
+     * decisions, scoped tools, fast tool calls, reuse and direct chart paths.
+     */
+    AiAgentFastDecisions = 'ai-agent-fast-decisions',
+    /** Optional replacement of the main response model for bounded requests. */
+    AiAgentAdaptiveModels = 'ai-agent-adaptive-models',
 }
 
 export type FeatureFlag = {

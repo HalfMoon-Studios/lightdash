@@ -30,6 +30,14 @@ export type ClaudeCodeAnthropicConfig = {
     baseUrl?: string;
 };
 
+// Exactly the values Claude Code accepts: any other string turns caching off.
+export type ClaudeCodePromptCacheTtl = '5m' | '1h';
+
+export type ClaudeCodeSessionConfig = {
+    /** `null` leaves the CLI default (5m). */
+    promptCacheTtl: ClaudeCodePromptCacheTtl | null;
+};
+
 /**
  * The slice of the AI copilot config the Claude CLI env depends on: the active
  * provider switch (`AI_DEFAULT_PROVIDER`) and the Bedrock credentials.
@@ -43,6 +51,15 @@ export type ClaudeCodeProviderConfig = {
         bedrock?: ClaudeCodeBedrockConfig;
     };
 };
+
+export const CLAUDE_CODE_SECRET_ENV_KEYS = [
+    'ANTHROPIC_API_KEY',
+    'ANTHROPIC_AUTH_TOKEN',
+    'AWS_ACCESS_KEY_ID',
+    'AWS_SECRET_ACCESS_KEY',
+    'AWS_SESSION_TOKEN',
+    'AWS_BEARER_TOKEN_BEDROCK',
+] as const;
 
 export const buildAnthropicClaudeCodeEnv = (
     apiKey: string,
@@ -102,16 +119,21 @@ const resolveBedrockConfig = (
  * (and validated) when we actually need it — in Bedrock mode it is never called.
  */
 export const buildClaudeCodeEnv = (
-    copilot: ClaudeCodeProviderConfig,
+    copilot: ClaudeCodeProviderConfig & ClaudeCodeSessionConfig,
     resolveAnthropicApiKey: () => string,
 ): Record<string, string> => {
     const bedrock = resolveBedrockConfig(copilot);
 
     if (!bedrock) {
-        return buildAnthropicClaudeCodeEnv(
-            resolveAnthropicApiKey(),
-            copilot.providers.anthropic?.baseUrl,
-        );
+        return {
+            ...buildAnthropicClaudeCodeEnv(
+                resolveAnthropicApiKey(),
+                copilot.providers.anthropic?.baseUrl,
+            ),
+            ...(copilot.promptCacheTtl
+                ? { CLAUDE_CODE_PROMPT_CACHE_TTL: copilot.promptCacheTtl }
+                : {}),
+        };
     }
     if (bedrock.claudeCodeSkipAuth && !bedrock.baseUrl) {
         throw new MissingConfigError(
@@ -164,9 +186,11 @@ export const buildClaudeCodeEnv = (
  */
 export const describeClaudeCodeEnv = (env: Record<string, string>): string => {
     if (env.CLAUDE_CODE_USE_BEDROCK !== '1') {
-        return env.ANTHROPIC_BASE_URL
+        const mode = env.ANTHROPIC_BASE_URL
             ? 'Anthropic API via gateway'
             : 'Anthropic API';
+        const ttl = env.CLAUDE_CODE_PROMPT_CACHE_TTL;
+        return ttl ? `${mode} (prompt cache ${ttl})` : mode;
     }
     let method = 'IAM';
     if (env.CLAUDE_CODE_SKIP_BEDROCK_AUTH === '1') {

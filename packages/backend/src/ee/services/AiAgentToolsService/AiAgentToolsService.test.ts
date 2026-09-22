@@ -17,13 +17,20 @@ import {
     SourceQuery,
     UnitOfTime,
     WarehouseTypes,
+    type DataAppSearchResult,
+    type DataAppVizSchema,
+    type ExtractedDataReference,
+    type PersistedDataAppDataReferences,
 } from '@lightdash/common';
 import { CatalogSearchContext } from '../../../models/CatalogModel/CatalogModel';
 import { AiAgentContentValidation } from '../ai/utils/AiAgentContentValidation';
+import type { DataAppReadSource } from '../AppGenerateService/AppGenerateService';
 import {
     AiAgentToolsService,
     type AiAgentToolsRuntimeContext,
 } from './AiAgentToolsService';
+
+const location = { path: 'src/App.tsx', line: 1, column: 1 };
 
 const organizationUuid = 'organization-uuid';
 const projectUuid = 'project-uuid';
@@ -106,6 +113,12 @@ const makeService = ({
     projectService = {},
     querySourceService = {},
     contentService = {},
+    searchService = {},
+    appGenerateService = {},
+    organizationDesignModel = {},
+    appModel = {},
+    savedChartModel = {},
+    dashboardModel = {},
 }: {
     explores?: Record<string, Explore>;
     userAttributes?: Record<string, string[]>;
@@ -128,6 +141,12 @@ const makeService = ({
     projectService?: Record<string, unknown>;
     querySourceService?: Record<string, unknown>;
     contentService?: Record<string, unknown>;
+    searchService?: Record<string, unknown>;
+    appGenerateService?: Record<string, unknown>;
+    organizationDesignModel?: Record<string, unknown>;
+    appModel?: Record<string, unknown>;
+    savedChartModel?: Record<string, unknown>;
+    dashboardModel?: Record<string, unknown>;
 } = {}) =>
     new AiAgentToolsService({
         builtInSkills: {
@@ -181,7 +200,7 @@ const makeService = ({
                 .mockResolvedValue(verifiedFieldUsage),
         },
         searchModel: {},
-        searchService: {},
+        searchService,
         spaceService: {},
         spaceModel,
         dashboardService,
@@ -197,6 +216,11 @@ const makeService = ({
         shareService: {},
         asyncQueryService,
         querySourceService,
+        appGenerateService,
+        organizationDesignModel,
+        appModel,
+        savedChartModel,
+        dashboardModel,
     } as unknown as ConstructorParameters<typeof AiAgentToolsService>[0]);
 
 function makeRuntimeContext(
@@ -223,6 +247,327 @@ function makeRuntimeContext(
 }
 
 describe('AiAgentToolsService', () => {
+    const makeProjectSpace = (uuid: string, path: string, name: string) => ({
+        uuid,
+        path,
+        name,
+        chartCount: 0,
+        dashboardCount: 0,
+        childSpaceCount: 0,
+        appCount: 1,
+        userAccess: undefined,
+    });
+
+    const makeDataAppSearchResult = (
+        overrides: Partial<
+            DataAppSearchResult & { contentType: 'data_app' }
+        > = {},
+    ): DataAppSearchResult & { contentType: 'data_app' } => ({
+        contentType: 'data_app',
+        uuid: 'app-uuid',
+        slug: 'sales-forecast',
+        name: 'Sales forecast',
+        description: 'Forecast revenue by region',
+        spaceUuid: 'sales-space-uuid',
+        projectUuid,
+        search_rank: 0.8,
+        viewsCount: 12,
+        createdBy: {
+            firstName: 'Ada',
+            lastName: 'Lovelace',
+            userUuid,
+        },
+        ...overrides,
+    });
+
+    it('resolves a custom chart type with the matching renderable version and schema', async () => {
+        const latestRenderableSchema: DataAppVizSchema = {
+            fields: [],
+            configOptions: [],
+            colorPalette: null,
+        };
+        const findDataAppVisualizationBySlug = vi.fn().mockResolvedValue({
+            app_id: 'viz-uuid',
+            viz_schema: {
+                fields: [
+                    {
+                        name: 'stale',
+                        label: 'Stale field',
+                        type: 'dimension',
+                        required: false,
+                    },
+                ],
+                configOptions: [],
+                colorPalette: null,
+            },
+        });
+        const getLatestRenderableDataAppVizVersion = vi.fn().mockResolvedValue({
+            version: 2,
+            viz_schema: latestRenderableSchema,
+        });
+        const service = makeService({
+            featureFlagService: {
+                get: vi.fn().mockResolvedValue({ enabled: true }),
+            },
+            appModel: {
+                findDataAppVisualizationBySlug,
+                getLatestRenderableDataAppVizVersion,
+            },
+        });
+        const resolveCustomChartType = (
+            service as unknown as {
+                resolveCustomChartType: (
+                    context: AiAgentToolsRuntimeContext,
+                    slug: string,
+                ) => Promise<unknown>;
+            }
+        ).resolveCustomChartType.bind(service);
+
+        await expect(
+            resolveCustomChartType(makeRuntimeContext(), 'funnel-viz'),
+        ).resolves.toEqual({
+            dataAppVizUuid: 'viz-uuid',
+            dataAppVizVersion: 2,
+            schema: latestRenderableSchema,
+        });
+        expect(getLatestRenderableDataAppVizVersion).toHaveBeenCalledWith(
+            'viz-uuid',
+        );
+    });
+
+    it('finds Space and personal Data Apps in unrestricted project search', async () => {
+        const searchService = {
+            findContent: vi.fn().mockResolvedValue({
+                content: [
+                    makeDataAppSearchResult(),
+                    makeDataAppSearchResult({
+                        uuid: 'personal-app-uuid',
+                        slug: 'personal-forecast',
+                        name: 'Personal forecast',
+                        spaceUuid: null,
+                    }),
+                ],
+            }),
+        };
+        const service = makeService({
+            projectSpaces: [
+                makeProjectSpace('sales-space-uuid', 'sales', 'Sales'),
+            ],
+            searchService,
+        });
+
+        const result = await service
+            .createRuntime(makeRuntimeContext())
+            .findContent({
+                searchQuery: { label: 'forecast revenue' },
+                spaceSlug: null,
+                verifiedOnly: true,
+            });
+
+        expect(result.content).toEqual([
+            expect.objectContaining({
+                contentType: 'data_app',
+                uuid: 'app-uuid',
+                space: expect.objectContaining({ slug: 'sales' }),
+                verification: null,
+            }),
+            expect.objectContaining({
+                contentType: 'data_app',
+                uuid: 'personal-app-uuid',
+                space: null,
+                verification: null,
+            }),
+        ]);
+        expect(searchService.findContent).toHaveBeenCalledWith(
+            user,
+            projectUuid,
+            'forecast revenue',
+            true,
+        );
+    });
+
+    it('drops apps whose Space is not caller-visible, like charts and dashboards', async () => {
+        const searchService = {
+            findContent: vi.fn().mockResolvedValue({
+                content: [
+                    makeDataAppSearchResult({
+                        uuid: 'creator-app-uuid',
+                        spaceUuid: 'hidden-space-uuid',
+                    }),
+                ],
+            }),
+        };
+        const service = makeService({ searchService });
+
+        const args = {
+            searchQuery: { label: 'forecast' },
+            spaceSlug: null,
+            verifiedOnly: false,
+        } as const;
+        const [unrestrictedResult, scopedResult] = await Promise.all([
+            service.createRuntime(makeRuntimeContext()).findContent(args),
+            service
+                .createRuntime(
+                    makeRuntimeContext({
+                        spaceAccess: ['hidden-space-uuid'],
+                    }),
+                )
+                .findContent(args),
+        ]);
+
+        for (const result of [unrestrictedResult, scopedResult]) {
+            expect(result.content).toEqual([]);
+        }
+    });
+
+    it('keeps Data Apps alongside verified dashboards in verified-only search', async () => {
+        const searchService = {
+            findContent: vi.fn().mockResolvedValue({
+                content: [
+                    {
+                        contentType: 'dashboard',
+                        uuid: 'verified-dashboard-uuid',
+                        name: 'Verified dashboard',
+                        spaceUuid: 'sales-space-uuid',
+                        verification: {
+                            verifiedBy: {
+                                userUuid,
+                                firstName: 'Ada',
+                                lastName: 'Lovelace',
+                            },
+                            verifiedAt: new Date('2026-01-01'),
+                        },
+                    },
+                    makeDataAppSearchResult(),
+                ],
+            }),
+        };
+        const service = makeService({
+            projectSpaces: [
+                makeProjectSpace('sales-space-uuid', 'sales', 'Sales'),
+            ],
+            searchService,
+        });
+
+        const result = await service
+            .createRuntime(makeRuntimeContext())
+            .findContent({
+                searchQuery: { label: 'forecast' },
+                spaceSlug: null,
+                verifiedOnly: true,
+            });
+
+        expect(
+            result.content.map(({ contentType, uuid }) => ({
+                contentType,
+                uuid,
+            })),
+        ).toEqual([
+            {
+                contentType: 'dashboard',
+                uuid: 'verified-dashboard-uuid',
+            },
+            { contentType: 'data_app', uuid: 'app-uuid' },
+        ]);
+        expect(searchService.findContent).toHaveBeenCalledWith(
+            user,
+            projectUuid,
+            'forecast',
+            true,
+        );
+    });
+
+    it('limits Data Apps to an explicit Space and descendants', async () => {
+        const searchService = {
+            findContent: vi.fn().mockResolvedValue({
+                content: [
+                    makeDataAppSearchResult(),
+                    makeDataAppSearchResult({
+                        uuid: 'child-app-uuid',
+                        spaceUuid: 'child-space-uuid',
+                    }),
+                    makeDataAppSearchResult({
+                        uuid: 'other-app-uuid',
+                        spaceUuid: 'other-space-uuid',
+                    }),
+                    makeDataAppSearchResult({
+                        uuid: 'personal-app-uuid',
+                        spaceUuid: null,
+                    }),
+                ],
+            }),
+        };
+        const service = makeService({
+            projectSpaces: [
+                makeProjectSpace('sales-space-uuid', 'sales', 'Sales'),
+                makeProjectSpace(
+                    'child-space-uuid',
+                    'sales.pipeline',
+                    'Pipeline',
+                ),
+                makeProjectSpace('other-space-uuid', 'finance', 'Finance'),
+            ],
+            searchService,
+        });
+
+        const result = await service
+            .createRuntime(makeRuntimeContext())
+            .findContent({
+                searchQuery: { label: 'forecast' },
+                spaceSlug: 'sales',
+                verifiedOnly: false,
+            });
+
+        expect(result.content.map(({ uuid }) => uuid)).toEqual([
+            'app-uuid',
+            'child-app-uuid',
+        ]);
+        expect(result.content).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ contentType: 'data_app' }),
+            ]),
+        );
+    });
+
+    it('does not let creator visibility bypass agent Space scope', async () => {
+        const searchService = {
+            findContent: vi.fn().mockResolvedValue({
+                content: [
+                    makeDataAppSearchResult(),
+                    makeDataAppSearchResult({
+                        uuid: 'blocked-app-uuid',
+                        spaceUuid: 'blocked-space-uuid',
+                    }),
+                    makeDataAppSearchResult({
+                        uuid: 'creator-personal-app-uuid',
+                        spaceUuid: null,
+                    }),
+                ],
+            }),
+        };
+        const service = makeService({
+            projectSpaces: [
+                makeProjectSpace('sales-space-uuid', 'sales', 'Sales'),
+            ],
+            searchService,
+        });
+
+        const result = await service
+            .createRuntime(
+                makeRuntimeContext({ spaceAccess: ['sales-space-uuid'] }),
+            )
+            .findContent({
+                searchQuery: { label: 'forecast' },
+                spaceSlug: null,
+                verifiedOnly: false,
+            });
+
+        expect(result.content.map(({ uuid }) => uuid)).toEqual(['app-uuid']);
+        expect(result.content[0]).toEqual(
+            expect.objectContaining({ contentType: 'data_app' }),
+        );
+    });
+
     it('returns canonical viewer URLs when listing space content', async () => {
         const contentService = {
             find: vi.fn().mockResolvedValue({
@@ -984,6 +1329,27 @@ describe('AiAgentToolsService', () => {
         }
     });
 
+    it.each([
+        { source: 'ai_agent' as const, enabled: false, calls: 2 },
+        { source: 'ai_agent' as const, enabled: true, calls: 1 },
+        { source: 'mcp' as const, enabled: true, calls: 2 },
+    ])(
+        'caches prerequisites only for enabled agents ($source, $enabled)',
+        async ({ source, enabled, calls }) => {
+            const findExploresFromCache = vi.fn().mockResolvedValue({});
+            const service = makeService({
+                projectModel: { findExploresFromCache },
+            });
+            const context = makeRuntimeContext({ enableRuntimeCache: enabled });
+            const runtime =
+                source === 'mcp'
+                    ? service.createRuntime({ ...context, source: 'mcp' })
+                    : service.createRuntime(context);
+            await Promise.all([runtime.listExplores(), runtime.listExplores()]);
+            expect(findExploresFromCache).toHaveBeenCalledTimes(calls);
+        },
+    );
+
     it('returns MCP runtime errors from findExplores instead of throwing', async () => {
         const service = makeService({
             explores: { orders: makeExplore({ name: 'orders' }) },
@@ -1220,7 +1586,7 @@ describe('AiAgentToolsService', () => {
             spaceModel: denySpaceAccessModel(),
             dashboardService,
             coderService: {
-                getDashboards: vi.fn().mockResolvedValue({
+                getDashboardsForRead: vi.fn().mockResolvedValue({
                     dashboards: [makeDashboardContent('blocked-space')],
                 }),
             },
@@ -1369,6 +1735,7 @@ describe('AiAgentToolsService', () => {
     });
 
     it('runs saved chart queries inside the scoped agent spaces', async () => {
+        const onQueryPrepared = vi.fn();
         const executeSavedChartQueryAndGetResults = vi
             .fn()
             .mockResolvedValue({ rows: [] });
@@ -1391,15 +1758,20 @@ describe('AiAgentToolsService', () => {
                 chartUuid: 'allowed-chart-uuid',
                 dashboardSlug: null,
                 limit: 100,
+                onQueryPrepared,
             }),
         ).resolves.toEqual({ rows: [] });
-        expect(executeSavedChartQueryAndGetResults).toHaveBeenCalledWith({
-            account,
-            projectUuid,
-            chartUuid: 'allowed-chart-uuid',
-            limit: 100,
-            context: QueryExecutionContext.AI,
-        });
+        expect(executeSavedChartQueryAndGetResults).toHaveBeenCalledWith(
+            {
+                account,
+                projectUuid,
+                chartUuid: 'allowed-chart-uuid',
+                limit: 100,
+                context: QueryExecutionContext.AI,
+            },
+            undefined,
+            onQueryPrepared,
+        );
     });
 
     it('checks the warehouse budget at the saved-chart query boundary', async () => {
@@ -1494,7 +1866,7 @@ describe('AiAgentToolsService', () => {
                     .mockResolvedValue({ uuid: 'dashboard-uuid' }),
             },
             coderService: {
-                getDashboards: vi.fn().mockResolvedValue({
+                getDashboardsForRead: vi.fn().mockResolvedValue({
                     dashboards: [makeDashboardContent('allowed-space')],
                 }),
                 getCurrentContentVersionBySlug: vi.fn().mockResolvedValue({
@@ -1562,7 +1934,7 @@ describe('AiAgentToolsService', () => {
                 get: vi.fn().mockResolvedValue({ uuid: 'chart-uuid' }),
             },
             coderService: {
-                getCharts: vi
+                getChartsForRead: vi
                     .fn()
                     .mockResolvedValue({ charts: [makeChartContent(null)] }),
                 getCurrentContentVersionBySlug: vi
@@ -1834,6 +2206,9 @@ describe('AiAgentToolsService runComposerQueries', () => {
             projectUuid,
             queries: composerQueries,
             context: QueryExecutionContext.AI,
+            parameters: {},
+            userAttributeOverrides: {},
+            invalidateCache: false,
         });
         expect(getAsyncQueryResults).toHaveBeenCalledWith(
             expect.objectContaining({ queryUuid: 'query-2', page: 1 }),
@@ -1845,6 +2220,34 @@ describe('AiAgentToolsService runComposerQueries', () => {
             rows: [{ orders_total: 42 }],
             rowCount: 1,
         });
+    });
+
+    it('carries the runtime user attribute overrides into the pipeline', async () => {
+        const executeSourceQueries = vi
+            .fn()
+            .mockResolvedValue({ queries: submissions });
+        const getAsyncQueryResults = vi.fn().mockResolvedValue(readyResults);
+        const service = makeService({
+            querySourceService: { executeSourceQueries },
+            asyncQueryService: { getAsyncQueryResults },
+        });
+
+        await service
+            .createRuntime(
+                makeRuntimeContext({
+                    userAttributeOverrides: { tenant: ['acme'] },
+                }),
+            )
+            .runComposerQueries({
+                queries: composerQueries,
+                terminalNodeId: 'joined',
+            });
+
+        expect(executeSourceQueries).toHaveBeenCalledWith(
+            expect.objectContaining({
+                userAttributeOverrides: { tenant: ['acme'] },
+            }),
+        );
     });
 
     it('emits per-node status transitions while the pipeline executes', async () => {
@@ -2048,5 +2451,1254 @@ describe('AiAgentToolsService runComposerQueries', () => {
                 terminalNodeId: 'joined',
             }),
         ).rejects.toThrow(/"orders" \(relation does not exist\)/);
+    });
+});
+
+describe('AiAgentToolsService readContent data_app', () => {
+    const dataReferences: PersistedDataAppDataReferences = {
+        references: [
+            {
+                kind: 'query',
+                explore: 'orders',
+                dimensions: ['orders_region'],
+                metrics: ['orders_revenue'],
+                dimensionFilterFields: ['orders_date'],
+                metricFilterFields: [],
+                sortFields: ['orders_revenue'],
+                parameterKeys: ['region'],
+                localFields: [],
+                customSql: {
+                    tableCalculations: ['SUM(${orders.revenue}) / 2'],
+                    customDimensions: [],
+                    additionalMetrics: [],
+                },
+                unresolved: [],
+                location,
+            },
+            {
+                kind: 'query',
+                explore: 'customers',
+                dimensions: ['customers_segment'],
+                metrics: ['customers_count'],
+                dimensionFilterFields: [],
+                metricFilterFields: [],
+                sortFields: [],
+                parameterKeys: [],
+                localFields: [],
+                unresolved: ['filters'],
+                location,
+            },
+            {
+                kind: 'savedChart',
+                chartUuid: 'chart-1',
+                filterFields: ['orders_date'],
+                unresolved: [],
+                location,
+            },
+            {
+                kind: 'externalFetch',
+                alias: 'crm',
+                path: '/accounts',
+                unresolved: [],
+                location,
+            },
+        ],
+        parseErrors: [],
+        stats: {
+            callSites: 4,
+            fullyResolved: 3,
+            partiallyResolved: 1,
+            unresolved: 0,
+        },
+    };
+
+    const makeReadSource = (
+        overrides: Partial<DataAppReadSource> = {},
+    ): DataAppReadSource => ({
+        app: {
+            uuid: 'app-uuid',
+            slug: 'sales-forecast',
+            name: 'Sales forecast',
+            description: 'Forecast revenue by region',
+            template: 'dashboard',
+            spaceUuid: 'sales-space-uuid',
+        },
+        spaceSlug: 'sales',
+        externalConnections: [{ alias: 'crm', connectionSlug: 'hubspot' }],
+        vizSchema: null,
+        version: 3,
+        versionCount: 4,
+        newerVersion: { version: 4, status: 'building' },
+        createdBy: { userUuid, firstName: 'Ada', lastName: 'Lovelace' },
+        resources: {
+            images: [{ imageId: 'image-1' }],
+            files: [
+                {
+                    fileId: 'file-1',
+                    filename: 'brief.pdf',
+                    mimeType: 'application/pdf',
+                },
+            ],
+            charts: [
+                {
+                    chartUuid: 'chart-1',
+                    chartName: 'Revenue by month',
+                    chartKind: 'line',
+                    linkLive: true,
+                },
+                {
+                    chartUuid: 'deleted-chart',
+                    chartName: 'Deleted chart',
+                    chartKind: null,
+                },
+            ],
+            externalConnections: [
+                {
+                    externalConnectionUuid: 'connection-1',
+                    name: 'HubSpot',
+                    alias: 'crm',
+                },
+            ],
+            dashboardName: 'Sales overview',
+            dashboardUuid: 'dashboard-1',
+            clarifications: [
+                { question: 'Which region first?', answer: 'EMEA' },
+            ],
+        },
+        dataReferences,
+        ...overrides,
+    });
+
+    const makeReadService = ({
+        source = makeReadSource(),
+        spaceModel,
+    }: {
+        source?: DataAppReadSource;
+        spaceModel?: Record<string, unknown>;
+    } = {}) => {
+        const appGenerateService = {
+            readDataApp: vi.fn().mockResolvedValue(source),
+        };
+        const savedChartModel = {
+            getSlugsByUuids: vi
+                .fn()
+                .mockResolvedValue({ 'chart-1': 'revenue-by-month' }),
+        };
+        const dashboardModel = {
+            getSlugsForUuids: vi
+                .fn()
+                .mockResolvedValue({ 'dashboard-1': 'sales-overview' }),
+        };
+        const service = makeService({
+            appGenerateService,
+            savedChartModel,
+            dashboardModel,
+            spaceModel,
+        });
+        return { service, appGenerateService, savedChartModel };
+    };
+
+    it('reads the latest ready version as a code-free manifest-shaped view', async () => {
+        const { service, appGenerateService, savedChartModel } =
+            makeReadService();
+
+        const result = await service
+            .createRuntime(makeRuntimeContext())
+            .readContent({ slug: 'sales-forecast', type: 'data_app' });
+
+        expect(appGenerateService.readDataApp).toHaveBeenCalledWith(
+            user,
+            projectUuid,
+            'sales-forecast',
+        );
+        expect(result).toEqual({
+            type: 'data_app',
+            href: '/projects/project-uuid/apps/app-uuid/view',
+            content: {
+                slug: 'sales-forecast',
+                name: 'Sales forecast',
+                description: 'Forecast revenue by region',
+                template: 'dashboard',
+                version: 3,
+                spaceSlug: 'sales',
+                externalConnections: [
+                    { alias: 'crm', connectionSlug: 'hubspot' },
+                ],
+                vizSchema: null,
+                createdBy: {
+                    userUuid,
+                    firstName: 'Ada',
+                    lastName: 'Lovelace',
+                },
+                versionCount: 4,
+                newerVersion: { version: 4, status: 'building' },
+                context: {
+                    charts: [
+                        {
+                            slug: 'revenue-by-month',
+                            name: 'Revenue by month',
+                            kind: 'line',
+                            linkLive: true,
+                        },
+                    ],
+                    dashboard: {
+                        slug: 'sales-overview',
+                        name: 'Sales overview',
+                    },
+                    files: ['brief.pdf'],
+                    imageCount: 1,
+                    externalConnectionAliases: ['crm'],
+                },
+                dataReferences: {
+                    explores: [
+                        {
+                            name: 'orders',
+                            dimensions: ['orders_region'],
+                            metrics: ['orders_revenue'],
+                            filterFields: ['orders_date'],
+                            sortFields: ['orders_revenue'],
+                            parameterKeys: ['region'],
+                            localFields: [],
+                            customSqlFieldCount: 1,
+                        },
+                        {
+                            name: 'customers',
+                            dimensions: ['customers_segment'],
+                            metrics: ['customers_count'],
+                            filterFields: [],
+                            sortFields: [],
+                            parameterKeys: [],
+                            localFields: [],
+                            customSqlFieldCount: 0,
+                        },
+                    ],
+                    linkedCharts: [
+                        {
+                            slug: 'revenue-by-month',
+                            filterFields: ['orders_date'],
+                        },
+                    ],
+                    externalConnections: [
+                        { alias: 'crm', paths: ['/accounts'] },
+                    ],
+                    stats: dataReferences.stats,
+                    unresolved: ['filters'],
+                },
+            },
+        });
+        // One batched lookup covers context charts and linked chart references.
+        expect(savedChartModel.getSlugsByUuids).toHaveBeenCalledTimes(1);
+        expect(savedChartModel.getSlugsByUuids).toHaveBeenCalledWith([
+            'chart-1',
+            'deleted-chart',
+        ]);
+        const serialized = JSON.stringify(result.content);
+        expect(serialized).not.toContain('Which region first?');
+        expect(serialized).not.toContain('SUM(');
+        expect(serialized).not.toContain('src/App.tsx');
+    });
+
+    it('includes the viz schema of a project chart type', async () => {
+        const vizSchema: DataAppVizSchema = {
+            fields: [],
+            configOptions: [],
+            colorPalette: null,
+        };
+        const { service } = makeReadService({
+            source: makeReadSource({
+                app: {
+                    uuid: 'viz-uuid',
+                    slug: 'funnel-viz',
+                    name: 'Funnel',
+                    description: '',
+                    template: 'data_app_viz',
+                    spaceUuid: null,
+                },
+                spaceSlug: null,
+                vizSchema,
+                resources: null,
+                dataReferences: null,
+            }),
+        });
+
+        const result = await service
+            .createRuntime(makeRuntimeContext())
+            .readContent({ slug: 'funnel-viz', type: 'data_app' });
+
+        expect(result.type).toBe('data_app');
+        if (result.type !== 'data_app') return;
+        expect(result.content.vizSchema).toEqual(vizSchema);
+        expect(result.content.spaceSlug).toBeNull();
+        expect(result.content.dataReferences).toBeNull();
+        expect(result.content.context).toEqual({
+            charts: [],
+            dashboard: null,
+            files: [],
+            imageCount: 0,
+            externalConnectionAliases: [],
+        });
+    });
+
+    it('hides personal apps from space-scoped agents', async () => {
+        const personal = makeReadSource({
+            app: { ...makeReadSource().app, spaceUuid: null },
+            spaceSlug: null,
+        });
+        const { service } = makeReadService({ source: personal });
+
+        await expect(
+            service
+                .createRuntime(
+                    makeRuntimeContext({ spaceAccess: ['sales-space-uuid'] }),
+                )
+                .readContent({ slug: 'sales-forecast', type: 'data_app' }),
+        ).rejects.toThrow(NotFoundError);
+
+        const unrestricted = await service
+            .createRuntime(makeRuntimeContext())
+            .readContent({ slug: 'sales-forecast', type: 'data_app' });
+        expect(unrestricted.type).toBe('data_app');
+    });
+
+    it('does not read apps in spaces outside the scoped agent spaces', async () => {
+        const { service } = makeReadService();
+
+        await expect(
+            service
+                .createRuntime(
+                    makeRuntimeContext({ spaceAccess: ['other-space-uuid'] }),
+                )
+                .readContent({ slug: 'sales-forecast', type: 'data_app' }),
+        ).rejects.toThrow(NotFoundError);
+
+        const inScope = await service
+            .createRuntime(
+                makeRuntimeContext({ spaceAccess: ['sales-space-uuid'] }),
+            )
+            .readContent({ slug: 'sales-forecast', type: 'data_app' });
+        expect(inScope.type).toBe('data_app');
+    });
+});
+
+const query = (
+    overrides: Partial<Extract<ExtractedDataReference, { kind: 'query' }>>,
+): ExtractedDataReference => ({
+    kind: 'query',
+    explore: 'orders',
+    dimensions: [],
+    metrics: [],
+    dimensionFilterFields: [],
+    metricFilterFields: [],
+    sortFields: [],
+    parameterKeys: [],
+    localFields: [],
+    unresolved: [],
+    location,
+    ...overrides,
+});
+
+const persisted = (
+    references: ExtractedDataReference[],
+    stats = {
+        callSites: references.length,
+        fullyResolved: references.length,
+        partiallyResolved: 0,
+        unresolved: 0,
+    },
+): PersistedDataAppDataReferences => ({
+    references,
+    parseErrors: [],
+    stats,
+});
+
+describe('AiAgentToolsService.aggregateDataAppDataReferences', () => {
+    it('unions fields across call sites of the same explore', () => {
+        const result = AiAgentToolsService.aggregateDataAppDataReferences(
+            persisted([
+                query({
+                    dimensions: ['orders_status'],
+                    metrics: ['orders_total'],
+                    dimensionFilterFields: ['orders_date'],
+                    sortFields: ['orders_total'],
+                }),
+                query({
+                    dimensions: ['orders_status', 'orders_region'],
+                    metrics: ['orders_count'],
+                    metricFilterFields: ['orders_total'],
+                    parameterKeys: ['region'],
+                    localFields: ['margin'],
+                }),
+                query({ explore: 'customers', dimensions: ['customers_id'] }),
+            ]),
+            {},
+        );
+
+        expect(result.explores).toEqual([
+            {
+                name: 'orders',
+                dimensions: ['orders_status', 'orders_region'],
+                metrics: ['orders_total', 'orders_count'],
+                filterFields: ['orders_date', 'orders_total'],
+                sortFields: ['orders_total'],
+                parameterKeys: ['region'],
+                localFields: ['margin'],
+                customSqlFieldCount: 0,
+            },
+            {
+                name: 'customers',
+                dimensions: ['customers_id'],
+                metrics: [],
+                filterFields: [],
+                sortFields: [],
+                parameterKeys: [],
+                localFields: [],
+                customSqlFieldCount: 0,
+            },
+        ]);
+    });
+
+    it('folds global filters into the matching explore filter fields', () => {
+        const result = AiAgentToolsService.aggregateDataAppDataReferences(
+            persisted([
+                query({ dimensions: ['orders_status'] }),
+                {
+                    kind: 'globalFilter',
+                    explore: 'orders',
+                    field: null,
+                    fields: ['orders_region', 'orders_status'],
+                    unresolved: [],
+                    location,
+                },
+                {
+                    kind: 'globalFilter',
+                    explore: 'orders',
+                    field: 'orders_status',
+                    unresolved: [],
+                    location,
+                },
+            ]),
+            {},
+        );
+
+        expect(result.explores).toHaveLength(1);
+        expect(result.explores[0].filterFields).toEqual([
+            'orders_region',
+            'orders_status',
+        ]);
+    });
+
+    it('reduces custom SQL to a count and drops locations', () => {
+        const result = AiAgentToolsService.aggregateDataAppDataReferences(
+            persisted([
+                query({
+                    customSql: {
+                        tableCalculations: ['SUM(x)'],
+                        customDimensions: [{ sql: 'a', table: 'orders' }],
+                        additionalMetrics: [
+                            { sql: 'b', table: 'orders' },
+                            { sql: 'c', table: 'orders' },
+                        ],
+                    },
+                }),
+            ]),
+            {},
+        );
+
+        expect(result.explores[0].customSqlFieldCount).toBe(4);
+        expect(JSON.stringify(result)).not.toContain('SUM(x)');
+        expect(JSON.stringify(result)).not.toContain('src/App.tsx');
+    });
+
+    it('resolves linked charts by slug and drops charts that no longer exist', () => {
+        const result = AiAgentToolsService.aggregateDataAppDataReferences(
+            persisted([
+                {
+                    kind: 'savedChart',
+                    chartUuid: 'chart-1',
+                    filterFields: ['orders_date'],
+                    unresolved: [],
+                    location,
+                },
+                {
+                    kind: 'savedChart',
+                    chartUuid: 'chart-1',
+                    filterFields: ['orders_region'],
+                    unresolved: [],
+                    location,
+                },
+                {
+                    kind: 'savedChart',
+                    chartUuid: 'deleted-chart',
+                    filterFields: [],
+                    unresolved: [],
+                    location,
+                },
+            ]),
+            { 'chart-1': 'revenue-by-month' },
+        );
+
+        expect(result.linkedCharts).toEqual([
+            {
+                slug: 'revenue-by-month',
+                filterFields: ['orders_date', 'orders_region'],
+            },
+        ]);
+    });
+
+    it('groups external fetch paths by alias', () => {
+        const result = AiAgentToolsService.aggregateDataAppDataReferences(
+            persisted([
+                {
+                    kind: 'externalFetch',
+                    alias: 'crm',
+                    path: '/accounts',
+                    unresolved: [],
+                    location,
+                },
+                {
+                    kind: 'externalFetch',
+                    alias: 'crm',
+                    path: null,
+                    unresolved: [],
+                    location,
+                },
+                {
+                    kind: 'externalFetch',
+                    alias: 'crm',
+                    path: '/deals',
+                    unresolved: [],
+                    location,
+                },
+            ]),
+            {},
+        );
+
+        expect(result.externalConnections).toEqual([
+            { alias: 'crm', paths: ['/accounts', '/deals'] },
+        ]);
+    });
+
+    it('keeps stats and the union of unresolved part names', () => {
+        const stats = {
+            callSites: 3,
+            fullyResolved: 1,
+            partiallyResolved: 1,
+            unresolved: 1,
+        };
+        const result = AiAgentToolsService.aggregateDataAppDataReferences(
+            persisted(
+                [
+                    query({ dimensions: ['orders_status'] }),
+                    query({ unresolved: ['filters', 'sorts'] }),
+                    query({
+                        explore: null,
+                        unresolved: ['explore', 'filters'],
+                    }),
+                ],
+                stats,
+            ),
+            {},
+        );
+
+        expect(result.stats).toEqual(stats);
+        expect(result.unresolved).toEqual(['explore', 'filters', 'sorts']);
+        expect(result.explores.map((explore) => explore.name)).toEqual([
+            'orders',
+        ]);
+    });
+});
+
+// Positional `options` arg of AppGenerateService.generateApp / iterateApp.
+const GENERATE_APP_OPTIONS_ARG = 11;
+const ITERATE_APP_OPTIONS_ARG = 8;
+const generateAppOptions = (appGenerateService: {
+    generateApp: ReturnType<typeof vi.fn>;
+}) => appGenerateService.generateApp.mock.calls[0][GENERATE_APP_OPTIONS_ARG];
+const iterateAppOptions = (appGenerateService: {
+    iterateApp: ReturnType<typeof vi.fn>;
+}) => appGenerateService.iterateApp.mock.calls[0][ITERATE_APP_OPTIONS_ARG];
+
+type DesignModelTheme = { designUuid: string; slug: string; name: string };
+// Mirrors the real model: slug lookup on the hit path, the full list only on a miss.
+const makeDesignModelWithThemes = (themes: DesignModelTheme[]) => ({
+    findByIdOrSlug: vi
+        .fn()
+        .mockImplementation(async (_org: string, slug: string) =>
+            themes.find((theme) => theme.slug === slug),
+        ),
+    listByOrganization: vi.fn().mockResolvedValue(themes),
+});
+
+describe('AiAgentToolsService generateDataApp', () => {
+    const makeAppGenerateService = ({
+        enabled = true,
+        canCreate = true,
+    }: { enabled?: boolean; canCreate?: boolean } = {}) => ({
+        dataAppsEnabledFor: vi.fn().mockResolvedValue(enabled),
+        canCreateDataApp: vi.fn().mockResolvedValue(canCreate),
+        generateApp: vi.fn().mockResolvedValue({
+            appUuid: 'app-uuid',
+            slug: 'revenue-overview',
+            version: 1,
+        }),
+    });
+
+    const dashboardService = {
+        getByIdOrSlug: vi.fn().mockResolvedValue({
+            uuid: 'dashboard-uuid',
+            spaceUuid: 'sales-space-uuid',
+        }),
+    };
+    const savedChartService = {
+        get: vi.fn().mockResolvedValue({
+            uuid: 'chart-uuid',
+            spaceUuid: 'sales-space-uuid',
+        }),
+    };
+
+    // A prompt inside an Ask AI thread, as the agent runtime provides it.
+    const askAiContext = () =>
+        makeRuntimeContext({
+            promptUuid: 'prompt-uuid',
+            threadUuid: 'thread-uuid',
+        });
+
+    const runGenerate = (
+        service: AiAgentToolsService,
+        context: AiAgentToolsRuntimeContext & { source: 'ai_agent' },
+        args: Partial<
+            Parameters<
+                ReturnType<typeof service.createRuntime>['generateDataApp']
+            >[0]
+        > = {},
+    ) =>
+        service.createRuntime(context).generateDataApp({
+            name: 'Revenue Overview',
+            prompt: 'Build a revenue app',
+            template: null,
+            dashboardSlug: null,
+            chartSlugs: null,
+            themeSlug: null,
+            toolCallId: 'tool-call-1',
+            ...args,
+        });
+
+    describe('gating', () => {
+        it.each([
+            [true, true, true],
+            [false, true, false],
+            [true, false, false],
+        ])(
+            'enabled=%s canCreate=%s → %s',
+            async (enabled, canCreate, expected) => {
+                const service = makeService({
+                    appGenerateService: makeAppGenerateService({
+                        enabled,
+                        canCreate,
+                    }),
+                });
+                expect(
+                    await service.canGenerateDataApp({ user, projectUuid }),
+                ).toBe(expected);
+            },
+        );
+    });
+
+    it('starts a personal ai_agent build linked to the tool call', async () => {
+        const appGenerateService = makeAppGenerateService();
+        const service = makeService({ appGenerateService });
+
+        const result = await runGenerate(service, askAiContext(), {
+            template: 'slideshow',
+        });
+
+        expect(result).toEqual({
+            appUuid: 'app-uuid',
+            slug: 'revenue-overview',
+            version: 1,
+        });
+        const [calledUser, calledProject, prompt, , , , , template] =
+            appGenerateService.generateApp.mock.calls[0];
+        const opts = generateAppOptions(appGenerateService);
+        expect(calledUser).toBe(user);
+        expect(calledProject).toBe(projectUuid);
+        expect(prompt).toBe('Build a revenue app');
+        expect(template).toBe('slideshow');
+        expect(opts).toEqual({
+            name: 'Revenue Overview',
+            creationExperience: 'ai_agent',
+            aiAgentToolCall: {
+                promptUuid: 'prompt-uuid',
+                toolCallId: 'tool-call-1',
+            },
+            thread: { origin: 'ai_thread', aiThreadUuid: 'thread-uuid' },
+        });
+    });
+
+    it('resolves dashboard and chart slugs to references', async () => {
+        const appGenerateService = makeAppGenerateService();
+        const service = makeService({
+            appGenerateService,
+            dashboardService,
+            savedChartService,
+        });
+
+        await runGenerate(service, askAiContext(), {
+            dashboardSlug: 'sales-overview',
+            chartSlugs: ['revenue'],
+        });
+
+        expect(dashboardService.getByIdOrSlug).toHaveBeenCalledWith(
+            user,
+            'sales-overview',
+            { projectUuid },
+        );
+        expect(savedChartService.get).toHaveBeenCalledWith('revenue', account, {
+            projectUuid,
+        });
+        const [, , , , , charts, dashboard] =
+            appGenerateService.generateApp.mock.calls[0];
+        expect(charts).toEqual([
+            { uuid: 'chart-uuid', includeSampleData: true, linkLive: true },
+        ]);
+        expect(dashboard).toEqual({
+            uuid: 'dashboard-uuid',
+            includeSampleData: true,
+        });
+    });
+
+    it('does not build on charts outside the scoped agent spaces', async () => {
+        const appGenerateService = makeAppGenerateService();
+        const service = makeService({ appGenerateService, savedChartService });
+
+        await expect(
+            runGenerate(
+                service,
+                makeRuntimeContext({
+                    promptUuid: 'prompt-uuid',
+                    threadUuid: 'thread-uuid',
+                    spaceAccess: ['other-space-uuid'],
+                }),
+                { chartSlugs: ['revenue'] },
+            ),
+        ).rejects.toThrow(NotFoundError);
+        expect(appGenerateService.generateApp).not.toHaveBeenCalled();
+    });
+
+    it('requires a prompt to link the build to', async () => {
+        const appGenerateService = makeAppGenerateService();
+        const service = makeService({ appGenerateService });
+
+        await expect(
+            runGenerate(service, makeRuntimeContext()),
+        ).rejects.toThrow('generateDataApp requires a prompt');
+        expect(appGenerateService.generateApp).not.toHaveBeenCalled();
+    });
+
+    it('requires the Ask AI thread to record on the new app', async () => {
+        const appGenerateService = makeAppGenerateService();
+        const service = makeService({ appGenerateService });
+
+        await expect(
+            runGenerate(
+                service,
+                makeRuntimeContext({ promptUuid: 'prompt-uuid' }),
+            ),
+        ).rejects.toThrow('generateDataApp requires a thread');
+        expect(appGenerateService.generateApp).not.toHaveBeenCalled();
+    });
+
+    it('starts an mcp build with no prompt, thread, or tool-call reference', async () => {
+        const appGenerateService = makeAppGenerateService();
+        const service = makeService({ appGenerateService });
+
+        const result = await service
+            .createRuntime(makeRuntimeContext({ source: 'mcp' }))
+            .generateDataApp({
+                name: 'Revenue Overview',
+                prompt: 'Build a revenue app',
+                template: null,
+                dashboardSlug: null,
+                chartSlugs: null,
+                themeSlug: null,
+                toolCallId: null,
+            });
+
+        expect(result).toEqual({
+            appUuid: 'app-uuid',
+            slug: 'revenue-overview',
+            version: 1,
+        });
+        expect(generateAppOptions(appGenerateService)).toEqual({
+            name: 'Revenue Overview',
+            creationExperience: 'mcp',
+        });
+    });
+
+    it.each([
+        ['pdf', 'pdf'],
+        [null, undefined],
+    ] as const)(
+        'starts the build with template %s → %s',
+        async (template, expected) => {
+            const appGenerateService = makeAppGenerateService();
+            const service = makeService({ appGenerateService });
+
+            await runGenerate(service, askAiContext(), { template });
+
+            const [, , , , , , , builderTemplate] =
+                appGenerateService.generateApp.mock.calls[0];
+            expect(builderTemplate).toBe(expected);
+        },
+    );
+
+    it('names an unknown dashboard slug and starts no build', async () => {
+        const appGenerateService = makeAppGenerateService();
+        const service = makeService({
+            appGenerateService,
+            dashboardService: {
+                getByIdOrSlug: vi
+                    .fn()
+                    .mockRejectedValue(
+                        new NotFoundError('Dashboard not found'),
+                    ),
+            },
+        });
+
+        await expect(
+            runGenerate(service, askAiContext(), {
+                dashboardSlug: 'no-such-dashboard',
+            }),
+        ).rejects.toThrow('Dashboard "no-such-dashboard" was not found');
+        expect(appGenerateService.generateApp).not.toHaveBeenCalled();
+    });
+
+    it('names the unknown chart slug among known ones and starts no build', async () => {
+        const appGenerateService = makeAppGenerateService();
+        const service = makeService({
+            appGenerateService,
+            savedChartService: {
+                get: vi.fn().mockImplementation(async (slug: string) => {
+                    if (slug === 'revenue') {
+                        return {
+                            uuid: 'chart-uuid',
+                            spaceUuid: 'sales-space-uuid',
+                        };
+                    }
+                    throw new NotFoundError('Saved chart not found');
+                }),
+            },
+        });
+
+        await expect(
+            runGenerate(service, askAiContext(), {
+                chartSlugs: ['revenue', 'no-such-chart'],
+            }),
+        ).rejects.toThrow('Chart "no-such-chart" was not found');
+        expect(appGenerateService.generateApp).not.toHaveBeenCalled();
+    });
+
+    describe('themeSlug', () => {
+        const makeDesignModel = () =>
+            makeDesignModelWithThemes([
+                { designUuid: 'brand-uuid', slug: 'brand', name: 'Brand' },
+                { designUuid: 'dark-uuid', slug: 'dark', name: 'Dark' },
+            ]);
+
+        it('resolves the slug within the organization to the theme uuid', async () => {
+            const appGenerateService = makeAppGenerateService();
+            const organizationDesignModel = makeDesignModel();
+            const service = makeService({
+                appGenerateService,
+                organizationDesignModel,
+            });
+
+            await runGenerate(service, askAiContext(), { themeSlug: 'dark' });
+
+            expect(organizationDesignModel.findByIdOrSlug).toHaveBeenCalledWith(
+                organizationUuid,
+                'dark',
+            );
+            expect(
+                organizationDesignModel.listByOrganization,
+            ).not.toHaveBeenCalled();
+            const opts = generateAppOptions(appGenerateService);
+            expect(opts).toEqual({
+                name: 'Revenue Overview',
+                creationExperience: 'ai_agent',
+                aiAgentToolCall: {
+                    promptUuid: 'prompt-uuid',
+                    toolCallId: 'tool-call-1',
+                },
+                thread: { origin: 'ai_thread', aiThreadUuid: 'thread-uuid' },
+                designUuidInput: 'dark-uuid',
+            });
+        });
+
+        it('names the valid slugs for an unknown slug and starts no build', async () => {
+            const appGenerateService = makeAppGenerateService();
+            const organizationDesignModel = makeDesignModel();
+            const service = makeService({
+                appGenerateService,
+                organizationDesignModel,
+            });
+
+            await expect(
+                runGenerate(
+                    service,
+                    makeRuntimeContext({
+                        promptUuid: 'prompt-uuid',
+                        threadUuid: 'thread-uuid',
+                    }),
+                    { themeSlug: 'no-such-theme' },
+                ),
+            ).rejects.toThrow(
+                'Theme "no-such-theme" was not found. Valid theme slugs: brand, dark',
+            );
+            expect(
+                organizationDesignModel.listByOrganization,
+            ).toHaveBeenCalledWith(organizationUuid);
+            expect(appGenerateService.generateApp).not.toHaveBeenCalled();
+        });
+
+        it('passes no theme input when the slug is absent', async () => {
+            const appGenerateService = makeAppGenerateService();
+            const organizationDesignModel = makeDesignModel();
+            const service = makeService({
+                appGenerateService,
+                organizationDesignModel,
+            });
+
+            await runGenerate(service, askAiContext());
+
+            expect(
+                organizationDesignModel.findByIdOrSlug,
+            ).not.toHaveBeenCalled();
+            expect(
+                organizationDesignModel.listByOrganization,
+            ).not.toHaveBeenCalled();
+            const opts = generateAppOptions(appGenerateService);
+            expect(opts).not.toHaveProperty('designUuidInput');
+        });
+    });
+});
+
+describe('AiAgentToolsService iterateDataApp', () => {
+    const makeAppGenerateService = () => ({
+        iterateApp: vi
+            .fn()
+            .mockResolvedValue({ appUuid: 'app-uuid', version: 2 }),
+    });
+
+    const makeAppModel = ({
+        spaceUuid = null,
+    }: { spaceUuid?: string | null } = {}) => ({
+        findAppBySlug: vi.fn().mockResolvedValue({
+            app_id: 'app-uuid',
+            slug: 'revenue-app',
+            space_uuid: spaceUuid,
+        }),
+    });
+
+    const savedChartService = {
+        get: vi.fn().mockResolvedValue({
+            uuid: 'chart-uuid',
+            spaceUuid: 'sales-space-uuid',
+        }),
+    };
+
+    const runIterate = (
+        service: AiAgentToolsService,
+        context: AiAgentToolsRuntimeContext & { source: 'ai_agent' },
+        args: Partial<
+            Parameters<
+                ReturnType<typeof service.createRuntime>['iterateDataApp']
+            >[0]
+        > = {},
+    ) =>
+        service.createRuntime(context).iterateDataApp({
+            appSlug: 'revenue-app',
+            prompt: 'Add an order status filter',
+            dashboardSlug: null,
+            chartSlugs: null,
+            themeSlug: null,
+            toolCallId: 'tool-call-1',
+            ...args,
+        });
+
+    it('starts an ai_agent build on the resolved app linked to the tool call', async () => {
+        const appGenerateService = makeAppGenerateService();
+        const appModel = makeAppModel();
+        const service = makeService({ appGenerateService, appModel });
+
+        const result = await runIterate(
+            service,
+            makeRuntimeContext({ promptUuid: 'prompt-uuid' }),
+        );
+
+        expect(result).toEqual({ appUuid: 'app-uuid', version: 2 });
+        expect(appModel.findAppBySlug).toHaveBeenCalledWith(
+            projectUuid,
+            'revenue-app',
+        );
+        const [
+            calledUser,
+            calledProject,
+            appUuid,
+            prompt,
+            fileIds,
+            ,
+            ,
+            ,
+            opts,
+        ] = appGenerateService.iterateApp.mock.calls[0];
+        expect(calledUser).toBe(user);
+        expect(calledProject).toBe(projectUuid);
+        expect(appUuid).toBe('app-uuid');
+        expect(prompt).toBe('Add an order status filter');
+        expect(fileIds).toEqual([]);
+        expect(opts).toEqual({
+            creationExperience: 'ai_agent',
+            aiAgentToolCall: {
+                promptUuid: 'prompt-uuid',
+                toolCallId: 'tool-call-1',
+            },
+        });
+    });
+
+    it('reads an unknown slug as not found and starts no build', async () => {
+        const appGenerateService = makeAppGenerateService();
+        const service = makeService({
+            appGenerateService,
+            appModel: { findAppBySlug: vi.fn().mockResolvedValue(undefined) },
+        });
+
+        await expect(
+            runIterate(
+                service,
+                makeRuntimeContext({ promptUuid: 'prompt-uuid' }),
+                { appSlug: 'no-such-app' },
+            ),
+        ).rejects.toThrow('Data app "no-such-app" was not found');
+        expect(appGenerateService.iterateApp).not.toHaveBeenCalled();
+    });
+
+    it('hides a personal app from a space-scoped agent', async () => {
+        const appGenerateService = makeAppGenerateService();
+        const service = makeService({
+            appGenerateService,
+            appModel: makeAppModel({ spaceUuid: null }),
+        });
+
+        await expect(
+            runIterate(
+                service,
+                makeRuntimeContext({
+                    promptUuid: 'prompt-uuid',
+                    spaceAccess: ['sales-space-uuid'],
+                }),
+            ),
+        ).rejects.toThrow('Data app "revenue-app" was not found');
+        expect(appGenerateService.iterateApp).not.toHaveBeenCalled();
+    });
+
+    it('hides an app outside the scoped agent spaces', async () => {
+        const appGenerateService = makeAppGenerateService();
+        const service = makeService({
+            appGenerateService,
+            appModel: makeAppModel({ spaceUuid: 'finance-space-uuid' }),
+        });
+
+        await expect(
+            runIterate(
+                service,
+                makeRuntimeContext({
+                    promptUuid: 'prompt-uuid',
+                    spaceAccess: ['sales-space-uuid'],
+                }),
+            ),
+        ).rejects.toThrow('Data app "revenue-app" was not found');
+        expect(appGenerateService.iterateApp).not.toHaveBeenCalled();
+    });
+
+    it('iterates on an app inside the scoped agent spaces', async () => {
+        const appGenerateService = makeAppGenerateService();
+        const service = makeService({
+            appGenerateService,
+            appModel: makeAppModel({ spaceUuid: 'sales-space-uuid' }),
+        });
+
+        await runIterate(
+            service,
+            makeRuntimeContext({
+                promptUuid: 'prompt-uuid',
+                spaceAccess: ['sales-space-uuid'],
+            }),
+        );
+
+        expect(appGenerateService.iterateApp).toHaveBeenCalledTimes(1);
+    });
+
+    it('resolves chart slugs to references like the create tool', async () => {
+        const appGenerateService = makeAppGenerateService();
+        const service = makeService({
+            appGenerateService,
+            appModel: makeAppModel(),
+            savedChartService,
+        });
+
+        await runIterate(
+            service,
+            makeRuntimeContext({ promptUuid: 'prompt-uuid' }),
+            { chartSlugs: ['revenue'] },
+        );
+
+        const [, , , , , charts] = appGenerateService.iterateApp.mock.calls[0];
+        expect(charts).toEqual([
+            { uuid: 'chart-uuid', includeSampleData: true, linkLive: true },
+        ]);
+    });
+
+    it('requires a prompt to link the build to', async () => {
+        const appGenerateService = makeAppGenerateService();
+        const service = makeService({
+            appGenerateService,
+            appModel: makeAppModel(),
+        });
+
+        await expect(runIterate(service, makeRuntimeContext())).rejects.toThrow(
+            'iterateDataApp requires a prompt',
+        );
+        expect(appGenerateService.iterateApp).not.toHaveBeenCalled();
+    });
+
+    describe('themeSlug', () => {
+        const makeDesignModel = () =>
+            makeDesignModelWithThemes([
+                { designUuid: 'brand-uuid', slug: 'brand', name: 'Brand' },
+            ]);
+
+        it('switches the theme alongside the brief', async () => {
+            const appGenerateService = makeAppGenerateService();
+            const organizationDesignModel = makeDesignModel();
+            const service = makeService({
+                appGenerateService,
+                organizationDesignModel,
+                appModel: makeAppModel(),
+            });
+
+            await runIterate(
+                service,
+                makeRuntimeContext({ promptUuid: 'prompt-uuid' }),
+                { themeSlug: 'brand' },
+            );
+
+            const opts = iterateAppOptions(appGenerateService);
+            expect(opts).toEqual({
+                creationExperience: 'ai_agent',
+                aiAgentToolCall: {
+                    promptUuid: 'prompt-uuid',
+                    toolCallId: 'tool-call-1',
+                },
+                designUuidInput: 'brand-uuid',
+                themeChangePrompt: 'append',
+            });
+        });
+
+        it('names the valid slugs for an unknown slug and starts no build', async () => {
+            const appGenerateService = makeAppGenerateService();
+            const organizationDesignModel = makeDesignModel();
+            const service = makeService({
+                appGenerateService,
+                organizationDesignModel,
+                appModel: makeAppModel(),
+            });
+
+            await expect(
+                runIterate(
+                    service,
+                    makeRuntimeContext({ promptUuid: 'prompt-uuid' }),
+                    { themeSlug: 'no-such-theme' },
+                ),
+            ).rejects.toThrow(
+                'Theme "no-such-theme" was not found. Valid theme slugs: brand',
+            );
+            expect(appGenerateService.iterateApp).not.toHaveBeenCalled();
+        });
+
+        it('keeps the app theme when the slug is absent', async () => {
+            const appGenerateService = makeAppGenerateService();
+            const organizationDesignModel = makeDesignModel();
+            const service = makeService({
+                appGenerateService,
+                organizationDesignModel,
+                appModel: makeAppModel(),
+            });
+
+            await runIterate(
+                service,
+                makeRuntimeContext({ promptUuid: 'prompt-uuid' }),
+            );
+
+            const opts = iterateAppOptions(appGenerateService);
+            expect(opts).not.toHaveProperty('designUuidInput');
+            expect(opts).not.toHaveProperty('themeChangePrompt');
+        });
+    });
+});
+
+describe('AiAgentToolsService listDataAppThemes', () => {
+    const organizationDesignModel = {
+        listByOrganization: vi.fn().mockResolvedValue([
+            {
+                designUuid: 'brand-uuid',
+                organizationUuid,
+                slug: 'brand',
+                name: 'Brand',
+                isDefault: true,
+                description: 'Company colours',
+                files: [],
+            },
+            {
+                designUuid: 'dark-uuid',
+                organizationUuid,
+                slug: 'dark',
+                name: 'Dark',
+                isDefault: false,
+                description: null,
+                files: [],
+            },
+        ]),
+    };
+
+    it('returns slug, name, isDefault and description for the organization themes', async () => {
+        const service = makeService({ organizationDesignModel });
+
+        const themes = await service
+            .createRuntime(makeRuntimeContext())
+            .listDataAppThemes();
+
+        expect(organizationDesignModel.listByOrganization).toHaveBeenCalledWith(
+            organizationUuid,
+        );
+        expect(themes).toEqual([
+            {
+                slug: 'brand',
+                name: 'Brand',
+                isDefault: true,
+                description: 'Company colours',
+            },
+            { slug: 'dark', name: 'Dark', isDefault: false, description: null },
+        ]);
+    });
+
+    it('lists the same themes on the MCP runtime', async () => {
+        const service = makeService({ organizationDesignModel });
+
+        const themes = await service
+            .createRuntime(makeRuntimeContext({ source: 'mcp' }))
+            .listDataAppThemes();
+
+        expect(themes.map((theme) => theme.slug)).toEqual(['brand', 'dark']);
     });
 });

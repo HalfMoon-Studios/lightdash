@@ -35,6 +35,7 @@ import {
     Badge,
     Popover,
     Tooltip,
+    VisuallyHidden,
 } from '@mantine/core';
 import {
     IconEye,
@@ -110,7 +111,13 @@ const SortableColumn: FC<{
     };
 
     return (
-        <Group ref={setNodeRef} style={style} justify="space-between" h={28}>
+        <Group
+            ref={setNodeRef}
+            style={style}
+            justify="space-between"
+            h={28}
+            className={classes.columnRow}
+        >
             <Group gap={4}>
                 <Tooltip
                     disabled={!column.frozen}
@@ -119,23 +126,27 @@ const SortableColumn: FC<{
                 >
                     <Box>
                         <ActionIcon
-                            variant="subtle"
                             size="xs"
                             color="ldGray.5"
                             {...attributes}
                             {...listeners}
+                            aria-label={`Reorder ${column.name} column`}
                             disabled={column.frozen}
                         >
                             <MantineIcon icon={IconGripVertical} />
                         </ActionIcon>
                     </Box>
                 </Tooltip>
-                <Text fz={13} fw={500} c="ldDark.9">
+                <Text fz="sm" fw={500} c="ldDark.9">
                     {column.name}
                 </Text>
             </Group>
             <ActionIcon
-                variant="subtle"
+                data-tour-anchor="catalog-column-toggle"
+                data-tour-hint="Toggle the {value} column"
+                data-tour-value={column.name}
+                aria-label={`Toggle ${column.name} column`}
+                aria-pressed={column.visible}
                 size="xs"
                 color="ldGray.5"
                 style={{
@@ -337,8 +348,12 @@ export const MetricsTableTopToolbar: FC<MetricsTableTopToolbarProps> = memo(
                 <Group gap="xs">
                     {/* Search input */}
                     <TextInput
+                        data-tour-anchor="metrics-search"
+                        data-tour-hint="Find Total completed order amount"
+                        data-tour-input="true"
+                        data-tour-suggest="Total completed order amount"
+                        data-tour-docs="explore/metrics-catalog/build-saved-trees.mdx#creating-a-saved-tree:li2"
                         size="xs"
-                        radius="md"
                         classNames={{ input: classes.searchInput }}
                         styles={(theme) => ({
                             input: {
@@ -361,7 +376,7 @@ export const MetricsTableTopToolbar: FC<MetricsTableTopToolbarProps> = memo(
                         leftSection={
                             <MantineIcon
                                 size="md"
-                                color="ldGray.6"
+                                color="dimmed"
                                 icon={IconSearch}
                             />
                         }
@@ -424,7 +439,6 @@ export const MetricsTableTopToolbar: FC<MetricsTableTopToolbarProps> = memo(
                         radius={6}
                         py="sm"
                         px="xs"
-                        tt="none"
                         h={32}
                     >
                         <Group gap={6}>
@@ -434,28 +448,73 @@ export const MetricsTableTopToolbar: FC<MetricsTableTopToolbarProps> = memo(
                             </Text>
                         </Group>
                     </Badge>
-                    <Popover shadow="subtle" withArrow>
+                    <Popover
+                        withArrow
+                        floatingStrategy="fixed"
+                        middlewares={{
+                            shift: { crossAxis: true, padding: 12 },
+                        }}
+                    >
                         <Popover.Target>
                             <Tooltip
-                                withinPortal
-                                multiline
                                 maw={150}
                                 label="Manage column visibility"
                                 position="top"
                             >
                                 <ActionIcon
                                     variant="transparent"
+                                    aria-label="Manage column visibility"
+                                    className={classes.columnTrigger}
                                     size="xs"
                                     color="ldGray.5"
                                     display={embedToken ? 'none' : undefined}
+                                    data-tour-anchor="catalog-columns"
+                                    data-tour-hint="Manage column visibility"
+                                    data-tour-scope="view:SpotlightTableConfig"
+                                    data-tour-step="2"
+                                    data-tour-route="/projects/:projectUuid/metrics"
+                                    data-tour-label="Open Manage column visibility"
+                                    data-tour-docs="explore/metrics-catalog.mdx#view-catalog-column-configuration:1-2"
+                                    data-tour-title="View catalog column settings"
+                                    data-tour-interactive="true"
+                                    data-tour-via='[data-tour-nav="metrics"]'
                                 >
                                     <MantineIcon icon={IconEye} />
                                 </ActionIcon>
                             </Tooltip>
                         </Popover.Target>
-                        <Popover.Dropdown p="sm" miw={270}>
+                        <Popover.Dropdown
+                            p="sm"
+                            miw={270}
+                            maw="calc(100vw - 24px)"
+                            mah="calc(100dvh - 24px)"
+                            className={classes.columnDropdown}
+                            data-tour-scope="view:SpotlightTableConfig"
+                            data-tour-step="1"
+                            data-tour-route="/projects/:projectUuid/metrics"
+                            data-tour-label="Read the column configuration"
+                            data-tour-docs="explore/metrics-catalog.mdx#view-catalog-column-configuration:1-2"
+                            data-tour-return="none"
+                            data-tour-resultdocs="explore/metrics-catalog.mdx#view-catalog-column-configuration:p2:1-3"
+                        >
                             <Stack gap="sm">
-                                <Stack gap={2}>
+                                <Stack
+                                    gap={2}
+                                    data-tour-scope="manage:SpotlightTableConfig"
+                                    data-tour-step="1"
+                                    data-tour-route="/projects/:projectUuid/metrics"
+                                    data-tour-label="Inspect the saved column settings"
+                                    data-tour-busy='[data-tour-anchor="catalog-save-pending"]'
+                                    data-tour-docs="explore/metrics-catalog.mdx#save-catalog-column-configuration:1"
+                                    data-tour-return="none"
+                                    data-tour-resultdocs="explore/metrics-catalog.mdx#save-catalog-column-configuration:1"
+                                    data-tour-anchor={
+                                        isCreatingSpotlightConfig ||
+                                        hasConfigChanges
+                                            ? 'catalog-save-pending'
+                                            : undefined
+                                    }
+                                >
                                     <DndContext
                                         sensors={sensors}
                                         collisionDetection={closestCenter}
@@ -503,7 +562,6 @@ export const MetricsTableTopToolbar: FC<MetricsTableTopToolbarProps> = memo(
                                         <>
                                             <Tooltip
                                                 position="bottom"
-                                                withinPortal
                                                 label={
                                                     hasConfigChanges
                                                         ? 'Discard unsaved changes'
@@ -513,7 +571,6 @@ export const MetricsTableTopToolbar: FC<MetricsTableTopToolbarProps> = memo(
                                                 <Button
                                                     size="xs"
                                                     variant="default"
-                                                    radius="md"
                                                     h={28}
                                                     onClick={handleReset}
                                                     style={(theme) => ({
@@ -536,8 +593,15 @@ export const MetricsTableTopToolbar: FC<MetricsTableTopToolbarProps> = memo(
                                             <Button
                                                 size="xs"
                                                 h={28}
-                                                variant="dark"
                                                 onClick={handleSave}
+                                                data-tour-scope="manage:SpotlightTableConfig"
+                                                data-tour-step="2"
+                                                data-tour-route="/projects/:projectUuid/metrics"
+                                                data-tour-label="Save for everyone"
+                                                data-tour-docs="explore/metrics-catalog.mdx#save-catalog-column-configuration:2"
+                                                data-tour-title="Save catalog column settings"
+                                                data-tour-interactive="true"
+                                                data-tour-via='[data-tour-nav="metrics"] >> [data-tour-anchor="catalog-columns"] >> [data-tour-anchor="catalog-column-toggle"][data-tour-value="Description"]'
                                                 loading={
                                                     isCreatingSpotlightConfig
                                                 }
@@ -548,14 +612,12 @@ export const MetricsTableTopToolbar: FC<MetricsTableTopToolbarProps> = memo(
                                     ) : (
                                         <Tooltip
                                             position="bottom"
-                                            withinPortal
                                             label={'Discard unsaved changes'}
                                         >
                                             <Button
                                                 fullWidth
                                                 size="xs"
                                                 h={28}
-                                                radius="md"
                                                 variant="default"
                                                 onClick={handleReset}
                                                 disabled={!hasConfigChanges}
@@ -584,6 +646,7 @@ export const MetricsTableTopToolbar: FC<MetricsTableTopToolbarProps> = memo(
                         }}
                     />
                     <SegmentedControl
+                        classNames={{ label: classes.viewLabel }}
                         size="xs"
                         value={metricCatalogView}
                         styles={(theme) => ({
@@ -604,11 +667,13 @@ export const MetricsTableTopToolbar: FC<MetricsTableTopToolbarProps> = memo(
                             {
                                 label: (
                                     <Tooltip
-                                        withinPortal
                                         label="List view"
                                         position="bottom-end"
                                     >
                                         <Center>
+                                            <VisuallyHidden>
+                                                List view
+                                            </VisuallyHidden>
                                             <MantineIcon
                                                 icon={IconList}
                                                 size="md"
@@ -621,11 +686,25 @@ export const MetricsTableTopToolbar: FC<MetricsTableTopToolbarProps> = memo(
                             {
                                 label: (
                                     <Tooltip
-                                        withinPortal
                                         label="Canvas"
                                         position="bottom-end"
                                     >
-                                        <Center>
+                                        <Center
+                                            data-tour-scope="view:MetricsTree"
+                                            data-tour-step="2"
+                                            data-tour-title="View a saved metrics tree"
+                                            data-tour-label="Open Canvas"
+                                            data-tour-route="/projects/:projectUuid/metrics"
+                                            data-tour-interactive="true"
+                                            data-tour-via='[data-tour-nav="metrics"]'
+                                            data-tour-then='[data-tour-anchor="saved-tree"][data-tour-value="Completed orders"]'
+                                            data-tour-anchor="metrics-canvas"
+                                            data-tour-hint="Open Canvas"
+                                            data-tour-docs="explore/metrics-catalog/build-saved-trees.mdx#intro:p3:1"
+                                        >
+                                            <VisuallyHidden>
+                                                Canvas
+                                            </VisuallyHidden>
                                             <MantineIcon
                                                 icon={IconSitemap}
                                                 size="md"

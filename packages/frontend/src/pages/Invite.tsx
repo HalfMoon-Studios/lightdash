@@ -1,7 +1,6 @@
 import {
     FeatureFlags,
     InviteLinkPurpose,
-    OpenIdIdentityIssuerType,
     type ActivateUserWithInviteCode,
     type ApiError,
     type CreateUserArgs,
@@ -36,13 +35,39 @@ import {
 import { useServerFeatureFlag } from '../hooks/useServerOrClientFeatureFlag';
 import useApp from '../providers/App/useApp';
 import useTracking from '../providers/Tracking/useTracking';
+import classes from './Invite.module.css';
 
 interface WelcomeCardProps {
     email: string | undefined;
+    expiresAt: Date;
     setReadyToJoin: (isReady: boolean) => void;
 }
 
-const WelcomeCard: FC<WelcomeCardProps> = ({ email, setReadyToJoin }) => {
+const InviteExpirationText: FC<{
+    expiresAt: Date;
+    textAlign: 'left' | 'center';
+}> = ({ expiresAt, textAlign }) => {
+    const expirationDate = new Date(expiresAt);
+
+    return (
+        <Text c="dimmed" ta={textAlign} fz="sm">
+            This invite link expires on{' '}
+            <time dateTime={expirationDate.toISOString()}>
+                {expirationDate.toLocaleString(undefined, {
+                    dateStyle: 'long',
+                    timeStyle: 'short',
+                })}
+            </time>
+            .
+        </Text>
+    );
+};
+
+const WelcomeCard: FC<WelcomeCardProps> = ({
+    email,
+    expiresAt,
+    setReadyToJoin,
+}) => {
     const { data: org } = useOrganization();
     const { isNewLayout } = useAuthLayoutVariant();
     const textAlign = isNewLayout ? 'left' : 'center';
@@ -55,14 +80,14 @@ const WelcomeCard: FC<WelcomeCardProps> = ({ email, setReadyToJoin }) => {
                     {email}
                 </Text>
             )}
-            <Text color="ldGray.6" ta={textAlign}>
+            <Text c="dimmed" ta={textAlign}>
                 {`Your teammates ${
                     org?.name ? `at ${org.name}` : ''
                 } are using Lightdash to discover
-                    and share data insights. Click on the link below within the
-                    next 72 hours to join your team and start exploring your
-                    data!`}
+                    and share data insights. Join your team to start exploring
+                    your data!`}
             </Text>
+            <InviteExpirationText expiresAt={expiresAt} textAlign={textAlign} />
             <Button onClick={() => setReadyToJoin(true)}>Join your team</Button>
         </Stack>
     );
@@ -72,14 +97,14 @@ const WelcomeCard: FC<WelcomeCardProps> = ({ email, setReadyToJoin }) => {
             {isNewLayout ? (
                 <Box data-cy="welcome-user">{content}</Box>
             ) : (
-                <Card p="xl" withBorder shadow="subtle" data-cy="welcome-user">
+                <Card p="xl" data-cy="welcome-user">
                     {content}
                 </Card>
             )}
             <Text c="ldGray.7" ta={textAlign} fz="sm" fw={500}>
                 {`Not ${email ? email : 'for you'}?`}
                 <br />
-                <Text c="ldGray.6" ta={textAlign} fz="xs" fw={500}>
+                <Text c="dimmed" ta={textAlign} fz="xs" fw={500}>
                     Ignore this invite link and contact your workspace admin.
                 </Text>
             </Text>
@@ -103,14 +128,14 @@ const ErrorCard: FC<{ title: string }> = ({ title }) => {
     return isNewLayout ? (
         <Box data-cy="welcome-user">{content}</Box>
     ) : (
-        <Card p="xl" withBorder shadow="subtle" data-cy="welcome-user">
+        <Card p="xl" data-cy="welcome-user">
             {content}
         </Card>
     );
 };
 
 const PrivacyTermsFootnote: FC = () => (
-    <Text c="ldGray.6" ta="center" fz="sm" fw={500}>
+    <Text c="dimmed" ta="center" fz="sm" fw={500}>
         By creating an account, you agree to
         <br />
         our{' '}
@@ -136,6 +161,7 @@ const PrivacyTermsFootnote: FC = () => (
 
 interface OneClickCardProps {
     email: string;
+    expiresAt: Date;
     isSetupInvite: boolean;
     isLoading: boolean;
     onActivate: () => void;
@@ -143,6 +169,7 @@ interface OneClickCardProps {
 
 const OneClickCard: FC<OneClickCardProps> = ({
     email,
+    expiresAt,
     isSetupInvite,
     isLoading,
     onActivate,
@@ -157,12 +184,18 @@ const OneClickCard: FC<OneClickCardProps> = ({
                     ? 'You’ve been asked to help with setup'
                     : 'You’ve been invited to Lightdash'}
             </Title>
-            <Text c="ldGray.6" ta={textAlign}>
+            <Text c="dimmed" ta={textAlign}>
                 {isSetupInvite
                     ? 'One click and we’ll take you straight to connecting the data warehouse.'
                     : 'One click to join your team.'}
             </Text>
-            <Button fullWidth loading={isLoading} onClick={onActivate}>
+            <InviteExpirationText expiresAt={expiresAt} textAlign={textAlign} />
+            <Button
+                fullWidth
+                loading={isLoading}
+                onClick={onActivate}
+                classNames={{ label: classes.oneClickLabel }}
+            >
                 Continue as {email}
             </Button>
         </Stack>
@@ -171,7 +204,7 @@ const OneClickCard: FC<OneClickCardProps> = ({
     return isNewLayout ? (
         <Box data-cy="one-click-invite">{content}</Box>
     ) : (
-        <Card p="xl" withBorder shadow="subtle" data-cy="one-click-invite">
+        <Card p="xl" data-cy="one-click-invite">
             {content}
         </Card>
     );
@@ -235,11 +268,11 @@ const Invite: FC = () => {
         },
     });
 
-    const allowPasswordAuthentication =
-        !health.data?.auth.disablePasswordAuthentication;
     const isNewOnboarding = newOnboardingFlag.data?.enabled ?? false;
     const showOneClick =
-        isNewOnboarding && allowPasswordAuthentication && Boolean(inviteCode);
+        isNewOnboarding &&
+        inviteLinkQuery.data?.authentication.allowOneClickActivation &&
+        Boolean(inviteCode);
 
     useEffect(() => {
         const searchParams = new URLSearchParams(search);
@@ -261,39 +294,43 @@ const Invite: FC = () => {
         return <Navigate to={{ pathname: redirectUrl }} />;
     }
 
-    const ssoAvailable =
-        health.data?.auth.google.enabled ||
-        health.data?.auth.okta.enabled ||
-        health.data?.auth.oneLogin.enabled ||
-        health.data?.auth.azuread.enabled ||
-        health.data?.auth.oidc.enabled;
-    const ssoLogins = ssoAvailable && (
+    const ssoProviders =
+        inviteLinkQuery.data?.authentication.ssoProviders ?? [];
+    const ssoLogins = ssoProviders.length > 0 && (
         <Stack>
-            {Object.values(OpenIdIdentityIssuerType).map((providerName) => (
+            {ssoProviders.map((providerName) => (
                 <ThirdPartySignInButton
                     key={providerName}
                     providerName={providerName}
                     inviteCode={inviteCode}
+                    loginHint={inviteLinkQuery.data?.email}
+                    forceShow
                     intent="signup"
                     redirect={redirectUrl}
                 />
             ))}
         </Stack>
     );
-    const passwordLogin = allowPasswordAuthentication && inviteCode && (
-        <CreateUserForm
-            isLoading={isLoading || isSuccess}
-            readOnlyEmail={inviteLinkQuery.data?.email}
-            onSubmit={({ firstName, lastName, password }: CreateUserArgs) => {
-                mutate({
-                    inviteCode,
+    const passwordLogin = inviteLinkQuery.data?.authentication
+        .allowPasswordSignup &&
+        inviteCode && (
+            <CreateUserForm
+                isLoading={isLoading || isSuccess}
+                readOnlyEmail={inviteLinkQuery.data?.email}
+                onSubmit={({
                     firstName,
                     lastName,
                     password,
-                });
-            }}
-        />
-    );
+                }: CreateUserArgs) => {
+                    mutate({
+                        inviteCode,
+                        firstName,
+                        lastName,
+                        password,
+                    });
+                }}
+            />
+        );
     const logins = (
         <>
             {ssoLogins}
@@ -319,11 +356,17 @@ const Invite: FC = () => {
                     : 'Sign up'}
             </Title>
             {isSetupInvite && (
-                <Text c="ldGray.6" ta={isNewLayout ? 'left' : 'center'} mb="md">
+                <Text c="dimmed" ta={isNewLayout ? 'left' : 'center'} mb="md">
                     Create your account and we’ll take you straight to warehouse
                     setup.
                 </Text>
             )}
+            {inviteLinkQuery.data ? (
+                <InviteExpirationText
+                    expiresAt={inviteLinkQuery.data.expiresAt}
+                    textAlign={isNewLayout ? 'left' : 'center'}
+                />
+            ) : null}
             {logins}
         </>
     );
@@ -342,12 +385,27 @@ const Invite: FC = () => {
                 <>
                     <OneClickCard
                         email={inviteLinkQuery.data.email}
+                        expiresAt={inviteLinkQuery.data.expiresAt}
                         isSetupInvite={isSetupInvite}
                         isLoading={
                             activateInvite.isLoading || activateInvite.isSuccess
                         }
                         onActivate={() => activateInvite.mutate()}
                     />
+                    {ssoLogins && (
+                        <>
+                            <Divider
+                                my="md"
+                                labelPosition="center"
+                                label={
+                                    <Text c="ldGray.5" size="sm" fw={500}>
+                                        OR
+                                    </Text>
+                                }
+                            />
+                            {ssoLogins}
+                        </>
+                    )}
                     <PrivacyTermsFootnote />
                 </>
             ) : isLinkFromEmail || isSetupInvite ? (
@@ -355,18 +413,17 @@ const Invite: FC = () => {
                     {isNewLayout ? (
                         signupContent
                     ) : (
-                        <Card p="xl" withBorder shadow="subtle">
-                            {signupContent}
-                        </Card>
+                        <Card p="xl">{signupContent}</Card>
                     )}
                     <PrivacyTermsFootnote />
                 </>
-            ) : (
+            ) : inviteLinkQuery.data ? (
                 <WelcomeCard
-                    email={inviteLinkQuery.data?.email}
+                    email={inviteLinkQuery.data.email}
+                    expiresAt={inviteLinkQuery.data.expiresAt}
                     setReadyToJoin={setIsLinkFromEmail}
                 />
-            )}
+            ) : null}
         </AuthLayout>
     );
 };

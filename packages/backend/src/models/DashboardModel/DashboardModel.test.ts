@@ -8,6 +8,8 @@ import {
 import knex from 'knex';
 import { getTracker, MockClient, RawQuery, Tracker } from 'knex-mock-client';
 import { FunctionQueryMatcher } from 'knex-mock-client/types/mock-client';
+import { ContentDraftsTableName } from '../../database/entities/contentDrafts';
+import { ContentReviewRequestsTableName } from '../../database/entities/contentReviewRequests';
 import {
     DashboardsTableName,
     DashboardTabsTableName,
@@ -18,6 +20,7 @@ import {
     DashboardVersionsTableName,
     DashboardViewsTableName,
 } from '../../database/entities/dashboards';
+import { DashboardSlugMappingsTableName } from '../../database/entities/dashboardSlugMappings';
 import { SavedChartsTableName } from '../../database/entities/savedCharts';
 import { SpaceTableName } from '../../database/entities/spaces';
 import { projectUuid } from '../ProjectModel/ProjectModel.mock';
@@ -61,6 +64,7 @@ describe('DashboardModel', () => {
     const model = new DashboardModel({
         database: knex({ client: MockClient, dialect: 'pg' }),
     });
+    const validDashboardUuid = '11111111-1111-4111-8111-111111111111';
 
     let tracker: Tracker;
     beforeAll(() => {
@@ -70,18 +74,7 @@ describe('DashboardModel', () => {
         tracker.reset();
     });
 
-    test('should get dashboard by uuid', async () => {
-        tracker.on
-            .select(
-                queryMatcher(DashboardsTableName, [expectedDashboard.uuid, 1]),
-            )
-            .response([
-                {
-                    ...dashboardWithVersionEntry,
-                    space_uuid: 'spaceUuid',
-                    space_name: 'space name',
-                },
-            ]);
+    const setupDashboardDetails = () => {
         tracker.on
             .select(
                 queryMatcher(DashboardViewsTableName, [
@@ -108,12 +101,162 @@ describe('DashboardModel', () => {
                 ]),
             )
             .response([]);
+    };
 
-        const dashboard = await model.getByIdOrSlug(expectedDashboard.uuid);
+    test('should get dashboard by uuid', async () => {
+        tracker.on
+            .select(
+                queryMatcher(DashboardsTableName, [
+                    true,
+                    validDashboardUuid,
+                    1,
+                ]),
+            )
+            .response([
+                {
+                    ...dashboardWithVersionEntry,
+                    dashboard_uuid: validDashboardUuid,
+                    space_uuid: 'spaceUuid',
+                    space_name: 'space name',
+                },
+            ]);
+        setupDashboardDetails();
 
-        expect(dashboard).toEqual(expectedDashboard);
+        const dashboard = await model.getByIdOrSlug(validDashboardUuid);
+
+        expect(dashboard).toEqual({
+            ...expectedDashboard,
+            uuid: validDashboardUuid,
+        });
         expect(tracker.history.select).toHaveLength(4);
+        const [uuidQuery] = tracker.history.select;
+        const whereClause = uuidQuery.sql.slice(
+            uuidQuery.sql.indexOf(' where '),
+        );
+        expect(whereClause).toContain('"dashboards"."dashboard_uuid" = $');
+        expect(whereClause).not.toContain('"dashboards"."slug"');
+        expect(whereClause).not.toContain('exists');
     });
+
+    test('should get dashboard by current slug', async () => {
+        tracker.on
+            .select(
+                queryMatcher(DashboardsTableName, [
+                    expectedDashboard.slug,
+                    projectUuid,
+                    1,
+                ]),
+            )
+            .responseOnce([{ dashboard_uuid: validDashboardUuid }]);
+        tracker.on
+            .select(
+                queryMatcher(DashboardsTableName, [
+                    true,
+                    projectUuid,
+                    validDashboardUuid,
+                    1,
+                ]),
+            )
+            .responseOnce([
+                {
+                    ...dashboardWithVersionEntry,
+                    dashboard_uuid: validDashboardUuid,
+                    space_uuid: 'spaceUuid',
+                    space_name: 'space name',
+                },
+            ]);
+        setupDashboardDetails();
+
+        const dashboard = await model.getByIdOrSlug(expectedDashboard.slug, {
+            projectUuid,
+        });
+
+        expect(dashboard).toEqual({
+            ...expectedDashboard,
+            uuid: validDashboardUuid,
+        });
+        expect(tracker.history.select).toHaveLength(5);
+        expect(
+            tracker.history.select.some((query) =>
+                query.sql.includes(DashboardSlugMappingsTableName),
+            ),
+        ).toBe(false);
+    });
+
+    test('should get dashboard by historical slug alias', async () => {
+        const alias = 'previous-dashboard-name';
+        tracker.on
+            .select(queryMatcher(DashboardsTableName, [alias, projectUuid, 1]))
+            .responseOnce([]);
+        tracker.on
+            .select(
+                queryMatcher(DashboardSlugMappingsTableName, [
+                    alias,
+                    projectUuid,
+                    1,
+                ]),
+            )
+            .responseOnce([{ dashboard_uuid: validDashboardUuid }]);
+        tracker.on
+            .select(
+                queryMatcher(DashboardsTableName, [
+                    true,
+                    projectUuid,
+                    validDashboardUuid,
+                    1,
+                ]),
+            )
+            .responseOnce([
+                {
+                    ...dashboardWithVersionEntry,
+                    dashboard_uuid: validDashboardUuid,
+                    space_uuid: 'spaceUuid',
+                    space_name: 'space name',
+                },
+            ]);
+        setupDashboardDetails();
+
+        const dashboard = await model.getByIdOrSlug(alias, { projectUuid });
+
+        expect(dashboard).toEqual({
+            ...expectedDashboard,
+            uuid: validDashboardUuid,
+        });
+        expect(tracker.history.select).toHaveLength(6);
+    });
+
+    it.each([
+        ['deleted dashboards', { deleted: true as const }, 'is not null'],
+        ['any dashboard', { deleted: 'any' as const }, undefined],
+    ])(
+        'should preserve the %s filter after uuid resolution',
+        async (_, options, filter) => {
+            tracker.on.select(DashboardsTableName).responseOnce([
+                {
+                    ...dashboardWithVersionEntry,
+                    dashboard_uuid: validDashboardUuid,
+                    space_uuid: 'spaceUuid',
+                    space_name: 'space name',
+                },
+            ]);
+            setupDashboardDetails();
+
+            await model.getByIdOrSlug(validDashboardUuid, options);
+
+            const [uuidQuery] = tracker.history.select;
+            const whereClause = uuidQuery.sql.slice(
+                uuidQuery.sql.indexOf(' where '),
+            );
+            if (filter) {
+                expect(whereClause).toContain(
+                    `"dashboards"."deleted_at" ${filter}`,
+                );
+            } else {
+                expect(whereClause).not.toContain('"dashboards"."deleted_at"');
+            }
+            expect(whereClause).toContain('"dashboards"."dashboard_uuid" = $');
+        },
+    );
 
     test('should order dashboard tiles by y_offset then x_offset when fetching dashboard', async () => {
         // Create tiles with specific coordinates to test ordering
@@ -138,11 +281,16 @@ describe('DashboardModel', () => {
 
         tracker.on
             .select(
-                queryMatcher(DashboardsTableName, [expectedDashboard.uuid, 1]),
+                queryMatcher(DashboardsTableName, [
+                    true,
+                    validDashboardUuid,
+                    1,
+                ]),
             )
             .response([
                 {
                     ...dashboardWithVersionEntry,
+                    dashboard_uuid: validDashboardUuid,
                     space_uuid: 'spaceUuid',
                     space_name: 'space name',
                 },
@@ -171,7 +319,7 @@ describe('DashboardModel', () => {
             .response([]);
 
         // Fetch the dashboard
-        const dashboard = await model.getByIdOrSlug(expectedDashboard.uuid);
+        const dashboard = await model.getByIdOrSlug(validDashboardUuid);
 
         // Assert that tiles are returned in the expected order
         // First by y_offset (ascending), then x_offset (ascending)
@@ -184,13 +332,79 @@ describe('DashboardModel', () => {
     test("should error if dashboard isn't found", async () => {
         tracker.on
             .select(
-                queryMatcher(DashboardsTableName, [expectedDashboard.uuid, 1]),
+                queryMatcher(DashboardsTableName, [
+                    true,
+                    validDashboardUuid,
+                    1,
+                ]),
             )
             .response([]);
+        tracker.on
+            .select(queryMatcher(DashboardsTableName, [validDashboardUuid, 1]))
+            .responseOnce([]);
+        tracker.on
+            .select(
+                queryMatcher(DashboardSlugMappingsTableName, [
+                    validDashboardUuid,
+                    1,
+                ]),
+            )
+            .responseOnce([]);
 
         await expect(
-            model.getByIdOrSlug(expectedDashboard.uuid),
+            model.getByIdOrSlug(validDashboardUuid),
         ).rejects.toThrowError(NotFoundError);
+    });
+
+    test('should pre-resolve historical aliases when finding dashboard slugs', async () => {
+        const currentSlug = 'current-dashboard-name';
+        const alias = 'previous-dashboard-name';
+        tracker.on
+            .select(
+                queryMatcher(DashboardSlugMappingsTableName, [
+                    currentSlug,
+                    alias,
+                    projectUuid,
+                ]),
+            )
+            .responseOnce([{ dashboard_uuid: validDashboardUuid }]);
+        tracker.on
+            .select(
+                queryMatcher(DashboardsTableName, [
+                    projectUuid,
+                    currentSlug,
+                    alias,
+                    validDashboardUuid,
+                ]),
+            )
+            .responseOnce([
+                {
+                    name: 'Dashboard name',
+                    dashboard_uuid: validDashboardUuid,
+                    space_uuid: 'spaceUuid',
+                    description: 'Dashboard description',
+                    slug: currentSlug,
+                },
+            ]);
+
+        const dashboards = await model.find({
+            projectUuid,
+            slugs: [currentSlug, alias],
+        });
+
+        expect(dashboards).toEqual([
+            {
+                name: 'Dashboard name',
+                uuid: validDashboardUuid,
+                spaceUuid: 'spaceUuid',
+                description: 'Dashboard description',
+                slug: currentSlug,
+            },
+        ]);
+        const findQuery = tracker.history.select[1];
+        expect(findQuery.sql).toContain('"dashboards"."slug" in');
+        expect(findQuery.sql).toContain('"dashboards"."dashboard_uuid" in');
+        expect(findQuery.sql).not.toContain('exists');
     });
 
     test('should get all by project uuid', async () => {
@@ -390,26 +604,93 @@ describe('DashboardModel', () => {
         });
     });
 
-    test('rejects an exact slug owned by a deleted dashboard', async () => {
+    test('revives a deleted dashboard that owns an exact slug', async () => {
         tracker.on.select('pg_advisory_xact_lock').response({});
         tracker.on.select(DashboardsTableName).responseOnce([
             {
                 dashboard_uuid: 'deleted-dashboard-uuid',
                 deleted_at: new Date(),
+                deleted_by_user_uuid: 'deleter-user-uuid',
             },
         ]);
-
-        await expect(
-            model.create(
-                'spaceUuid',
-                { ...createDashboard, forceSlug: true },
-                user,
-                projectUuid,
-            ),
-        ).rejects.toThrow(
-            `Dashboard slug "${createDashboard.slug}" is already used by a deleted dashboard`,
+        tracker.on.select(SpaceTableName).responseOnce([spaceEntry]);
+        tracker.on.update(DashboardsTableName).responseOnce([
+            {
+                dashboard_id: dashboardEntry.dashboard_id,
+                dashboard_uuid: 'deleted-dashboard-uuid',
+            },
+        ]);
+        tracker.on.update(SavedChartsTableName).responseOnce(1);
+        tracker.on
+            .insert(DashboardVersionsTableName)
+            .responseOnce([dashboardVersionEntry]);
+        tracker.on
+            .insert(DashboardViewsTableName)
+            .responseOnce([dashboardViewEntry]);
+        tracker.on
+            .insert(DashboardTilesTableName)
+            .responseOnce([dashboardTileEntry]);
+        tracker.on.select(SavedChartsTableName).responseOnce([savedChartEntry]);
+        tracker.on.insert(DashboardTileChartTableName).responseOnce([]);
+        tracker.on.update(DashboardViewsTableName).responseOnce([]);
+        vi.spyOn(model, 'getByIdOrSlug').mockImplementationOnce(() =>
+            Promise.resolve(expectedDashboard),
         );
+
+        await model.create(
+            'spaceUuid',
+            { ...createDashboard, forceSlug: true },
+            user,
+            projectUuid,
+        );
+
+        expect(
+            tracker.history.insert.some((query) =>
+                query.sql.includes(`into "${DashboardsTableName}"`),
+            ),
+        ).toBe(false);
+        const revive = tracker.history.update.find((query) =>
+            query.sql.includes(`update "${DashboardsTableName}"`),
+        );
+        expect(revive?.sql).toContain('"deleted_at" = $');
+        expect(revive?.bindings).toEqual(
+            expect.arrayContaining([
+                createDashboard.name,
+                spaceEntry.space_id,
+                'deleted-dashboard-uuid',
+            ]),
+        );
+        const chartRevive = tracker.history.update.find((query) =>
+            query.sql.includes(`update "${SavedChartsTableName}"`),
+        );
+        expect(chartRevive?.bindings).toContain('deleter-user-uuid');
+        expect(tracker.history.insert[0].sql).toContain(
+            DashboardVersionsTableName,
+        );
+    });
+
+    test('reuses an active dashboard that owns an exact slug', async () => {
+        tracker.on.select('pg_advisory_xact_lock').response({});
+        tracker.on.select(DashboardsTableName).responseOnce([
+            {
+                dashboard_uuid: 'active-dashboard-uuid',
+                deleted_at: null,
+                deleted_by_user_uuid: null,
+            },
+        ]);
+        vi.spyOn(model, 'getByIdOrSlug').mockImplementationOnce(() =>
+            Promise.resolve(expectedDashboard),
+        );
+
+        await model.create(
+            'spaceUuid',
+            { ...createDashboard, forceSlug: true },
+            user,
+            projectUuid,
+        );
+
         expect(tracker.history.insert).toHaveLength(0);
+        expect(tracker.history.update).toHaveLength(0);
     });
 
     test('should update dashboard', async () => {
@@ -570,9 +851,9 @@ describe('DashboardModel', () => {
     });
 
     test('should delete dashboard', async () => {
-        const dashboardUuid = 'dashboard uuid';
+        const dashboardUuid = '11111111-1111-4111-8111-111111111111';
         tracker.on
-            .select(queryMatcher(DashboardsTableName, [dashboardUuid, 1]))
+            .select(queryMatcher(DashboardsTableName, [true, dashboardUuid, 1]))
             .response([dashboardWithVersionEntry]);
         tracker.on
             .select(
@@ -603,9 +884,29 @@ describe('DashboardModel', () => {
         tracker.on
             .delete(queryMatcher(DashboardsTableName, [dashboardUuid]))
             .response([]);
+        tracker.on
+            .select(queryMatcher(SavedChartsTableName, [dashboardUuid]))
+            .responseOnce([{ saved_query_uuid: 'owned-chart-uuid' }]);
+        tracker.on.update(ContentDraftsTableName).response(1);
+        tracker.on.update(ContentReviewRequestsTableName).response(0);
 
         await model.permanentDelete(dashboardUuid);
         expect(tracker.history.delete).toHaveLength(1);
+        // Open drafts are dismissed and pending review requests cancelled for
+        // the dashboard and its dashboard-scoped charts
+        expect(tracker.history.update).toHaveLength(4);
+        expect(tracker.history.update[0].bindings).toEqual(
+            expect.arrayContaining(['dismissed', 'dashboard', dashboardUuid]),
+        );
+        expect(tracker.history.update[1].bindings).toEqual(
+            expect.arrayContaining(['dismissed', 'chart', 'owned-chart-uuid']),
+        );
+        expect(tracker.history.update[2].bindings).toEqual(
+            expect.arrayContaining(['cancelled', 'dashboard', dashboardUuid]),
+        );
+        expect(tracker.history.update[3].bindings).toEqual(
+            expect.arrayContaining(['cancelled', 'chart', 'owned-chart-uuid']),
+        );
     });
 
     test("should error on create dashboard version if dashboard isn't found", async () => {
@@ -982,13 +1283,15 @@ describe('DashboardModel', () => {
             tracker.on
                 .select(
                     queryMatcher(DashboardsTableName, [
-                        expectedDashboard.uuid,
+                        true,
+                        validDashboardUuid,
                         1,
                     ]),
                 )
                 .response([
                     {
                         ...dashboardWithVersionEntry,
+                        dashboard_uuid: validDashboardUuid,
                         space_uuid: 'spaceUuid',
                         space_name: 'space name',
                     },
@@ -1020,7 +1323,7 @@ describe('DashboardModel', () => {
         test('returns default filters when the version has no dashboard_views row', async () => {
             setupDashboardQueries([]); // regression: this used to throw an NPE
 
-            const dashboard = await model.getByIdOrSlug(expectedDashboard.uuid);
+            const dashboard = await model.getByIdOrSlug(validDashboardUuid);
 
             expect(dashboard.filters).toEqual({
                 dimensions: [],
@@ -1045,9 +1348,7 @@ describe('DashboardModel', () => {
                     { ...dashboardViewEntry, filters } as AnyType,
                 ]);
 
-                const dashboard = await model.getByIdOrSlug(
-                    expectedDashboard.uuid,
-                );
+                const dashboard = await model.getByIdOrSlug(validDashboardUuid);
 
                 expect(Array.isArray(dashboard.filters.tableCalculations)).toBe(
                     true,

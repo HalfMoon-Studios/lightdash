@@ -19,9 +19,10 @@ import {
 import { type FC } from 'react';
 import MantineIcon from '../../../../../components/common/MantineIcon';
 import TruncatedText from '../../../../../components/common/TruncatedText';
+import { useContentAuthoringEnabled } from '../../../../../hooks/useContentAuthoringEnabled';
 import { useSavedQuery } from '../../../../../hooks/useSavedQuery';
 import {
-    clearSavedChartPreview,
+    clearPreview,
     type SavedChartPreviewData,
 } from '../../store/aiArtifactSlice';
 import { useAiAgentStoreDispatch } from '../../store/hooks';
@@ -39,8 +40,6 @@ const VerifiedBadge: FC<{ verification: ContentVerificationInfo }> = ({
 
     return (
         <Tooltip
-            withinPortal
-            multiline
             maw={300}
             position="bottom"
             label={`Verified by ${verification.verifiedBy.firstName} ${verification.verifiedBy.lastName} on ${verifiedDate}`}
@@ -53,6 +52,7 @@ const VerifiedBadge: FC<{ verification: ContentVerificationInfo }> = ({
 };
 
 export const AiSavedChartPreviewPanel: FC<Props> = ({ savedChartPreview }) => {
+    const authoringEnabled = useContentAuthoringEnabled();
     const dispatch = useAiAgentStoreDispatch();
 
     const {
@@ -69,9 +69,7 @@ export const AiSavedChartPreviewPanel: FC<Props> = ({ savedChartPreview }) => {
     const closeButton = (
         <ActionIcon
             size="sm"
-            variant="subtle"
-            color="ldGray.6"
-            onClick={() => dispatch(clearSavedChartPreview())}
+            onClick={() => dispatch(clearPreview())}
             aria-label="Close"
         >
             <MantineIcon icon={IconX} />
@@ -131,13 +129,11 @@ export const AiSavedChartPreviewPanel: FC<Props> = ({ savedChartPreview }) => {
                                 verification={savedChart.verification}
                             />
                         )}
-                        <Menu withinPortal position="bottom-end">
+                        <Menu position="bottom-end">
                             <Menu.Target>
-                                <Tooltip withinPortal label="More options">
+                                <Tooltip label="More options">
                                     <ActionIcon
                                         size="sm"
-                                        variant="subtle"
-                                        color="ldGray.6"
                                         aria-label="More options"
                                     >
                                         <MantineIcon icon={IconDots} />
@@ -146,6 +142,9 @@ export const AiSavedChartPreviewPanel: FC<Props> = ({ savedChartPreview }) => {
                             </Menu.Target>
                             <Menu.Dropdown>
                                 <Menu.Item
+                                    display={
+                                        authoringEnabled ? undefined : 'none'
+                                    }
                                     component="a"
                                     href={chartUrl}
                                     target="_blank"

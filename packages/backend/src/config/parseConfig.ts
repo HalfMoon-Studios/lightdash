@@ -1,5 +1,6 @@
 import {
     AI_DEEP_RESEARCH_QUERY_HISTORY_RETENTION_DAYS,
+    AI_DEEP_RESEARCH_REPORT_RETENTION_DAYS,
     AI_DEFAULT_MAX_QUERY_LIMIT,
     ALL_TASK_NAMES,
     AllowedEmailDomainsRole,
@@ -36,6 +37,7 @@ import {
 import * as Sentry from '@sentry/core';
 import { type ClientAuthMethod } from 'openid-client';
 import { z } from 'zod';
+import { type S3AuthMode } from '../clients/Aws/S3BaseClient';
 import { VERSION } from '../version';
 import {
     AI_PROVIDER_KEYS,
@@ -45,6 +47,7 @@ import {
     DEFAULT_ANTHROPIC_MODEL_NAME,
     DEFAULT_BEDROCK_MODEL_NAME,
     DEFAULT_DEFAULT_AI_PROVIDER,
+    DEFAULT_GOOGLE_MODEL_NAME,
     DEFAULT_OPENAI_EMBEDDING_MODEL,
     DEFAULT_OPENAI_MODEL_NAME,
     DEFAULT_OPENROUTER_MODEL_NAME,
@@ -53,6 +56,10 @@ import {
     normalizeAnthropicGatewayBaseUrl,
     normalizeLlmGatewayBaseUrl,
 } from './aiGatewayConfig';
+import {
+    parseAutopilotValidatedModels,
+    type AutopilotValidatedModel,
+} from './autopilotConfig';
 
 enum TokenEnvironmentVariable {
     SERVICE_ACCOUNT = 'LD_SETUP_SERVICE_ACCOUNT_TOKEN',
@@ -96,6 +103,40 @@ export const getIntegerFromEnvironmentVariable = (
         );
     }
     return parsed;
+};
+
+// Timers above 2^31-1 ms fire immediately in Node.
+const MAX_TIMER_MS = 2_147_483_647;
+
+export const getPositiveIntegerFromEnvironmentVariable = (
+    name: string,
+    defaultValue: number,
+    max = Number.MAX_SAFE_INTEGER,
+): number => {
+    const value = getIntegerFromEnvironmentVariable(name) ?? defaultValue;
+    if (value < 1 || value > max) {
+        throw new ParseError(
+            `Cannot parse environment variable "${name}". Value must be an integer between 1 and ${max} but ${name}=${value}`,
+        );
+    }
+    return value;
+};
+
+const getNonNegativeIntegerFromEnvironmentVariable = (
+    name: string,
+    defaultValue: number,
+): number => {
+    const raw = process.env[name];
+    if (!raw) {
+        return defaultValue;
+    }
+    const value = Number(raw);
+    if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value)) {
+        throw new ParseError(
+            `Cannot parse environment variable "${name}". Value must be a non-negative safe integer but ${name}=${raw}`,
+        );
+    }
+    return value;
 };
 
 export const getFloatFromEnvironmentVariable = (
@@ -158,7 +199,7 @@ export const getStringRecordFromEnvironmentVariable = (
         return undefined;
     }
 
-    const result = z.record(z.string()).safeParse(value);
+    const result = z.record(z.string(), z.string()).safeParse(value);
     if (!result.success) {
         throw new ParseError(
             `Cannot parse environment variable "${name}". Value must be a JSON object with string values. Error: ${result.error.message}`,
@@ -460,7 +501,7 @@ const startOfWeekSchema = z
             return parseWeekDay(value);
         } catch (e) {
             ctx.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: 'custom',
                 message: getErrorMessage(e),
             });
             return z.NEVER;
@@ -471,24 +512,22 @@ const multiProjectSetupEntrySchema = z.object({
     name: z.string().min(1, 'Project name cannot be empty'),
     warehouseConnection: z
         .object({
-            type: z.nativeEnum(WarehouseTypes, {
-                errorMap: () => ({
-                    message: `Invalid warehouse type. Must be one of: ${Object.values(WarehouseTypes).join(', ')}`,
-                }),
+            type: z.enum(WarehouseTypes, {
+                error: () =>
+                    `Invalid warehouse type. Must be one of: ${Object.values(WarehouseTypes).join(', ')}`,
             }),
             startOfWeek: startOfWeekSchema,
         })
         .passthrough(),
     dbtConnection: z
         .object({
-            type: z.nativeEnum(DbtProjectType, {
-                errorMap: () => ({
-                    message: `Invalid dbt connection type. Must be one of: ${Object.values(DbtProjectType).join(', ')}`,
-                }),
+            type: z.enum(DbtProjectType, {
+                error: () =>
+                    `Invalid dbt connection type. Must be one of: ${Object.values(DbtProjectType).join(', ')}`,
             }),
         })
         .passthrough(),
-    dbtVersion: z.nativeEnum(SupportedDbtVersions).optional(),
+    dbtVersion: z.enum(SupportedDbtVersions).optional(),
     embed: z
         .object({
             secret: z.string().optional(),
@@ -497,19 +536,18 @@ const multiProjectSetupEntrySchema = z.object({
         .optional(),
 });
 
-const multiProjectSetupSchema = z.array(multiProjectSetupEntrySchema).refine(
-    (entries) => {
-        const names = entries.map((e) => e.name);
-        return new Set(names).size === names.length;
-    },
-    (entries) => {
+const multiProjectSetupSchema = z
+    .array(multiProjectSetupEntrySchema)
+    .superRefine((entries, ctx) => {
         const names = entries.map((e) => e.name);
         const duplicate = names.find((name, i) => names.indexOf(name) !== i);
-        return {
-            message: `Duplicate project name "${duplicate}" in LD_SETUP_PROJECTS`,
-        };
-    },
-);
+        if (duplicate !== undefined) {
+            ctx.addIssue({
+                code: 'custom',
+                message: `Duplicate project name "${duplicate}" in LD_SETUP_PROJECTS`,
+            });
+        }
+    });
 
 export const getMultiProjectSetupConfig = ():
     | MultiProjectSetupEntry[]
@@ -532,7 +570,7 @@ export const getMultiProjectSetupConfig = ():
 
     const result = multiProjectSetupSchema.safeParse(parsed);
     if (!result.success) {
-        const errorDetails = result.error.errors
+        const errorDetails = result.error.issues
             .map((err) => {
                 const path =
                     err.path.length > 0
@@ -615,19 +653,18 @@ const userAttributeSetupEntrySchema = z.object({
         .default([]),
 });
 
-const userAttributesSetupSchema = z.array(userAttributeSetupEntrySchema).refine(
-    (entries) => {
-        const names = entries.map((e) => e.name);
-        return new Set(names).size === names.length;
-    },
-    (entries) => {
+const userAttributesSetupSchema = z
+    .array(userAttributeSetupEntrySchema)
+    .superRefine((entries, ctx) => {
         const names = entries.map((e) => e.name);
         const duplicate = names.find((name, i) => names.indexOf(name) !== i);
-        return {
-            message: `Duplicate user attribute name "${duplicate}" in LD_SETUP_USER_ATTRIBUTES`,
-        };
-    },
-);
+        if (duplicate !== undefined) {
+            ctx.addIssue({
+                code: 'custom',
+                message: `Duplicate user attribute name "${duplicate}" in LD_SETUP_USER_ATTRIBUTES`,
+            });
+        }
+    });
 
 export const getUserAttributesSetupConfig = ():
     | UserAttributeSetupEntry[]
@@ -650,7 +687,7 @@ export const getUserAttributesSetupConfig = ():
 
     const result = userAttributesSetupSchema.safeParse(parsed);
     if (!result.success) {
-        const errorDetails = result.error.errors
+        const errorDetails = result.error.issues
             .map((err) =>
                 err.path.length > 0
                     ? `  - ${err.path.join('.')}: ${err.message}`
@@ -679,23 +716,18 @@ const groupProjectAccessSetupEntrySchema = z
 
 const groupProjectAccessSetupSchema = z
     .array(groupProjectAccessSetupEntrySchema)
-    .refine(
-        (entries) => {
-            const keys = entries.map(
-                (e) => `${e.groupName}::${e.projectUuid ?? e.projectName}`,
-            );
-            return new Set(keys).size === keys.length;
-        },
-        (entries) => {
-            const keys = entries.map(
-                (e) => `${e.groupName}::${e.projectUuid ?? e.projectName}`,
-            );
-            const duplicate = keys.find((k, i) => keys.indexOf(k) !== i);
-            return {
+    .superRefine((entries, ctx) => {
+        const keys = entries.map(
+            (e) => `${e.groupName}::${e.projectUuid ?? e.projectName}`,
+        );
+        const duplicate = keys.find((k, i) => keys.indexOf(k) !== i);
+        if (duplicate !== undefined) {
+            ctx.addIssue({
+                code: 'custom',
                 message: `Duplicate group/project pair "${duplicate}" in LD_SETUP_GROUP_PROJECT_ACCESS`,
-            };
-        },
-    );
+            });
+        }
+    });
 
 export const getGroupProjectAccessSetupConfig = ():
     | GroupProjectAccessSetupEntry[]
@@ -720,7 +752,7 @@ export const getGroupProjectAccessSetupConfig = ():
 
     const result = groupProjectAccessSetupSchema.safeParse(parsed);
     if (!result.success) {
-        const errorDetails = result.error.errors
+        const errorDetails = result.error.issues
             .map((err) =>
                 err.path.length > 0
                     ? `  - ${err.path.join('.')}: ${err.message}`
@@ -919,6 +951,23 @@ export const getUpdateSetupConfig = (): LightdashConfig['updateSetup'] => {
     };
 };
 
+/** GCS does not sign a URL that lasts longer than 7 days. */
+const GCS_MAX_EXPIRATION_TIME_SECONDS = 604800;
+
+const parseS3AuthMode = (value: string | undefined): S3AuthMode => {
+    const authMode = value?.trim().toLowerCase();
+    if (!authMode || authMode === 'default') {
+        return 'default';
+    }
+    if (authMode === 'gcp_oauth') {
+        return 'gcp_oauth';
+    }
+    throw new ParseError(
+        `Invalid S3_AUTH_MODE: "${value}". Expected "default" or "gcp_oauth".`,
+        {},
+    );
+};
+
 export const parseBaseS3Config = (): LightdashConfig['s3'] => {
     const endpoint = process.env.S3_ENDPOINT;
     const bucket = process.env.S3_BUCKET;
@@ -943,10 +992,23 @@ export const parseBaseS3Config = (): LightdashConfig['s3'] => {
     const useCredentialsFrom = useCredentialsFromRaw
         .map((v) => v.trim().toLowerCase())
         .filter((v) => v.length > 0);
+    const authMode = parseS3AuthMode(process.env.S3_AUTH_MODE);
 
     if (!endpoint || !bucket || !region) {
         throw new ParseError(
             'S3-compatible storage is required. Set S3_ENDPOINT, S3_BUCKET and S3_REGION (AWS S3, GCS, MinIO, etc.) - https://docs.lightdash.com/self-host/customize-deployment/environment-variables#s3',
+            {},
+        );
+    }
+
+    // Fail at startup instead of letting the deployment create URLs that
+    // GCS rejects when a user opens them.
+    if (
+        authMode === 'gcp_oauth' &&
+        expirationTime > GCS_MAX_EXPIRATION_TIME_SECONDS
+    ) {
+        throw new ParseError(
+            `S3_EXPIRATION_TIME is ${expirationTime} seconds, but Google Cloud Storage signed URLs cannot last longer than ${GCS_MAX_EXPIRATION_TIME_SECONDS} seconds (7 days) when S3_AUTH_MODE is gcp_oauth.`,
             {},
         );
     }
@@ -960,9 +1022,31 @@ export const parseBaseS3Config = (): LightdashConfig['s3'] => {
         secretKey,
         expirationTime,
         forcePathStyle,
+        authMode,
         useCredentialsFrom: useCredentialsFrom.length
             ? useCredentialsFrom
             : undefined,
+    };
+};
+
+export const parseStaticAssetsS3Config = ():
+    | Omit<S3Config, 'expirationTime'>
+    | undefined => {
+    const bucket = process.env.ASSETS_S3_BUCKET;
+    if (!bucket) {
+        return undefined;
+    }
+    const base = parseBaseS3Config();
+    if (!base) {
+        return undefined;
+    }
+    return {
+        ...base,
+        bucket,
+        endpoint: process.env.ASSETS_S3_ENDPOINT || base.endpoint,
+        region: process.env.ASSETS_S3_REGION || base.region,
+        accessKey: process.env.ASSETS_S3_ACCESS_KEY || base.accessKey,
+        secretKey: process.env.ASSETS_S3_SECRET_KEY || base.secretKey,
     };
 };
 
@@ -980,6 +1064,7 @@ export const parseResultsS3Config = (): LightdashConfig['results']['s3'] => {
         accessKey: baseAccessKey,
         secretKey: baseSecretKey,
         forcePathStyle: baseForcePathStyle,
+        authMode: baseAuthMode,
         useCredentialsFrom: baseUseCredentialsFrom,
     } = baseS3Config;
 
@@ -1012,6 +1097,7 @@ export const parseResultsS3Config = (): LightdashConfig['results']['s3'] => {
         region,
         accessKey,
         secretKey,
+        authMode: baseAuthMode,
         useCredentialsFrom: baseUseCredentialsFrom,
     };
 };
@@ -1040,6 +1126,7 @@ export const parsePreAggregateResultsS3Config = ():
     const {
         endpoint,
         forcePathStyle,
+        authMode,
         useCredentialsFrom,
         accessKey: baseAccessKey,
         secretKey: baseSecretKey,
@@ -1059,6 +1146,7 @@ export const parsePreAggregateResultsS3Config = ():
         region,
         accessKey: accessKey || baseAccessKey,
         secretKey: secretKey || baseSecretKey,
+        authMode,
         useCredentialsFrom,
     };
 };
@@ -1076,6 +1164,7 @@ export const parseUsageEventsS3Config = (): Omit<
     const {
         endpoint,
         forcePathStyle,
+        authMode,
         useCredentialsFrom,
         bucket: baseBucket,
         region: baseRegion,
@@ -1084,12 +1173,13 @@ export const parseUsageEventsS3Config = (): Omit<
     } = baseS3Config;
 
     return {
-        endpoint,
+        endpoint: process.env.USAGE_EVENTS_S3_ENDPOINT || endpoint,
         forcePathStyle,
         bucket: process.env.USAGE_EVENTS_S3_BUCKET || baseBucket,
         region: process.env.USAGE_EVENTS_S3_REGION || baseRegion,
         accessKey: process.env.USAGE_EVENTS_S3_ACCESS_KEY || baseAccessKey,
         secretKey: process.env.USAGE_EVENTS_S3_SECRET_KEY || baseSecretKey,
+        authMode,
         useCredentialsFrom,
     };
 };
@@ -1269,16 +1359,22 @@ export const getAiConfig = () => ({
     defaultEmbeddingModelProvider:
         process.env.AI_DEFAULT_EMBEDDING_PROVIDER ||
         DEFAULT_DEFAULT_AI_PROVIDER,
-    // Unknown names are dropped (with a log) rather than passed through so a
-    // typo can't fail schema validation and discard the whole parsed config.
-    selfManagedProviders: getArrayFromCommaSeparatedList(
-        'AI_COPILOT_SELF_MANAGED_PROVIDERS',
+    // Which instance-level provider keys are Lightdash's. Set by Lightdash's
+    // own infrastructure on Lightdash Cloud deployments that run on Lightdash
+    // keys; never set by customers. Everything else — self-hosted installs,
+    // dedicated instances configured with a customer's key, org keys entered
+    // in the UI — is the customer's, so the default is "none". Only affects
+    // the `keyManagement` dimension on AI usage analytics. Unknown names are
+    // dropped (with a log) rather than passed through so a typo can't fail
+    // schema validation and discard the whole parsed config.
+    lightdashManagedProviders: getArrayFromCommaSeparatedList(
+        'AI_COPILOT_LIGHTDASH_MANAGED_PROVIDERS',
     ).filter((provider): provider is (typeof AI_PROVIDER_KEYS)[number] => {
         if ((AI_PROVIDER_KEYS as readonly string[]).includes(provider)) {
             return true;
         }
         console.error(
-            `Ignoring unknown provider "${provider}" in AI_COPILOT_SELF_MANAGED_PROVIDERS`,
+            `Ignoring unknown provider "${provider}" in AI_COPILOT_LIGHTDASH_MANAGED_PROVIDERS`,
         );
         return false;
     }),
@@ -1351,15 +1447,41 @@ export const getAiConfig = () => ({
                       ),
                   }
                 : undefined,
+        google: process.env.GEMINI_API_KEY
+            ? {
+                  apiKey: process.env.GEMINI_API_KEY,
+                  modelName:
+                      process.env.GEMINI_MODEL_NAME ||
+                      DEFAULT_GOOGLE_MODEL_NAME,
+                  baseUrl: process.env.GEMINI_BASE_URL
+                      ? normalizeLlmGatewayBaseUrl(
+                            process.env.GEMINI_BASE_URL,
+                            'GEMINI_BASE_URL',
+                        )
+                      : undefined,
+                  availableModels: getArrayFromCommaSeparatedList(
+                      'GEMINI_AVAILABLE_MODELS',
+                  ),
+                  supportsStreaming: getProviderSupportsStreaming(
+                      'GEMINI_SUPPORTS_STREAMING',
+                  ),
+              }
+            : undefined,
         openrouter: process.env.OPENROUTER_API_KEY
             ? {
                   apiKey: process.env.OPENROUTER_API_KEY,
                   modelName:
                       process.env.OPENROUTER_MODEL_NAME ||
                       DEFAULT_OPENROUTER_MODEL_NAME,
+                  availableModels: getArrayFromCommaSeparatedList(
+                      'OPENROUTER_AVAILABLE_MODELS',
+                  ),
                   sortOrder: process.env.OPENROUTER_SORT_ORDER,
                   allowedProviders: getArrayFromCommaSeparatedList(
                       'OPENROUTER_ALLOWED_PROVIDERS',
+                  ),
+                  providerOrder: getArrayFromCommaSeparatedList(
+                      'OPENROUTER_PROVIDER_ORDER',
                   ),
                   customHeaders: getProviderCustomHeaders(
                       'OPENROUTER_CUSTOM_HEADERS',
@@ -1423,6 +1545,38 @@ export type LightdashSecrets = {
     readonly all: readonly string[];
 };
 
+export type MobilePushNotificationsConfig = {
+    enabled: boolean;
+    bundleId: string;
+    teamId: string | undefined;
+    sandbox:
+        | {
+              keyId: string;
+              privateKey: string;
+          }
+        | undefined;
+    production:
+        | {
+              keyId: string;
+              privateKey: string;
+          }
+        | undefined;
+    fcm:
+        | {
+              projectId: string;
+              clientEmail: string;
+              privateKey: string;
+          }
+        | undefined;
+};
+
+export type MobileAppAssociationConfig = {
+    appleTeamId: string;
+    appleBundleId: string;
+    androidPackageName: string;
+    androidCertificateFingerprints: string[];
+};
+
 export type LightdashConfig = {
     /** Always equals `lightdashSecrets.active`; kept for compatibility */
     lightdashSecret: string;
@@ -1449,8 +1603,14 @@ export type LightdashConfig = {
     rudder: RudderConfig;
     mode: LightdashMode;
     mobile: HealthState['mobile'];
+    mobilePushNotifications: MobilePushNotificationsConfig;
+    mobileAppAssociation: MobileAppAssociationConfig;
     license: {
         licenseKey: string | null;
+        licenseCertificate: string | null;
+    };
+    roadmap: {
+        baseUrl: string;
     };
     sentry: SentryConfig;
     auth: AuthConfig;
@@ -1487,6 +1647,7 @@ export type LightdashConfig = {
     };
     dbt: {
         environmentVariableAllowlist: string[];
+        sourceFetchConcurrency: number | undefined;
     };
     database: {
         connectionUri: string | undefined;
@@ -1510,6 +1671,7 @@ export type LightdashConfig = {
         maxPageSize: number;
         retryQueryOnTransientErrors: boolean;
         enableTimezoneSupport: boolean | undefined;
+        exploreSummaryProjectionMinStoredBytesPerExplore: number;
     };
     pivotTable: {
         maxColumnLimit: number;
@@ -1534,6 +1696,7 @@ export type LightdashConfig = {
         cacheStateTimeSeconds: number;
         s3?: Omit<S3Config, 'expirationTime'>;
     };
+    staticAssets: { s3?: Omit<S3Config, 'expirationTime'> };
     natsWorker: {
         enabled: boolean;
         url: string | undefined;
@@ -1550,6 +1713,7 @@ export type LightdashConfig = {
         pollInterval: number;
         jobTimeout: number;
         screenshotTimeout?: number;
+        shutdownTimeout: number;
         tasks: Array<SchedulerTaskName>;
         quiesce: {
             pollInterval: number;
@@ -1565,6 +1729,15 @@ export type LightdashConfig = {
                 delayMs: number;
                 maxBatches?: number;
                 schedule: string;
+            };
+        };
+        scimRequestLogs: {
+            cleanup: {
+                enabled: boolean;
+                retentionDays: number;
+                batchSize: number;
+                delayMs: number;
+                maxBatches: number;
             };
         };
     };
@@ -1584,11 +1757,19 @@ export type LightdashConfig = {
     logging: LoggingConfig;
     ai: {
         copilot: AiCopilotConfigSchemaType;
+        decisions: {
+            apiKey: string | null;
+            model: string;
+            timeoutMs: number;
+        };
         analyticsProjectUuid?: string;
         analyticsDashboardUuid?: string;
         agentMemory: {
             /** Consolidation computes and records its operations, applying none. */
             consolidationDryRun: boolean;
+        };
+        promptInputRequestClassifier: {
+            enabled: boolean;
         };
     };
     embedding: {
@@ -1639,13 +1820,18 @@ export type LightdashConfig = {
         projectId?: string;
     };
     managedAgent: {
-        anthropicApiKey: string | null;
-        skillIds: string[];
         schedule: string;
         sessionTimeoutMs: number;
+        maxSteps: number;
+        validatedModels: AutopilotValidatedModel[];
     };
     aiWriteback: {
-        anthropicApiKey: string | null;
+        /**
+         * @deprecated Writeback runs on the shared data-apps Anthropic
+         * credentials (`ANTHROPIC_API_KEY`). Only read when those are unset, so
+         * instances still setting the writeback-specific key keep working.
+         */
+        legacyAnthropicApiKey: string | null;
         /**
          * Pre-clone size ceiling (MB) for the general coding agent. A repo whose
          * GitHub-reported size exceeds this is rejected with an actionable error
@@ -1845,6 +2031,14 @@ export type S3Config = {
     accessKey?: string;
     secretKey?: string;
     forcePathStyle?: boolean;
+    /**
+     * Selects how Lightdash authenticates requests. `default` signs requests
+     * with SigV4. `gcp_oauth` sends a Google OAuth bearer token instead, which
+     * lets Lightdash reach GCS from a workload identity service account
+     * without static keys. Set this value with S3_AUTH_MODE. Every storage
+     * configuration shares it.
+     */
+    authMode?: S3AuthMode;
     /**
      * Ordered list of credential sources to use for AWS SDK credential resolution.
      * Comma-separated env var S3_USE_CREDENTIALS_FROM -> ["env","token_file","ini","container_metadata","instance_metadata"], etc.
@@ -2076,6 +2270,14 @@ export type AppRuntimeConfig = {
      * the UI. Env var `LIGHTDASH_APP_SAMPLE_DATA_ENABLED`; defaults to `true`.
      */
     sampleDataEnabled: boolean;
+    chartRegistry: {
+        /** null disables the chart type library entirely */
+        url: string | null;
+        /** dev-only: allow http/private addresses for a local fixture registry */
+        allowInsecure: boolean;
+        /** which index the client reads: stable (index.json) or next (index-next.json, includes beta charts) */
+        channel: 'stable' | 'next';
+    };
 };
 
 export type DataAppOtelConfig = {
@@ -2185,6 +2387,11 @@ type AuthOneLoginConfig = {
     loginPath: string;
 };
 
+type AuthMicrosoftManagedSignInConfig = {
+    iosClientId: string | undefined;
+    androidClientId: string | undefined;
+};
+
 type AuthOidcConfig = {
     callbackPath: string;
     loginPath: string;
@@ -2229,6 +2436,7 @@ export type AuthConfig = {
     okta: AuthOktaConfig;
     oneLogin: AuthOneLoginConfig;
     azuread: AuthAzureADConfig;
+    microsoftManagedSignIn: AuthMicrosoftManagedSignInConfig;
     oidc: AuthOidcConfig;
     snowflake: AuthSnowflakeConfig;
     databricks: AuthDatabricksConfig;
@@ -2240,6 +2448,8 @@ export type AuthConfig = {
     oauthServer?: {
         accessTokenLifetime: number; // in seconds (default = 1 hour)
         refreshTokenLifetime: number; // in seconds (default = 2 weeks)
+        mobileRefreshTokenLifetime: number; // in seconds (default = 90 days)
+        refreshTokenRotationGrace: number; // in seconds (default = 1 minute)
     };
 };
 
@@ -2282,6 +2492,13 @@ export type PostmarkConfig = {
 };
 
 const DEFAULT_JOB_TIMEOUT = 1000 * 60 * 10; // 10 minutes
+// Must stay below the orchestrator's termination grace period (helm: 90s)
+// so the fail_job fallback runs before SIGKILL.
+const DEFAULT_SCHEDULER_SHUTDOWN_TIMEOUT = 1000 * 60; // 1 minute
+
+// The official chart type registry (lightdash/lightdash-library, GitHub Pages).
+const DEFAULT_CHART_REGISTRY_URL: string | null =
+    'https://lightdash.github.io/lightdash-library';
 
 const parseSandboxProvider = (
     value: string | undefined,
@@ -2323,6 +2540,21 @@ const parseDataAppOtelConfig = (): DataAppOtelConfig => {
     };
 };
 
+const parseChartRegistryAllowInsecure = (): boolean => {
+    const enabled =
+        process.env.LIGHTDASH_CHART_REGISTRY_ALLOW_INSECURE === 'true';
+    if (enabled) {
+        console.warn(
+            'SECURITY WARNING: LIGHTDASH_CHART_REGISTRY_ALLOW_INSECURE is enabled. ' +
+                'SSRF defenses for chart registry fetches are OFF (http:// and ' +
+                'private addresses allowed, IP pinning skipped). Only use this ' +
+                'with a local dev fixture or a fully trusted internal registry ' +
+                'mirror — never with a registry you do not control.',
+        );
+    }
+    return enabled;
+};
+
 const parseAppRuntimeConfig = (siteUrl: string): AppRuntimeConfig => {
     const enabled = process.env.APPS_RUNTIME_ENABLED === 'true';
     const dataAppCodingAgent = (() => {
@@ -2348,6 +2580,7 @@ const parseAppRuntimeConfig = (siteUrl: string): AppRuntimeConfig => {
             accessKey: baseAccessKey,
             secretKey: baseSecretKey,
             forcePathStyle: baseForcePathStyle,
+            authMode: baseAuthMode,
             useCredentialsFrom: baseUseCredentialsFrom,
         } = baseS3Config;
 
@@ -2364,6 +2597,7 @@ const parseAppRuntimeConfig = (siteUrl: string): AppRuntimeConfig => {
             region,
             accessKey,
             secretKey,
+            authMode: baseAuthMode,
             useCredentialsFrom: baseUseCredentialsFrom,
         };
     }
@@ -2506,6 +2740,28 @@ const parseAppRuntimeConfig = (siteUrl: string): AppRuntimeConfig => {
             'false',
         sampleDataEnabled:
             process.env.LIGHTDASH_APP_SAMPLE_DATA_ENABLED !== 'false',
+        chartRegistry: {
+            // Unset → official registry once the repo exists; explicit '' → disabled.
+            url: ((raw) => {
+                if (raw === undefined) return DEFAULT_CHART_REGISTRY_URL;
+                const trimmed = raw.trim();
+                return trimmed === '' ? null : trimmed.replace(/\/$/, '');
+            })(process.env.LIGHTDASH_CHART_REGISTRY_URL),
+            // Disables the registry client's SSRF defenses (allows http://
+            // and private/loopback addresses, skips IP pinning). Only for
+            // local dev fixtures and trusted internal registry mirrors —
+            // never with a registry URL you do not fully control.
+            allowInsecure: parseChartRegistryAllowInsecure(),
+            channel: ((raw) => {
+                const normalized = raw?.trim().toLowerCase();
+                if (!normalized || normalized === 'stable')
+                    return 'stable' as const;
+                if (normalized === 'next') return 'next' as const;
+                throw new ParseError(
+                    `Cannot parse environment variable "LIGHTDASH_CHART_REGISTRY_CHANNEL". Value must be one of stable, next but LIGHTDASH_CHART_REGISTRY_CHANNEL=${raw}`,
+                );
+            })(process.env.LIGHTDASH_CHART_REGISTRY_CHANNEL),
+        },
     };
 };
 
@@ -2523,7 +2779,6 @@ const LEGACY_ENABLE_ENV_VARS: ReadonlyArray<
 > = [
     // Add per migration; truthy env value enables the flag.
     ['CHANGE_CHART_EXPLORE_ENABLED', 'change-chart-explore'],
-    ['GOOGLE_CHAT_ENABLED', 'google-chat-enabled'],
     ['USER_IMPERSONATION_ENABLED', 'user-impersonation'],
     // GROUPS_ENABLED is also read by UserService for group-sync logic (separate
     // from the feature flag) — keep the config field, but translate the env
@@ -2555,7 +2810,97 @@ const LEGACY_DISABLE_ENV_VARS: ReadonlyArray<
     // Add per migration; truthy env value disables the flag.
 ];
 
+const parseCertificateFingerprints = (value: string | undefined): string[] =>
+    (value ?? '')
+        .split(',')
+        .map((fingerprint) => fingerprint.trim())
+        .filter((fingerprint) => fingerprint.length > 0);
+
+const normalizeCredentialEnvironmentVariable = (
+    value: string | undefined,
+): string | undefined => {
+    if (value === undefined) {
+        return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+};
+
+const parseMobilePushFcmCredential = ():
+    | MobilePushNotificationsConfig['fcm']
+    | undefined => {
+    const projectId = normalizeCredentialEnvironmentVariable(
+        process.env.MOBILE_PUSH_NOTIFICATIONS_FCM_PROJECT_ID,
+    );
+    const clientEmail = normalizeCredentialEnvironmentVariable(
+        process.env.MOBILE_PUSH_NOTIFICATIONS_FCM_CLIENT_EMAIL,
+    );
+    const privateKey = normalizeCredentialEnvironmentVariable(
+        process.env.MOBILE_PUSH_NOTIFICATIONS_FCM_PRIVATE_KEY,
+    );
+
+    if (
+        projectId !== undefined &&
+        clientEmail !== undefined &&
+        privateKey !== undefined
+    ) {
+        return { projectId, clientEmail, privateKey };
+    }
+
+    const missingVariables = [
+        projectId === undefined && 'MOBILE_PUSH_NOTIFICATIONS_FCM_PROJECT_ID',
+        clientEmail === undefined &&
+            'MOBILE_PUSH_NOTIFICATIONS_FCM_CLIENT_EMAIL',
+        privateKey === undefined && 'MOBILE_PUSH_NOTIFICATIONS_FCM_PRIVATE_KEY',
+    ].filter((name): name is string => name !== false);
+
+    if (missingVariables.length < 3) {
+        console.warn(
+            `Mobile push FCM credential is missing: ${missingVariables.join(
+                ', ',
+            )}`,
+        );
+    }
+
+    return undefined;
+};
+
+const parseMobilePushCredential = (
+    environment: 'SANDBOX' | 'PRODUCTION',
+): MobilePushNotificationsConfig['sandbox'] => {
+    const keyIdVariable =
+        `MOBILE_PUSH_NOTIFICATIONS_APNS_${environment}_KEY_ID` as const;
+    const privateKeyVariable =
+        `MOBILE_PUSH_NOTIFICATIONS_APNS_${environment}_PRIVATE_KEY` as const;
+    const keyId = process.env[keyIdVariable];
+    const privateKey = process.env[privateKeyVariable];
+
+    return keyId === undefined || privateKey === undefined
+        ? undefined
+        : { keyId, privateKey };
+};
+
 export const parseConfig = (): LightdashConfig => {
+    if (process.env.MANAGED_AGENT_RUNTIME) {
+        console.warn(
+            'WARNING: MANAGED_AGENT_RUNTIME is set but no longer selects a runtime. Autopilot always runs on the AI SDK; remove the variable.',
+        );
+    }
+    // Still read for one release so operators are told to remove them and the
+    // release-safety config diff does not report them as removed.
+    const retiredManagedAgentVariables = [
+        process.env.MANAGED_AGENT_ANTHROPIC_API_KEY
+            ? 'MANAGED_AGENT_ANTHROPIC_API_KEY'
+            : null,
+        (process.env.MANAGED_AGENT_SKILL_IDS || '') !== ''
+            ? 'MANAGED_AGENT_SKILL_IDS'
+            : null,
+    ].filter((name): name is string => name !== null);
+    for (const name of retiredManagedAgentVariables) {
+        console.warn(
+            `WARNING: ${name} is set but no longer used. Autopilot runs on the organization's AI provider; remove the variable.`,
+        );
+    }
     const lightdashSecret = process.env.LIGHTDASH_SECRET;
     if (!lightdashSecret) {
         throw new ParseError(
@@ -2663,6 +3008,14 @@ export const parseConfig = (): LightdashConfig => {
     }
 
     const licenseKey = process.env.LIGHTDASH_LICENSE_KEY || null;
+    const licenseCertificate =
+        process.env.LIGHTDASH_LICENSE_CERTIFICATE || null;
+    if (licenseCertificate !== null && licenseKey === null) {
+        throw new ParseError(
+            'LIGHTDASH_LICENSE_KEY is required when LIGHTDASH_LICENSE_CERTIFICATE is set',
+            {},
+        );
+    }
     const preAggregatesEnabled =
         licenseKey !== null && process.env.PRE_AGGREGATES_ENABLED === 'true';
     const preAggregatesS3 = parsePreAggregateResultsS3Config();
@@ -2676,6 +3029,10 @@ export const parseConfig = (): LightdashConfig => {
     const natsWorkerQueueTimeoutMs =
         getIntegerFromEnvironmentVariable('NATS_QUEUE_TIMEOUT_MS') ?? 180000;
     const lightdashCloudInstance = process.env.LIGHTDASH_CLOUD_INSTANCE;
+    const mobilePushSandbox = parseMobilePushCredential('SANDBOX');
+    const mobilePushProduction = parseMobilePushCredential('PRODUCTION');
+    const mobilePushTeamId = process.env.MOBILE_PUSH_NOTIFICATIONS_APNS_TEAM_ID;
+    const mobilePushFcm = parseMobilePushFcmCredential();
     const motherduckInstanceCache = {
         enabled: process.env.MOTHERDUCK_INSTANCE_CACHE_ENABLED === 'true',
         projectUuids: getArrayFromCommaSeparatedList(
@@ -2732,6 +3089,20 @@ export const parseConfig = (): LightdashConfig => {
         );
     }
 
+    const queryHistoryCleanupEnabled =
+        process.env.QUERY_HISTORY_CLEANUP_ENABLED !== 'false';
+    const queryHistoryRetentionDays =
+        getIntegerFromEnvironmentVariable('QUERY_HISTORY_RETENTION_DAYS') ||
+        AI_DEEP_RESEARCH_QUERY_HISTORY_RETENTION_DAYS;
+    if (
+        queryHistoryCleanupEnabled &&
+        queryHistoryRetentionDays < AI_DEEP_RESEARCH_REPORT_RETENTION_DAYS
+    ) {
+        console.warn(
+            `WARNING: QUERY_HISTORY_RETENTION_DAYS is below the ${AI_DEEP_RESEARCH_REPORT_RETENTION_DAYS}-day Deep Research report retention. Report charts may become unavailable before their reports expire.`,
+        );
+    }
+
     return {
         mode,
         mobile: {
@@ -2744,9 +3115,41 @@ export const parseConfig = (): LightdashConfig => {
                 ),
             },
         },
+        mobileAppAssociation: {
+            appleTeamId: process.env.MOBILE_APPLE_TEAM_ID ?? 'AF5SF5H727',
+            appleBundleId:
+                process.env.MOBILE_APPLE_BUNDLE_ID ?? 'com.lightdash.mobile',
+            androidPackageName:
+                process.env.MOBILE_ANDROID_PACKAGE_NAME ??
+                'com.lightdash.mobile',
+            androidCertificateFingerprints: parseCertificateFingerprints(
+                process.env.MOBILE_ANDROID_CERT_FINGERPRINTS,
+            ),
+        },
+        mobilePushNotifications: {
+            enabled:
+                lightdashCloudInstance !== undefined &&
+                ((mobilePushTeamId !== undefined &&
+                    (mobilePushSandbox !== undefined ||
+                        mobilePushProduction !== undefined)) ||
+                    mobilePushFcm !== undefined),
+            bundleId:
+                process.env.MOBILE_PUSH_NOTIFICATIONS_APNS_BUNDLE_ID ??
+                'com.lightdash.mobile',
+            teamId: mobilePushTeamId,
+            sandbox: mobilePushSandbox,
+            production: mobilePushProduction,
+            fcm: mobilePushFcm,
+        },
         cookieSameSite: iframeEmbeddingEnabled ? 'none' : 'lax',
         license: {
             licenseKey,
+            licenseCertificate,
+        },
+        roadmap: {
+            baseUrl:
+                process.env.LIGHTDASH_ROADMAP_API_URL ||
+                'https://roadmap.lightdash.com',
         },
         security: {
             contentSecurityPolicy: {
@@ -2927,6 +3330,12 @@ export const parseConfig = (): LightdashConfig => {
                         ? `https://login.microsoftonline.com/${process.env.AUTH_AZURE_AD_OAUTH_TENANT_ID}/v2.0/.well-known/openid-configuration`
                         : undefined,
             },
+            microsoftManagedSignIn: {
+                iosClientId:
+                    process.env.AUTH_MICROSOFT_MANAGED_SIGNIN_IOS_CLIENT_ID,
+                androidClientId:
+                    process.env.AUTH_MICROSOFT_MANAGED_SIGNIN_ANDROID_CLIENT_ID,
+            },
             oidc: {
                 callbackPath: '/oauth/redirect/oidc',
                 loginPath: '/login/oidc',
@@ -2976,6 +3385,14 @@ export const parseConfig = (): LightdashConfig => {
                     getIntegerFromEnvironmentVariable(
                         'AUTH_OAUTH_SERVER_REFRESH_TOKEN_LIFETIME',
                     ) || 60 * 60 * 24 * 14, // 2 weeks
+                mobileRefreshTokenLifetime:
+                    getIntegerFromEnvironmentVariable(
+                        'AUTH_OAUTH_SERVER_MOBILE_REFRESH_TOKEN_LIFETIME',
+                    ) || 60 * 60 * 24 * 90, // 90 days
+                refreshTokenRotationGrace:
+                    getIntegerFromEnvironmentVariable(
+                        'AUTH_OAUTH_SERVER_REFRESH_TOKEN_ROTATION_GRACE',
+                    ) || 60, // 1 minute
             },
         },
         intercom: {
@@ -3044,6 +3461,9 @@ export const parseConfig = (): LightdashConfig => {
             environmentVariableAllowlist: getArrayFromCommaSeparatedList(
                 'ALLOW_DBT_COMMANDS_ACCESS_TO_ENV_VARS',
             ),
+            sourceFetchConcurrency: getIntegerFromEnvironmentVariable(
+                'DBT_SOURCE_FETCH_CONCURRENCY',
+            ),
         },
         allowMultiOrgs: process.env.ALLOW_MULTIPLE_ORGS === 'true',
         maxPayloadSize: process.env.LIGHTDASH_MAX_PAYLOAD || '5mb',
@@ -3085,6 +3505,11 @@ export const parseConfig = (): LightdashConfig => {
             enableTimezoneSupport: process.env.LIGHTDASH_ENABLE_TIMEZONE_SUPPORT
                 ? process.env.LIGHTDASH_ENABLE_TIMEZONE_SUPPORT === 'true'
                 : undefined,
+            exploreSummaryProjectionMinStoredBytesPerExplore:
+                getNonNegativeIntegerFromEnvironmentVariable(
+                    'LIGHTDASH_EXPLORE_SUMMARY_PROJECTION_MIN_STORED_BYTES_PER_EXPLORE',
+                    2048,
+                ),
         },
         dashboard: {
             maxTilesPerTab:
@@ -3140,6 +3565,7 @@ export const parseConfig = (): LightdashConfig => {
             ),
             s3: parseResultsS3Config(),
         },
+        staticAssets: { s3: parseStaticAssetsS3Config() },
         natsWorker: {
             enabled: natsWorkerEnabled,
             url: natsWorkerUrl,
@@ -3179,6 +3605,10 @@ export const parseConfig = (): LightdashConfig => {
             screenshotTimeout: process.env.SCHEDULER_SCREENSHOT_TIMEOUT
                 ? parseInt(process.env.SCHEDULER_SCREENSHOT_TIMEOUT, 10)
                 : undefined,
+            shutdownTimeout:
+                getIntegerFromEnvironmentVariable(
+                    'SCHEDULER_SHUTDOWN_TIMEOUT',
+                ) ?? DEFAULT_SCHEDULER_SHUTDOWN_TIMEOUT,
             tasks: parseAndSanitizeSchedulerTasks(),
             quiesce: {
                 pollInterval:
@@ -3200,12 +3630,8 @@ export const parseConfig = (): LightdashConfig => {
             },
             queryHistory: {
                 cleanup: {
-                    enabled:
-                        process.env.QUERY_HISTORY_CLEANUP_ENABLED !== 'false', // true by default
-                    retentionDays:
-                        getIntegerFromEnvironmentVariable(
-                            'QUERY_HISTORY_RETENTION_DAYS',
-                        ) || AI_DEEP_RESEARCH_QUERY_HISTORY_RETENTION_DAYS,
+                    enabled: queryHistoryCleanupEnabled,
+                    retentionDays: queryHistoryRetentionDays,
                     batchSize:
                         getIntegerFromEnvironmentVariable(
                             'QUERY_HISTORY_CLEANUP_BATCH_SIZE',
@@ -3221,6 +3647,29 @@ export const parseConfig = (): LightdashConfig => {
                     schedule:
                         process.env.QUERY_HISTORY_CLEANUP_SCHEDULE ||
                         '0 2 * * *',
+                },
+            },
+            scimRequestLogs: {
+                cleanup: {
+                    enabled:
+                        process.env.SCIM_REQUEST_LOG_CLEANUP_ENABLED !==
+                        'false', // true by default
+                    retentionDays:
+                        getIntegerFromEnvironmentVariable(
+                            'SCIM_REQUEST_LOG_RETENTION_DAYS',
+                        ) ?? 30,
+                    batchSize:
+                        getIntegerFromEnvironmentVariable(
+                            'SCIM_REQUEST_LOG_CLEANUP_BATCH_SIZE',
+                        ) ?? 1000,
+                    delayMs:
+                        getIntegerFromEnvironmentVariable(
+                            'SCIM_REQUEST_LOG_CLEANUP_DELAY_MS',
+                        ) ?? 100,
+                    maxBatches:
+                        getIntegerFromEnvironmentVariable(
+                            'SCIM_REQUEST_LOG_CLEANUP_MAX_BATCHES',
+                        ) ?? 100,
                 },
             },
         },
@@ -3290,11 +3739,29 @@ export const parseConfig = (): LightdashConfig => {
         },
         ai: {
             copilot: copilotConfig,
+            decisions: {
+                apiKey: process.env.JEV_API_KEY?.trim() || null,
+                model: process.env.JEV_MODEL || 'jev-1.13.0',
+                timeoutMs: Math.max(
+                    100,
+                    Math.min(
+                        2_000,
+                        getIntegerFromEnvironmentVariable('JEV_TIMEOUT_MS') ||
+                            900,
+                    ),
+                ),
+            },
             analyticsProjectUuid: process.env.AI_ANALYTICS_PROJECT_UUID,
             analyticsDashboardUuid: process.env.AI_ANALYTICS_DASHBOARD_UUID,
             agentMemory: {
                 consolidationDryRun:
                     process.env.AI_AGENT_MEMORY_CONSOLIDATION_DRY_RUN ===
+                    'true',
+            },
+            promptInputRequestClassifier: {
+                enabled:
+                    process.env
+                        .AI_AGENT_PROMPT_INPUT_REQUEST_CLASSIFIER_ENABLED ===
                     'true',
             },
         },
@@ -3372,24 +3839,23 @@ export const parseConfig = (): LightdashConfig => {
             projectId: process.env.GOOGLE_CLOUD_PROJECT_ID,
         },
         managedAgent: {
-            anthropicApiKey:
-                process.env.MANAGED_AGENT_ANTHROPIC_API_KEY ||
-                (!process.env.ANTHROPIC_BASE_URL
-                    ? process.env.ANTHROPIC_API_KEY
-                    : undefined) ||
-                null,
-            skillIds: (process.env.MANAGED_AGENT_SKILL_IDS || '')
-                .split(',')
-                .map((skillId) => skillId.trim())
-                .filter(Boolean),
+            validatedModels: parseAutopilotValidatedModels(
+                process.env.MANAGED_AGENT_VALIDATED_MODELS,
+            ),
             schedule: process.env.MANAGED_AGENT_SCHEDULE || '0 0 * * *',
-            sessionTimeoutMs: parseInt(
-                process.env.MANAGED_AGENT_SESSION_TIMEOUT_MS || '600000',
-                10,
-            ), // 10 minutes default
+            sessionTimeoutMs: getPositiveIntegerFromEnvironmentVariable(
+                'MANAGED_AGENT_SESSION_TIMEOUT_MS',
+                600_000,
+                MAX_TIMER_MS,
+            ),
+            maxSteps: getPositiveIntegerFromEnvironmentVariable(
+                'MANAGED_AGENT_MAX_STEPS',
+                120,
+            ),
         },
         aiWriteback: {
-            anthropicApiKey: process.env.AI_WRITEBACK_ANTHROPIC_API_KEY || null,
+            legacyAnthropicApiKey:
+                process.env.AI_WRITEBACK_ANTHROPIC_API_KEY || null,
             codingAgentMaxRepoSizeMb: parseInt(
                 process.env.AI_CODING_AGENT_MAX_REPO_SIZE_MB || '500',
                 10,

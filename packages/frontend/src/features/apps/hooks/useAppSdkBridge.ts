@@ -2,8 +2,13 @@ import {
     APP_SDK_COLOR_SCHEME_MESSAGE,
     APP_SDK_COLOR_SCHEME_REQUEST_MESSAGE,
     APP_SDK_DATA_APP_VIZ_CONTEXT_MESSAGE,
+    APP_SDK_INSIGHT_ACTION_MESSAGE,
+    APP_SDK_INSIGHTS_MESSAGE,
+    APP_SDK_INSIGHTS_REQUEST_MESSAGE,
+    APP_SDK_MOUNTED_QUERIES_MESSAGE,
     APP_SDK_VIZ_CONTEXT_REQUEST_MESSAGE,
     APP_SDK_VIZ_DRILL_DOWN_PATH,
+    APP_SDK_VIZ_UNDERLYING_DATA_OPEN_PATH,
     APP_SDK_VIZ_UNDERLYING_DATA_PATH,
     extractAppSdkRouteProjectUuid,
     isAllowedAppSdkRoute,
@@ -14,7 +19,10 @@ import {
     LightdashSignedDownloadHeader,
     type AppColorScheme,
     type DashboardFilters,
+    type DataAppInsightAction,
+    type DataAppInsightsPayload,
     type DataAppVizContext,
+    type ExternalFetchResponse,
     type QueryExecutionContext,
 } from '@lightdash/common';
 import { useCallback, useEffect, useRef, type RefObject } from 'react';
@@ -156,6 +164,21 @@ export type ExternalRequestEvent = {
 // Caps what an app can push into the host page's URL / browser history.
 const MAX_URL_STATE_CHARS = 4096;
 
+const UNAVAILABLE_INSIGHTS: DataAppInsightsPayload = {
+    status: 'unavailable',
+    analysisId: null,
+    headline: null,
+    summary: null,
+    limitations: [],
+    dataAsOf: null,
+    generatedAt: null,
+    stale: false,
+    canInvestigate: false,
+    canContinue: false,
+    error: null,
+    anomalies: [],
+};
+
 const isMetricQueryPost = (method: string, path: string): boolean =>
     method.toUpperCase() === 'POST' &&
     /^\/api\/v2\/projects\/[^/]+\/query\/metric-query$/.test(path);
@@ -253,6 +276,14 @@ export type UseAppSdkBridgeParams = {
      */
     onSdkManifest?: (manifest: SdkManifest) => void;
     /**
+     * Called when the iframe acknowledges painting the matching render context.
+     */
+    onVizRendered?: (renderId: string) => void;
+    /** Identity attached to the next viz context push and its acknowledgement. */
+    vizRenderId?: string;
+    /** Called when the iframe SDK requests its initial viz context. */
+    onVizContextRequest?: () => void;
+    /**
      * When provided, external-connection fetches proxied through this bridge
      * are reported for the external-requests inspector tab — mirrors
      * `onQueryEvent` for metric queries. Emits `pending` when the fetch starts
@@ -262,6 +293,8 @@ export type UseAppSdkBridgeParams = {
     // When set, the host pushes this render context into the iframe over the
     // existing bridge — on load and on every change. Only set for data app vizs.
     dataAppVizContext?: DataAppVizContext;
+    /** Chart types render host-provided rows and cannot query independently. */
+    dataAppVizMode?: boolean;
     /**
      * Rewrites the viz underlying-data virtual route
      * (`APP_SDK_VIZ_UNDERLYING_DATA_PATH`) into the real API request, which
@@ -275,6 +308,11 @@ export type UseAppSdkBridgeParams = {
         path: string;
         body: unknown;
     };
+    /**
+     * Handles the host-owned underlying-data dialog route. Never forwarded to
+     * the API; the handler resolves the click intent and opens Lightdash UI.
+     */
+    onVizUnderlyingDataIntent?: (intentBody: unknown) => void;
     /**
      * Handles the viz drill-down virtual route
      * (`APP_SDK_VIZ_DRILL_DOWN_PATH`): resolves the click intent and opens the
@@ -305,6 +343,16 @@ export type UseAppSdkBridgeParams = {
      * SDK understood the message ignore it.
      */
     colorScheme: AppColorScheme;
+    /**
+     * The host's AI analysis of the current view, pushed into the app on
+     * change and whenever the SDK asks. Null when the feature is off; the
+     * app's `useInsights()` then stays idle.
+     */
+    insights?: DataAppInsightsPayload | null;
+    /** The viewer clicked an analysis action the app rendered. */
+    onInsightAction?: (action: DataAppInsightAction) => void;
+    /** Which query uuids the app currently has on screen (SDKs that report). */
+    onMountedQueriesChange?: (queryUuids: string[]) => void;
 };
 
 export function useAppSdkBridge({
@@ -324,14 +372,22 @@ export function useAppSdkBridge({
     onLineageSelected,
     onExternalRequestEvent,
     dataAppVizContext,
+    dataAppVizMode = false,
     rewriteVizUnderlyingDataRequest,
+    onVizUnderlyingDataIntent,
     onVizDrillDownIntent,
     onUrlStateChange,
     onSdkManifest,
+    onVizRendered,
+    vizRenderId,
+    onVizContextRequest,
     deliveryCapture,
     captureRender,
     queryContextOverride,
     colorScheme,
+    insights = null,
+    onInsightAction,
+    onMountedQueriesChange,
 }: UseAppSdkBridgeParams) {
     // Embed mode adapts the bridge's outgoing fetches in two ways:
     //   - Attaches the embed JWT header in lieu of session cookies
@@ -365,10 +421,11 @@ export function useAppSdkBridge({
             {
                 type: APP_SDK_DATA_APP_VIZ_CONTEXT_MESSAGE,
                 ...dataAppVizContext,
+                ...(vizRenderId ? { renderId: vizRenderId } : {}),
             },
             '*',
         );
-    }, [iframeRef, dataAppVizContext]);
+    }, [iframeRef, dataAppVizContext, vizRenderId]);
 
     // Tell the iframe which scheme to render in. Wildcard target for the same
     // reason as every other outbound message: the sandboxed iframe has an
@@ -379,6 +436,19 @@ export function useAppSdkBridge({
             '*',
         );
     }, [iframeRef, colorScheme]);
+
+    // Push the analysis in; the SDK validates the payload on its side.
+    // A host with nothing to offer says so, so the app hides its AI controls
+    // instead of showing an "Analyse" that the backend would reject.
+    const pushInsights = useCallback(() => {
+        iframeRef.current?.contentWindow?.postMessage(
+            {
+                type: APP_SDK_INSIGHTS_MESSAGE,
+                payload: insights ?? UNAVAILABLE_INSIGHTS,
+            },
+            '*',
+        );
+    }, [iframeRef, insights]);
 
     const handleMessage = useCallback(
         async (event: MessageEvent) => {
@@ -426,6 +496,13 @@ export function useAppSdkBridge({
                 return;
             }
 
+            if (data?.type === 'lightdash:sdk:viz-rendered') {
+                if (vizRenderId && data.renderId === vizRenderId) {
+                    onVizRendered?.(vizRenderId);
+                }
+                return;
+            }
+
             if (data?.type === 'lightdash:sdk:screenshot-available') {
                 onScreenshotAvailable?.();
                 return;
@@ -435,6 +512,7 @@ export function useAppSdkBridge({
             // once its listener is mounted. Reply with a push (no-op if this
             // isn't a data app viz).
             if (data?.type === APP_SDK_VIZ_CONTEXT_REQUEST_MESSAGE) {
+                onVizContextRequest?.();
                 pushDataAppVizContext();
                 return;
             }
@@ -443,6 +521,38 @@ export function useAppSdkBridge({
             // listener is live, so it can't miss the load-time push.
             if (data?.type === APP_SDK_COLOR_SCHEME_REQUEST_MESSAGE) {
                 pushColorScheme();
+                return;
+            }
+
+            if (data?.type === APP_SDK_INSIGHTS_REQUEST_MESSAGE) {
+                pushInsights();
+                return;
+            }
+
+            if (data?.type === APP_SDK_INSIGHT_ACTION_MESSAGE) {
+                const { action, anomalyId } = data as {
+                    action?: unknown;
+                    anomalyId?: unknown;
+                };
+                if (action === 'analyse') {
+                    onInsightAction?.({ action });
+                } else if (
+                    (action === 'investigate' || action === 'continue') &&
+                    typeof anomalyId === 'string'
+                ) {
+                    onInsightAction?.({ action, anomalyId });
+                }
+                return;
+            }
+
+            if (data?.type === APP_SDK_MOUNTED_QUERIES_MESSAGE) {
+                const { queryUuids } = data as { queryUuids?: unknown };
+                if (
+                    Array.isArray(queryUuids) &&
+                    queryUuids.every((q) => typeof q === 'string')
+                ) {
+                    onMountedQueriesChange?.(queryUuids);
+                }
                 return;
             }
 
@@ -653,12 +763,7 @@ export function useAppSdkBridge({
                     const json = await res.json();
                     if (json.status === 'ok') {
                         const result = json.results as
-                            | {
-                                  status?: number;
-                                  contentType?: string;
-                                  body?: unknown;
-                                  truncated?: boolean;
-                              }
+                            | ExternalFetchResponse
                             | undefined;
                         emitExternal({
                             status: 'ready',
@@ -715,6 +820,7 @@ export function useAppSdkBridge({
             // Bridge-only virtual route: the viz posts semantic click intent;
             // the host rewrites it into the real underlying-data request, then
             // the standard pipeline (allowlist, project pinning, auth) applies.
+            let hostRewrittenUnderlyingData = false;
             if (path === APP_SDK_VIZ_UNDERLYING_DATA_PATH) {
                 if (!rewriteVizUnderlyingDataRequest) {
                     respond({
@@ -725,6 +831,11 @@ export function useAppSdkBridge({
                 try {
                     ({ method, path, body } =
                         rewriteVizUnderlyingDataRequest(body));
+                    hostRewrittenUnderlyingData =
+                        method.toUpperCase() === 'POST' &&
+                        /^\/api\/v2\/projects\/[^/]+\/query\/underlying-data$/.test(
+                            path,
+                        );
                 } catch (err) {
                     respond({
                         error:
@@ -734,6 +845,27 @@ export function useAppSdkBridge({
                     });
                     return;
                 }
+            }
+
+            if (path === APP_SDK_VIZ_UNDERLYING_DATA_OPEN_PATH) {
+                if (!onVizUnderlyingDataIntent) {
+                    respond({
+                        error: 'Underlying data is not available for this visualization.',
+                    });
+                    return;
+                }
+                try {
+                    onVizUnderlyingDataIntent(body);
+                    respond({ result: {} });
+                } catch (err) {
+                    respond({
+                        error:
+                            err instanceof Error
+                                ? err.message
+                                : 'Invalid underlying-data request.',
+                    });
+                }
+                return;
             }
 
             // Bridge-only virtual route: the viz posts a drill click intent;
@@ -761,6 +893,15 @@ export function useAppSdkBridge({
             }
 
             if (!isAllowedAppSdkRoute(method, path)) {
+                respond({ error: `Blocked: ${method} ${path}` });
+                return;
+            }
+
+            if (
+                dataAppVizMode &&
+                /\/query(?:\/|$)/.test(path) &&
+                !hostRewrittenUnderlyingData
+            ) {
                 respond({ error: `Blocked: ${method} ${path}` });
                 return;
             }
@@ -1108,14 +1249,22 @@ export function useAppSdkBridge({
             onExternalRequestEvent,
             pushDataAppVizContext,
             rewriteVizUnderlyingDataRequest,
+            onVizUnderlyingDataIntent,
             onVizDrillDownIntent,
             pushColorScheme,
             onUrlStateChange,
             onSdkManifest,
+            onVizRendered,
+            vizRenderId,
+            onVizContextRequest,
+            dataAppVizMode,
             health.data,
             user.data,
             deliveryCapture,
             queryContextOverride,
+            pushInsights,
+            onInsightAction,
+            onMountedQueriesChange,
         ],
     );
 
@@ -1131,6 +1280,10 @@ export function useAppSdkBridge({
         pushColorScheme();
     }, [pushColorScheme]);
 
+    useEffect(() => {
+        pushInsights();
+    }, [pushInsights]);
+
     const handleIframeLoad = useCallback(() => {
         // `*` because the load event fires once for the initial about:blank
         // (which inherits the parent's origin) and again after the iframe
@@ -1144,11 +1297,14 @@ export function useAppSdkBridge({
                 // which ignore unknown fields — and new SDKs on old hosts
                 // both default to `useDeliveryRender() === false`.
                 ...(captureRender ? { deliveryRender: true } : {}),
+                // Lets the SDK address app-scoped routes (AI prompts).
+                ...(appUuid ? { appUuid } : {}),
             },
             '*',
         );
         pushColorScheme();
-    }, [iframeRef, pushColorScheme, captureRender]);
+        pushInsights();
+    }, [iframeRef, pushColorScheme, pushInsights, captureRender, appUuid]);
 
     // Re-push the render context whenever the host's field mapping or rows
     // change, so an already-loaded iframe re-renders live. The initial delivery

@@ -1,13 +1,25 @@
 import {
+    getItemId,
     isAdditionalMetric,
+    isCompiledMetric,
     isCustomDimension,
+    isCustomSqlDimension,
     isDimension,
     isField,
     isFilterableField,
     isMetric,
+    MetricType,
+    type Dimension,
     type FilterableField,
 } from '@lightdash/common';
-import { UnstyledButton, ActionIcon, Tooltip } from '@mantine/core';
+import {
+    ActionIcon,
+    Badge,
+    HoverCard,
+    Popover,
+    Tooltip,
+    UnstyledButton,
+} from '@mantine/core';
 import { IconFilter, IconTrash } from '@tabler/icons-react';
 import {
     Fragment,
@@ -23,16 +35,23 @@ import { useToggle } from 'react-use';
 import {
     explorerActions,
     selectIsFieldFiltered,
+    selectTableName,
     useExplorerDispatch,
     useExplorerSelector,
     type ExplorerStoreState,
 } from '../../../features/explorer/store';
+import { useExplore } from '../../../hooks/useExplore';
 import { useAddFilter } from '../../../hooks/useFilters';
+import { useModalHostedDashboardMetricIds } from '../../../providers/Explorer/useIsModalHosted';
 import useTracking from '../../../providers/Tracking/useTracking';
 import { EventName } from '../../../types/Events';
 import FieldIcon from '../../common/Filters/FieldIcon';
 import MantineIcon from '../../common/MantineIcon';
 import classes from './SelectedFieldsSection.module.css';
+import { ItemDetailPreview } from './TableTree/ItemDetailPreview';
+import previewClasses from './TableTree/ItemDetailPreview.module.css';
+import { ITEM_DETAIL_PREVIEW_TRANSITION_PROPS } from './TableTree/itemDetailPreviewTransition';
+import CustomMetricQuickCreate from './TableTree/Tree/CustomMetricQuickCreate';
 import TreeSingleNodeActions from './TableTree/Tree/TreeSingleNodeActions';
 import { type NodeItem } from './TableTree/Tree/types';
 import { useCustomMetricDelete } from './useCustomMetricDelete';
@@ -69,9 +88,42 @@ const getFieldLabel = (item: NodeItem): string =>
         ? item.label || item.name
         : item.name;
 
+const renderAggregatedSql = (sql: string, type: MetricType): string => {
+    switch (type) {
+        case MetricType.AVERAGE:
+            return `AVG(${sql})`;
+        case MetricType.COUNT:
+            return `COUNT(${sql})`;
+        case MetricType.COUNT_DISTINCT:
+            return `COUNT(DISTINCT ${sql})`;
+        case MetricType.MAX:
+            return `MAX(${sql})`;
+        case MetricType.MIN:
+            return `MIN(${sql})`;
+        case MetricType.SUM:
+            return `SUM(${sql})`;
+        default:
+            return sql;
+    }
+};
+
 type RowProps = {
     row: RenderedRow;
     onDeselect: (fieldId: string, isDimension: boolean) => void;
+};
+
+/**
+ * Walkthrough result for manage:CustomFields: a custom dimension's row in
+ * the sidebar's Selected list, there as soon as the dimension exists.
+ */
+const customDimensionTourProps = {
+    'data-tour-scope': 'manage:CustomFields',
+    'data-tour-step': '1',
+    'data-tour-route': '/projects/:projectUuid/saved/:savedQueryUuid/edit',
+    'data-tour-label': 'The dimension joins the sidebar',
+    'data-tour-docs': 'explore/create-custom-fields.mdx#custom-dimensions:p2:1',
+    'data-tour-return': 'none',
+    'data-tour-resultdocs': 'explore/create-custom-fields.mdx#bin:p3:1',
 };
 
 const SelectedFieldRow: FC<RowProps> = memo(({ row, onDeselect }) => {
@@ -91,9 +143,23 @@ const SelectedFieldRow: FC<RowProps> = memo(({ row, onDeselect }) => {
     const dispatch = useExplorerDispatch();
     const addFilter = useAddFilter();
     const { track } = useTracking();
+    const activeTableName = useExplorerSelector(selectTableName);
+    const { data: exploreData } = useExplore(activeTableName);
 
     const [isHover, toggleHover] = useToggle(false);
     const [isMenuOpen, toggleMenu] = useToggle(false);
+    const [quickCreateType, setQuickCreateType] = useState<MetricType | null>(
+        null,
+    );
+
+    // Registry metrics stay frozen here too; the badge marks provenance
+    const dashboardMetricIds = useModalHostedDashboardMetricIds();
+    const isRegistryMetric =
+        isAdditionalMetric(item) &&
+        (dashboardMetricIds?.has(getItemId(item)) ?? false);
+    const isDashboardMetric =
+        isRegistryMetric ||
+        (dashboardMetricIds !== undefined && isAdditionalMetric(item));
 
     const selectIsFiltered = useMemo(
         () => (state: ExplorerStoreState) =>
@@ -115,7 +181,7 @@ const SelectedFieldRow: FC<RowProps> = memo(({ row, onDeselect }) => {
         useCustomMetricDelete({
             item,
             fieldId,
-            isHover,
+            isHover: isHover && !isRegistryMetric,
         });
     const showDeleteAction = !hideActions && canShowDeleteAction;
 
@@ -123,6 +189,44 @@ const SelectedFieldRow: FC<RowProps> = memo(({ row, onDeselect }) => {
         isField(item) || isAdditionalMetric(item)
             ? item.description
             : undefined;
+
+    const metricInfo = useMemo(() => {
+        if (isCompiledMetric(item)) {
+            return {
+                type: item.type,
+                sql: item.sql,
+                compiledSql: item.compiledSql,
+                filters: item.filters,
+                table: item.table,
+                name: item.name,
+            };
+        }
+        if (isAdditionalMetric(item)) {
+            const baseDimensionCandidate =
+                item.baseDimensionName && exploreData
+                    ? exploreData.tables[item.table]?.dimensions[
+                          item.baseDimensionName
+                      ]
+                    : undefined;
+            const baseDimension: Dimension | undefined =
+                baseDimensionCandidate && isDimension(baseDimensionCandidate)
+                    ? baseDimensionCandidate
+                    : undefined;
+            const baseSql = item.sql ?? '';
+            return {
+                type: item.type,
+                sql: baseSql,
+                compiledSql: renderAggregatedSql(baseSql, item.type),
+                filters: item.filters,
+                table: item.table,
+                name: item.name,
+                baseDimension,
+            };
+        }
+        return undefined;
+    }, [item, exploreData]);
+
+    const isHoverCardDisabled = !description && !metricInfo;
 
     const label = getFieldLabel(item);
 
@@ -137,6 +241,10 @@ const SelectedFieldRow: FC<RowProps> = memo(({ row, onDeselect }) => {
     const handleMouseLeave = useCallback(
         () => toggleHover(false),
         [toggleHover],
+    );
+    const handleDropdownClick = useCallback(
+        (e: React.MouseEvent) => e.stopPropagation(),
+        [],
     );
 
     const handleFilterClick = useCallback(
@@ -166,81 +274,163 @@ const SelectedFieldRow: FC<RowProps> = memo(({ row, onDeselect }) => {
         );
     }, [toggleHover, dispatch, item, label, description]);
 
-    const onToggleMenu = useCallback(() => {
-        toggleHover(false);
-        toggleMenu();
-    }, [toggleHover, toggleMenu]);
+    const onToggleMenu = useCallback(
+        (opened: boolean) => {
+            toggleHover(false);
+            toggleMenu(opened);
+        },
+        [toggleHover, toggleMenu],
+    );
+
+    const quickCreateItem =
+        isDimension(item) || isCustomSqlDimension(item) ? item : null;
+    const openQuickCreate = useCallback(
+        (type: MetricType) => {
+            toggleHover(false);
+            setQuickCreateType(type);
+        },
+        [toggleHover],
+    );
+    const closeQuickCreate = useCallback(() => setQuickCreateType(null), []);
+    const isQuickCreateOpen = quickCreateType !== null && !!quickCreateItem;
 
     return (
-        <UnstyledButton
-            component="div"
-            className={
-                isExiting ? `${classes.row} ${classes.rowExiting}` : classes.row
-            }
-            data-field-kind={getFieldKind(item)}
-            onClick={handleClick}
-            onMouseEnter={handleMouseEnter}
-            onMouseLeave={handleMouseLeave}
-            data-testid={`selected-field-${selectionKey ?? fieldId}`}
+        <Popover
+            opened={isQuickCreateOpen}
+            onDismiss={closeQuickCreate}
+            position="right-start"
+            offset={4}
+            width={320}
+            withArrow
+            withinPortal
+            trapFocus
+            returnFocus
         >
-            <FieldIcon item={item} size="md" />
-            <span className={classes.label} title={label}>
-                {label}
-            </span>
-            <span className={classes.actions}>
-                {showFilterAction && (
-                    <Tooltip
-                        withinPortal
-                        label={
-                            isFiltered
-                                ? 'This field is filtered'
-                                : 'Click here to add filter'
-                        }
+            <Popover.Target>
+                <UnstyledButton
+                    component="div"
+                    className={
+                        isExiting
+                            ? `${classes.row} ${classes.rowExiting}`
+                            : classes.row
+                    }
+                    data-field-kind={getFieldKind(item)}
+                    onClick={handleClick}
+                    onMouseEnter={handleMouseEnter}
+                    onMouseLeave={handleMouseLeave}
+                    data-testid={`selected-field-${selectionKey ?? fieldId}`}
+                    {...(isCustomDimension(item)
+                        ? customDimensionTourProps
+                        : {})}
+                >
+                    <FieldIcon item={item} size="md" />
+                    <HoverCard
+                        openDelay={300}
+                        keepMounted={false}
+                        withArrow
+                        disabled={isHoverCardDisabled}
+                        position="right"
+                        offset={70}
+                        transitionProps={ITEM_DETAIL_PREVIEW_TRANSITION_PROPS}
                     >
-                        <ActionIcon
-                            aria-label={
-                                isFiltered ? 'Field is filtered' : 'Add filter'
-                            }
-                            variant="subtle"
-                            color="gray"
-                            onClick={handleFilterClick}
+                        <HoverCard.Target>
+                            <span className={classes.label} title={label}>
+                                {label}
+                            </span>
+                        </HoverCard.Target>
+                        <HoverCard.Dropdown
+                            hidden={!isHover}
+                            p="md"
+                            miw={400}
+                            mah={500}
+                            maw={500}
+                            className={previewClasses.previewDropdown}
+                            onClick={handleDropdownClick}
                         >
-                            <MantineIcon icon={IconFilter} />
-                        </ActionIcon>
-                    </Tooltip>
-                )}
-                {showDeleteAction && (
-                    <Tooltip withinPortal label="Delete custom metric">
-                        <ActionIcon
-                            variant="subtle"
-                            color="gray"
-                            onClick={handleDeleteClick}
-                        >
-                            <MantineIcon icon={IconTrash} />
-                        </ActionIcon>
-                    </Tooltip>
-                )}
-                {/* Mounted on hover only so the labels get the space at rest */}
-                {!hideActions &&
-                    (!basicActionsOnly ||
-                        !!description ||
-                        (!isAdditionalMetric(item) &&
-                            isFilterableField(item))) &&
-                    (isHover || isMenuOpen) && (
-                        <TreeSingleNodeActions
-                            item={item}
-                            isHovered={isHover}
-                            isSelected={false}
-                            isOpened={isMenuOpen}
-                            hasDescription={!!description}
-                            onViewDescription={onOpenDescriptionView}
-                            onMenuChange={onToggleMenu}
-                            onAddFilter={fieldOnAddFilter}
-                            basicActionsOnly={basicActionsOnly}
-                        />
+                            <ItemDetailPreview
+                                onViewDescription={onOpenDescriptionView}
+                                description={description}
+                                metricInfo={metricInfo}
+                            />
+                        </HoverCard.Dropdown>
+                    </HoverCard>
+                    {isDashboardMetric && (
+                        <Tooltip label="Only available in this dashboard">
+                            <Badge size="xs" radius="sm" px={4} flex="0 0 auto">
+                                =
+                            </Badge>
+                        </Tooltip>
                     )}
-            </span>
-        </UnstyledButton>
+                    <span className={classes.actions}>
+                        {showFilterAction && (
+                            <Tooltip
+                                label={
+                                    isFiltered
+                                        ? 'This field is filtered'
+                                        : 'Click here to add filter'
+                                }
+                            >
+                                <ActionIcon
+                                    aria-label={
+                                        isFiltered
+                                            ? 'Field is filtered'
+                                            : 'Add filter'
+                                    }
+                                    onClick={handleFilterClick}
+                                >
+                                    <MantineIcon icon={IconFilter} />
+                                </ActionIcon>
+                            </Tooltip>
+                        )}
+                        {showDeleteAction && (
+                            <Tooltip label="Delete custom metric">
+                                <ActionIcon onClick={handleDeleteClick}>
+                                    <MantineIcon icon={IconTrash} />
+                                </ActionIcon>
+                            </Tooltip>
+                        )}
+                        {/* Mounted on hover only so the labels get the space at rest */}
+                        {!hideActions &&
+                            (!basicActionsOnly ||
+                                isRegistryMetric ||
+                                !!description ||
+                                (!isAdditionalMetric(item) &&
+                                    isFilterableField(item))) &&
+                            (isHover || isMenuOpen) && (
+                                <TreeSingleNodeActions
+                                    item={item}
+                                    isHovered={isHover}
+                                    isSelected={false}
+                                    isOpened={isMenuOpen}
+                                    hasDescription={!!description}
+                                    onViewDescription={onOpenDescriptionView}
+                                    onMenuChange={onToggleMenu}
+                                    onAddFilter={fieldOnAddFilter}
+                                    onQuickCreateMetric={
+                                        quickCreateItem
+                                            ? openQuickCreate
+                                            : undefined
+                                    }
+                                    basicActionsOnly={
+                                        basicActionsOnly || isRegistryMetric
+                                    }
+                                    allowRegistryEdit={isRegistryMetric}
+                                />
+                            )}
+                    </span>
+                </UnstyledButton>
+            </Popover.Target>
+            <Popover.Dropdown p="sm" onClick={handleDropdownClick}>
+                {isQuickCreateOpen && quickCreateItem && quickCreateType ? (
+                    <CustomMetricQuickCreate
+                        key={`${fieldId}-${quickCreateType}`}
+                        item={quickCreateItem}
+                        type={quickCreateType}
+                        onClose={closeQuickCreate}
+                    />
+                ) : null}
+            </Popover.Dropdown>
+        </Popover>
     );
 });
 

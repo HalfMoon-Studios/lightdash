@@ -15,19 +15,16 @@ import {
     IconPlus,
     IconX,
 } from '@tabler/icons-react';
-import { useId, useState, type FC, type ReactNode } from 'react';
+import { useId, useMemo, useState, type FC, type ReactNode } from 'react';
 import FieldSelect from '../../../components/common/FieldSelect';
 import MantineIcon from '../../../components/common/MantineIcon';
 import { useServerFeatureFlag } from '../../../hooks/useServerOrClientFeatureFlag';
-import {
-    explorerActions,
-    selectTableName,
-    useExplorerDispatch,
-    useExplorerSelector,
-} from '../../explorer/store';
+import { selectTableName, useExplorerSelector } from '../../explorer/store';
 import { EMPTY_MERGE, PRIMARY_SOURCE_ID } from '../constants';
 import { useMergeSafe } from '../context/useMerge';
 import { useMergeSetup } from '../hooks/useMergeSetup';
+import { useMergeSourceNames } from '../hooks/useMergeSourceNames';
+import { getMergeSourcesWithoutValues } from '../utils/getMergeSourcesWithoutValues';
 import styles from './MergeJoinBar.module.css';
 import { getJoinClauseLabel } from './mergeJoinLabels';
 
@@ -36,16 +33,22 @@ const Note: FC<{ tone: 'muted' | 'warn'; children: ReactNode }> = ({
     tone,
     children,
 }) => (
-    <Box className={styles.note}>
+    <Group className={styles.note} gap={6} wrap="nowrap">
         <MantineIcon
             className={styles.noteIcon}
             icon={tone === 'warn' ? IconAlertTriangle : IconInfoCircle}
-            color={tone === 'warn' ? 'orange.7' : 'gray.6'}
+            color={tone === 'warn' ? 'orange.7' : 'dimmed'}
+            size={14}
         />
-        <Text size="xs" c={tone === 'warn' ? undefined : 'dimmed'}>
+        <Text
+            span
+            size="xs"
+            className={styles.noteText}
+            c={tone === 'warn' ? undefined : 'dimmed'}
+        >
             {children}
         </Text>
-    </Box>
+    </Group>
 );
 
 type JoinTypeOption = {
@@ -131,9 +134,13 @@ const JoinTypePicker: FC<{
                     withBorder={false}
                     aria-label={`${option.label}: ${option.help}`}
                 >
-                    <Group justify="center" gap={6} wrap="nowrap" p={6}>
+                    <Group
+                        className={styles.joinTypeOption}
+                        gap={6}
+                        wrap="nowrap"
+                    >
                         <JoinTypeDiagram type={option.value} />
-                        <Text size="xs" fw={600} ta="center" truncate>
+                        <Text span size="xs" fw={600} truncate>
                             {option.label}
                         </Text>
                     </Group>
@@ -153,20 +160,21 @@ const JoinTypePicker: FC<{
  * error is not chrome.
  */
 export const MergeJoinBar: FC<{ guided?: boolean }> = ({ guided = false }) => {
-    const dispatch = useExplorerDispatch();
     const { data: mergeFlag } = useServerFeatureFlag(FeatureFlags.MergeQueries);
     const tableName = useExplorerSelector(selectTableName);
     const mergeContext = useMergeSafe();
+    const { handleByName } = useMergeSourceNames();
     const {
         isMerging,
         readOnly,
         additionalSources,
         joinType,
+        repeatValuesSourceIds,
         setJoinField,
         addJoinPart,
         removeJoinPart,
         setJoinType,
-        toggleSourceField,
+        setRepeatValues,
     } = mergeContext ?? EMPTY_MERGE;
     const additionalSource = additionalSources[0];
     const additionalSourceId = additionalSource?.id;
@@ -178,10 +186,9 @@ export const MergeJoinBar: FC<{ guided?: boolean }> = ({ guided = false }) => {
         fanOut,
         joinKeyErrors,
         joinFieldLabel,
-        primaryJoinItems,
-        additionalJoinItems,
         availablePrimaryJoinItems,
         availableAdditionalJoinItems,
+        getJoinCandidates,
         suggestedAvailablePair,
         primaryExploreLabel,
         additionalExploreLabel,
@@ -198,6 +205,20 @@ export const MergeJoinBar: FC<{ guided?: boolean }> = ({ guided = false }) => {
         !readOnly &&
         !!additionalSource?.exploreName &&
         (guided || (editingOverride ?? isIncomplete));
+
+    // A side that contributed nothing reads as a mistake unless the card
+    // says so; judged only once every row is on screen.
+    const sourcesWithoutValues = useMemo(
+        () =>
+            mergeResults
+                ? getMergeSourcesWithoutValues({
+                      rows: mergeResults.results.rows,
+                      fieldOrigins: mergeResults.fieldOrigins,
+                      complete: mergeResults.results.hasFetchedAllRows,
+                  })
+                : [],
+        [mergeResults],
+    );
 
     if (!mergeContext || !tableName || mergeFlag?.enabled !== true) return null;
     if (!isMerging) return null;
@@ -285,235 +306,207 @@ export const MergeJoinBar: FC<{ guided?: boolean }> = ({ guided = false }) => {
                         <Text size="xs" fw={600}>
                             Join conditions
                         </Text>
-                        {effectiveParts.map((part, index) => (
-                            // eslint-disable-next-line react/no-array-index-key
-                            <Box className={styles.pair} key={index}>
-                                {index > 0 ? (
-                                    <Box className={styles.andDivider}>
-                                        <Text
-                                            span
-                                            size="xs"
-                                            c="dimmed"
-                                            fw={600}
-                                        >
-                                            AND
-                                        </Text>
-                                    </Box>
-                                ) : null}
-                                {index === 0 &&
-                                    !part.fieldIdBySourceId[
-                                        PRIMARY_SOURCE_ID
-                                    ] &&
-                                    !part.fieldIdBySourceId[
-                                        additionalSourceId
-                                    ] &&
-                                    suggestedAvailablePair && (
-                                        <Box className={styles.suggestion}>
-                                            <Text size="xs" c="dimmed">
-                                                Suggested:{' '}
-                                                <Text
-                                                    span
-                                                    inherit
+                        {effectiveParts.map((part, index) => {
+                            const primaryCandidates = getJoinCandidates(
+                                'primary',
+                                part.fieldIdBySourceId[additionalSourceId],
+                            );
+                            const additionalCandidates = getJoinCandidates(
+                                'additional',
+                                part.fieldIdBySourceId[PRIMARY_SOURCE_ID],
+                            );
+                            return (
+                                // eslint-disable-next-line react/no-array-index-key
+                                <Box className={styles.pair} key={index}>
+                                    {index > 0 ? (
+                                        <Box className={styles.andDivider}>
+                                            <Text
+                                                span
+                                                size="xs"
+                                                c="dimmed"
+                                                fw={600}
+                                            >
+                                                AND
+                                            </Text>
+                                        </Box>
+                                    ) : null}
+                                    {index === 0 &&
+                                        !part.fieldIdBySourceId[
+                                            PRIMARY_SOURCE_ID
+                                        ] &&
+                                        !part.fieldIdBySourceId[
+                                            additionalSourceId
+                                        ] &&
+                                        suggestedAvailablePair && (
+                                            <Box className={styles.suggestion}>
+                                                <Text size="xs" c="dimmed">
+                                                    Suggested:{' '}
+                                                    <Text
+                                                        span
+                                                        inherit
+                                                        fw={600}
+                                                        c="gray.7"
+                                                    >
+                                                        {getJoinClauseLabel(
+                                                            thisQuery,
+                                                            labelFor(
+                                                                suggestedAvailablePair[
+                                                                    PRIMARY_SOURCE_ID
+                                                                ],
+                                                            ),
+                                                            otherQuery,
+                                                            labelFor(
+                                                                suggestedAvailablePair[
+                                                                    additionalSourceId
+                                                                ],
+                                                            ),
+                                                        )}
+                                                    </Text>
+                                                </Text>
+                                                <Anchor
+                                                    component="button"
+                                                    type="button"
+                                                    size="xs"
                                                     fw={600}
-                                                    c="gray.7"
-                                                >
-                                                    {getJoinClauseLabel(
-                                                        thisQuery,
-                                                        labelFor(
+                                                    onClick={() => {
+                                                        const primaryField =
                                                             suggestedAvailablePair[
                                                                 PRIMARY_SOURCE_ID
-                                                            ],
-                                                        ),
-                                                        otherQuery,
-                                                        labelFor(
+                                                            ];
+                                                        const additionalField =
                                                             suggestedAvailablePair[
                                                                 additionalSourceId
-                                                            ],
-                                                        ),
-                                                    )}
-                                                </Text>
-                                            </Text>
-                                            <Anchor
-                                                component="button"
-                                                type="button"
-                                                size="xs"
-                                                fw={600}
-                                                onClick={() => {
-                                                    const primaryField =
-                                                        suggestedAvailablePair[
-                                                            PRIMARY_SOURCE_ID
-                                                        ];
-                                                    const additionalField =
-                                                        suggestedAvailablePair[
-                                                            additionalSourceId
-                                                        ];
-                                                    if (
-                                                        !primaryField ||
-                                                        !additionalField
-                                                    )
-                                                        return;
-                                                    if (
-                                                        !primaryJoinItems.some(
-                                                            (item) =>
-                                                                getItemId(
-                                                                    item,
-                                                                ) ===
-                                                                primaryField,
+                                                            ];
+                                                        if (
+                                                            !primaryField ||
+                                                            !additionalField
                                                         )
-                                                    ) {
-                                                        dispatch(
-                                                            explorerActions.toggleDimension(
-                                                                primaryField,
-                                                            ),
+                                                            return;
+                                                        setJoinField(
+                                                            index,
+                                                            PRIMARY_SOURCE_ID,
+                                                            primaryField,
                                                         );
-                                                    }
-                                                    if (
-                                                        !additionalJoinItems.some(
-                                                            (item) =>
-                                                                getItemId(
-                                                                    item,
-                                                                ) ===
-                                                                additionalField,
-                                                        )
-                                                    ) {
-                                                        toggleSourceField(
+                                                        setJoinField(
+                                                            index,
                                                             additionalSourceId,
                                                             additionalField,
-                                                            true,
                                                         );
-                                                    }
+                                                    }}
+                                                >
+                                                    Use suggestion
+                                                </Anchor>
+                                            </Box>
+                                        )}
+                                    <Box className={styles.pairFields}>
+                                        <Stack
+                                            gap={4}
+                                            className={styles.fieldSide}
+                                        >
+                                            <SourceLabel label={thisQuery} />
+                                            <FieldSelect
+                                                aria-label={`${thisQuery} join field`}
+                                                size="xs"
+                                                placeholder="Choose a field"
+                                                hasGrouping
+                                                items={
+                                                    availablePrimaryJoinItems
+                                                }
+                                                suggestedItems={
+                                                    primaryCandidates.suggested
+                                                }
+                                                inactiveItemIds={primaryCandidates.incompatible.map(
+                                                    getItemId,
+                                                )}
+                                                item={availablePrimaryJoinItems.find(
+                                                    (candidate) =>
+                                                        getItemId(candidate) ===
+                                                        part.fieldIdBySourceId[
+                                                            PRIMARY_SOURCE_ID
+                                                        ],
+                                                )}
+                                                onChange={(value) =>
                                                     setJoinField(
                                                         index,
                                                         PRIMARY_SOURCE_ID,
-                                                        primaryField,
-                                                    );
+                                                        value
+                                                            ? getItemId(value)
+                                                            : null,
+                                                    )
+                                                }
+                                            />
+                                        </Stack>
+                                        <Text
+                                            className={styles.operator}
+                                            aria-hidden
+                                            size="sm"
+                                            fw={600}
+                                        >
+                                            =
+                                        </Text>
+                                        <Stack
+                                            gap={4}
+                                            className={styles.fieldSide}
+                                        >
+                                            <SourceLabel label={otherQuery} />
+                                            <FieldSelect
+                                                aria-label={`${otherQuery} join field`}
+                                                size="xs"
+                                                placeholder="Choose a field"
+                                                hasGrouping
+                                                items={
+                                                    availableAdditionalJoinItems
+                                                }
+                                                suggestedItems={
+                                                    additionalCandidates.suggested
+                                                }
+                                                inactiveItemIds={additionalCandidates.incompatible.map(
+                                                    getItemId,
+                                                )}
+                                                item={availableAdditionalJoinItems.find(
+                                                    (candidate) =>
+                                                        getItemId(candidate) ===
+                                                        part.fieldIdBySourceId[
+                                                            additionalSourceId
+                                                        ],
+                                                )}
+                                                onChange={(value) =>
                                                     setJoinField(
                                                         index,
                                                         additionalSourceId,
-                                                        additionalField,
-                                                    );
-                                                }}
-                                            >
-                                                Use suggestion
-                                            </Anchor>
-                                        </Box>
-                                    )}
-                                <Box className={styles.pairFields}>
-                                    <Stack gap={4} className={styles.fieldSide}>
-                                        <SourceLabel label={thisQuery} />
-                                        <FieldSelect
-                                            aria-label={`${thisQuery} join field`}
-                                            size="xs"
-                                            placeholder="Choose or add a field"
-                                            hasGrouping
-                                            items={availablePrimaryJoinItems}
-                                            item={availablePrimaryJoinItems.find(
-                                                (candidate) =>
-                                                    getItemId(candidate) ===
-                                                    part.fieldIdBySourceId[
-                                                        PRIMARY_SOURCE_ID
-                                                    ],
-                                            )}
-                                            onChange={(value) => {
-                                                const fieldId = value
-                                                    ? getItemId(value)
-                                                    : null;
-                                                if (
-                                                    fieldId &&
-                                                    !primaryJoinItems.some(
-                                                        (item) =>
-                                                            getItemId(item) ===
-                                                            fieldId,
+                                                        value
+                                                            ? getItemId(value)
+                                                            : null,
                                                     )
-                                                ) {
-                                                    dispatch(
-                                                        explorerActions.toggleDimension(
-                                                            fieldId,
-                                                        ),
-                                                    );
                                                 }
-                                                setJoinField(
-                                                    index,
-                                                    PRIMARY_SOURCE_ID,
-                                                    fieldId,
-                                                );
-                                            }}
-                                        />
-                                    </Stack>
-                                    <Text
-                                        className={styles.operator}
-                                        aria-hidden
-                                        size="sm"
-                                        fw={600}
-                                    >
-                                        =
-                                    </Text>
-                                    <Stack gap={4} className={styles.fieldSide}>
-                                        <SourceLabel label={otherQuery} />
-                                        <FieldSelect
-                                            aria-label={`${otherQuery} join field`}
-                                            size="xs"
-                                            placeholder="Choose or add a field"
-                                            hasGrouping
-                                            items={availableAdditionalJoinItems}
-                                            item={availableAdditionalJoinItems.find(
-                                                (candidate) =>
-                                                    getItemId(candidate) ===
-                                                    part.fieldIdBySourceId[
-                                                        additionalSourceId
-                                                    ],
-                                            )}
-                                            onChange={(value) => {
-                                                const fieldId = value
-                                                    ? getItemId(value)
-                                                    : null;
-                                                if (
-                                                    fieldId &&
-                                                    !additionalJoinItems.some(
-                                                        (item) =>
-                                                            getItemId(item) ===
-                                                            fieldId,
-                                                    )
-                                                ) {
-                                                    toggleSourceField(
-                                                        additionalSourceId,
-                                                        fieldId,
-                                                        true,
-                                                    );
-                                                }
-                                                setJoinField(
-                                                    index,
-                                                    additionalSourceId,
-                                                    fieldId,
-                                                );
-                                            }}
-                                        />
-                                    </Stack>
-                                    {effectiveParts.length > 1 ? (
-                                        <ActionIcon
-                                            className={styles.removeKey}
-                                            variant="subtle"
-                                            color="gray"
-                                            size="sm"
-                                            onClick={() =>
-                                                removeJoinPart(index)
-                                            }
-                                            aria-label={`Remove join condition ${index + 1}`}
-                                        >
-                                            <MantineIcon
-                                                icon={IconX}
-                                                size={14}
                                             />
-                                        </ActionIcon>
-                                    ) : (
-                                        <Box
-                                            aria-hidden
-                                            className={styles.removeKeySpacer}
-                                        />
-                                    )}
+                                        </Stack>
+                                        {effectiveParts.length > 1 ? (
+                                            <ActionIcon
+                                                className={styles.removeKey}
+                                                size="sm"
+                                                onClick={() =>
+                                                    removeJoinPart(index)
+                                                }
+                                                aria-label={`Remove join condition ${index + 1}`}
+                                            >
+                                                <MantineIcon
+                                                    icon={IconX}
+                                                    size={14}
+                                                />
+                                            </ActionIcon>
+                                        ) : (
+                                            <Box
+                                                aria-hidden
+                                                className={
+                                                    styles.removeKeySpacer
+                                                }
+                                            />
+                                        )}
+                                    </Box>
                                 </Box>
-                            </Box>
-                        ))}
+                            );
+                        })}
 
                         <Anchor
                             component="button"
@@ -556,20 +549,101 @@ export const MergeJoinBar: FC<{ guided?: boolean }> = ({ guided = false }) => {
                 </Note>
             ))}
 
-            {!isIncomplete &&
-                fanOut.map(({ sourceId, fields }) => (
-                    <Note key={sourceId} tone="warn">
-                        {sourceId === PRIMARY_SOURCE_ID
-                            ? primaryExploreLabel
-                            : additionalExploreLabel}{' '}
-                        is split by {fields.map(labelFor).join(' and ')}, which
-                        the other query does not have. Merging would repeat the
-                        other query's rows once per value. Remove{' '}
-                        {fields.length === 1 ? 'it' : 'them'}, or select{' '}
-                        {fields.length === 1 ? 'it' : 'them'} on both queries
-                        and join on {fields.length === 1 ? 'it' : 'them'}.
+            {sourcesWithoutValues.map((sourceId) => {
+                // Results name sources as they ran
+                const isPrimary = handleByName[sourceId] === PRIMARY_SOURCE_ID;
+                const emptyLabel = isPrimary ? thisQuery : otherQuery;
+                const otherLabel = isPrimary ? otherQuery : thisQuery;
+                return (
+                    <Note key={`empty-${sourceId}`} tone="muted">
+                        {emptyLabel}'s columns are blank on every row: its query
+                        returned no rows matching {otherLabel} on{' '}
+                        {joinFieldLabel}.
                     </Note>
-                ))}
+                );
+            })}
+
+            {!isIncomplete &&
+                fanOut.map(({ sourceId, fields }) => {
+                    const splitLabel =
+                        sourceId === PRIMARY_SOURCE_ID
+                            ? primaryExploreLabel
+                            : additionalExploreLabel;
+                    const otherSourceId =
+                        sourceId === PRIMARY_SOURCE_ID
+                            ? additionalSourceId
+                            : PRIMARY_SOURCE_ID;
+                    const otherLabel =
+                        sourceId === PRIMARY_SOURCE_ID
+                            ? additionalExploreLabel
+                            : primaryExploreLabel;
+                    return (
+                        <Note key={sourceId} tone="warn">
+                            {splitLabel} is split by{' '}
+                            {fields.map(labelFor).join(' and ')}, which{' '}
+                            {otherLabel} does not have. Merging would repeat{' '}
+                            {otherLabel}'s rows once per value. Remove{' '}
+                            {fields.length === 1 ? 'it' : 'them'}, select{' '}
+                            {fields.length === 1 ? 'it' : 'them'} on both
+                            queries and join on{' '}
+                            {fields.length === 1 ? 'it' : 'them'}, or{' '}
+                            {!readOnly && (
+                                <Anchor
+                                    component="button"
+                                    type="button"
+                                    size="xs"
+                                    fw={600}
+                                    onClick={() =>
+                                        setRepeatValues(otherSourceId, true)
+                                    }
+                                >
+                                    repeat {otherLabel}'s values on every{' '}
+                                    {splitLabel} row
+                                </Anchor>
+                            )}
+                            .
+                        </Note>
+                    );
+                })}
+
+            {/* Repeating is a lookup the user asked for; saying so keeps a
+                repeated metric from reading as a per-row measurement. */}
+            {repeatValuesSourceIds
+                .filter(
+                    (sourceId) =>
+                        sourceId === PRIMARY_SOURCE_ID ||
+                        sourceId === additionalSourceId,
+                )
+                .map((sourceId) => {
+                    const repeatingLabel =
+                        sourceId === PRIMARY_SOURCE_ID
+                            ? primaryExploreLabel
+                            : additionalExploreLabel;
+                    const otherLabel =
+                        sourceId === PRIMARY_SOURCE_ID
+                            ? additionalExploreLabel
+                            : primaryExploreLabel;
+                    return (
+                        <Note key={`repeat-${sourceId}`} tone="muted">
+                            {repeatingLabel}'s values repeat on every{' '}
+                            {otherLabel} row with the same {joinFieldLabel}. Its
+                            columns have no totals here.{' '}
+                            {!readOnly && (
+                                <Anchor
+                                    component="button"
+                                    type="button"
+                                    size="xs"
+                                    fw={600}
+                                    onClick={() =>
+                                        setRepeatValues(sourceId, false)
+                                    }
+                                >
+                                    Stop repeating
+                                </Anchor>
+                            )}
+                        </Note>
+                    );
+                })}
 
             {(runErrors ?? []).map((error) => (
                 <Note key={`${error.kind}-${error.sourceId ?? ''}`} tone="warn">

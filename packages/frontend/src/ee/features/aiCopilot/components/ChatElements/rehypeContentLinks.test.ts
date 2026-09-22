@@ -21,6 +21,25 @@ const processHref = (href: string) => {
 };
 
 describe('rehypeAiAgentContentLinks', () => {
+    it.each([
+        '/projects/project-uuid/documents/document-uuid',
+        'https://app.lightdash.cloud/projects/project-uuid/documents/document-uuid',
+        '/projects/project-uuid/documents/document-uuid?foo=bar#section',
+    ])('marks a canonical document link: %s', (href) => {
+        expect(processHref(href)).toEqual({
+            href,
+            'data-content-type': 'document-link',
+            'data-document-uuid': 'document-uuid',
+        });
+    });
+
+    it.each([
+        '/projects/project-uuid/documents',
+        '/projects/project-uuid/documents/document-uuid/not-a-document',
+    ])('does not classify non-document routes: %s', (href) => {
+        expect(processHref(href)).toEqual({ href });
+    });
+
     it('marks canonical dashboard links', () => {
         expect(
             processHref(
@@ -41,6 +60,16 @@ describe('rehypeAiAgentContentLinks', () => {
             'data-content-type': 'chart-link',
             'data-chart-source': 'saved-chart',
             'data-chart-uuid': 'chart-slug',
+        });
+    });
+
+    it('marks canonical data app links', () => {
+        expect(
+            processHref('/projects/project-uuid/apps/app-uuid/view'),
+        ).toMatchObject({
+            href: '/projects/project-uuid/apps/app-uuid/view',
+            'data-content-type': 'data-app-link',
+            'data-app-uuid': 'app-uuid',
         });
     });
 
@@ -90,6 +119,18 @@ describe('rehypeAiAgentContentLinks', () => {
             href: '/projects/project-uuid/dashboards/dashboard-uuid/view?scheduler_uuid=scheduler-uuid',
             'data-content-type': 'scheduled-delivery-link',
             'data-scheduler-uuid': 'scheduler-uuid',
+        });
+    });
+
+    it('keeps data app links classified as data app links despite a scheduler_uuid param', () => {
+        expect(
+            processHref(
+                '/projects/project-uuid/apps/app-uuid/view?scheduler_uuid=scheduler-uuid',
+            ),
+        ).toMatchObject({
+            href: '/projects/project-uuid/apps/app-uuid/view?scheduler_uuid=scheduler-uuid',
+            'data-content-type': 'data-app-link',
+            'data-app-uuid': 'app-uuid',
         });
     });
 

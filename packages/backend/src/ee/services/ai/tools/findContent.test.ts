@@ -5,8 +5,10 @@ import {
     type ToolFindContentOutput,
     type ToolGetDashboardChartsOutput,
 } from '@lightdash/common';
+import type { AiDecisionClient } from '../decisions/AiDecisionClient';
 import type {
     FindContentDashboardResult,
+    FindContentDataAppResult,
     FindContentResult,
 } from '../types/aiAgentDependencies';
 import { DASHBOARD_CHARTS_PREVIEW_COUNT } from '../utils/truncation';
@@ -124,14 +126,49 @@ const makeMockSpace = (): FindContentResult => ({
     },
 });
 
+const makeMockDataApp = (
+    overrides: Partial<FindContentDataAppResult> = {},
+): FindContentDataAppResult => ({
+    contentType: 'data_app',
+    uuid: 'app-uuid-1',
+    slug: 'sales-forecast',
+    name: 'Sales forecast',
+    description: 'Forecast revenue by region',
+    spaceUuid: 'space-uuid-1',
+    projectUuid: 'project-uuid-1',
+    search_rank: 0.75,
+    viewsCount: 12,
+    createdBy: {
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+        userUuid: 'user-uuid-1',
+    },
+    space: {
+        uuid: 'space-uuid-1',
+        name: 'Marketing',
+        slug: 'marketing',
+        breadcrumbs: [
+            {
+                uuid: 'space-uuid-1',
+                name: 'Marketing',
+                slug: 'marketing',
+            },
+        ],
+    },
+    verification: null,
+    ...overrides,
+});
+
 describe('getFindContent', () => {
     const createTool = (
         content: FindContentResult[],
         trackCoverage: import('vitest').Mock = vi.fn(),
+        decisions?: Pick<AiDecisionClient, 'evaluate'>,
     ) => {
         const mockFindContent = vi.fn().mockResolvedValue({ content });
         return {
             tool: getFindContent({
+                decisions,
                 findContent: mockFindContent,
                 siteUrl: '',
                 toolDescriptionMaxChars: 600,
@@ -143,6 +180,129 @@ describe('getFindContent', () => {
         };
     };
     const toolOf = (content: FindContentResult[]) => createTool(content).tool;
+
+    it('bounds fast search output even when ranking is unavailable, retaining identity and verification', async () => {
+        const content = Array.from({ length: 30 }, (_, i) =>
+            makeMockDashboard(30, {
+                uuid: `dashboard-${i}`,
+                description: 'Detailed description. '.repeat(100),
+                verification: i === 0 ? makeVerification() : null,
+            }),
+        );
+        const args = { searchQueries: [{ label: 'support' }], spaceSlug: null };
+        const legacy = await executeFindContent(toolOf(content), args);
+        const { tool, trackCoverage } = createTool(content, vi.fn(), {
+            evaluate: async () => null,
+        });
+        const compact = await executeFindContent(tool, args);
+
+        expect(compact.result.length).toBeLessThan(legacy.result.length / 4);
+        expect(compact.result).toContain('totalMatches="30"');
+        expect(compact.result).toContain('shown="8"');
+        expect(compact.result).toContain('uuid="dashboard-0"');
+        expect(compact.result).toContain(
+            '/dashboards/dashboard-0/view#dashboard-link',
+        );
+        expect(compact.result).toContain('Sarah Khan');
+        expect(compact.result).toContain('Marketing');
+        expect(compact.result).toContain('chartCount="30"');
+        expect(compact.result).not.toContain('chart-uuid-');
+        expect(compact.result).not.toContain('firstviewedat');
+        expect(compact.result).toContain('readContent');
+        expect(trackCoverage).toHaveBeenCalledWith(
+            expect.objectContaining({ totalResultCount: 30 }),
+        );
+    });
+
+    it('retains space navigation and document/app identities in compact results', async () => {
+        const { tool } = createTool(
+            [
+                makeMockSpace(),
+                makeMockDataApp(),
+                {
+                    contentType: 'document',
+                    uuid: 'doc-1',
+                    slug: 'policy',
+                    name: 'Policy',
+                    href: '/documents/policy',
+                    description: '<internal> & notes',
+                    search_rank: 1,
+                    space: null,
+                    verification: null,
+                },
+            ],
+            vi.fn(),
+            { evaluate: async () => null },
+        );
+        const { result } = await executeFindContent(tool, {
+            searchQueries: [{ label: 'policy' }],
+            spaceSlug: null,
+        });
+        expect(result).toContain('directAccess="true"');
+        expect(result).toContain('childSpaceCount="1"');
+        expect(result).toContain('type="data_app"');
+        expect(result).toContain('/apps/app-uuid-1/view');
+        expect(result).toContain('slug="policy"');
+        expect(result).toContain('href="/documents/policy"');
+        expect(result).toContain('&lt;internal&gt; &amp; notes');
+    });
+
+    it('keeps an empty verified-only compact search scoped to verified content', async () => {
+        const { tool, mockFindContent } = createTool([], vi.fn(), {
+            evaluate: async () => null,
+        });
+        const { result } = await executeFindContent(tool, {
+            searchQueries: [{ label: 'policy' }],
+            spaceSlug: 'finance',
+            verifiedOnly: true,
+        });
+        expect(mockFindContent).toHaveBeenCalledExactlyOnceWith({
+            searchQuery: { label: 'policy' },
+            spaceSlug: 'finance',
+            verifiedOnly: true,
+        });
+        expect(result).toContain('No verified content matched');
+        expect(result).toContain('shown="0"');
+    });
+
+    it('renders Data App discovery metadata and canonical viewer link', async () => {
+        const tool = toolOf([makeMockDataApp()]);
+        const output = await executeFindContent(tool, {
+            searchQueries: [{ label: 'forecast revenue' }],
+            spaceSlug: null,
+        });
+
+        expect(output.result).toContain('<dataApp');
+        expect(output.result).toContain('dataAppUuid="app-uuid-1"');
+        expect(output.result).toContain('slug="sales-forecast"');
+        expect(output.result).toContain('searchRank="0.75"');
+        expect(output.result).toContain('spaceUuid="space-uuid-1"');
+        expect(output.result).toContain('viewsCount="12"');
+        expect(output.result).toContain(
+            'href="/projects/project-uuid-1/apps/app-uuid-1/view"',
+        );
+        expect(output.result).toContain('<name>Sales forecast</name>');
+        expect(output.result).toContain(
+            '<description>Forecast revenue by region</description>',
+        );
+        expect(output.result).toContain('<createdby>Ada Lovelace</createdby>');
+        expect(output.result).toContain('breadcrumb="Marketing"');
+    });
+
+    it('keeps Data Apps in verified-only search without empty guidance', async () => {
+        const tool = toolOf([
+            makeMockDataApp({ spaceUuid: null, space: null }),
+        ]);
+        const output = await executeFindContent(tool, {
+            searchQueries: [{ label: 'forecast revenue' }],
+            spaceSlug: null,
+            verifiedOnly: true,
+        });
+
+        expect(output.result).toContain('<dataApp');
+        expect(output.result).not.toContain('No verified content matched');
+        expect(output.result).not.toContain('<space ');
+    });
 
     it('renders spaces and forwards the space filter', async () => {
         const { tool, mockFindContent } = createTool([makeMockSpace()]);

@@ -24,6 +24,7 @@ import {
     IconCalendar,
     IconClock,
     IconFolder,
+    IconFileText,
     IconLayoutDashboard,
     IconPuzzle,
     IconRefresh,
@@ -62,9 +63,15 @@ import DeletedContentActionMenu from './DeletedContentActionMenu';
 function getDeletedContentDescription(
     item: DeletedContentWithDescendants,
     dataAppsEnabled: boolean,
+    documentsEnabled: boolean,
 ): string | null {
     const parts: string[] = [];
     if (item.contentType === ContentType.SPACE) {
+        if (documentsEnabled && item.documentCount > 0) {
+            parts.push(
+                `${item.documentCount} document${item.documentCount !== 1 ? 's' : ''}`,
+            );
+        }
         if (item.nestedSpaceCount > 0)
             parts.push(
                 `${item.nestedSpaceCount} space${item.nestedSpaceCount !== 1 ? 's' : ''}`,
@@ -138,6 +145,9 @@ const RecentlyDeletedPage: FC<Props> = ({ projectUuid }) => {
     const retentionDays = health.data?.softDelete.retentionDays;
     const dataAppsFlag = useServerFeatureFlag(FeatureFlags.EnableDataApps);
     const dataAppsEnabled = dataAppsFlag.data?.enabled ?? false;
+    const documentsFlag = useServerFeatureFlag(FeatureFlags.Documents);
+    const documentsEnabled =
+        !documentsFlag.isError && (documentsFlag.data?.enabled ?? false);
 
     const [selectedContentType, setSelectedContentType] =
         useState<DeletedContentTypeFilter>('all');
@@ -196,8 +206,15 @@ const RecentlyDeletedPage: FC<Props> = ({ projectUuid }) => {
         });
 
     const flatData = useMemo<DeletedContentWithDescendants[]>(
-        () => data?.pages?.flatMap((page) => page.data) ?? [],
-        [data],
+        () =>
+            data?.pages?.flatMap((page) =>
+                page.data.filter(
+                    (item) =>
+                        documentsEnabled ||
+                        item.contentType !== ContentType.DOCUMENT,
+                ),
+            ) ?? [],
+        [data, documentsEnabled],
     );
 
     const totalDBRowCount = data?.pages?.[0]?.pagination?.totalResults ?? 0;
@@ -236,7 +253,7 @@ const RecentlyDeletedPage: FC<Props> = ({ projectUuid }) => {
                 size: 300,
                 Header: ({ column }) => (
                     <Group gap="two" wrap="nowrap">
-                        <MantineIcon icon={IconTextCaption} color="ldGray.6" />
+                        <MantineIcon icon={IconTextCaption} color="dimmed" />
                         {column.columnDef.header}
                     </Group>
                 ),
@@ -256,6 +273,13 @@ const RecentlyDeletedPage: FC<Props> = ({ projectUuid }) => {
                                     <IconBox
                                         icon={IconLayoutDashboard}
                                         color="green.6"
+                                    />
+                                );
+                            case ContentType.DOCUMENT:
+                                return (
+                                    <IconBox
+                                        icon={IconFileText}
+                                        color="dimmed"
                                     />
                                 );
                             case ContentType.SPACE:
@@ -290,6 +314,7 @@ const RecentlyDeletedPage: FC<Props> = ({ projectUuid }) => {
                     const description = getDeletedContentDescription(
                         row.original,
                         dataAppsEnabled,
+                        documentsEnabled,
                     );
                     return (
                         <Group gap="sm" wrap="nowrap">
@@ -299,7 +324,7 @@ const RecentlyDeletedPage: FC<Props> = ({ projectUuid }) => {
                                     {row.original.name}
                                 </Text>
                                 {description && (
-                                    <Text fz={12} c="dimmed" lineClamp={1}>
+                                    <Text fz="xs" c="dimmed" lineClamp={1}>
                                         {description}
                                     </Text>
                                 )}
@@ -320,10 +345,7 @@ const RecentlyDeletedPage: FC<Props> = ({ projectUuid }) => {
                               column: { columnDef: { header: string } };
                           }) => (
                               <Group gap="two" wrap="nowrap">
-                                  <MantineIcon
-                                      icon={IconUser}
-                                      color="ldGray.6"
-                                  />
+                                  <MantineIcon icon={IconUser} color="dimmed" />
                                   {column.columnDef.header}
                               </Group>
                           ),
@@ -333,12 +355,12 @@ const RecentlyDeletedPage: FC<Props> = ({ projectUuid }) => {
                               row: { original: DeletedContentWithDescendants };
                           }) =>
                               row.original.deletedBy ? (
-                                  <Text fz="xs" c="ldGray.6">
+                                  <Text fz="xs" c="dimmed">
                                       {row.original.deletedBy.firstName}{' '}
                                       {row.original.deletedBy.lastName}
                                   </Text>
                               ) : (
-                                  <Text fz="xs" c="ldGray.6">
+                                  <Text fz="xs" c="dimmed">
                                       Unknown
                                   </Text>
                               ),
@@ -351,12 +373,12 @@ const RecentlyDeletedPage: FC<Props> = ({ projectUuid }) => {
                 size: 130,
                 Header: ({ column }) => (
                     <Group gap="two" wrap="nowrap">
-                        <MantineIcon icon={IconCalendar} color="ldGray.6" />
+                        <MantineIcon icon={IconCalendar} color="dimmed" />
                         {column.columnDef.header}
                     </Group>
                 ),
                 Cell: ({ row }) => (
-                    <Text fz="xs" c="ldGray.6">
+                    <Text fz="xs" c="dimmed">
                         {new Date(row.original.deletedAt).toLocaleDateString()}
                     </Text>
                 ),
@@ -367,7 +389,7 @@ const RecentlyDeletedPage: FC<Props> = ({ projectUuid }) => {
                 size: 140,
                 Header: ({ column }) => (
                     <Group gap="two" wrap="nowrap">
-                        <MantineIcon icon={IconClock} color="ldGray.6" />
+                        <MantineIcon icon={IconClock} color="dimmed" />
                         {column.columnDef.header}
                     </Group>
                 ),
@@ -410,6 +432,7 @@ const RecentlyDeletedPage: FC<Props> = ({ projectUuid }) => {
                                         });
                                         break;
                                     case ContentType.DASHBOARD:
+                                    case ContentType.DOCUMENT:
                                         restoreContent({
                                             uuid: item.uuid,
                                             contentType: item.contentType,
@@ -448,6 +471,7 @@ const RecentlyDeletedPage: FC<Props> = ({ projectUuid }) => {
                                         });
                                         break;
                                     case ContentType.DASHBOARD:
+                                    case ContentType.DOCUMENT:
                                         permanentlyDelete({
                                             uuid: item.uuid,
                                             contentType: item.contentType,
@@ -486,6 +510,7 @@ const RecentlyDeletedPage: FC<Props> = ({ projectUuid }) => {
             isRestoring,
             isDeleting,
             dataAppsEnabled,
+            documentsEnabled,
         ],
     );
 
@@ -566,11 +591,10 @@ const RecentlyDeletedPage: FC<Props> = ({ projectUuid }) => {
                 p={`${theme.spacing.sm} ${theme.spacing.md}`}
                 wrap="nowrap"
             >
-                <Group gap="xs" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
-                    <Tooltip withinPortal label="Search by item name">
+                <Group gap="xs" wrap="nowrap" flex={1} miw={0}>
+                    <Tooltip label="Search by item name">
                         <TextInput
                             size="xs"
-                            radius="md"
                             type="search"
                             variant="default"
                             placeholder="Search deleted items..."
@@ -578,7 +602,7 @@ const RecentlyDeletedPage: FC<Props> = ({ projectUuid }) => {
                             leftSection={
                                 <MantineIcon
                                     size="md"
-                                    color="ldGray.6"
+                                    color="dimmed"
                                     icon={IconSearch}
                                 />
                             }
@@ -652,14 +676,10 @@ const RecentlyDeletedPage: FC<Props> = ({ projectUuid }) => {
                         </Text>
                     </Box>
                     <Tooltip label="Click to refresh the list">
-                        <ActionIcon
-                            onClick={() => refetch()}
-                            variant="subtle"
-                            size="xs"
-                        >
+                        <ActionIcon onClick={() => refetch()} size="xs">
                             <MantineIcon
                                 icon={IconRefresh}
-                                color="ldGray.6"
+                                color="dimmed"
                                 stroke={2}
                             />
                         </ActionIcon>

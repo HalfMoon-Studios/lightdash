@@ -1,4 +1,5 @@
 import {
+    deriveDataAppVizFieldMetadata,
     getEffectiveOptionValues,
     type DataAppVizContext,
     type DataAppVizFieldMapping,
@@ -8,6 +9,7 @@ import {
     type ReadyQueryResultsPage,
     type ResultRow,
 } from '@lightdash/common';
+import { type DataAppVizResolvedColors } from '../hooks/useDataAppVizResolvedColors';
 import {
     autoMapDataAppVizFields,
     reconcileDataAppVizFieldMapping,
@@ -23,7 +25,24 @@ type Args = {
     pivotDetails: ReadyQueryResultsPage['pivotDetails'];
     colorPalette: string[];
     optionValues: DataAppVizOptionValues;
+    resolvedColors: DataAppVizResolvedColors;
 };
+
+export const resolveExplorerVizFieldMapping = ({
+    schema,
+    itemsMap,
+    persistedFieldMapping,
+}: Pick<
+    Args,
+    'schema' | 'itemsMap' | 'persistedFieldMapping'
+>): DataAppVizFieldMapping =>
+    persistedFieldMapping
+        ? reconcileDataAppVizFieldMapping(
+              schema.fields,
+              itemsMap,
+              persistedFieldMapping,
+          )
+        : autoMapDataAppVizFields(schema.fields, itemsMap);
 
 /** A `DataAppVizContext` for previewing a chart type against the Explorer's
  *  own results while it is authored. Not a chart, so nothing to drill into. */
@@ -35,18 +54,22 @@ export const buildExplorerVizContext = ({
     pivotDetails,
     colorPalette,
     optionValues,
-}: Args): DataAppVizContext => ({
-    fieldMapping: persistedFieldMapping
-        ? reconcileDataAppVizFieldMapping(
-              schema.fields,
-              itemsMap,
-              persistedFieldMapping,
-          )
-        : autoMapDataAppVizFields(schema.fields, itemsMap),
-    rows,
-    options: getEffectiveOptionValues(schema.configOptions, optionValues),
-    colorPalette,
-    pivotDetails,
-    underlyingData: { enabled: false },
-    drillDown: { enabled: false },
-});
+    resolvedColors,
+}: Args): DataAppVizContext => {
+    const fieldMapping = resolveExplorerVizFieldMapping({
+        schema,
+        itemsMap,
+        persistedFieldMapping,
+    });
+    return {
+        fieldMapping,
+        fields: deriveDataAppVizFieldMetadata(fieldMapping, itemsMap),
+        rows,
+        options: getEffectiveOptionValues(schema.configOptions, optionValues),
+        colorPalette,
+        ...resolvedColors,
+        pivotDetails,
+        underlyingData: { enabled: false },
+        drillDown: { enabled: false },
+    };
+};

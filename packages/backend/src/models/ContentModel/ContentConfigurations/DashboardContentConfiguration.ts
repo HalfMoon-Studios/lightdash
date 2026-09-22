@@ -5,6 +5,7 @@ import {
     DashboardsTableName,
     DashboardVersionsTableName,
 } from '../../../database/entities/dashboards';
+import { EmailTableName } from '../../../database/entities/emails';
 import { OrganizationTableName } from '../../../database/entities/organizations';
 import { PinnedDashboardTableName } from '../../../database/entities/pinnedList';
 import { ProjectTableName } from '../../../database/entities/projects';
@@ -108,6 +109,21 @@ export const dashboardContentConfiguration: ContentConfiguration<SummaryContentR
                     `verified_by_user.user_uuid`,
                     `${ContentVerificationTableName}.verified_by_user_uuid`,
                 )
+                .leftJoin(
+                    `${UserTableName} as owner_user`,
+                    `owner_user.user_uuid`,
+                    `${DashboardsTableName}.owner_user_uuid`,
+                )
+                .leftJoin(
+                    `${EmailTableName} as owner_email`,
+                    function ownerEmailJoin() {
+                        this.on(
+                            'owner_email.user_id',
+                            '=',
+                            'owner_user.user_id',
+                        ).andOnVal('owner_email.is_primary', true);
+                    },
+                )
                 .select<SummaryContentRow[]>([
                     knex.raw(`'${ContentType.DASHBOARD}' as content_type`),
                     knex.raw(
@@ -141,6 +157,7 @@ export const dashboardContentConfiguration: ContentConfiguration<SummaryContentR
                     knex.raw(
                         `${DashboardsTableName}.first_viewed_at::timestamp as first_viewed_at`,
                     ),
+                    knex.raw('null::timestamp as last_viewed_at'),
                     knex.raw(
                         `${DashboardsTableName}.deleted_at::timestamp as deleted_at`,
                     ),
@@ -155,6 +172,10 @@ export const dashboardContentConfiguration: ContentConfiguration<SummaryContentR
                     `verified_by_user.user_uuid as verified_by_user_uuid`,
                     `verified_by_user.first_name as verified_by_user_first_name`,
                     `verified_by_user.last_name as verified_by_user_last_name`,
+                    `${DashboardsTableName}.owner_user_uuid as owner_user_uuid`,
+                    `owner_user.first_name as owner_user_first_name`,
+                    `owner_user.last_name as owner_user_last_name`,
+                    `owner_email.email as owner_user_email`,
                     knex.raw(
                         `json_build_object(${
                             filters.includeDescendantCounts
@@ -201,6 +222,13 @@ export const dashboardContentConfiguration: ContentConfiguration<SummaryContentR
                             filters.spaceUuids,
                         );
                     }
+
+                    if (filters.ownerUserUuids) {
+                        void builder.whereIn(
+                            `${DashboardsTableName}.owner_user_uuid`,
+                            filters.ownerUserUuids,
+                        );
+                    }
                     void builder.where(
                         `last_version.dashboard_version_id`,
                         knex.raw(`(select dashboard_version_id
@@ -236,6 +264,8 @@ export const dashboardContentConfiguration: ContentConfiguration<SummaryContentR
             }
             return {
                 contentType: ContentType.DASHBOARD,
+                // Filled in by ContentService for the requesting user.
+                directAccessRoles: [],
                 uuid: value.uuid,
                 slug: value.slug,
                 name: value.name,
@@ -276,6 +306,15 @@ export const dashboardContentConfiguration: ContentConfiguration<SummaryContentR
                     : null,
                 views: value.views,
                 firstViewedAt: value.first_viewed_at,
+                lastViewedAt: value.last_viewed_at,
+                owner: value.owner_user_uuid
+                    ? {
+                          userUuid: value.owner_user_uuid,
+                          firstName: value.owner_user_first_name ?? '',
+                          lastName: value.owner_user_last_name ?? '',
+                          email: value.owner_user_email,
+                      }
+                    : null,
                 verification:
                     value.verified_at !== null &&
                     value.verified_by_user_uuid !== null &&

@@ -5,6 +5,7 @@ import {
     getErrorMessage,
     getItemId,
     getItemMap,
+    getMergeColumnTotals,
     getMetricOverridesWithPopInheritance,
     isCustomDimension,
     isDimension,
@@ -50,6 +51,8 @@ import {
     TableHeaderRegularLabel,
 } from '../components/common/Table/Table.styles';
 import TotalCalculationErrorCell from '../components/common/Table/TotalCalculationErrorCell';
+import TotalFromSourceCell from '../components/common/Table/TotalFromSourceCell';
+import TotalNotComputableCell from '../components/common/Table/TotalNotComputableCell';
 import {
     columnHelper,
     type TableColumn,
@@ -68,6 +71,7 @@ import {
 import provenanceStyles from '../features/mergeQuery/components/MergeColumnProvenance.module.css';
 import { useMergeSafe } from '../features/mergeQuery/context/useMerge';
 import { getMergeFieldProvenance } from '../features/mergeQuery/utils/getMergeFieldProvenance';
+import { canHaveWarehouseTotal } from '../utils/canHaveWarehouseTotal';
 import { getFieldColors } from '../utils/fieldColors';
 import { TableCellBar } from './TableCellBar';
 import {
@@ -522,6 +526,17 @@ export const useColumns = (): TableColumn[] => {
                 : exploreActiveFields,
         [mergeResults, exploreActiveFields],
     );
+    const mergeColumnTotals = useMemo(
+        () =>
+            mergeResults
+                ? getMergeColumnTotals({
+                      mergeQuery: mergeResults.mergeQuery,
+                      fieldIds: mergeResults.columnOrder,
+                      itemsMap: mergeResults.fields,
+                  })
+                : {},
+        [mergeResults],
+    );
     const resultsMetricQuery =
         mergeResults?.metricQuery ?? query.data?.metricQuery;
     const resultsFields = mergeResults?.fields ?? query.data?.fields;
@@ -635,12 +650,21 @@ export const useColumns = (): TableColumn[] => {
         return result;
     }, [itemsMap, activeFields]);
 
-    const sourceQueryUuid = unpivotedEnabled
-        ? unpivotedQueryResults.queryUuid
-        : queryResults.queryUuid;
-    const sourceQueryStatus = unpivotedEnabled
-        ? unpivotedQueryResults.queryStatus
-        : queryResults.queryStatus;
+    // A merged result's totals come from the merged rows, so the merge run
+    // is the source; the unpivoted run when the chart run is pivoted
+    const mergeTotalsSource = mergeResults
+        ? (mergeResults.unpivotedResults ?? mergeResults.results)
+        : null;
+    const sourceQueryUuid =
+        mergeTotalsSource?.queryUuid ??
+        (unpivotedEnabled
+            ? unpivotedQueryResults.queryUuid
+            : queryResults.queryUuid);
+    const sourceQueryStatus =
+        mergeTotalsSource?.queryStatus ??
+        (unpivotedEnabled
+            ? unpivotedQueryResults.queryStatus
+            : queryResults.queryStatus);
     // Only request totals once the source query has succeeded
     const isInitialQueryReady = sourceQueryStatus === QueryHistoryStatus.READY;
     const hasMetricFields = !!resultsMetricQuery?.metrics.length;
@@ -658,10 +682,7 @@ export const useColumns = (): TableColumn[] => {
             isInitialQueryReady &&
             !!sourceQueryUuid &&
             hasMetricFields &&
-            totalsEnabledByDefault &&
-            // Totals are recomputed from the metric query behind the source
-            // query, which a merged result does not have.
-            !mergeResults,
+            totalsEnabledByDefault,
         invalidateCache: validQueryArgs?.invalidateCache,
     });
 
@@ -759,23 +780,49 @@ export const useColumns = (): TableColumn[] => {
                         );
                     },
                     footer: () => {
+                        const mergeTotal = mergeColumnTotals[fieldId];
                         if (totals?.[fieldId] !== undefined) {
-                            return formatItemValue(
+                            const value = formatItemValue(
                                 item,
                                 totals[fieldId],
                                 false,
                                 parameters,
                                 timezone,
                             );
+                            return mergeTotal?.from === 'sourceQuery' ? (
+                                <TotalFromSourceCell
+                                    value={value}
+                                    sourceLabel={mergeTotal.sourceLabel}
+                                />
+                            ) : (
+                                value
+                            );
                         }
-                        if (totalsError && isNumericItem(item)) {
+                        // A merged column with no total says why instead
+                        // of showing a blank
+                        if (
+                            mergeResults &&
+                            totalsEnabledByDefault &&
+                            canHaveWarehouseTotal(item) &&
+                            mergeTotal?.from === null
+                        ) {
+                            return (
+                                <TotalNotComputableCell
+                                    reason={mergeTotal.reason}
+                                />
+                            );
+                        }
+                        if (totalsError && canHaveWarehouseTotal(item)) {
                             return (
                                 <TotalCalculationErrorCell
                                     error={totalsError}
                                 />
                             );
                         }
-                        if (isCalculatingTotals && isNumericItem(item)) {
+                        if (
+                            isCalculatingTotals &&
+                            canHaveWarehouseTotal(item)
+                        ) {
                             return (
                                 <Skeleton
                                     height={16}
@@ -821,7 +868,6 @@ export const useColumns = (): TableColumn[] => {
                         header: () => (
                             <Group gap="two">
                                 <Tooltip
-                                    withinPortal
                                     label="This field was not found in the dbt project."
                                     position="top"
                                 >
@@ -859,10 +905,12 @@ export const useColumns = (): TableColumn[] => {
         totals,
         totalsError,
         isCalculatingTotals,
+        totalsEnabledByDefault,
         exploreData,
         parameters,
         timezone,
         mergeResults,
         mergeSourceLabels,
+        mergeColumnTotals,
     ]);
 };

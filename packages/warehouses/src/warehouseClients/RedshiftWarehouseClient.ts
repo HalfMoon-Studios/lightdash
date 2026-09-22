@@ -1,8 +1,10 @@
 import {
     AnyType,
     CreateRedshiftCredentials,
+    getWarehouseTableType,
     RedshiftAuthenticationType,
     SupportedDbtAdapter,
+    WarehouseCatalog,
     WarehouseResults,
     WarehouseTypes,
 } from '@lightdash/common';
@@ -128,6 +130,63 @@ export class RedshiftWarehouseClient extends PostgresClient<CreateRedshiftCreden
             this.config = await this.resolveIamPoolConfig();
         }
         return super.streamQuery(sql, streamCallback, options);
+    }
+
+    // SVV_ALL_* are grant-filtered catalog views; SVV_TABLES and SVV_COLUMNS are
+    // visible to all users unless metadata_security is on. Keep SVV_COLUMNS for
+    // late-binding view columns, gated on SVV_ALL_TABLES. Plain Postgres keeps its catalog.
+    async getAllTables() {
+        if (!(await this.isRedshift())) return super.getAllTables();
+        const query = `
+            SELECT database_name, schema_name, table_name, table_type
+            FROM svv_all_tables
+            WHERE database_name = $1
+                AND schema_name NOT IN ('information_schema', 'pg_catalog', 'pg_internal')
+            ORDER BY 1, 2, 3
+        `;
+        const { rows } = await this.runQuery(query, {}, undefined, [
+            this.credentials.dbname,
+        ]);
+        return rows.map((row) => ({
+            database: row.database_name,
+            schema: row.schema_name,
+            table: row.table_name,
+            tableType: getWarehouseTableType(row.table_type),
+        }));
+    }
+
+    async getFields(
+        tableName: string,
+        schema?: string,
+        database?: string,
+        tags?: Record<string, string>,
+    ): Promise<WarehouseCatalog> {
+        if (!(await this.isRedshift())) {
+            return super.getFields(tableName, schema, database, tags);
+        }
+        const { values, schemaParam, databaseParam } = this.bindFieldsFilters(
+            tableName,
+            schema,
+            database,
+        );
+        const query = `
+            SELECT c.table_catalog,
+                   c.table_schema,
+                   c.table_name,
+                   c.column_name,
+                   c.data_type
+            FROM svv_columns c
+            JOIN svv_all_tables t
+                ON t.database_name = c.table_catalog
+                AND t.schema_name = c.table_schema
+                AND t.table_name = c.table_name
+            WHERE c.table_name = $1
+            ${schemaParam ? `AND c.table_schema = ${schemaParam}` : ''}
+            ${databaseParam ? `AND c.table_catalog = ${databaseParam}` : ''}
+            ORDER BY c.ordinal_position
+        `;
+        const { rows } = await this.runQuery(query, tags, undefined, values);
+        return this.parsePostgresCatalog(rows);
     }
 
     private async resolveIamPoolConfig(): Promise<PoolConfig> {

@@ -1,4 +1,5 @@
 import { ActionIcon, Button, Divider, Group, Tooltip } from '@mantine/core';
+import { useMediaQuery } from '@mantine/hooks';
 import {
     IconNotebook,
     IconSettings,
@@ -29,18 +30,26 @@ export const AgentPageHeader: FC<Props> = ({
     settingsHref,
 }) => {
     const settingsLinkState = useAgentSettingsLinkState();
-    const hasAgentActions = Boolean(onOpenMemories || settingsHref);
+    const isMobile = useMediaQuery('(max-width: 768px)', undefined, {
+        getInitialValueInEffect: false,
+    });
+    // Memories and minimize are desktop affordances — the mobile header only
+    // has room for the agent selector, sidebar toggle and share.
+    const showMemories = Boolean(onOpenMemories) && !isMobile;
+    const showMinimize = Boolean(onMinimize) && !isMobile;
+    const showSettings = Boolean(settingsHref) && !isMobile;
+    const hasAgentActions = showMemories || showSettings;
 
     return (
         <Group align="center" justify="space-between" className={styles.root}>
             <Group gap="sm">
-                {leftSection}
-                {leftSection && hasAgentActions && (
+                {!isMobile && leftSection}
+                {!isMobile && leftSection && hasAgentActions && (
                     <Divider orientation="vertical" my={6} />
                 )}
                 {hasAgentActions && (
                     <Group gap={4}>
-                        {onOpenMemories && (
+                        {showMemories && (
                             <Button
                                 variant="default"
                                 className={styles.action}
@@ -57,7 +66,7 @@ export const AgentPageHeader: FC<Props> = ({
                                 Memories
                             </Button>
                         )}
-                        {settingsHref && (
+                        {showSettings && settingsHref && (
                             <Button
                                 component={Link}
                                 variant="default"
@@ -82,7 +91,6 @@ export const AgentPageHeader: FC<Props> = ({
                 {onShare && (
                     <Tooltip label="Share thread" position="bottom">
                         <ActionIcon
-                            variant="subtle"
                             color="ldGray"
                             className={styles.threadAction}
                             onClick={onShare}
@@ -97,10 +105,9 @@ export const AgentPageHeader: FC<Props> = ({
                         </ActionIcon>
                     </Tooltip>
                 )}
-                {onMinimize && (
+                {showMinimize && (
                     <Tooltip label="Minimize" position="bottom">
                         <ActionIcon
-                            variant="subtle"
                             color="ldGray"
                             className={styles.threadAction}
                             onClick={onMinimize}

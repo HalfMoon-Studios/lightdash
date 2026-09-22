@@ -2,14 +2,17 @@ import {
     AI_DEEP_RESEARCH_DEFAULT_LIMITS,
     AiOrganizationSettings,
     AiProviderApiKeyHints,
+    AiProviderApiKeysSet,
     BYO_AI_PROVIDERS,
     CreateAiOrganizationSettings,
     NotFoundError,
     ParameterError,
     UpdateAiOrganizationSettings,
     UpdateAiProviderApiKeys,
+    type ByoAiProvider,
 } from '@lightdash/common';
 import { Knex } from 'knex';
+import { z } from 'zod';
 import Logger from '../../logging/logger';
 import { EncryptionUtil } from '../../utils/EncryptionUtil/EncryptionUtil';
 import {
@@ -28,10 +31,42 @@ export type StoredAiOrganizationSettings = Omit<
     'aiAgentMemoryEnabled'
 >;
 
-export type AiOrgProviderApiKeys = {
-    anthropic?: string;
-    openai?: string;
+const storedAiOrgProviderApiKeyFields = {
+    anthropic: z.string().optional(),
+    google: z.string().optional(),
+    openai: z.string().optional(),
+} satisfies Record<ByoAiProvider, z.ZodOptional<z.ZodString>>;
+
+// Keep known provider keys strongly typed and exhaustive, but strip unknown
+// future-provider keys so mixed-version deploys do not invalidate the whole blob.
+const storedAiOrgProviderApiKeysSchema = z.object(
+    storedAiOrgProviderApiKeyFields,
+);
+
+export type AiOrgProviderApiKeys = z.infer<
+    typeof storedAiOrgProviderApiKeysSchema
+>;
+
+export const parseAiOrgProviderApiKeys = (
+    value: unknown,
+): AiOrgProviderApiKeys | null => {
+    const result = storedAiOrgProviderApiKeysSchema.safeParse(value);
+    if (!result.success) return null;
+
+    return result.data;
 };
+
+const emptyProviderApiKeyHints = (): AiProviderApiKeyHints => ({
+    anthropic: null,
+    google: null,
+    openai: null,
+});
+
+const emptyProviderApiKeysSet = (): AiProviderApiKeysSet => ({
+    anthropic: false,
+    google: false,
+    openai: false,
+});
 
 export const applyProviderApiKeyUpdates = (
     existing: AiOrgProviderApiKeys,
@@ -66,13 +101,34 @@ export const buildProviderApiKeyHint = (key: string): string => {
 export const buildProviderApiKeyHints = (
     keys: AiOrgProviderApiKeys,
 ): AiProviderApiKeyHints | null => {
-    if (!keys.anthropic && !keys.openai) return null;
-    return {
-        anthropic: keys.anthropic
-            ? buildProviderApiKeyHint(keys.anthropic)
-            : null,
-        openai: keys.openai ? buildProviderApiKeyHint(keys.openai) : null,
-    };
+    if (!BYO_AI_PROVIDERS.some((provider) => keys[provider])) return null;
+    const hints = emptyProviderApiKeyHints();
+    BYO_AI_PROVIDERS.forEach((provider) => {
+        const key = keys[provider];
+        hints[provider] = key ? buildProviderApiKeyHint(key) : null;
+    });
+    return hints;
+};
+
+export const normalizeProviderApiKeyHints = (
+    hints: Partial<AiProviderApiKeyHints> | null,
+): AiProviderApiKeyHints => {
+    const normalized = emptyProviderApiKeyHints();
+    BYO_AI_PROVIDERS.forEach((provider) => {
+        const hint = hints?.[provider];
+        normalized[provider] = typeof hint === 'string' ? hint : null;
+    });
+    return normalized;
+};
+
+export const buildProviderApiKeysSet = (
+    keys: AiOrgProviderApiKeys,
+): AiProviderApiKeysSet => {
+    const keysSet = emptyProviderApiKeysSet();
+    BYO_AI_PROVIDERS.forEach((provider) => {
+        keysSet[provider] = Boolean(keys[provider]);
+    });
+    return keysSet;
 };
 
 export class AiOrganizationSettingsModel {
@@ -90,9 +146,11 @@ export class AiOrganizationSettingsModel {
     ): AiOrgProviderApiKeys {
         if (!encrypted) return {};
         try {
-            return JSON.parse(
-                this.encryptionUtil.decrypt(encrypted),
-            ) as AiOrgProviderApiKeys;
+            const keys = parseAiOrgProviderApiKeys(
+                JSON.parse(this.encryptionUtil.decrypt(encrypted)),
+            );
+            if (!keys) throw new Error('Invalid provider key data');
+            return keys;
         } catch {
             Logger.warn(
                 'Failed to decrypt AI provider API keys; treating as unset',
@@ -102,7 +160,7 @@ export class AiOrganizationSettingsModel {
     }
 
     private encryptProviderApiKeys(keys: AiOrgProviderApiKeys): Buffer | null {
-        if (!keys.anthropic && !keys.openai) return null;
+        if (!BYO_AI_PROVIDERS.some((provider) => keys[provider])) return null;
         return this.encryptionUtil.encrypt(JSON.stringify(keys));
     }
 
@@ -119,19 +177,20 @@ export class AiOrganizationSettingsModel {
             deepResearchLimits: db.deep_research_limits,
             deepResearchRawSqlEnabled: db.deep_research_raw_sql_enabled,
             mcpContentWritesEnabled: db.mcp_content_writes_enabled,
+            mcpAgentsEnabled: db.mcp_agents_enabled,
+            dataAppRuntimeAiEnabled: db.data_app_runtime_ai_enabled,
+            dataAppContinueInAskAiEnabled:
+                db.data_app_continue_in_ask_ai_enabled,
+            dataAppAutoAnalysisEnabled: db.data_app_auto_analysis_enabled,
             requireExplicitSlackChannelLinking:
                 db.require_explicit_slack_channel_linking,
             defaultAiAgentModelConfig: db.default_ai_agent_model_config,
             modelVisibility: db.model_visibility,
             dataAppModelVisibility: db.data_app_model_visibility,
-            providerApiKeysSet: {
-                anthropic: Boolean(keys.anthropic),
-                openai: Boolean(keys.openai),
-            },
-            providerApiKeyHints: db.provider_api_key_hints ?? {
-                anthropic: null,
-                openai: null,
-            },
+            providerApiKeysSet: buildProviderApiKeysSet(keys),
+            providerApiKeyHints: normalizeProviderApiKeyHints(
+                db.provider_api_key_hints,
+            ),
             threadRetentionHours: db.thread_retention_hours,
         };
     }
@@ -180,7 +239,9 @@ export class AiOrganizationSettingsModel {
         const keys = this.decryptProviderApiKeys(
             row.encrypted_provider_api_keys,
         );
-        return keys.anthropic || keys.openai ? keys : null;
+        return BYO_AI_PROVIDERS.some((provider) => keys[provider])
+            ? keys
+            : null;
     }
 
     async create(
@@ -199,6 +260,11 @@ export class AiOrganizationSettingsModel {
                 deep_research_limits: data.deepResearchLimits,
                 deep_research_raw_sql_enabled: data.deepResearchRawSqlEnabled,
                 mcp_content_writes_enabled: data.mcpContentWritesEnabled,
+                mcp_agents_enabled: data.mcpAgentsEnabled,
+                data_app_runtime_ai_enabled: data.dataAppRuntimeAiEnabled,
+                data_app_continue_in_ask_ai_enabled:
+                    data.dataAppContinueInAskAiEnabled,
+                data_app_auto_analysis_enabled: data.dataAppAutoAnalysisEnabled,
                 require_explicit_slack_channel_linking:
                     data.requireExplicitSlackChannelLinking,
                 default_ai_agent_model_config: data.defaultAiAgentModelConfig,
@@ -226,6 +292,10 @@ export class AiOrganizationSettingsModel {
                 | 'deep_research_limits'
                 | 'deep_research_raw_sql_enabled'
                 | 'mcp_content_writes_enabled'
+                | 'mcp_agents_enabled'
+                | 'data_app_runtime_ai_enabled'
+                | 'data_app_continue_in_ask_ai_enabled'
+                | 'data_app_auto_analysis_enabled'
                 | 'require_explicit_slack_channel_linking'
                 | 'default_ai_agent_model_config'
                 | 'model_visibility'
@@ -251,6 +321,21 @@ export class AiOrganizationSettingsModel {
         if (data.mcpContentWritesEnabled !== undefined) {
             updateData.mcp_content_writes_enabled =
                 data.mcpContentWritesEnabled;
+        }
+        if (data.mcpAgentsEnabled !== undefined) {
+            updateData.mcp_agents_enabled = data.mcpAgentsEnabled;
+        }
+        if (data.dataAppRuntimeAiEnabled !== undefined) {
+            updateData.data_app_runtime_ai_enabled =
+                data.dataAppRuntimeAiEnabled;
+        }
+        if (data.dataAppContinueInAskAiEnabled !== undefined) {
+            updateData.data_app_continue_in_ask_ai_enabled =
+                data.dataAppContinueInAskAiEnabled;
+        }
+        if (data.dataAppAutoAnalysisEnabled !== undefined) {
+            updateData.data_app_auto_analysis_enabled =
+                data.dataAppAutoAnalysisEnabled;
         }
         if (data.requireExplicitSlackChannelLinking !== undefined) {
             updateData.require_explicit_slack_channel_linking =
@@ -361,6 +446,12 @@ export class AiOrganizationSettingsModel {
                 deepResearchRawSqlEnabled:
                     data.deepResearchRawSqlEnabled ?? false,
                 mcpContentWritesEnabled: data.mcpContentWritesEnabled ?? true,
+                mcpAgentsEnabled: data.mcpAgentsEnabled ?? true,
+                dataAppRuntimeAiEnabled: data.dataAppRuntimeAiEnabled ?? false,
+                dataAppContinueInAskAiEnabled:
+                    data.dataAppContinueInAskAiEnabled ?? true,
+                dataAppAutoAnalysisEnabled:
+                    data.dataAppAutoAnalysisEnabled ?? false,
                 requireExplicitSlackChannelLinking:
                     data.requireExplicitSlackChannelLinking ?? false,
                 defaultAiAgentModelConfig:
@@ -372,12 +463,6 @@ export class AiOrganizationSettingsModel {
             },
             database,
         );
-    }
-
-    async transaction<T>(
-        callback: (trx: Knex.Transaction) => Promise<T>,
-    ): Promise<T> {
-        return this.database.transaction(callback);
     }
 
     async delete(organizationUuid: string): Promise<void> {

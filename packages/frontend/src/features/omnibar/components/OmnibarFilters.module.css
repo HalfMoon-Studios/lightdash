@@ -10,10 +10,7 @@
 
 .filterButton[data-expanded],
 .filterButton.filterButtonActive {
-    background-color: light-dark(
-        var(--mantine-color-ldGray-1),
-        var(--mantine-color-ldDark-5)
-    );
+    background-color: var(--mantine-color-default-hover);
     color: light-dark(
         var(--mantine-color-ldGray-9),
         var(--mantine-color-ldGray-9)
@@ -50,4 +47,14 @@
    Select wrapper can't reflow the modal, whatever Mantine renders inside. */
 .filtersRow {
     height: 38px;
+
+    @mixin smaller-than $mantine-breakpoint-sm {
+        height: auto;
+        flex-wrap: wrap;
+        flex-shrink: 0;
+
+        button {
+            min-height: 44px;
+        }
+    }
 }

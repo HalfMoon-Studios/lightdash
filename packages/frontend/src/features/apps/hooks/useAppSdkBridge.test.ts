@@ -2,6 +2,7 @@ import {
     APP_SDK_COLOR_SCHEME_MESSAGE,
     APP_SDK_COLOR_SCHEME_REQUEST_MESSAGE,
     APP_SDK_DATA_APP_VIZ_CONTEXT_MESSAGE,
+    APP_SDK_INSIGHTS_MESSAGE,
     APP_SDK_VIZ_CONTEXT_REQUEST_MESSAGE,
     FilterOperator,
     JWT_HEADER_NAME,
@@ -123,6 +124,7 @@ const PREVIEW_TOKEN = 'signed-preview-token';
 function renderBridge(
     onQueryEvent: (event: QueryEvent) => void,
     previewToken = PREVIEW_TOKEN,
+    dataAppVizMode = false,
 ) {
     const iframeRef = {
         current: { contentWindow: window } as unknown as HTMLIFrameElement,
@@ -136,6 +138,7 @@ function renderBridge(
             appUuid: APP_UUID,
             previewToken,
             onQueryEvent,
+            dataAppVizMode,
         }),
     );
 }
@@ -148,6 +151,64 @@ describe('useAppSdkBridge', () => {
     afterEach(() => {
         vi.unstubAllGlobals();
         vi.clearAllMocks();
+    });
+
+    it('accepts render acknowledgements only from this iframe and an allowed origin', () => {
+        const onVizRendered = vi.fn();
+        renderHook(() =>
+            useAppSdkBridge({
+                colorScheme: 'light',
+                iframeRef: {
+                    current: {
+                        contentWindow: window,
+                    } as unknown as HTMLIFrameElement,
+                },
+                expectedPreviewOrigin: window.location.origin,
+                projectUuid: PROJECT_UUID,
+                appUuid: APP_UUID,
+                previewToken: PREVIEW_TOKEN,
+                onVizRendered,
+                vizRenderId: 'render-1',
+            }),
+        );
+        const data = {
+            type: 'lightdash:sdk:viz-rendered',
+            renderId: 'render-1',
+        };
+        window.dispatchEvent(
+            new MessageEvent('message', { data, source: null, origin: 'null' }),
+        );
+        window.dispatchEvent(
+            new MessageEvent('message', {
+                data,
+                source: window,
+                origin: 'https://other.example',
+            }),
+        );
+        expect(onVizRendered).not.toHaveBeenCalled();
+        dispatchFetchMessage({ ...data, renderId: 'stale-render' });
+        expect(onVizRendered).not.toHaveBeenCalled();
+        dispatchFetchMessage(data);
+        expect(onVizRendered).toHaveBeenCalledExactlyOnceWith('render-1');
+    });
+
+    it('blocks every query route for a chart-type iframe', async () => {
+        renderBridge(() => undefined, PREVIEW_TOKEN, true);
+        const postMessageSpy = vi.spyOn(window, 'postMessage');
+
+        postMetricQuery();
+
+        await vi.waitFor(() =>
+            expect(postMessageSpy).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'lightdash:sdk:fetch-response',
+                    id: POST_ID,
+                    error: `Blocked: POST ${POST_PATH}`,
+                }),
+                '*',
+            ),
+        );
+        expect(fetch).not.toHaveBeenCalled();
     });
 
     it('re-keys ready events to the POST request id (regression: id mismatch left MinimalApp stuck on the indicator)', async () => {
@@ -931,6 +992,7 @@ describe('external-fetch branch', () => {
             results: {
                 status: 200,
                 contentType: 'application/json',
+                headers: {},
                 body: { ok: true },
                 truncated: false,
             },
@@ -973,6 +1035,7 @@ describe('external-fetch branch', () => {
             results: {
                 status: 200,
                 contentType: 'application/json',
+                headers: {},
                 body: { temperature: 18 },
                 truncated: false,
             },
@@ -999,6 +1062,7 @@ describe('external-fetch branch', () => {
         const result = {
             status: 200,
             contentType: 'application/json',
+            headers: { 'retry-after': '2' },
             body: 1,
             truncated: false,
         };
@@ -1169,6 +1233,10 @@ describe('data-app-viz-context push', () => {
 
     const dataAppVizContext: DataAppVizContext = {
         fieldMapping: { category: 'orders_status', value: 'orders_count' },
+        fields: {
+            orders_status: { label: 'Status', tableLabel: 'Orders' },
+            orders_count: { label: 'Count', tableLabel: 'Orders' },
+        },
         rows: [
             {
                 orders_status: {
@@ -1179,6 +1247,8 @@ describe('data-app-viz-context push', () => {
         ],
         options: { showLegend: true, barColor: '#ff0000' },
         colorPalette: ['#7162FF', '#1A1B1E'],
+        seriesColors: {},
+        valueColors: {},
         pivotDetails: null,
         underlyingData: { enabled: false },
         drillDown: { enabled: false },
@@ -1581,8 +1651,13 @@ describe('color scheme push', () => {
         postSpy.mockClear();
         result.current.handleIframeLoad();
         expect(postSpy.mock.calls.map(([message]) => message)).toEqual([
-            { type: 'lightdash:sdk:ready' },
+            { type: 'lightdash:sdk:ready', appUuid: APP_UUID },
             { type: APP_SDK_COLOR_SCHEME_MESSAGE, colorScheme: 'dark' },
+            // No insights supplied: the host says so instead of staying silent.
+            {
+                type: APP_SDK_INSIGHTS_MESSAGE,
+                payload: expect.objectContaining({ status: 'unavailable' }),
+            },
         ]);
     });
 
@@ -1658,6 +1733,7 @@ describe('delivery-render flag on the ready handshake', () => {
         expect(postSpy.mock.calls[0][0]).toEqual({
             type: 'lightdash:sdk:ready',
             deliveryRender: true,
+            appUuid: APP_UUID,
         });
     });
 
@@ -1670,6 +1746,7 @@ describe('delivery-render flag on the ready handshake', () => {
         result.current.handleIframeLoad();
         expect(postSpy.mock.calls[0][0]).toEqual({
             type: 'lightdash:sdk:ready',
+            appUuid: APP_UUID,
         });
     });
 });
@@ -1700,6 +1777,7 @@ describe('viz underlying-data virtual route', () => {
             path: string;
             body: unknown;
         },
+        dataAppVizMode = false,
     ) {
         const iframeRef = {
             current: { contentWindow: window } as unknown as HTMLIFrameElement,
@@ -1713,6 +1791,7 @@ describe('viz underlying-data virtual route', () => {
                 appUuid: APP_UUID,
                 previewToken: PREVIEW_TOKEN,
                 rewriteVizUnderlyingDataRequest,
+                dataAppVizMode,
             }),
         );
     }
@@ -1762,6 +1841,43 @@ describe('viz underlying-data virtual route', () => {
                 '*',
             ),
         );
+    });
+
+    it('allows only host-rewritten underlying data in viz mode', async () => {
+        const rewrite = vi.fn((intentBody: unknown) => ({
+            method: 'POST' as const,
+            path: UNDERLYING_DATA_PATH,
+            body: { rewritten: true, original: intentBody },
+        }));
+        renderBridgeWithRewrite(rewrite, true);
+        mockFetchOk({ status: 'ok', results: { queryUuid: QUERY_UUID } });
+
+        postVirtualRoute();
+        await vi.waitFor(() =>
+            expect(fetch).toHaveBeenCalledWith(
+                UNDERLYING_DATA_PATH,
+                expect.objectContaining({ method: 'POST' }),
+            ),
+        );
+
+        dispatchFetchMessage({
+            type: 'lightdash:sdk:fetch',
+            id: GET_ID,
+            method: 'POST',
+            path: UNDERLYING_DATA_PATH,
+            body: { bypass: true },
+        });
+        const postMessageSpy = vi.spyOn(window, 'postMessage');
+        await vi.waitFor(() =>
+            expect(postMessageSpy).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    id: GET_ID,
+                    error: `Blocked: POST ${UNDERLYING_DATA_PATH}`,
+                }),
+                '*',
+            ),
+        );
+        expect(fetch).toHaveBeenCalledTimes(1);
     });
 
     it('answers the virtual route with an error when no rewrite callback is installed', async () => {
@@ -1920,6 +2036,107 @@ describe('viz drill-down virtual route', () => {
                     type: 'lightdash:sdk:fetch-response',
                     id: POST_ID,
                     error: '"x" is not a metric on this chart.',
+                }),
+                '*',
+            ),
+        );
+        expect(fetch).not.toHaveBeenCalled();
+    });
+});
+
+describe('viz underlying-data host dialog virtual route', () => {
+    beforeEach(() => {
+        vi.stubGlobal('fetch', vi.fn());
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.clearAllMocks();
+    });
+
+    const VIRTUAL_PATH = '/__sdk/viz/underlying-data/open';
+    const INTENT = { row: {}, metric: 'x' };
+
+    function renderBridge(
+        onVizUnderlyingDataIntent?: (intentBody: unknown) => void,
+    ) {
+        const iframeRef = {
+            current: { contentWindow: window } as unknown as HTMLIFrameElement,
+        } as RefObject<HTMLIFrameElement | null>;
+        renderHook(() =>
+            useAppSdkBridge({
+                colorScheme: 'light',
+                iframeRef,
+                expectedPreviewOrigin: window.location.origin,
+                projectUuid: PROJECT_UUID,
+                appUuid: APP_UUID,
+                previewToken: PREVIEW_TOKEN,
+                onVizUnderlyingDataIntent,
+            }),
+        );
+    }
+
+    function postVirtualRoute() {
+        dispatchFetchMessage({
+            type: 'lightdash:sdk:fetch',
+            id: POST_ID,
+            method: 'POST',
+            path: VIRTUAL_PATH,
+            body: INTENT,
+        });
+    }
+
+    it('answers with an error when no host dialog handler is mounted', async () => {
+        renderBridge();
+        const postMessageSpy = vi.spyOn(window, 'postMessage');
+        postVirtualRoute();
+
+        await vi.waitFor(() =>
+            expect(postMessageSpy).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'lightdash:sdk:fetch-response',
+                    id: POST_ID,
+                    error: 'Underlying data is not available for this visualization.',
+                }),
+                '*',
+            ),
+        );
+        expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('invokes the host handler and acks without forwarding to the API', async () => {
+        const handler = vi.fn();
+        renderBridge(handler);
+        const postMessageSpy = vi.spyOn(window, 'postMessage');
+        postVirtualRoute();
+
+        await vi.waitFor(() =>
+            expect(postMessageSpy).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'lightdash:sdk:fetch-response',
+                    id: POST_ID,
+                    result: {},
+                }),
+                '*',
+            ),
+        );
+        expect(handler).toHaveBeenCalledWith(INTENT);
+        expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('answers with the thrown validation message', async () => {
+        renderBridge(() => {
+            throw new Error('Invalid underlying-data request.');
+        });
+        const postMessageSpy = vi.spyOn(window, 'postMessage');
+        postVirtualRoute();
+
+        await vi.waitFor(() =>
+            expect(postMessageSpy).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'lightdash:sdk:fetch-response',
+                    id: POST_ID,
+                    error: 'Invalid underlying-data request.',
                 }),
                 '*',
             ),

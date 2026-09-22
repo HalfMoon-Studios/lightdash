@@ -12,8 +12,8 @@ import type {
     ToolDashboardV2Args,
     ToolName,
     ToolRunQueryArgs,
-    ToolRunQueryArgsV3,
 } from '../..';
+import { type UUID } from '../../types/api/uuid';
 import {
     MAX_RETENTION_WINDOW_HOURS,
     MIN_RETENTION_WINDOW_HOURS,
@@ -27,22 +27,30 @@ import {
     type AiAgentModelConfig,
     type AiPromptContext,
     type AiPromptContextInput,
+    type AiPromptResponseTiming,
     type AiPromptTokenUsage,
     type AiThreadCreatedFrom,
 } from './requestTypes';
 import { type AgentToolOutput } from './schemas';
+import type {
+    PersistedMergeRunQueryPayload,
+    PersistedRunQueryPayload,
+} from './schemas/persistedRunQueryArgs';
 import { ToolNameSchema } from './schemas/visualizations';
 import { type AiMetricQuery, type AiResultType } from './types';
 
 export * from './adminTypes';
 export * from './aiEvalAssessment';
+export * from './canonicalizeAiMerge';
 export * from './chartConfig/slack';
 export * from './chartConfig/web';
 export * from './constants';
 export * from './coder';
 export * from './composerArtifact';
 export * from './dashboardContext';
+export * from './dashboardLayout';
 export * from './aiAgentReviewClassifierTypes';
+export * from './documentGuidance';
 export * from './documentTypes';
 export * from './filterExploreByTags';
 export * from './projectContext';
@@ -226,11 +234,15 @@ export type AiAgentSummary = Pick<
 >;
 
 // An empty spaceAccess list means the agent is unrestricted (all spaces).
+export const isSpaceRestrictedAgent = (
+    agent: Pick<AiAgent, 'spaceAccess'>,
+): boolean => agent.spaceAccess.length > 0;
+
 export const hasAiAgentAccessToSpace = (
     agent: Pick<AiAgent, 'spaceAccess'>,
     spaceUuid: string,
 ): boolean =>
-    agent.spaceAccess.length === 0 || agent.spaceAccess.includes(spaceUuid);
+    !isSpaceRestrictedAgent(agent) || agent.spaceAccess.includes(spaceUuid);
 
 export type AiAgentUser = {
     uuid: string;
@@ -309,11 +321,23 @@ export type AiAgentMessageAssistant = {
     referencedArtifacts: AiAgentMessageAssistantArtifact[] | null;
     modelConfig: AiAgentModelConfig | null;
     tokenUsage: AiPromptTokenUsage | null;
+    responseTiming: AiPromptResponseTiming | null;
 };
 
 export type AiAgentMessage<TUser extends AiAgentUser = AiAgentUser> =
     | AiAgentMessageUser<TUser>
     | AiAgentMessageAssistant;
+
+export type AiAgentThreadLiveState = 'working' | 'waiting_for_you' | 'idle';
+
+export type AiAgentThreadStateSource = 'deterministic' | 'classified';
+
+export type AiAgentThreadLiveStatus = {
+    threadUuid: string;
+    state: AiAgentThreadLiveState;
+    stateChangedAt: string | null;
+    source: AiAgentThreadStateSource;
+};
 
 export type AiAgentThreadSummary<TUser extends AiAgentUser = AiAgentUser> = {
     uuid: string;
@@ -322,11 +346,13 @@ export type AiAgentThreadSummary<TUser extends AiAgentUser = AiAgentUser> = {
     createdFrom: AiThreadCreatedFrom;
     title: string | null;
     titleGeneratedAt: string | null;
+    pinnedAt: string | null;
     firstMessage: {
         uuid: string;
         message: string;
     };
     user: TUser;
+    liveStatus: AiAgentThreadLiveStatus | null;
 };
 
 export type AiAgentThreadShare = {
@@ -705,6 +731,14 @@ export type ApiAiAgentThreadSummaryListResponse = {
     results: AiAgentThreadSummary[];
 };
 
+export type ApiAiAgentThreadLiveStatusesResponse = {
+    status: 'ok';
+    results: {
+        statuses: AiAgentThreadLiveStatus[];
+        generatedAt: string;
+    };
+};
+
 export type AiAgentThreadFilters = {
     agentUuid?: string;
     createdFrom?: AiThreadCreatedFrom;
@@ -772,6 +806,7 @@ export type ApiAiAgentThreadCreateRequest = {
     prompt?: string;
     context?: AiPromptContextInput;
     modelConfig?: AiAgentModelConfig;
+    originatingInstallationUuid?: string;
 };
 
 export type ApiAiAgentThreadCreateResponse = ApiSuccess<AiAgentThreadSummary>;
@@ -780,6 +815,7 @@ export type ApiAiAgentThreadMessageCreateRequest = {
     prompt: string;
     context?: AiPromptContextInput;
     modelConfig?: AiAgentModelConfig;
+    originatingInstallationUuid?: string;
     /**
      * Inject the prompt as a hidden turn — the agent responds to it, but the UI
      * does not render the user bubble. Used by the post-merge content-migration
@@ -835,6 +871,18 @@ export type ApiAiAgentThreadMessageCreateResponse = ApiSuccess<
     AiAgentMessageUser<AiAgentUser>
 >;
 
+export type ApiAiAgentThreadDataAppRestoreRequest = {
+    appUuid: UUID;
+    version: number;
+};
+
+export type ApiAiAgentThreadDataAppRestoreResponse = ApiSuccess<{
+    appUuid: string;
+    version: number;
+    restoredFromVersion: number;
+    promptUuid: string;
+}>;
+
 export type ApiAiAgentStartThreadResponse = {
     status: 'ok';
     results: {
@@ -855,6 +903,12 @@ export type ApiAiAgentThreadGenerateTitleResponse = {
     results: {
         title: string;
     };
+};
+
+export const AI_AGENT_THREAD_TITLE_MAX_LENGTH = 200;
+
+export type ApiAiAgentThreadUpdateRequest = {
+    title: string;
 };
 
 export type ApiAiAgentThreadMessageViz = {
@@ -1021,23 +1075,29 @@ export type AiLegacySemanticChartArtifactConfig = ToolRunQueryArgs;
 
 export type AiSemanticChartArtifactConfig = {
     source: 'semantic';
-    config: AiLegacySemanticChartArtifactConfig;
+    config: PersistedRunQueryPayload;
+    /** Schema-validated portable snapshot used by export and PR workflows. */
+    contentAsCode?: unknown;
 };
 
 export type AiMergeChartArtifactConfig = {
     source: 'merge';
     schemaVersion: 1;
-    config: ToolRunQueryArgsV3;
+    config: PersistedMergeRunQueryPayload;
+    contentAsCode?: unknown;
 };
 
-// Custom chart type answer envelope: the model's tool args are stored
-// verbatim (slug chartConfig intact) and everything the server derives —
-// the resolved dataAppVizUuid — sits beside them.
+// Custom chart type answer envelope: the persisted query payload keeps the
+// slug chartConfig intact, while the server-derived dataAppVizUuid sits beside
+// it.
 export type AiCustomChartTypeChartArtifactConfig = {
     source: 'customChartType';
     schemaVersion: 1;
     dataAppVizUuid: string;
-    config: ToolRunQueryArgs;
+    /** Omitted by artifacts created before custom chart type pins existed. */
+    dataAppVizVersion?: number;
+    config: PersistedRunQueryPayload;
+    contentAsCode?: unknown;
 };
 
 export type AiChartArtifactConfig =
@@ -1296,6 +1356,7 @@ export type AiModelOption = {
     displayName: string;
     description: string;
     provider: string;
+    groupLabel?: string;
     default: boolean;
     supportsReasoning: boolean;
     deprecated: boolean;

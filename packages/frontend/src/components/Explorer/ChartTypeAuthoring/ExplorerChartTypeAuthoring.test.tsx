@@ -10,6 +10,7 @@ import {
 } from '@lightdash/common';
 import { act, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { type ReactNode } from 'react';
 import { Provider } from 'react-redux';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,6 +26,7 @@ import {
     createExplorerStore,
     explorerActions,
 } from '../../../features/explorer/store';
+import { ChartColorMappingContext } from '../../../hooks/useChartColorConfig/context';
 import { renderWithProviders } from '../../../testing/testUtils';
 import { useExplorerResultsData } from '../VisualizationCard/useExplorerResultsData';
 import ExplorerChartTypeAuthoring from './ExplorerChartTypeAuthoring';
@@ -55,9 +57,12 @@ vi.mock('../VisualizationCard/useExplorerResultsData', () => ({
 vi.mock('../VisualizationCard/useExplorerChartColorPalette', () => ({
     useExplorerChartColorPalette: () => ['#explorer-1', '#explorer-2'],
 }));
+const { dataAppsEnabled } = vi.hoisted(() => ({
+    dataAppsEnabled: { current: true },
+}));
 vi.mock('../../../hooks/useServerOrClientFeatureFlag', () => ({
     useServerFeatureFlag: () => ({
-        data: { enabled: true },
+        data: { enabled: dataAppsEnabled.current },
         isLoading: false,
     }),
 }));
@@ -81,12 +86,22 @@ vi.mock(
     () => ({
         default: ({
             previewContext,
+            configurationSidebar,
         }: {
+            configurationSidebar?: ReactNode;
             previewContext: DataAppVizContext | null;
         }) => {
             previewContexts.push(previewContext);
-            return <div data-testid="workspace" />;
+            return <div data-testid="workspace">{configurationSidebar}</div>;
         },
+    }),
+);
+// The modal's config column needs the chart card's viz context, which this
+// container test does not mount.
+vi.mock(
+    '../../VisualizationConfigs/DataAppVizConfig/DataAppVizConfigTabs',
+    () => ({
+        ConfigTabs: () => <div data-testid="config-tabs" />,
     }),
 );
 
@@ -127,6 +142,7 @@ const rows = [{ orders_status: { value: { raw: 'new', formatted: 'New' } } }];
 
 const dataAppViz = {
     dataAppVizUuid: 'viz-1',
+    slug: 'grouped-bars',
     name: 'Grouped bars',
     description: '',
     projectUuid: 'project-1',
@@ -153,6 +169,8 @@ const dataAppViz = {
     },
     createdAt: new Date('2026-08-19T00:00:00Z'),
     createdByUserUuid: 'user-1',
+    icon: null,
+    registrySlug: null,
 } satisfies DataAppViz;
 
 const readyVersion = {
@@ -173,6 +191,7 @@ const workspaceStub = (
         latest: readyVersion,
         latestReadyVersion: 1,
         hasOrigin: true,
+        currentThreadNumber: null,
         hasEarlier: false,
         isLoading: false,
         isError: false,
@@ -222,6 +241,7 @@ const newTypeWorkspace = () =>
             latest: null,
             latestReadyVersion: null,
             hasOrigin: false,
+            currentThreadNumber: null,
         },
     });
 
@@ -263,11 +283,13 @@ const renderAuthoring = ({
     };
 
     renderWithProviders(
-        <Provider store={store}>
-            <MemoryRouter>
-                <Harness />
-            </MemoryRouter>
-        </Provider>,
+        <ChartColorMappingContext.Provider value={{ colorMappings: new Map() }}>
+            <Provider store={store}>
+                <MemoryRouter>
+                    <Harness />
+                </MemoryRouter>
+            </Provider>
+        </ChartColorMappingContext.Provider>,
     );
     return store;
 };
@@ -276,6 +298,7 @@ describe('ExplorerChartTypeAuthoring', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         previewContexts.length = 0;
+        dataAppsEnabled.current = true;
         vi.mocked(useCanCreateDataApp).mockReturnValue(true);
         vi.mocked(useCanEditDataApp).mockReturnValue(true);
         vi.mocked(useChartTypeBuilderWorkspace).mockReturnValue(
@@ -289,6 +312,126 @@ describe('ExplorerChartTypeAuthoring', () => {
                 setFetchAll,
             },
         } as unknown as ReturnType<typeof useExplorerResultsData>);
+    });
+
+    it('keeps the builder modal named while its workflow header owns the workspace', () => {
+        renderAuthoring();
+
+        expect(
+            screen.getByRole('dialog', {
+                name: 'Chart Studio',
+            }),
+        ).toBeInTheDocument();
+        expect(
+            screen.getByRole('heading', {
+                name: 'Grouped bars',
+            }),
+        ).toBeInTheDocument();
+        expect(screen.getByTestId('workspace')).toBeInTheDocument();
+        expect(screen.getByTestId('config-tabs')).toBeInTheDocument();
+    });
+
+    it('keeps configuration out of a new chart type before its first build', () => {
+        vi.mocked(useChartTypeBuilderWorkspace).mockReturnValue(
+            newTypeWorkspace(),
+        );
+
+        renderAuthoring({ dataAppVizUuid: null });
+
+        expect(screen.queryByTestId('config-tabs')).not.toBeInTheDocument();
+    });
+
+    it('keeps configuration out while a first build has no preview version', () => {
+        vi.mocked(useChartTypeBuilderWorkspace).mockReturnValue(
+            workspaceStub({ isBuilding: true, previewVersion: null }),
+        );
+
+        renderAuthoring();
+
+        expect(screen.queryByTestId('config-tabs')).not.toBeInTheDocument();
+    });
+
+    it('keeps configuration out when the preview schema has not arrived', () => {
+        vi.mocked(useChartTypeBuilderWorkspace).mockReturnValue(
+            workspaceStub({
+                dataAppViz: { ...dataAppViz, schema: null },
+            }),
+        );
+
+        renderAuthoring();
+
+        expect(screen.queryByTestId('config-tabs')).not.toBeInTheDocument();
+    });
+
+    it('keeps configuration out for an empty generated schema contract', () => {
+        vi.mocked(useChartTypeBuilderWorkspace).mockReturnValue(
+            workspaceStub({
+                dataAppViz: {
+                    ...dataAppViz,
+                    schema: {
+                        fields: [],
+                        configOptions: [],
+                        colorPalette: null,
+                    },
+                },
+            }),
+        );
+
+        renderAuthoring();
+
+        expect(screen.queryByTestId('config-tabs')).not.toBeInTheDocument();
+    });
+
+    it('shows field mapping for a ready schema with no configuration options', () => {
+        vi.mocked(useChartTypeBuilderWorkspace).mockReturnValue(
+            workspaceStub({
+                dataAppViz: {
+                    ...dataAppViz,
+                    schema: { ...dataAppViz.schema, configOptions: [] },
+                },
+            }),
+        );
+
+        renderAuthoring();
+
+        expect(screen.getByTestId('config-tabs')).toBeInTheDocument();
+    });
+
+    it('shows configuration for a ready options-only schema', () => {
+        vi.mocked(useChartTypeBuilderWorkspace).mockReturnValue(
+            workspaceStub({
+                dataAppViz: {
+                    ...dataAppViz,
+                    schema: {
+                        ...dataAppViz.schema,
+                        fields: [],
+                    },
+                },
+            }),
+        );
+
+        renderAuthoring();
+
+        expect(screen.getByTestId('config-tabs')).toBeInTheDocument();
+    });
+
+    it('shows configuration for a ready palette-only schema', () => {
+        vi.mocked(useChartTypeBuilderWorkspace).mockReturnValue(
+            workspaceStub({
+                dataAppViz: {
+                    ...dataAppViz,
+                    schema: {
+                        fields: [],
+                        configOptions: [],
+                        colorPalette: { group: 'Colours' },
+                    },
+                },
+            }),
+        );
+
+        renderAuthoring();
+
+        expect(screen.getByTestId('config-tabs')).toBeInTheDocument();
     });
 
     it('binds the chart to the type once its schema is known', () => {
@@ -477,23 +620,39 @@ describe('ExplorerChartTypeAuthoring', () => {
         expect(store.getState().explorer.chartTypeAuthoring).toBeNull();
     });
 
-    it('finishes on Configure with the chart on the authored type', async () => {
-        const store = renderAuthoring({ step: 'choose' });
+    it.each(['choose', 'configure'] as const)(
+        'returns an edited type to %s',
+        async (step) => {
+            const store = renderAuthoring({ step });
 
+            await userEvent.click(
+                screen.getByRole('button', { name: 'Back to chart' }),
+            );
+
+            const { explorer } = store.getState();
+            expect(explorer.chartTypeAuthoring).toBeNull();
+            expect(explorer.isVisualizationConfigOpen).toBe(true);
+            expect(explorer.chartSidebarStep).toBe(step);
+            expect(explorer.unsavedChartVersion.chartConfig).toEqual(
+                expect.objectContaining({ type: ChartType.DATA_APP_VIZ }),
+            );
+            expect(showToastSuccess).toHaveBeenCalledWith({
+                title: 'Chart now uses Grouped bars v1',
+            });
+        },
+    );
+
+    it('finishes a newly created type on Configure when opened from Choose', async () => {
+        const store = renderAuthoring({
+            dataAppVizUuid: null,
+            claimedUuid: 'viz-1',
+            step: 'choose',
+        });
         await userEvent.click(
             screen.getByRole('button', { name: 'Back to chart' }),
         );
-
-        const { explorer } = store.getState();
-        expect(explorer.chartTypeAuthoring).toBeNull();
-        expect(explorer.isVisualizationConfigOpen).toBe(true);
-        expect(explorer.chartSidebarStep).toBe('configure');
-        expect(explorer.unsavedChartVersion.chartConfig).toEqual(
-            expect.objectContaining({ type: ChartType.DATA_APP_VIZ }),
-        );
-        expect(showToastSuccess).toHaveBeenCalledWith({
-            title: 'Chart now uses Grouped bars v1',
-        });
+        expect(store.getState().explorer.chartTypeAuthoring).toBeNull();
+        expect(store.getState().explorer.chartSidebarStep).toBe('configure');
     });
 
     it('leaves a new type without a viz until it has a version', () => {
@@ -546,7 +705,12 @@ describe('ExplorerChartTypeAuthoring', () => {
         document.body.appendChild(sidebarTitle);
         try {
             renderAuthoring();
-            expect(screen.getByRole('heading', { level: 2 })).toHaveFocus();
+            expect(
+                screen.getByRole('heading', {
+                    level: 2,
+                    name: 'Grouped bars',
+                }),
+            ).toHaveFocus();
 
             await userEvent.click(
                 screen.getByRole('button', { name: 'Back to chart' }),
@@ -579,6 +743,34 @@ describe('ExplorerChartTypeAuthoring', () => {
             newTypeWorkspace(),
         );
         const store = renderAuthoring({ dataAppVizUuid: null });
+
+        expect(showToastError).toHaveBeenCalled();
+        expect(store.getState().explorer.chartTypeAuthoring).toBeNull();
+    });
+
+    it('leaves authoring when the user may not edit this type', () => {
+        vi.mocked(useCanEditDataApp).mockReturnValue(false);
+        const store = renderAuthoring({ dataAppVizUuid: 'viz-1' });
+
+        expect(showToastError).toHaveBeenCalled();
+        expect(store.getState().explorer.chartTypeAuthoring).toBeNull();
+    });
+
+    it('leaves authoring when data-apps is switched off under it', () => {
+        dataAppsEnabled.current = false;
+        const store = renderAuthoring({ dataAppVizUuid: 'viz-1' });
+
+        expect(showToastError).toHaveBeenCalled();
+        expect(store.getState().explorer.chartTypeAuthoring).toBeNull();
+    });
+
+    it('leaves authoring when the type is an official (registry-installed) chart type', () => {
+        vi.mocked(useChartTypeBuilderWorkspace).mockReturnValue(
+            workspaceStub({
+                dataAppViz: { ...dataAppViz, registrySlug: 'radial-gauge' },
+            }),
+        );
+        const store = renderAuthoring({ dataAppVizUuid: 'viz-1' });
 
         expect(showToastError).toHaveBeenCalled();
         expect(store.getState().explorer.chartTypeAuthoring).toBeNull();

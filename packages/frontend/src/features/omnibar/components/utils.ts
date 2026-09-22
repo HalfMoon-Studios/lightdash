@@ -11,6 +11,7 @@ import {
     IconAppWindow,
     IconBrowser,
     IconFolder,
+    IconFileText,
     IconLayoutDashboard,
     IconLayoutNavbarInactive,
     IconSettings,
@@ -22,6 +23,7 @@ import { type SearchResultMap } from '../types/searchResultMap';
 
 export const getOmnibarItemColor = (itemType: SearchItemType) => {
     switch (itemType) {
+        case SearchItemType.DOCUMENT:
         case SearchItemType.FIELD:
             return 'ldGray.7';
         case SearchItemType.DASHBOARD_TAB:
@@ -60,6 +62,8 @@ export const getOmnibarItemIcon = (item: SearchItem) => {
             } else {
                 return Icon123;
             }
+        case SearchItemType.DOCUMENT:
+            return IconFileText;
         case SearchItemType.DASHBOARD:
             return IconLayoutDashboard;
         case SearchItemType.CHART:
@@ -95,10 +99,11 @@ export const itemHasValidationError = (searchItem: SearchItem) =>
     searchItem.item.validationErrors?.length > 0;
 
 export const itemHasVerification = (searchItem: SearchItem) =>
-    searchItem.item &&
-    'verification' in searchItem.item &&
-    searchItem.item.verification !== null &&
-    searchItem.item.verification !== undefined;
+    Boolean(searchItem.recentContent?.verification) ||
+    (searchItem.item &&
+        'verification' in searchItem.item &&
+        searchItem.item.verification !== null &&
+        searchItem.item.verification !== undefined);
 
 export const getSearchResultsGroupsSorted = (results: SearchResultMap) =>
     Object.entries(results)

@@ -37,6 +37,7 @@ import { AddToSpaceResources } from '../components/Explorer/SpaceBrowser/types';
 import ForbiddenPanel from '../components/ForbiddenPanel';
 import { useSpacePinningMutation } from '../hooks/pinning/useSpaceMutation';
 import { useContentAction } from '../hooks/useContent';
+import { useContentAuthoringEnabled } from '../hooks/useContentAuthoringEnabled';
 import { useProjectUrlIdentifier } from '../hooks/useProjectRoute';
 import { useProjectUuid } from '../hooks/useProjectUuid';
 import { useServerFeatureFlag } from '../hooks/useServerOrClientFeatureFlag';
@@ -64,6 +65,7 @@ const Space: FC = () => {
     const { mutate: pinSpace } = useSpacePinningMutation(projectUuid);
     const { user, health } = useApp();
     const { track } = useTracking();
+    const contentAuthoringEnabled = useContentAuthoringEnabled();
 
     const userCanManageSpace = user.data?.ability?.can(
         'create',
@@ -76,6 +78,9 @@ const Space: FC = () => {
     const isDemo = health.data?.mode === LightdashMode.DEMO;
     const dataAppsFlag = useServerFeatureFlag(FeatureFlags.EnableDataApps);
     const dataAppsEnabled = dataAppsFlag.data?.enabled ?? false;
+    const documentsFlag = useServerFeatureFlag(FeatureFlags.Documents);
+    const documentsEnabled =
+        documentsFlag.data?.enabled === true && !documentsFlag.isError;
     const navigate = useNavigate();
     const location = useLocation();
 
@@ -190,7 +195,25 @@ const Space: FC = () => {
 
                                         return {
                                             title: isAccessible ? (
-                                                breadcrumb.name
+                                                isLastBreadcrumb ? (
+                                                    <span
+                                                        // Walkthrough result
+                                                        // marker for
+                                                        // create:Space: the
+                                                        // new space itself.
+                                                        data-tour-scope="create:Space"
+                                                        data-tour-step="1"
+                                                        data-tour-route="/projects/:projectUuid/spaces/:spaceUuid"
+                                                        data-tour-label="A space keeps related content together"
+                                                        data-tour-docs="explore/spaces.mdx#intro:1-2"
+                                                        data-tour-return="none"
+                                                        data-tour-resultdocs="explore/spaces.mdx#creating-a-space:p2:3"
+                                                    >
+                                                        {breadcrumb.name}
+                                                    </span>
+                                                ) : (
+                                                    breadcrumb.name
+                                                )
                                             ) : (
                                                 <span
                                                     style={{
@@ -248,30 +271,29 @@ const Space: FC = () => {
 
                         <Group gap="xs">
                             {!isDemo &&
-                                (userCanCreateDashboards ||
-                                    userCanCreateCharts ||
+                                ((contentAuthoringEnabled &&
+                                    (userCanCreateDashboards ||
+                                        userCanCreateCharts)) ||
                                     userCanCreateDataApps ||
                                     userCanManageSpace) && (
                                     <Menu
                                         position="bottom-end"
-                                        shadow="md"
                                         closeOnItemClick
                                         withArrow
                                         arrowPosition="center"
                                     >
                                         <Menu.Target>
-                                            <Box>
-                                                <Button
-                                                    data-testid="Space/AddButton"
-                                                    leftSection={
-                                                        <MantineIcon
-                                                            icon={IconPlus}
-                                                        />
-                                                    }
-                                                >
-                                                    Add
-                                                </Button>
-                                            </Box>
+                                            <Button
+                                                data-testid="Space/AddButton"
+                                                h={{ base: 32, md: 36 }}
+                                                leftSection={
+                                                    <MantineIcon
+                                                        icon={IconPlus}
+                                                    />
+                                                }
+                                            >
+                                                Add
+                                            </Button>
                                         </Menu.Target>
 
                                         <Menu.Dropdown>
@@ -297,7 +319,8 @@ const Space: FC = () => {
                                                 </>
                                             )}
 
-                                            {userCanCreateDashboards ? (
+                                            {contentAuthoringEnabled &&
+                                            userCanCreateDashboards ? (
                                                 <Menu.Item
                                                     leftSection={
                                                         <MantineIcon
@@ -314,7 +337,8 @@ const Space: FC = () => {
                                                 </Menu.Item>
                                             ) : null}
 
-                                            {userCanCreateCharts ? (
+                                            {contentAuthoringEnabled &&
+                                            userCanCreateCharts ? (
                                                 <Menu.Item
                                                     leftSection={
                                                         <MantineIcon
@@ -364,10 +388,19 @@ const Space: FC = () => {
                                     isPinned={!!space?.pinnedListUuid}
                                     spaceUuid={spaceUuid}
                                 >
-                                    <ActionIcon variant="default" size={36}>
+                                    <ActionIcon
+                                        variant="default"
+                                        size={36}
+                                        w={{ base: 32, md: 36 }}
+                                        h={{ base: 32, md: 36 }}
+                                        aria-label="Space actions"
+                                        // Anchor for scope walkthroughs
+                                        data-tour-anchor="space-actions"
+                                        data-tour-hint="Open the space's actions menu"
+                                    >
                                         <MantineIcon
                                             icon={IconDots}
-                                            size="lg"
+                                            size="md"
                                         />
                                     </ActionIcon>
                                 </SpaceBrowserMenu>
@@ -426,42 +459,60 @@ const Space: FC = () => {
                             </Can>
                         </Group>
                     </Group>
-                    <InfiniteResourceTable
-                        filters={{
-                            projectUuid,
-                            spaceUuids: [spaceUuid],
-                            contentTypes: [
-                                ContentType.DASHBOARD,
-                                ContentType.CHART,
-                                ContentType.SPACE,
-                                ContentType.DATA_APP,
-                            ],
-                            // Vizs are spaceless today, but declare the
-                            // exclusion rather than rely on that invariant.
-                            dataAppVizsFilter: 'exclude',
-                        }}
-                        contentTypeFilter={{
-                            defaultValue: undefined,
-                            options: [
-                                ContentType.DASHBOARD,
-                                ContentType.CHART,
-                                ...(dataAppsEnabled
-                                    ? [ContentType.DATA_APP]
-                                    : []),
-                            ],
-                        }}
-                        columnVisibility={{
-                            [ColumnVisibility.SPACE]: false,
-                        }}
-                        enableBottomToolbar={false}
-                        enableRowSelection={userCanManageSpace}
-                        adminContentView={userCanManageProject}
-                        initialAdminContentViewValue={
-                            userCanManageSpaceAndHasNoDirectAccessToSpace
-                                ? 'all'
-                                : 'shared'
-                        }
-                    />
+                    <Box
+                        // Walkthrough result marker for view:Space: the
+                        // space's own list of dashboards and charts.
+                        data-tour-scope="view:Space"
+                        data-tour-step="1"
+                        data-tour-route="/projects/:projectUuid/spaces/:spaceUuid"
+                        data-tour-label="Spaces are folders for charts and dashboards"
+                        data-tour-docs="explore/spaces.mdx#intro:1-2"
+                        data-tour-return="none"
+                        data-tour-resultdocs="explore/spaces.mdx#intro:p2:1"
+                    >
+                        <InfiniteResourceTable
+                            filters={{
+                                projectUuid,
+                                spaceUuids: [spaceUuid],
+                                contentTypes: [
+                                    ContentType.DASHBOARD,
+                                    ContentType.CHART,
+                                    ContentType.SPACE,
+                                    ContentType.DATA_APP,
+                                    ...(documentsEnabled
+                                        ? [ContentType.DOCUMENT]
+                                        : []),
+                                ],
+                                // Vizs are spaceless today, but declare the
+                                // exclusion rather than rely on that invariant.
+                                dataAppVizsFilter: 'exclude',
+                            }}
+                            contentTypeFilter={{
+                                defaultValue: undefined,
+                                options: [
+                                    ContentType.DASHBOARD,
+                                    ContentType.CHART,
+                                    ...(dataAppsEnabled
+                                        ? [ContentType.DATA_APP]
+                                        : []),
+                                    ...(documentsEnabled
+                                        ? [ContentType.DOCUMENT]
+                                        : []),
+                                ],
+                            }}
+                            columnVisibility={{
+                                [ColumnVisibility.SPACE]: false,
+                            }}
+                            enableBottomToolbar={false}
+                            enableRowSelection={userCanManageSpace}
+                            adminContentView={userCanManageProject}
+                            initialAdminContentViewValue={
+                                userCanManageSpaceAndHasNoDirectAccessToSpace
+                                    ? 'all'
+                                    : 'shared'
+                            }
+                        />
+                    </Box>
 
                     {createToSpace && (
                         <CreateResourceToSpace resourceType={createToSpace} />
@@ -511,6 +562,7 @@ const Space: FC = () => {
                                         chartCount: 0,
                                         childSpaceCount: 0,
                                         appCount: 0,
+                                        documentCount: 0,
                                     },
                                     type: ResourceViewItemType.SPACE,
                                 } satisfies ResourceViewSpaceItem,

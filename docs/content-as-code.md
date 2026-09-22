@@ -56,6 +56,28 @@ handlers:
 New resources should use these extension points instead of adding another
 standalone download/upload implementation.
 
+## Homepages
+
+Published homepage layouts can be exported with `lightdash download
+--include-homepages`, `--homepages "Team homepage"`, or `--include-all`.
+They are stored in `homepages/*.yml` under the content root. The exact homepage
+name is its project-scoped identity; duplicate names are rejected and changing
+the name creates a separate homepage.
+
+Uploads resolve content slugs and organization group names in the destination.
+The existing upload flow imports homepage files after their referenced content.
+`lightdash upload --homepages "Team homepage"` imports only that homepage, so its
+referenced content must already exist. Imports save drafts by default; add
+`--publish` to publish the layout and apply its exported default/group/role
+assignments. `--skip-homepages` excludes homepage files from an upload.
+
+Internal content links use `lightdash://dashboards/<slug>/view` (or `saved`,
+`spaces`, and `apps`) in files and become destination project links on upload.
+External links and live collection rules remain unchanged. Announcement entries,
+personalized results, signed app thumbnails, and organization homepage settings
+are not exported. Imports require the existing homepage builder feature and
+homepage management permission; they do not enable it or publish announcements.
+
 ## Download flow
 
 1. The CLI resolves the project or organization and the local content root.
@@ -183,6 +205,7 @@ organization resources will use the same root.
 | Custom roles         | Organization | Exact role name                  | `lightdash/custom-roles/`                |
 | Users                | Organization | Lowercase primary email          | `lightdash/users/`                       |
 | Groups               | Organization | Exact, case-sensitive group name | `lightdash/groups/`                      |
+| User attributes      | Organization | Exact attribute name             | `lightdash/user_attributes/`             |
 | Data App themes      | Organization | Immutable organization slug      | `lightdash/themes/<slug>/`               |
 
 Data apps and organization Data App themes are deliberately outside the
@@ -194,7 +217,7 @@ Project APIs use `/api/v1/projects/{projectUuid}/code/{resource}`. Organization
 APIs use `/api/v2/orgs/{orgUuid}/code/{resource}`. The resource segments are
 `charts`, `sqlCharts`, `dashboards`, `spaces`, `virtualViews`, `aiAgents`,
 `scheduledDeliveries`, `alerts`, `googleSheets`, `externalConnections`,
-`roles`, `users`, and `groups`.
+`roles`, `users`, `groups`, and `userAttributes`.
 The legacy resource-first routes are deprecated in OpenAPI and should not be
 used by new clients.
 
@@ -252,8 +275,8 @@ flags.
 
 ## External connections
 
-Data-app external connections (see `docs/data-apps.md` → *External
-connections*) are enterprise-only and both download and upload require the
+Data-app external connections (see `docs/data-apps.md` → _External
+connections_) are enterprise-only and both download and upload require the
 admin-only `manage:ExternalConnection` scope. When `--include-all` reaches
 them implicitly on a non-enterprise server or without that permission, the
 CLI warns and skips; the explicit `--external-connections <slugs...>` and
@@ -310,7 +333,7 @@ warned about, never uploaded.
 App↔connection links are not part of these documents — each data app's
 bundle manifest (`lightdash-app.yml`) carries them as
 `externalConnections: [{alias, connectionSlug}]`, resolved by slug in the
-target project on app upload. See `docs/data-apps.md` → *Data apps as code*.
+target project on app upload. See `docs/data-apps.md` → _Data apps as code_.
 
 ## Spaces and access
 
@@ -531,14 +554,47 @@ new group and leaves the original group intact; missing files do not delete
 groups.
 
 Organization uploads preflight theme packages, then run remote phases
-sequentially: custom roles, users, groups, and themes. A failed document phase
+sequentially: custom roles, users, groups, user attributes, and themes. A failed document phase
 prevents later phases from starting, so group emails are resolved only after
 the complete users phase has succeeded and theme imports begin only after the
-groups phase succeeds.
+user attributes phase succeeds.
 
 SCIM and content as code should not manage the same group. Groups do not yet
 record management provenance, so this limitation cannot be enforced by the
 first version.
+
+## User attributes as code
+
+`lightdash download --organization` writes one YAML file per attribute under
+`lightdash/user_attributes/`. Use `--path` to select a separate content root for
+each organization, as with users and groups.
+
+```yaml
+version: 1
+name: team_id
+description: Team access
+attributeDefaults: null
+users:
+  - email: jane@example.com
+    values: [a, b]
+groups:
+  - name: team-a-viewers
+    values: [a]
+```
+
+The endpoints are `GET` and `POST /api/v2/orgs/{orgUuid}/code/userAttributes`.
+Both require permission to manage the target organization. References use
+organization member emails (case-insensitive) and exact group names, not UUIDs.
+Unknown or ambiguous references and duplicate assignments are rejected before
+that attribute is changed. Values support multiple strings.
+
+`lightdash upload --organization` applies attributes after users and groups.
+Each file replaces the attribute's description, defaults, and complete user and
+group assignment lists. Use `users: []`, `groups: []`, and
+`attributeDefaults: null` to clear them. Reapplying the same document reports
+`unchanged`. Missing files do not delete remote attributes, and changing a name
+creates a new attribute. Uploads without this folder leave attributes unchanged.
+This does not lock UI editing or configure project-level group roles.
 
 ## Adding another content-as-code resource
 

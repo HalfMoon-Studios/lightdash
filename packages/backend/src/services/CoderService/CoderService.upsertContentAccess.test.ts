@@ -2,8 +2,11 @@ import { Ability, type RawRuleOf } from '@casl/ability';
 import {
     AnyType,
     ChartAsCode,
+    ContentType,
     CustomDimensionType,
     DashboardAsCode,
+    DashboardChartTile,
+    DashboardDAO,
     DashboardTileTypes,
     DimensionType,
     ForbiddenError,
@@ -15,6 +18,7 @@ import {
 } from '@lightdash/common';
 import { analyticsMock } from '../../analytics/LightdashAnalytics.mock';
 import { lightdashConfigMock } from '../../config/lightdashConfig.mock';
+import { dashboard as dashboardMock } from '../DashboardService/DashboardService.mock';
 import { CoderService } from './CoderService';
 
 const PROJECT_UUID = 'project-uuid';
@@ -24,7 +28,7 @@ const OTHER_SPACE_UUID = 'other-space-uuid';
 const PARENT_SPACE_UUID = 'parent-space-uuid';
 const NEW_SPACE_UUID = 'new-space-uuid';
 
-const makeUser = (
+const makeSessionUser = (
     rules: RawRuleOf<Ability<PossibleAbilities>>[],
 ): SessionUser =>
     ({
@@ -67,6 +71,7 @@ const dashboardAsCode = {
 
 const buildService = () =>
     new CoderService({
+        directAccessService: {} as AnyType,
         lightdashConfig: lightdashConfigMock,
         analytics: analyticsMock,
         projectModel: {
@@ -89,6 +94,7 @@ const buildService = () =>
             find: vi.fn(async () => []),
             create: vi.fn(),
             getByIdOrSlug: vi.fn(),
+            renameSlug: vi.fn(),
         } as AnyType,
         spaceModel: {
             find: vi.fn(async () => [
@@ -126,28 +132,124 @@ const buildService = () =>
         } as AnyType,
         spacePermissionService: {
             can: vi.fn(async () => true),
-            getSpacesAccessContext: vi.fn(async () => ({
-                [SPACE_UUID]: {
-                    organizationUuid: ORG_UUID,
-                    projectUuid: PROJECT_UUID,
-                    inheritsFromOrgOrProject: true,
-                    access: [],
-                },
-                [OTHER_SPACE_UUID]: {
-                    organizationUuid: ORG_UUID,
-                    projectUuid: PROJECT_UUID,
-                    inheritsFromOrgOrProject: true,
-                    access: [],
-                },
-            })),
+            resolveAccessBatch: vi.fn(
+                async (_userUuid: string, targets: { spaceUuid: string }[]) =>
+                    targets.map((target) => ({
+                        target,
+                        context: {
+                            organizationUuid: ORG_UUID,
+                            projectUuid: PROJECT_UUID,
+                            inheritsFromOrgOrProject: true,
+                            access: [],
+                            admins: [],
+                            directOnly: false,
+                        },
+                    })),
+            ),
         } as AnyType,
+        contentAsCodeSnapshotModel: { upsert: vi.fn() } as AnyType,
+        contentAsCodeProjectSettingsModel: { upsert: vi.fn() } as AnyType,
         contentVerificationModel: {} as AnyType,
         groupsModel: {} as AnyType,
         organizationMemberProfileModel: {} as AnyType,
         userModel: {} as AnyType,
     });
 
-describe('CoderService content-as-code space permissions', () => {
+const registerContentAccessTests = (
+    contentAsCodeAction: 'create' | 'manage',
+) => {
+    const makeUser = (rules: RawRuleOf<Ability<PossibleAbilities>>[]) =>
+        makeSessionUser(
+            rules.map((rule) =>
+                rule.subject === 'ContentAsCode' && rule.action === 'create'
+                    ? { ...rule, action: contentAsCodeAction }
+                    : rule,
+            ),
+        );
+    describe('CoderService dashboard slug rename permissions', () => {
+        const request = {
+            resourceType: ContentType.DASHBOARD,
+            from: 'old-dashboard',
+            to: 'dashboard',
+        };
+
+        it('requires project write access before looking up a dashboard', async () => {
+            const service = buildService();
+            await expect(
+                service.renameContentSlug(makeUser([]), PROJECT_UUID, request),
+            ).rejects.toThrow(ForbiddenError);
+            expect(service.dashboardModel.getByIdOrSlug).not.toHaveBeenCalled();
+            expect(service.dashboardModel.renameSlug).not.toHaveBeenCalled();
+        });
+
+        it('requires dashboard update access for write-only callers', async () => {
+            const service = buildService();
+            vi.mocked(service.dashboardModel.getByIdOrSlug).mockResolvedValue({
+                uuid: 'dashboard-uuid',
+                slug: request.from,
+                spaceUuid: SPACE_UUID,
+            } as AnyType);
+            await expect(
+                service.renameContentSlug(
+                    makeUser([{ subject: 'ContentAsCode', action: 'create' }]),
+                    PROJECT_UUID,
+                    request,
+                ),
+            ).rejects.toThrow(ForbiddenError);
+            expect(service.dashboardModel.renameSlug).not.toHaveBeenCalled();
+        });
+
+        it('renames an authorized project-scoped dashboard', async () => {
+            const service = buildService();
+            vi.mocked(service.dashboardModel.getByIdOrSlug).mockResolvedValue({
+                uuid: 'dashboard-uuid',
+                slug: request.from,
+                spaceUuid: SPACE_UUID,
+            } as AnyType);
+            await service.renameContentSlug(
+                makeUser([
+                    { subject: 'ContentAsCode', action: 'create' },
+                    {
+                        subject: 'Dashboard',
+                        action: 'update',
+                        conditions: { projectUuid: PROJECT_UUID },
+                    },
+                ]),
+                PROJECT_UUID,
+                request,
+            );
+            expect(service.dashboardModel.getByIdOrSlug).toHaveBeenCalledWith(
+                request.from,
+                { projectUuid: PROJECT_UUID },
+            );
+            expect(service.dashboardModel.renameSlug).toHaveBeenCalledWith({
+                projectUuid: PROJECT_UUID,
+                dashboardUuid: 'dashboard-uuid',
+                from: request.from,
+                to: request.to,
+            });
+        });
+
+        it.each(['../dashboard', 'UPPERCASE', '', 'a'.repeat(256)])(
+            'rejects malformed target %s before looking up a dashboard',
+            async (to) => {
+                const service = buildService();
+                await expect(
+                    service.renameContentSlug(makeUser([]), PROJECT_UUID, {
+                        ...request,
+                        to,
+                    }),
+                ).rejects.toThrow('target slug');
+                expect(
+                    service.dashboardModel.getByIdOrSlug,
+                ).not.toHaveBeenCalled();
+                expect(
+                    service.dashboardModel.renameSlug,
+                ).not.toHaveBeenCalled();
+            },
+        );
+    });
+
     const chartCreateRules: RawRuleOf<Ability<PossibleAbilities>>[] = [
         { subject: 'ContentAsCode', action: 'create' },
         {
@@ -228,7 +330,7 @@ describe('CoderService content-as-code space permissions', () => {
 
         await expect(
             service.upsertChart(
-                makeUser(chartCreateRules),
+                makeSessionUser(chartCreateRules),
                 PROJECT_UUID,
                 chartAsCode.slug,
                 {
@@ -260,7 +362,7 @@ describe('CoderService content-as-code space permissions', () => {
 
         await expect(
             service.upsertChart(
-                makeUser(chartCreateRules),
+                makeSessionUser(chartCreateRules),
                 PROJECT_UUID,
                 chartAsCode.slug,
                 {
@@ -289,7 +391,7 @@ describe('CoderService content-as-code space permissions', () => {
 
         await expect(
             service.upsertChart(
-                makeUser(chartCreateRules),
+                makeSessionUser(chartCreateRules),
                 PROJECT_UUID,
                 chartAsCode.slug,
                 {
@@ -321,7 +423,7 @@ describe('CoderService content-as-code space permissions', () => {
         );
     });
 
-    it('lets manage upload any content without SQL and space checks', async () => {
+    it('lets manage upload SQL content but still checks space access', async () => {
         const service = buildService();
         prepareChartCreate(service);
         const chartWithSql = {
@@ -343,15 +445,22 @@ describe('CoderService content-as-code space permissions', () => {
 
         await expect(
             service.upsertChart(
-                makeUser([{ subject: 'ContentAsCode', action: 'manage' }]),
+                makeUser([
+                    { subject: 'ContentAsCode', action: 'manage' },
+                    {
+                        subject: 'SavedChart',
+                        action: 'create',
+                        conditions: { projectUuid: PROJECT_UUID },
+                    },
+                ]),
                 PROJECT_UUID,
                 chartWithSql.slug,
                 chartWithSql,
             ),
         ).resolves.toMatchObject({ charts: [{ action: 'create' }] });
         expect(
-            service.spacePermissionService.getSpacesAccessContext,
-        ).not.toHaveBeenCalled();
+            service.spacePermissionService.resolveAccessBatch,
+        ).toHaveBeenCalled();
     });
 
     it('does not let ContentAsCode alone create charts in a space', async () => {
@@ -398,16 +507,20 @@ describe('CoderService content-as-code space permissions', () => {
             service.spaceModel.findClosestAncestorByPath,
         ).mockResolvedValue(PARENT_SPACE_UUID);
         vi.mocked(
-            service.spacePermissionService.getSpacesAccessContext,
-        ).mockResolvedValue({
-            [PARENT_SPACE_UUID]: {
-                organizationUuid: ORG_UUID,
-                projectUuid: PROJECT_UUID,
-                inheritsFromOrgOrProject: false,
-                access: [],
-                admins: [],
+            service.spacePermissionService.resolveAccessBatch,
+        ).mockResolvedValue([
+            {
+                target: { type: 'space', spaceUuid: PARENT_SPACE_UUID },
+                context: {
+                    organizationUuid: ORG_UUID,
+                    projectUuid: PROJECT_UUID,
+                    inheritsFromOrgOrProject: false,
+                    access: [],
+                    admins: [],
+                    directOnly: false,
+                },
             },
-        });
+        ]);
         const user = makeUser([
             { subject: 'ContentAsCode', action: 'create' },
             {
@@ -440,7 +553,7 @@ describe('CoderService content-as-code space permissions', () => {
         expect(service.spaceModel.createSpace).not.toHaveBeenCalled();
     });
 
-    it('rechecks a newly created chart target space before moving content', async () => {
+    it('rejects moving a chart below a restricted parent before creating spaces', async () => {
         const service = buildService();
         vi.mocked(service.savedChartModel.find).mockResolvedValue([
             {
@@ -475,32 +588,31 @@ describe('CoderService content-as-code space permissions', () => {
             inheritParentPermissions: true,
         } as AnyType);
         vi.mocked(
-            service.spacePermissionService.getSpacesAccessContext,
-        ).mockImplementation(async (_userUuid, spaceUuids) =>
-            Object.fromEntries(
-                spaceUuids.map((spaceUuid) => [
-                    spaceUuid,
-                    {
-                        organizationUuid: ORG_UUID,
-                        projectUuid: PROJECT_UUID,
-                        inheritsFromOrgOrProject: false,
-                        access:
-                            spaceUuid === SPACE_UUID
-                                ? [
-                                      {
-                                          userUuid: 'user-uuid',
-                                          role: SpaceMemberRole.EDITOR,
-                                          hasDirectAccess: true,
-                                          projectRole: undefined,
-                                          inheritedRole: undefined,
-                                          inheritedFrom: undefined,
-                                      },
-                                  ]
-                                : [],
-                        admins: [],
-                    },
-                ]),
-            ),
+            service.spacePermissionService.resolveAccessBatch,
+        ).mockImplementation(async (_userUuid, targets) =>
+            targets.map((target) => ({
+                target,
+                context: {
+                    organizationUuid: ORG_UUID,
+                    projectUuid: PROJECT_UUID,
+                    inheritsFromOrgOrProject: false,
+                    access:
+                        target.spaceUuid === SPACE_UUID
+                            ? [
+                                  {
+                                      userUuid: 'user-uuid',
+                                      role: SpaceMemberRole.EDITOR,
+                                      hasDirectAccess: true,
+                                      projectRole: undefined,
+                                      inheritedRole: undefined,
+                                      inheritedFrom: undefined,
+                                  },
+                              ]
+                            : [],
+                    admins: [],
+                    directOnly: false,
+                },
+            })),
         );
         const user = makeUser([
             { subject: 'ContentAsCode', action: 'create' },
@@ -529,7 +641,7 @@ describe('CoderService content-as-code space permissions', () => {
                 spaceSlug: 'restricted/new-space',
             }),
         ).rejects.toThrow('You don\'t have access to update chart "chart"');
-        expect(service.spaceModel.createSpace).toHaveBeenCalledOnce();
+        expect(service.spaceModel.createSpace).not.toHaveBeenCalled();
         expect(service.promoteService.getPromoteCharts).not.toHaveBeenCalled();
     });
 
@@ -773,23 +885,22 @@ describe('CoderService content-as-code space permissions', () => {
             filters: { dimensions: [], metrics: [], tableCalculations: [] },
         } as AnyType);
         vi.mocked(
-            service.spacePermissionService.getSpacesAccessContext,
-        ).mockImplementation(async (_userUuid, spaceUuids) =>
-            Object.fromEntries(
-                spaceUuids.map((spaceUuid) => [
-                    spaceUuid,
-                    {
-                        organizationUuid: ORG_UUID,
-                        projectUuid:
-                            spaceUuid === OTHER_SPACE_UUID
-                                ? 'restricted-project'
-                                : PROJECT_UUID,
-                        inheritsFromOrgOrProject: true,
-                        access: [],
-                        admins: [],
-                    },
-                ]),
-            ),
+            service.spacePermissionService.resolveAccessBatch,
+        ).mockImplementation(async (_userUuid, targets) =>
+            targets.map((target) => ({
+                target,
+                context: {
+                    organizationUuid: ORG_UUID,
+                    projectUuid:
+                        target.spaceUuid === OTHER_SPACE_UUID
+                            ? 'restricted-project'
+                            : PROJECT_UUID,
+                    inheritsFromOrgOrProject: true,
+                    access: [],
+                    admins: [],
+                    directOnly: false,
+                },
+            })),
         );
         const user = makeUser([
             { subject: 'ContentAsCode', action: 'create' },
@@ -834,23 +945,22 @@ describe('CoderService content-as-code space permissions', () => {
             filters: { dimensions: [], metrics: [], tableCalculations: [] },
         } as AnyType);
         vi.mocked(
-            service.spacePermissionService.getSpacesAccessContext,
-        ).mockImplementation(async (_userUuid, spaceUuids) =>
-            Object.fromEntries(
-                spaceUuids.map((spaceUuid) => [
-                    spaceUuid,
-                    {
-                        organizationUuid: ORG_UUID,
-                        projectUuid:
-                            spaceUuid === SPACE_UUID
-                                ? 'restricted-project'
-                                : PROJECT_UUID,
-                        inheritsFromOrgOrProject: true,
-                        access: [],
-                        admins: [],
-                    },
-                ]),
-            ),
+            service.spacePermissionService.resolveAccessBatch,
+        ).mockImplementation(async (_userUuid, targets) =>
+            targets.map((target) => ({
+                target,
+                context: {
+                    organizationUuid: ORG_UUID,
+                    projectUuid:
+                        target.spaceUuid === SPACE_UUID
+                            ? 'restricted-project'
+                            : PROJECT_UUID,
+                    inheritsFromOrgOrProject: true,
+                    access: [],
+                    admins: [],
+                    directOnly: false,
+                },
+            })),
         );
         const user = makeUser([
             { subject: 'ContentAsCode', action: 'create' },
@@ -950,32 +1060,31 @@ describe('CoderService content-as-code space permissions', () => {
             } as AnyType,
         ]);
         vi.mocked(
-            service.spacePermissionService.getSpacesAccessContext,
-        ).mockImplementation(async (_userUuid, spaceUuids) =>
-            Object.fromEntries(
-                spaceUuids.map((spaceUuid) => [
-                    spaceUuid,
-                    {
-                        organizationUuid: ORG_UUID,
-                        projectUuid: PROJECT_UUID,
-                        inheritsFromOrgOrProject: false,
-                        access:
-                            spaceUuid === SPACE_UUID
-                                ? [
-                                      {
-                                          userUuid: 'user-uuid',
-                                          role: SpaceMemberRole.EDITOR,
-                                          hasDirectAccess: true,
-                                          projectRole: undefined,
-                                          inheritedRole: undefined,
-                                          inheritedFrom: undefined,
-                                      },
-                                  ]
-                                : [],
-                        admins: [],
-                    },
-                ]),
-            ),
+            service.spacePermissionService.resolveAccessBatch,
+        ).mockImplementation(async (_userUuid, targets) =>
+            targets.map((target) => ({
+                target,
+                context: {
+                    organizationUuid: ORG_UUID,
+                    projectUuid: PROJECT_UUID,
+                    inheritsFromOrgOrProject: false,
+                    access:
+                        target.spaceUuid === SPACE_UUID
+                            ? [
+                                  {
+                                      userUuid: 'user-uuid',
+                                      role: SpaceMemberRole.EDITOR,
+                                      hasDirectAccess: true,
+                                      projectRole: undefined,
+                                      inheritedRole: undefined,
+                                      inheritedFrom: undefined,
+                                  },
+                              ]
+                            : [],
+                    admins: [],
+                    directOnly: false,
+                },
+            })),
         );
         const user = makeUser([
             { subject: 'ContentAsCode', action: 'create' },
@@ -1070,7 +1179,13 @@ describe('CoderService content-as-code space permissions', () => {
         ).resolves.toMatchObject({
             charts: [{ action: PromotionAction.NO_CHANGES }],
         });
-        expect(service.savedChartModel.get).toHaveBeenCalledWith('chart-uuid');
+        if (contentAsCodeAction === 'create') {
+            expect(service.savedChartModel.get).toHaveBeenCalledWith(
+                'chart-uuid',
+            );
+        } else {
+            expect(service.savedChartModel.get).not.toHaveBeenCalled();
+        }
         expect(service.promoteService.getPromoteCharts).toHaveBeenCalled();
     });
 
@@ -1095,32 +1210,31 @@ describe('CoderService content-as-code space permissions', () => {
             } as AnyType,
         ]);
         vi.mocked(
-            service.spacePermissionService.getSpacesAccessContext,
-        ).mockImplementation(async (_userUuid, spaceUuids) =>
-            Object.fromEntries(
-                spaceUuids.map((spaceUuid) => [
-                    spaceUuid,
-                    {
-                        organizationUuid: ORG_UUID,
-                        projectUuid: PROJECT_UUID,
-                        inheritsFromOrgOrProject: false,
-                        access:
-                            spaceUuid === SPACE_UUID
-                                ? [
-                                      {
-                                          userUuid: 'user-uuid',
-                                          role: SpaceMemberRole.EDITOR,
-                                          hasDirectAccess: true,
-                                          projectRole: undefined,
-                                          inheritedRole: undefined,
-                                          inheritedFrom: undefined,
-                                      },
-                                  ]
-                                : [],
-                        admins: [],
-                    },
-                ]),
-            ),
+            service.spacePermissionService.resolveAccessBatch,
+        ).mockImplementation(async (_userUuid, targets) =>
+            targets.map((target) => ({
+                target,
+                context: {
+                    organizationUuid: ORG_UUID,
+                    projectUuid: PROJECT_UUID,
+                    inheritsFromOrgOrProject: false,
+                    access:
+                        target.spaceUuid === SPACE_UUID
+                            ? [
+                                  {
+                                      userUuid: 'user-uuid',
+                                      role: SpaceMemberRole.EDITOR,
+                                      hasDirectAccess: true,
+                                      projectRole: undefined,
+                                      inheritedRole: undefined,
+                                      inheritedFrom: undefined,
+                                  },
+                              ]
+                            : [],
+                    admins: [],
+                    directOnly: false,
+                },
+            })),
         );
         const user = makeUser([
             { subject: 'ContentAsCode', action: 'create' },
@@ -1191,32 +1305,31 @@ describe('CoderService content-as-code space permissions', () => {
             } as AnyType,
         ]);
         vi.mocked(
-            service.spacePermissionService.getSpacesAccessContext,
-        ).mockImplementation(async (_userUuid, spaceUuids) =>
-            Object.fromEntries(
-                spaceUuids.map((spaceUuid) => [
-                    spaceUuid,
-                    {
-                        organizationUuid: ORG_UUID,
-                        projectUuid: PROJECT_UUID,
-                        inheritsFromOrgOrProject: false,
-                        access:
-                            spaceUuid === SPACE_UUID
-                                ? [
-                                      {
-                                          userUuid: 'user-uuid',
-                                          role: SpaceMemberRole.EDITOR,
-                                          hasDirectAccess: true,
-                                          projectRole: undefined,
-                                          inheritedRole: undefined,
-                                          inheritedFrom: undefined,
-                                      },
-                                  ]
-                                : [],
-                        admins: [],
-                    },
-                ]),
-            ),
+            service.spacePermissionService.resolveAccessBatch,
+        ).mockImplementation(async (_userUuid, targets) =>
+            targets.map((target) => ({
+                target,
+                context: {
+                    organizationUuid: ORG_UUID,
+                    projectUuid: PROJECT_UUID,
+                    inheritsFromOrgOrProject: false,
+                    access:
+                        target.spaceUuid === SPACE_UUID
+                            ? [
+                                  {
+                                      userUuid: 'user-uuid',
+                                      role: SpaceMemberRole.EDITOR,
+                                      hasDirectAccess: true,
+                                      projectRole: undefined,
+                                      inheritedRole: undefined,
+                                      inheritedFrom: undefined,
+                                  },
+                              ]
+                            : [],
+                    admins: [],
+                    directOnly: false,
+                },
+            })),
         );
         const user = makeUser([
             { subject: 'ContentAsCode', action: 'create' },
@@ -1279,6 +1392,7 @@ describe('CoderService content-as-code space permissions', () => {
         ]);
         vi.mocked(service.dashboardModel.create).mockResolvedValue({
             uuid: 'dashboard-uuid',
+            tiles: [],
         } as AnyType);
         const user = makeUser([
             { subject: 'ContentAsCode', action: 'create' },
@@ -1323,6 +1437,7 @@ describe('CoderService content-as-code space permissions', () => {
         vi.mocked(service.dashboardModel.find).mockResolvedValue([]);
         vi.mocked(service.dashboardModel.create).mockResolvedValue({
             uuid: 'dashboard-uuid',
+            tiles: [],
         } as AnyType);
         vi.mocked(service.savedChartModel.create).mockResolvedValue({
             uuid: 'chart-uuid',
@@ -1353,7 +1468,224 @@ describe('CoderService content-as-code space permissions', () => {
         expect(service.dashboardModel.create).toHaveBeenCalled();
         expect(service.savedChartModel.create).toHaveBeenCalled();
         expect(
-            service.spacePermissionService.getSpacesAccessContext,
+            service.spacePermissionService.resolveAccessBatch,
         ).toHaveBeenCalledTimes(1);
     });
+};
+
+describe.each(['create', 'manage'] as const)(
+    'CoderService content-as-code space permissions (%s)',
+    (action) => {
+        registerContentAccessTests(action);
+    },
+);
+
+describe('CoderService upsertDashboard tile chart versions', () => {
+    it('does not re-version unchanged tile charts on a forced dashboard upload', async () => {
+        const service = buildService();
+        vi.mocked(service.dashboardModel.find).mockResolvedValue([
+            { uuid: 'dashboard-uuid' } as AnyType,
+        ]);
+        vi.mocked(service.dashboardModel.getByIdOrSlug).mockResolvedValue({
+            uuid: 'dashboard-uuid',
+            slug: 'dashboard',
+            name: 'Dashboard',
+            spaceUuid: SPACE_UUID,
+            filters: { dimensions: [], metrics: [], tableCalculations: [] },
+        } as AnyType);
+        vi.mocked(
+            service.promoteService.getPromotedDashboard,
+        ).mockResolvedValue({
+            promotedDashboard: {
+                dashboard: { uuid: 'dashboard-uuid', name: 'Dashboard' },
+                projectUuid: PROJECT_UUID,
+                space: { name: 'Space' },
+                spaceAccessContext: {
+                    organizationUuid: ORG_UUID,
+                    projectUuid: PROJECT_UUID,
+                    access: [],
+                },
+            },
+            upstreamDashboard: {
+                dashboard: { uuid: 'dashboard-uuid', name: 'Dashboard' },
+                projectUuid: PROJECT_UUID,
+                space: { name: 'Space' },
+                spaceAccessContext: {
+                    organizationUuid: ORG_UUID,
+                    projectUuid: PROJECT_UUID,
+                    access: [],
+                },
+            },
+        } as AnyType);
+        vi.mocked(
+            service.promoteService.getPromotionDashboardChanges,
+        ).mockResolvedValue([
+            {
+                dashboards: [
+                    {
+                        action: PromotionAction.UPDATE,
+                        data: { uuid: 'dashboard-uuid' },
+                    },
+                ],
+                charts: [
+                    {
+                        action: PromotionAction.NO_CHANGES,
+                        data: { uuid: 'chart-uuid' },
+                    },
+                ],
+                spaces: [],
+            },
+            [],
+        ] as AnyType);
+        const user = makeSessionUser([
+            { subject: 'ContentAsCode', action: 'create' },
+            {
+                subject: 'Dashboard',
+                action: 'update',
+                conditions: { projectUuid: PROJECT_UUID },
+            },
+            {
+                subject: 'Dashboard',
+                action: 'promote',
+                conditions: { projectUuid: PROJECT_UUID },
+            },
+        ]);
+
+        await expect(
+            service.upsertDashboard(
+                user,
+                PROJECT_UUID,
+                dashboardAsCode.slug,
+                dashboardAsCode,
+                { force: true },
+            ),
+        ).resolves.toMatchObject({
+            dashboards: [{ action: PromotionAction.UPDATE }],
+        });
+
+        // The forced upload updates the dashboard but must not write a second
+        // version of tile charts already handled by the chart upload path.
+        expect(service.promoteService.upsertCharts).toHaveBeenCalledTimes(1);
+        const upsertChartsChanges = vi.mocked(
+            service.promoteService.upsertCharts,
+        ).mock.calls[0][1] as AnyType;
+        expect(upsertChartsChanges.charts).toEqual([
+            expect.objectContaining({
+                action: PromotionAction.NO_CHANGES,
+            }),
+        ]);
+    });
 });
+
+describe.each(['create', 'upsert'] as const)(
+    'CoderService new dashboard chart ownership (%s)',
+    (mode) => {
+        it('copies dashboard-owned charts while preserving shared charts and tile settings', async () => {
+            const service = buildService();
+            const user = makeSessionUser([
+                { subject: 'ContentAsCode', action: 'create' },
+                { subject: 'Dashboard', action: 'create' },
+                { subject: 'SavedChart', action: 'view' },
+            ]);
+            const tiles: DashboardChartTile[] = [true, false].map(
+                (belongsToDashboard, index) => ({
+                    uuid: `tile-${index}`,
+                    type: DashboardTileTypes.SAVED_CHART,
+                    x: index * 6,
+                    y: 0,
+                    h: 5,
+                    w: 6,
+                    tabUuid: null,
+                    properties: {
+                        savedChartUuid: `chart-${index}`,
+                        belongsToDashboard,
+                        hideTitle: true,
+                    },
+                }),
+            );
+            const createdDashboard: DashboardDAO = {
+                ...dashboardMock,
+                uuid: 'copy-dashboard',
+                slug: 'copy',
+                projectUuid: PROJECT_UUID,
+                tiles,
+                tabs: [],
+                filters: { dimensions: [], metrics: [], tableCalculations: [] },
+            };
+            vi.spyOn(service, 'getOrCreateSpace').mockResolvedValue({
+                space: { uuid: SPACE_UUID } as AnyType,
+                created: false,
+            });
+            vi.mocked(service.savedChartModel.find).mockResolvedValue(
+                [0, 1].map((index) => ({
+                    uuid: `chart-${index}`,
+                    slug: `chart-${index}`,
+                    spaceUuid: SPACE_UUID,
+                    dashboardUuid: index === 0 ? 'original-dashboard' : null,
+                })) as AnyType,
+            );
+            vi.mocked(service.dashboardModel.create).mockResolvedValue(
+                createdDashboard,
+            );
+            const duplicateChartForDashboard = vi.fn(
+                async () => 'copied-chart',
+            );
+            Object.assign(service.dashboardService, {
+                duplicateChartForDashboard,
+            });
+            const updatedTiles = tiles.map((tile, index) =>
+                index === 0
+                    ? {
+                          ...tile,
+                          properties: {
+                              ...tile.properties,
+                              savedChartUuid: 'copied-chart',
+                          },
+                      }
+                    : tile,
+            );
+            const addVersion = vi.fn(async () => ({
+                ...createdDashboard,
+                tiles: updatedTiles,
+            }));
+            Object.assign(service.dashboardModel, { addVersion });
+            vi.mocked(service.dashboardModel.getByIdOrSlug).mockResolvedValue({
+                ...createdDashboard,
+                tiles: updatedTiles,
+            });
+
+            const result = await service.upsertDashboard(
+                user,
+                PROJECT_UUID,
+                'copy',
+                {
+                    ...dashboardAsCode,
+                    slug: 'copy',
+                    tiles: tiles.map((tile, index) => ({
+                        ...tile,
+                        tileSlug: `tile-${index}`,
+                        properties: { chartSlug: `chart-${index}` },
+                    })),
+                },
+                { mode },
+            );
+
+            expect(duplicateChartForDashboard).toHaveBeenCalledExactlyOnceWith({
+                user,
+                projectUuid: PROJECT_UUID,
+                dashboardUuid: 'copy-dashboard',
+                chartUuid: 'chart-0',
+            });
+            expect(addVersion).toHaveBeenCalledWith(
+                'copy-dashboard',
+                expect.objectContaining({ tiles: updatedTiles }),
+                user,
+                PROJECT_UUID,
+            );
+            expect(result.dashboards[0].data.tiles).toEqual(updatedTiles);
+            expect(tiles[0].properties).toMatchObject({
+                savedChartUuid: 'chart-0',
+            });
+        });
+    },
+);

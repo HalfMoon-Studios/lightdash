@@ -4,6 +4,23 @@
     "type": ["object", "null"],
     "required": ["spotlight"],
     "properties": {
+        "content_as_code": {
+            "type": ["object", "null"],
+            "description": "Settings for content-as-code sync between this repo and Lightdash instances",
+            "properties": {
+                "sync": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When true, uploaded content is tracked as Git-backed for content review and write-back workflows."
+                },
+                "path": {
+                    "type": "string",
+                    "default": "lightdash",
+                    "description": "Directory that holds the charts/ and dashboards/ folders, relative to the dbt project directory. Write-back pull requests put content files under it."
+                }
+            },
+            "additionalProperties": false
+        },
         "spotlight": {
             "type": ["object", "null"],
             "properties": {
@@ -103,7 +120,7 @@
                             }
                         },
                         "default": {
-                            "description": "The default value(s) for the parameter",
+                            "description": "The default value(s) for the parameter. For date parameters, `today` resolves to the current date at query time.",
                             "oneOf": [
                                 { "type": ["string", "number"] },
                                 {

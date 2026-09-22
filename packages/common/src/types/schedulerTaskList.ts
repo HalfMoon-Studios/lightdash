@@ -15,6 +15,7 @@ import {
     type DataAppClaudeModel,
     type DataAppCodexModel,
     type DataAppCreationExperience,
+    type DataAppInvestigateJobPayload,
     type DataAppTemplate,
     type EmbedArtifactVersionJobPayload,
     type GenerateArtifactQuestionJobPayload,
@@ -27,6 +28,8 @@ import { type RenameResourcesPayload } from './rename';
 import {
     type BackfillDefaultUserSpacesPayload,
     type CompileProjectPayload,
+    type CreateReviewJiraIssuePayload,
+    type CreateReviewLinearIssuePayload,
     type DownloadAsyncQueryResultsPayload,
     type EmailBatchNotificationPayload,
     type EmailNotificationPayload,
@@ -44,6 +47,7 @@ import {
     type ReplaceCustomFieldsPayload,
     type ScheduledDeliveryPayload,
     type SchedulerCreateProjectWithCompilePayload,
+    type SendContentReviewNotificationPayload,
     type SendReviewNotificationPayload,
     type SlackBatchNotificationPayload,
     type SlackNotificationPayload,
@@ -99,6 +103,9 @@ export type AppGeneratePipelineJobPayload = TraceTaskBase & {
     // and system-prompt augmentation entirely. Absent on jobs enqueued
     // before the theme picker shipped.
     designUuid?: string | null;
+    // The AI agent tool call that started this build; the worker patches its
+    // pending result on the terminal transition. Absent on builder-started jobs.
+    aiAgentToolCall?: { promptUuid: string; toolCallId: string };
 };
 
 export type AppBuildFromSourceJobPayload = TraceTaskBase & {
@@ -132,6 +139,7 @@ export type AiAgentEditDbtProjectPipelineJobPayload = TraceTaskBase & {
     isSlackPrompt: boolean;
     toolCallId: string;
     writebackPrompt: string;
+    dbtSourceUuid?: string;
     source: AiWritebackSource;
     prUrl: string | null;
     startNewPullRequest: boolean | null;
@@ -154,8 +162,20 @@ export type AiAgentMemoryConsolidatePartitionJobPayload = TraceTaskBase & {
     ownerUserUuid: UUID;
 };
 
+export type MobilePushLiveActivityJobPayload = TraceTaskBase & {
+    liveActivityUuid: UUID;
+};
+
+export const MOBILE_PUSH_LIVE_ACTIVITY_START_MAX_ATTEMPTS = 5;
+
+export type MobilePushLiveActivityStartJobPayload = TraceTaskBase & {
+    liveActivityStartAttemptUuid: UUID;
+};
+
 export const EE_SCHEDULER_TASKS = {
     SLACK_AI_PROMPT: 'slackAiPrompt',
+    SLACK_AI_ARTIFACT_IMAGES: 'slackAiArtifactImages',
+    SWEEP_SLACK_AI_ARTIFACT_IMAGES: 'sweepSlackAiArtifactImages',
     AI_AGENT_EVAL_RESULT: 'aiAgentEvalResult',
     AI_AGENT_REVIEW_CLASSIFIER: 'aiAgentReviewClassifier',
     AI_AGENT_REVIEW_WRITEBACK: 'aiAgentReviewWriteback',
@@ -163,17 +183,22 @@ export const EE_SCHEDULER_TASKS = {
     AI_AGENT_REVIEW_REMEDIATION_COMPILE: 'aiAgentReviewRemediationCompile',
     AI_AGENT_REVIEW_REMEDIATION_RUN: 'aiAgentReviewRemediationRun',
     SEND_REVIEW_NOTIFICATION: 'sendReviewNotification',
+    SEND_CONTENT_REVIEW_NOTIFICATION: 'sendContentReviewNotification',
+    CREATE_REVIEW_JIRA_ISSUE: 'createReviewJiraIssue',
+    CREATE_REVIEW_LINEAR_ISSUE: 'createReviewLinearIssue',
     EMBED_ARTIFACT_VERSION: 'embedArtifactVersion',
     GENERATE_ARTIFACT_QUESTION: 'generateArtifactQuestion',
     APP_GENERATE_PIPELINE: 'appGeneratePipeline',
     APP_BUILD_FROM_SOURCE: 'appBuildFromSource',
     AI_WRITEBACK_PIPELINE: 'aiWritebackPipeline',
     AI_DEEP_RESEARCH: 'aiDeepResearch',
+    DATA_APP_INVESTIGATE: 'dataAppInvestigate',
     AGENT_ONBOARDING_RUN: 'agentOnboardingRun',
     AI_AGENT_EDIT_DBT_PROJECT_PIPELINE: 'aiAgentEditDbtProjectPipeline',
     SWEEP_STALE_APP_LOCKS: 'sweepStaleAppLocks',
     SWEEP_STALE_AI_WRITEBACK_RUNS: 'sweepStaleAiWritebackRuns',
     SWEEP_STALE_AI_DEEP_RESEARCH_RUNS: 'sweepStaleAiDeepResearchRuns',
+    SWEEP_STALE_AI_EVAL_RUNS: 'sweepStaleAiEvalRuns',
     SWEEP_AI_AGENT_MEMORY_THREADS: 'sweepAiAgentMemoryThreads',
     AI_AGENT_MEMORY_DISTILL: 'aiAgentMemoryDistill',
     CONSOLIDATE_AI_AGENT_MEMORIES: 'consolidateAiAgentMemories',
@@ -181,11 +206,15 @@ export const EE_SCHEDULER_TASKS = {
     CLEAN_MCP_TOOL_CALLS: 'cleanMcpToolCalls',
     CLEAN_AI_DEEP_RESEARCH_REPORTS: 'cleanAiDeepResearchReports',
     CLEAN_AI_AGENT_THREADS: 'cleanAiAgentThreads',
+    CLEAN_SCIM_REQUEST_LOGS: 'cleanScimRequestLogs',
     PUBLISH_ANNOUNCEMENT: 'publishAnnouncement',
     SWEEP_DUE_ANNOUNCEMENTS: 'sweepDueAnnouncements',
     INGEST_EXTERNAL_SOURCE: 'ingestExternalSource',
     INGEST_EXTERNAL_SOURCE_ATTACHMENT: 'ingestExternalSourceAttachment',
     MAINTAIN_EXTERNAL_SOURCES: 'maintainExternalSources',
+    MOBILE_PUSH_LIVE_ACTIVITY_START: 'mobilePushLiveActivityStart',
+    MOBILE_PUSH_LIVE_ACTIVITY: 'mobilePushLiveActivity',
+    SWEEP_MOBILE_PUSH_LIVE_ACTIVITIES: 'sweepMobilePushLiveActivities',
 } as const;
 
 export const SCHEDULER_TASKS = {
@@ -261,6 +290,8 @@ export interface TaskPayloadMap {
     [SCHEDULER_TASKS.EXPORT_CSV_DASHBOARD]: ExportCsvDashboardPayload;
     [SCHEDULER_TASKS.EXPORT_CONTENT]: ExportContentPayload;
     [SCHEDULER_TASKS.SLACK_AI_PROMPT]: SlackPromptJobPayload;
+    [SCHEDULER_TASKS.SLACK_AI_ARTIFACT_IMAGES]: SlackPromptJobPayload;
+    [SCHEDULER_TASKS.SWEEP_SLACK_AI_ARTIFACT_IMAGES]: TraceTaskBase;
     [SCHEDULER_TASKS.RENAME_RESOURCES]: RenameResourcesPayload;
     [SCHEDULER_TASKS.MATERIALIZE_PRE_AGGREGATE]: MaterializePreAggregatePayload;
     [SCHEDULER_TASKS.CLEAN_QUERY_HISTORY]: TraceTaskBase;
@@ -282,7 +313,11 @@ export interface TaskPayloadMap {
     [SCHEDULER_TASKS.AI_AGENT_REVIEW_REMEDIATION_PREVIEW]: AiAgentReviewRemediationPreviewJobPayload;
     [SCHEDULER_TASKS.AI_AGENT_REVIEW_REMEDIATION_COMPILE]: AiAgentReviewRemediationCompileJobPayload;
     [SCHEDULER_TASKS.AI_AGENT_REVIEW_REMEDIATION_RUN]: AiAgentReviewRemediationRunJobPayload;
+    [SCHEDULER_TASKS.DATA_APP_INVESTIGATE]: DataAppInvestigateJobPayload;
     [SCHEDULER_TASKS.SEND_REVIEW_NOTIFICATION]: SendReviewNotificationPayload;
+    [SCHEDULER_TASKS.SEND_CONTENT_REVIEW_NOTIFICATION]: SendContentReviewNotificationPayload;
+    [SCHEDULER_TASKS.CREATE_REVIEW_JIRA_ISSUE]: CreateReviewJiraIssuePayload;
+    [SCHEDULER_TASKS.CREATE_REVIEW_LINEAR_ISSUE]: CreateReviewLinearIssuePayload;
     [SCHEDULER_TASKS.EMBED_ARTIFACT_VERSION]: EmbedArtifactVersionJobPayload;
     [SCHEDULER_TASKS.GENERATE_ARTIFACT_QUESTION]: GenerateArtifactQuestionJobPayload;
     [SCHEDULER_TASKS.APP_GENERATE_PIPELINE]: AppGeneratePipelineJobPayload;
@@ -290,6 +325,7 @@ export interface TaskPayloadMap {
     [SCHEDULER_TASKS.SWEEP_STALE_APP_LOCKS]: TraceTaskBase;
     [SCHEDULER_TASKS.SWEEP_STALE_AI_WRITEBACK_RUNS]: TraceTaskBase;
     [SCHEDULER_TASKS.SWEEP_STALE_AI_DEEP_RESEARCH_RUNS]: TraceTaskBase;
+    [SCHEDULER_TASKS.SWEEP_STALE_AI_EVAL_RUNS]: TraceTaskBase;
     [SCHEDULER_TASKS.SWEEP_AI_AGENT_MEMORY_THREADS]: TraceTaskBase;
     [SCHEDULER_TASKS.AI_AGENT_MEMORY_DISTILL]: AiAgentMemoryDistillJobPayload;
     [SCHEDULER_TASKS.CONSOLIDATE_AI_AGENT_MEMORIES]: TraceTaskBase;
@@ -297,11 +333,15 @@ export interface TaskPayloadMap {
     [SCHEDULER_TASKS.CLEAN_MCP_TOOL_CALLS]: TraceTaskBase;
     [SCHEDULER_TASKS.CLEAN_AI_DEEP_RESEARCH_REPORTS]: TraceTaskBase;
     [SCHEDULER_TASKS.CLEAN_AI_AGENT_THREADS]: TraceTaskBase;
+    [SCHEDULER_TASKS.CLEAN_SCIM_REQUEST_LOGS]: TraceTaskBase;
     [SCHEDULER_TASKS.PUBLISH_ANNOUNCEMENT]: PublishAnnouncementPayload;
     [SCHEDULER_TASKS.SWEEP_DUE_ANNOUNCEMENTS]: TraceTaskBase;
     [SCHEDULER_TASKS.INGEST_EXTERNAL_SOURCE]: IngestExternalSourceJobPayload;
     [SCHEDULER_TASKS.INGEST_EXTERNAL_SOURCE_ATTACHMENT]: IngestExternalSourceJobPayload;
     [SCHEDULER_TASKS.MAINTAIN_EXTERNAL_SOURCES]: Record<string, never>;
+    [SCHEDULER_TASKS.MOBILE_PUSH_LIVE_ACTIVITY_START]: MobilePushLiveActivityStartJobPayload;
+    [SCHEDULER_TASKS.MOBILE_PUSH_LIVE_ACTIVITY]: MobilePushLiveActivityJobPayload;
+    [SCHEDULER_TASKS.SWEEP_MOBILE_PUSH_LIVE_ACTIVITIES]: Record<string, never>;
     [SCHEDULER_TASKS.AI_WRITEBACK_PIPELINE]: AiWritebackPipelineJobPayload;
     [SCHEDULER_TASKS.AI_DEEP_RESEARCH]: AiDeepResearchPipelineJobPayload;
     [SCHEDULER_TASKS.AGENT_ONBOARDING_RUN]: AgentOnboardingPipelineJobPayload;
@@ -310,13 +350,19 @@ export interface TaskPayloadMap {
 
 export interface EETaskPayloadMap {
     [EE_SCHEDULER_TASKS.SLACK_AI_PROMPT]: SlackPromptJobPayload;
+    [EE_SCHEDULER_TASKS.SLACK_AI_ARTIFACT_IMAGES]: SlackPromptJobPayload;
+    [EE_SCHEDULER_TASKS.SWEEP_SLACK_AI_ARTIFACT_IMAGES]: TraceTaskBase;
     [EE_SCHEDULER_TASKS.AI_AGENT_EVAL_RESULT]: AiAgentEvalRunJobPayload;
     [EE_SCHEDULER_TASKS.AI_AGENT_REVIEW_CLASSIFIER]: AiAgentReviewClassifierJobPayload;
     [EE_SCHEDULER_TASKS.AI_AGENT_REVIEW_WRITEBACK]: AiAgentReviewWritebackJobPayload;
     [EE_SCHEDULER_TASKS.AI_AGENT_REVIEW_REMEDIATION_PREVIEW]: AiAgentReviewRemediationPreviewJobPayload;
     [EE_SCHEDULER_TASKS.AI_AGENT_REVIEW_REMEDIATION_COMPILE]: AiAgentReviewRemediationCompileJobPayload;
     [EE_SCHEDULER_TASKS.AI_AGENT_REVIEW_REMEDIATION_RUN]: AiAgentReviewRemediationRunJobPayload;
+    [EE_SCHEDULER_TASKS.DATA_APP_INVESTIGATE]: DataAppInvestigateJobPayload;
     [EE_SCHEDULER_TASKS.SEND_REVIEW_NOTIFICATION]: SendReviewNotificationPayload;
+    [EE_SCHEDULER_TASKS.SEND_CONTENT_REVIEW_NOTIFICATION]: SendContentReviewNotificationPayload;
+    [EE_SCHEDULER_TASKS.CREATE_REVIEW_JIRA_ISSUE]: CreateReviewJiraIssuePayload;
+    [EE_SCHEDULER_TASKS.CREATE_REVIEW_LINEAR_ISSUE]: CreateReviewLinearIssuePayload;
     [EE_SCHEDULER_TASKS.EMBED_ARTIFACT_VERSION]: EmbedArtifactVersionJobPayload;
     [EE_SCHEDULER_TASKS.GENERATE_ARTIFACT_QUESTION]: GenerateArtifactQuestionJobPayload;
     [EE_SCHEDULER_TASKS.APP_GENERATE_PIPELINE]: AppGeneratePipelineJobPayload;
@@ -324,6 +370,7 @@ export interface EETaskPayloadMap {
     [EE_SCHEDULER_TASKS.SWEEP_STALE_APP_LOCKS]: TraceTaskBase;
     [EE_SCHEDULER_TASKS.SWEEP_STALE_AI_WRITEBACK_RUNS]: TraceTaskBase;
     [EE_SCHEDULER_TASKS.SWEEP_STALE_AI_DEEP_RESEARCH_RUNS]: TraceTaskBase;
+    [EE_SCHEDULER_TASKS.SWEEP_STALE_AI_EVAL_RUNS]: TraceTaskBase;
     [EE_SCHEDULER_TASKS.SWEEP_AI_AGENT_MEMORY_THREADS]: TraceTaskBase;
     [EE_SCHEDULER_TASKS.AI_AGENT_MEMORY_DISTILL]: AiAgentMemoryDistillJobPayload;
     [EE_SCHEDULER_TASKS.CONSOLIDATE_AI_AGENT_MEMORIES]: TraceTaskBase;
@@ -331,6 +378,7 @@ export interface EETaskPayloadMap {
     [EE_SCHEDULER_TASKS.CLEAN_MCP_TOOL_CALLS]: TraceTaskBase;
     [EE_SCHEDULER_TASKS.CLEAN_AI_DEEP_RESEARCH_REPORTS]: TraceTaskBase;
     [EE_SCHEDULER_TASKS.CLEAN_AI_AGENT_THREADS]: TraceTaskBase;
+    [EE_SCHEDULER_TASKS.CLEAN_SCIM_REQUEST_LOGS]: TraceTaskBase;
     [EE_SCHEDULER_TASKS.PUBLISH_ANNOUNCEMENT]: PublishAnnouncementPayload;
     [EE_SCHEDULER_TASKS.SWEEP_DUE_ANNOUNCEMENTS]: TraceTaskBase;
     [EE_SCHEDULER_TASKS.AI_WRITEBACK_PIPELINE]: AiWritebackPipelineJobPayload;
@@ -340,6 +388,12 @@ export interface EETaskPayloadMap {
     [EE_SCHEDULER_TASKS.INGEST_EXTERNAL_SOURCE]: IngestExternalSourceJobPayload;
     [EE_SCHEDULER_TASKS.INGEST_EXTERNAL_SOURCE_ATTACHMENT]: IngestExternalSourceJobPayload;
     [EE_SCHEDULER_TASKS.MAINTAIN_EXTERNAL_SOURCES]: Record<string, never>;
+    [EE_SCHEDULER_TASKS.MOBILE_PUSH_LIVE_ACTIVITY_START]: MobilePushLiveActivityStartJobPayload;
+    [EE_SCHEDULER_TASKS.MOBILE_PUSH_LIVE_ACTIVITY]: MobilePushLiveActivityJobPayload;
+    [EE_SCHEDULER_TASKS.SWEEP_MOBILE_PUSH_LIVE_ACTIVITIES]: Record<
+        string,
+        never
+    >;
 }
 
 export type SchedulerTaskName =

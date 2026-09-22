@@ -59,18 +59,18 @@ const TableRow: FC<{
                 </Tooltip>
             </Table.Td>
             <Table.Td>
-                <Badge variant="light" color="gray">
+                <Badge>
                     {level === 'organization' ? 'Organization' : 'Project'}
                 </Badge>
             </Table.Td>
             <Table.Td>{createdAt ? formatDate(createdAt) : '-'}</Table.Td>
             <Table.Td w="1%">
-                <Menu withinPortal position="bottom-end">
+                <Menu position="bottom-end">
                     <Menu.Target>
                         <ActionIcon
                             variant="transparent"
                             size="sm"
-                            color="ldGray.6"
+                            aria-label={`Actions for ${name}`}
                         >
                             <MantineIcon icon={IconDots} />
                         </ActionIcon>
@@ -136,30 +136,32 @@ export const CustomRolesTable: FC<TableProps> = ({
 
     return (
         <>
-            <Paper withBorder style={{ overflow: 'hidden' }}>
-                <Table
-                    className={`${tableStyles.root} ${tableStyles.alignLastTdRight}`}
-                >
-                    <Table.Thead>
-                        <Table.Tr>
-                            <Table.Th>Name</Table.Th>
-                            <Table.Th>Description</Table.Th>
-                            <Table.Th>Type</Table.Th>
-                            <Table.Th>Created</Table.Th>
-                            <Table.Th></Table.Th>
-                        </Table.Tr>
-                    </Table.Thead>
-                    <Table.Tbody>
-                        {roles.map((role) => (
-                            <TableRow
-                                key={role.roleUuid}
-                                role={role}
-                                onClickEdit={onEdit}
-                                onClickDelete={handleOpenDeleteModal}
-                            />
-                        ))}
-                    </Table.Tbody>
-                </Table>
+            <Paper className={tableStyles.paper}>
+                <Table.ScrollContainer minWidth={720}>
+                    <Table
+                        className={`${tableStyles.root} ${tableStyles.alignLastTdRight}`}
+                    >
+                        <Table.Thead>
+                            <Table.Tr>
+                                <Table.Th>Name</Table.Th>
+                                <Table.Th>Description</Table.Th>
+                                <Table.Th>Type</Table.Th>
+                                <Table.Th>Created</Table.Th>
+                                <Table.Th></Table.Th>
+                            </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                            {roles.map((role) => (
+                                <TableRow
+                                    key={role.roleUuid}
+                                    role={role}
+                                    onClickEdit={onEdit}
+                                    onClickDelete={handleOpenDeleteModal}
+                                />
+                            ))}
+                        </Table.Tbody>
+                    </Table>
+                </Table.ScrollContainer>
             </Paper>
 
             {roleToDelete && (

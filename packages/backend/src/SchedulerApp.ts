@@ -1,10 +1,11 @@
+import './tracing/bootstrap'; // Must run before modules that can load Knex
 import { createTerminus } from '@godaddy/terminus';
 import { MotherduckInstanceCache } from '@lightdash/warehouses';
 import * as Sentry from '@sentry/node';
 import { EventEmitter } from 'events';
 import express from 'express';
 import http from 'http';
-import knex, { Knex } from 'knex';
+import { Knex } from 'knex';
 import { registerAiUsageTracker } from './analytics/aiUsage';
 import { BufferedEventStreamWriter } from './analytics/eventStream/BufferedEventStreamWriter';
 import { createEventStreamWriter } from './analytics/eventStream/createEventStreamWriter';
@@ -18,6 +19,7 @@ import {
 } from './clients/ClientRepository';
 import { setGithubRateLimitObserver } from './clients/github/Github';
 import { LightdashConfig } from './config/parseConfig';
+import { createDatabase } from './database/createDatabase';
 import Logger from './logging/logger';
 import { flush as flushFeatureFlagChecks } from './models/FeatureFlagModel/flagCheckAggregator';
 import { ModelProviderMap, ModelRepository } from './models/ModelRepository';
@@ -54,9 +56,10 @@ const FEATURE_FLAG_CHECK_FLUSH_INTERVAL_MS = 15 * 60 * 1000;
 // Delay between the pool-dead latch firing and the fallback process.exit(1).
 // The PRIMARY restart path is the liveness probe: the latch flips
 // /api/v1/health to 503 immediately, the orchestrator SIGTERMs the pod, and
-// terminus runs worker.stop() so graphile fail_job-releases any in-flight
-// jobs for immediate retry (relevant when a single worker died while
-// siblings still process — the latch also fires there). The hard exit only
+// terminus runs worker.stop(), which skips the drain on a dead pool and
+// graphile fail_job-releases any in-flight jobs for immediate retry
+// (relevant when a single worker died while siblings still process — the
+// latch also fires there). The hard exit only
 // covers deployments with no liveness probe. It must stay comfortably above
 // the helm chart's scheduler liveness window (~305s: failureThreshold 20 x
 // periodSeconds 15) so the probe path, which shuts down cleanly, always wins
@@ -89,6 +92,7 @@ const schedulerWorkerFactory = (context: {
     prometheusMetrics?: PrometheusMetrics;
 }) =>
     new SchedulerWorker({
+        usageDimensionsModel: context.models.getUsageDimensionsModel(),
         lightdashConfig: context.lightdashConfig,
         analytics: context.analytics,
         // SlackClient should initialize before UnfurlService and AiAgentService
@@ -98,6 +102,8 @@ const schedulerWorkerFactory = (context: {
         dashboardService: context.serviceRepository.getDashboardService(),
         deployService: context.serviceRepository.getDeployService(),
         projectService: context.serviceRepository.getProjectService(),
+        contentAsCodeWritebackService:
+            context.serviceRepository.getContentAsCodeWritebackService(),
         schedulerService: context.serviceRepository.getSchedulerService(),
         validationService: context.serviceRepository.getValidationService(),
         userService: context.serviceRepository.getUserService(),
@@ -111,7 +117,6 @@ const schedulerWorkerFactory = (context: {
         googleChatClient: context.clients.getGoogleChatClient(),
         renameService: context.serviceRepository.getRenameService(),
         asyncQueryService: context.serviceRepository.getAsyncQueryService(),
-        featureFlagService: context.serviceRepository.getFeatureFlagService(),
         persistentDownloadFileService:
             context.serviceRepository.getPersistentDownloadFileService(),
         preAggregateModel: context.models.getPreAggregateModel(),
@@ -192,7 +197,7 @@ export default class SchedulerApp {
         });
         registerAiUsageTracker((event) => this.analytics.track(event));
 
-        this.database = knex(
+        this.database = createDatabase(
             this.environment === 'production'
                 ? args.knexConfig.production
                 : args.knexConfig.development,

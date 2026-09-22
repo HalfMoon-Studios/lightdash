@@ -42,6 +42,7 @@ describe('SavedChartService.getCreateEventProperties data app viz attribution', 
                     optionValues: { showLegend: false },
                 },
             }),
+            { viaDashboardGrant: false, grantOnly: false },
         );
 
         expect(properties.chartType).toBe(ChartType.DATA_APP_VIZ);
@@ -61,6 +62,7 @@ describe('SavedChartService.getCreateEventProperties data app viz attribution', 
                     fieldMapping: { category: 'orders_status' },
                 },
             }),
+            { viaDashboardGrant: false, grantOnly: false },
         );
 
         expect(properties.dataAppViz).toEqual({
@@ -70,9 +72,43 @@ describe('SavedChartService.getCreateEventProperties data app viz attribution', 
         });
     });
 
+    it('counts scalar and multiple mapped slots', () => {
+        const properties = SavedChartService.getCreateEventProperties(
+            chartWithConfig({
+                type: ChartType.DATA_APP_VIZ,
+                config: {
+                    dataAppVizUuid: 'viz-uuid',
+                    fieldMapping: {
+                        category: 'orders_status',
+                        values: ['orders_count'],
+                    },
+                },
+            }),
+            { viaDashboardGrant: false, grantOnly: false },
+        );
+
+        expect(properties.dataAppViz).toMatchObject({ mappedFieldCount: 2 });
+    });
+
+    it('does not count explicitly cleared slots as mapped', () => {
+        const properties = SavedChartService.getCreateEventProperties(
+            chartWithConfig({
+                type: ChartType.DATA_APP_VIZ,
+                config: {
+                    dataAppVizUuid: 'viz-uuid',
+                    fieldMapping: { category: 'orders_status', values: [] },
+                },
+            }),
+            { viaDashboardGrant: false, grantOnly: false },
+        );
+
+        expect(properties.dataAppViz).toMatchObject({ mappedFieldCount: 1 });
+    });
+
     it('omits the block for a viz chart saved before a viz was picked', () => {
         const properties = SavedChartService.getCreateEventProperties(
             chartWithConfig({ type: ChartType.DATA_APP_VIZ }),
+            { viaDashboardGrant: false, grantOnly: false },
         );
 
         expect(properties.chartType).toBe(ChartType.DATA_APP_VIZ);
@@ -82,6 +118,7 @@ describe('SavedChartService.getCreateEventProperties data app viz attribution', 
     it('omits the block for every other chart type', () => {
         const properties = SavedChartService.getCreateEventProperties(
             chartWithConfig({ type: ChartType.TABLE, config: {} }),
+            { viaDashboardGrant: false, grantOnly: false },
         );
 
         expect(properties.dataAppViz).toBeUndefined();

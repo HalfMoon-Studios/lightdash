@@ -1,13 +1,18 @@
-import { useMediaQuery } from '@mantine/hooks';
+import * as Sentry from '@sentry/react';
 import { Outlet } from 'react-router';
 import NavBar from '../../../components/NavBar';
-import { MobileNavBar } from '../../../MobileRoutes';
+import ScopeTourHost from '../../../features/scopeTours/ScopeTourHost';
 
 const AiAgentsRootLayout = () => {
-    const isMobile = useMediaQuery('(max-width: 768px)');
     return (
         <>
-            {isMobile ? <MobileNavBar /> : <NavBar />}
+            {/* Static navbar: its z-index stays inert so the in-thread chart
+                editor modal can cover it, matching dashboard views. */}
+            <NavBar isFixed={false} />
+            {/* A walkthrough that clicked into Ask AI continues here. */}
+            <Sentry.ErrorBoundary fallback={<></>}>
+                <ScopeTourHost />
+            </Sentry.ErrorBoundary>
             <Outlet />
         </>
     );

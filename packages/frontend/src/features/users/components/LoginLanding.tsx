@@ -20,9 +20,10 @@ import {
     Anchor,
     PasswordInput,
 } from '@mantine/core';
-import { useForm, zodResolver, type UseFormReturnType } from '@mantine/form';
+import { useForm, type UseFormReturnType } from '@mantine/form';
 import { useTimeout } from '@mantine/hooks';
 import { IconX } from '@tabler/icons-react';
+import { zod4Resolver as zodResolver } from 'mantine-form-zod-resolver';
 import {
     useCallback,
     useEffect,
@@ -34,9 +35,9 @@ import {
 import { Link, Navigate, useLocation } from 'react-router';
 import { z } from 'zod';
 import { useAuthLayoutVariant } from '../../../components/common/AuthLayout/useAuthLayoutVariant';
+import EmptyStateLoader from '../../../components/common/EmptyStateLoader';
 import MantineIcon from '../../../components/common/MantineIcon';
 import { ThirdPartySignInButton } from '../../../components/common/ThirdPartySignInButton';
-import PageSpinner from '../../../components/PageSpinner';
 import useToaster from '../../../hooks/toaster/useToaster';
 import { useFlashMessages } from '../../../hooks/useFlashMessages';
 import useApp from '../../../providers/App/useApp';
@@ -132,7 +133,7 @@ const getAlternativeLoginIntent = ({
     return undefined;
 };
 
-const LoginForm: FC<{
+export const LoginForm: FC<{
     alternativeLoginIntent: MobileLoginIntent | undefined;
     availability: { email: boolean; emailOtp: boolean };
     form: UseFormReturnType<LoginParams>;
@@ -212,6 +213,11 @@ const LoginForm: FC<{
                 <TextInput
                     label={isNewLayout ? 'Work email' : 'Email address'}
                     name="email"
+                    type="email"
+                    inputMode="email"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
                     placeholder={
                         isNewLayout ? 'maya@acme.com' : 'Your email address'
                     }
@@ -224,8 +230,6 @@ const LoginForm: FC<{
                             <ActionIcon
                                 aria-label="Clear email address"
                                 onMouseDown={(event) => event.preventDefault()}
-                                variant="subtle"
-                                color="gray"
                                 onClick={onClearEmail}
                             >
                                 <MantineIcon icon={IconX} />
@@ -567,7 +571,7 @@ const Login: FC<{}> = () => {
     });
 
     if (health.isInitialLoading || isDemo || isInitialLoadingLoginOptions) {
-        return <PageSpinner />;
+        return <EmptyStateLoader py="xl" />;
     }
     if (health.status === 'success' && health.data?.requiresOrgRegistration) {
         return (

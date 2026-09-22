@@ -51,6 +51,7 @@ import classes from './DraggableItem.module.css';
 import ResourceViewGridChartItem from './ResourceViewGridChartItem';
 import ResourceViewGridDashboardItem from './ResourceViewGridDashboardItem';
 import ResourceViewGridDataAppItem from './ResourceViewGridDataAppItem';
+import ResourceViewGridDocumentItem from './ResourceViewGridDocumentItem';
 import ResourceViewGridSpaceItem from './ResourceViewGridSpaceItem';
 
 export interface ResourceViewGridCommonProps {
@@ -95,6 +96,15 @@ const ResourceCard: FC<ResourceCardProps> = ({
     dragIcon,
 }) => {
     switch (item.type) {
+        case ResourceViewItemType.DOCUMENT:
+            return (
+                <ResourceViewGridDocumentItem
+                    item={item}
+                    onAction={onAction}
+                    allowDelete={allowDelete}
+                    dragIcon={dragIcon}
+                />
+            );
         case ResourceViewItemType.SPACE:
             return (
                 <ResourceViewGridSpaceItem
@@ -108,6 +118,7 @@ const ResourceCard: FC<ResourceCardProps> = ({
             return (
                 <ResourceViewGridDashboardItem
                     item={item}
+                    projectUuid={projectUuid}
                     allowDelete={allowDelete}
                     onAction={onAction}
                     dragIcon={dragIcon}
@@ -117,6 +128,7 @@ const ResourceCard: FC<ResourceCardProps> = ({
             return (
                 <ResourceViewGridChartItem
                     item={item}
+                    projectUuid={projectUuid}
                     allowDelete={allowDelete}
                     onAction={onAction}
                     dragIcon={dragIcon}
@@ -196,7 +208,7 @@ const DraggableItem: FC<DraggableItemProps> = ({
             <MantineIcon
                 display={showDragIcon ? 'block' : 'none'}
                 size="sm"
-                color="ldGray.6"
+                color="dimmed"
                 icon={IconGripVertical}
             />
         </Box>
@@ -215,6 +227,11 @@ const DraggableItem: FC<DraggableItemProps> = ({
             }`}
             ref={mergeRefs(setNodeRef, hoverRef)}
             style={style}
+            // Walkthrough anchor (data-tour-via): a pinned item, by name.
+            data-tour-anchor="pinned-item"
+            data-tour-hint="Open a pinned item"
+            data-tour-hint-named="Open {value}"
+            data-tour-value={item.data.name}
             onClick={(event: React.MouseEvent<HTMLDivElement>) => {
                 if (shouldSuppressClick()) {
                     event.preventDefault();
@@ -254,6 +271,7 @@ const ResourceViewGrid: FC<ResourceViewGridProps> = ({
             ResourceViewItemType.SPACE,
             ResourceViewItemType.DASHBOARD,
             ResourceViewItemType.CHART,
+            ResourceViewItemType.DOCUMENT,
         ],
     ],
     onAction,
@@ -408,7 +426,7 @@ const ResourceViewGrid: FC<ResourceViewGridProps> = ({
                 return (
                     <Stack gap={5} key={group.name}>
                         {localGroupedItems.length > 1 && (
-                            <Text tt="uppercase" fz="xs" fw={600} c="ldGray.6">
+                            <Text tt="uppercase" fz="xs" fw={600} c="dimmed">
                                 {group.name}
                             </Text>
                         )}

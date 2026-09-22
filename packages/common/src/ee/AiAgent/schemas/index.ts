@@ -11,9 +11,11 @@ import {
     type ToolFindDashboardsOutput,
     type ToolFindExploresOutput,
     type ToolFindFieldsOutput,
+    type ToolGenerateDataAppOutput,
     type ToolGenerateHashesOutput,
     type ToolGenerateUuidsOutput,
     type ToolGetKnowledgeDocumentContentOutput,
+    type ToolListDataAppThemesOutput,
     type ToolListKnowledgeDocumentsOutput,
     type ToolListWarehouseTablesOutput,
     type ToolLoadSkillOutput,
@@ -26,11 +28,14 @@ import {
     type ToolSyncDbtProjectOutput,
 } from './tools';
 
+export * from './agentInputSchema';
 export * from './customMetrics';
 export * from './defineTool';
+export * from './filterExpressions';
 export * from './filters';
 export * from './McpSchemaCompatLayer';
 export * from './outputMetadata';
+export * from './persistedRunQueryArgs';
 export * from './sortField';
 export * from './tableCalcs/tableCalcFormula';
 export * from './tableCalcs/tableCalcs';
@@ -50,10 +55,12 @@ export type AgentToolOutput =
     | ToolDescribeWarehouseTableOutput
     | ToolDiscoverFieldsOutput
     | ToolEditContentOutput
+    | ToolListDataAppThemesOutput
     | ToolListKnowledgeDocumentsOutput
     | ToolListWarehouseTablesOutput
     | ToolLoadSkillOutput
     | ToolEditDbtProjectOutput
+    | ToolGenerateDataAppOutput
     | ToolSyncDbtProjectOutput
     | ToolReadContentOutput
     | ToolRunQueryOutput

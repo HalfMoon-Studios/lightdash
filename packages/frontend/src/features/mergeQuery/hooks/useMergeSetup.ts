@@ -7,8 +7,10 @@ import {
     getItemMap,
     getUnaccountedDimensions,
     isCustomDimension,
+    isFanOutAccepted,
     isDimension,
     MergeQueryErrorKind,
+    toMergedSorts,
     validateMergeQuery,
     type MergeFieldTypes,
     type MergeQuery,
@@ -28,10 +30,15 @@ import {
     DEFAULT_ADDITIONAL_SOURCE_ID,
     EMPTY_MERGE,
     emptyMergeSource,
-    JOIN_KEY,
     PRIMARY_SOURCE_ID,
 } from '../constants';
 import { useMergeSafe } from '../context/useMerge';
+import {
+    rankJoinFieldCandidates,
+    type JoinFieldCandidate,
+    type RankedJoinFieldCandidates,
+} from '../utils/rankJoinFieldCandidates';
+import { useMergeSourceNames } from './useMergeSourceNames';
 
 /**
  * Everything derived from the selected sources and their relationship:
@@ -49,12 +56,23 @@ export const useMergeSetup = () => {
     const parameters = useExplorerSelector(selectParameters);
     const unsavedChartVersion = useExplorerSelector(selectUnsavedChartVersion);
     const mergeContext = useMergeSafe();
-    const { isMerging, additionalSources, joinParts, joinType } =
-        mergeContext ?? EMPTY_MERGE;
+    const {
+        isMerging,
+        additionalSources,
+        joinParts,
+        joinType,
+        repeatValuesSourceIds,
+        setRepeatValues,
+    } = mergeContext ?? EMPTY_MERGE;
     const { run, isRunning, runErrors, mergeResults } = mergeContext ?? {};
     const additionalSource =
         additionalSources[0] ?? emptyMergeSource(DEFAULT_ADDITIONAL_SOURCE_ID);
     const additionalSourceId = additionalSource.id;
+    // The editor addresses sources by handle; the merge runs them by name
+    const sourceNames = useMergeSourceNames();
+    const primaryRuntimeId = sourceNames.nameByHandle[PRIMARY_SOURCE_ID];
+    const additionalRuntimeId =
+        sourceNames.nameByHandle[additionalSourceId] ?? additionalSourceId;
 
     const { data: primaryExplore } = useExplore(tableName, {
         refetchOnMount: false,
@@ -173,37 +191,116 @@ export const useMergeSetup = () => {
         additionalSourceId,
     ]);
 
-    // The first key part defaults to the suggested pair, falling back to each
-    // query's first dimension while the explores are still loading. Further
-    // parts start empty because there is no obvious default.
-    const effectiveParts = useMemo(
+    // A join key is any dimension of the source's explore, selected or not:
+    // the leg groups by it and the merged result shows it once, as the key.
+    // Custom dimensions remain limited to ones already present in the query
+    // because they cannot be recreated by id.
+    const availablePrimaryJoinItems = useMemo(
         () =>
-            joinParts.map((part, index) => ({
-                fieldIdBySourceId: {
-                    [PRIMARY_SOURCE_ID]:
-                        part.fieldIdBySourceId[PRIMARY_SOURCE_ID] ??
-                        (index === 0
-                            ? (suggestedPair?.[PRIMARY_SOURCE_ID] ??
-                              metricQuery.dimensions[0] ??
-                              null)
-                            : null),
-                    [additionalSourceId]:
-                        part.fieldIdBySourceId[additionalSourceId] ??
-                        (index === 0
-                            ? (suggestedPair?.[additionalSourceId] ??
-                              additionalSource.dimensions[0] ??
-                              null)
-                            : null),
-                },
-            })),
+            Object.entries(primaryItemMap).flatMap(([id, item]) =>
+                isDimension(item) ||
+                (isCustomDimension(item) && metricQuery.dimensions.includes(id))
+                    ? [item]
+                    : [],
+            ),
+        [primaryItemMap, metricQuery.dimensions],
+    );
+    const availableAdditionalJoinItems = useMemo(
+        () =>
+            Object.entries(additionalItemMap).flatMap(([id, item]) =>
+                isDimension(item) ||
+                (isCustomDimension(item) &&
+                    additionalSource.dimensions.includes(id))
+                    ? [item]
+                    : [],
+            ),
+        [additionalItemMap, additionalSource.dimensions],
+    );
+
+    // The field chosen on one side ranks the other side's candidates: the
+    // validator's type and grain rules rule fields out, a shared name or
+    // label recommends them.
+    const getJoinCandidates = useCallback(
+        (
+            side: 'primary' | 'additional',
+            counterpartFieldId: string | null,
+        ): RankedJoinFieldCandidates<JoinFieldCandidate> => {
+            const counterpart = counterpartFieldId
+                ? (side === 'primary' ? additionalItemMap : primaryItemMap)[
+                      counterpartFieldId
+                  ]
+                : undefined;
+            return rankJoinFieldCandidates(
+                side === 'primary'
+                    ? availablePrimaryJoinItems
+                    : availableAdditionalJoinItems,
+                counterpart &&
+                    (isDimension(counterpart) || isCustomDimension(counterpart))
+                    ? counterpart
+                    : undefined,
+            );
+        },
         [
-            joinParts,
-            suggestedPair,
-            metricQuery.dimensions,
-            additionalSource.dimensions,
-            additionalSourceId,
+            primaryItemMap,
+            additionalItemMap,
+            availablePrimaryJoinItems,
+            availableAdditionalJoinItems,
         ],
     );
+
+    // The first key part defaults to the suggested pair among selected
+    // fields, then to the one field the other side's choice recommends,
+    // then to each query's first dimension while the explores are still
+    // loading. Further parts start empty because there is no obvious default.
+    const effectiveParts = useMemo(() => {
+        const soleSuggestion = (
+            side: 'primary' | 'additional',
+            counterpartFieldId: string | null,
+        ) => {
+            const { suggested } = getJoinCandidates(side, counterpartFieldId);
+            return suggested.length === 1 ? getItemId(suggested[0]) : null;
+        };
+        return joinParts.map((part, index) => {
+            const chosenPrimary = part.fieldIdBySourceId[PRIMARY_SOURCE_ID];
+            const chosenAdditional = part.fieldIdBySourceId[additionalSourceId];
+            const savedName = part.name ? { name: part.name } : {};
+            if (index > 0) {
+                return {
+                    ...savedName,
+                    fieldIdBySourceId: {
+                        [PRIMARY_SOURCE_ID]: chosenPrimary ?? null,
+                        [additionalSourceId]: chosenAdditional ?? null,
+                    },
+                };
+            }
+            const primary =
+                chosenPrimary ??
+                suggestedPair?.[PRIMARY_SOURCE_ID] ??
+                soleSuggestion('primary', chosenAdditional ?? null) ??
+                metricQuery.dimensions[0] ??
+                null;
+            const additional =
+                chosenAdditional ??
+                suggestedPair?.[additionalSourceId] ??
+                soleSuggestion('additional', primary) ??
+                additionalSource.dimensions[0] ??
+                null;
+            return {
+                ...savedName,
+                fieldIdBySourceId: {
+                    [PRIMARY_SOURCE_ID]: primary,
+                    [additionalSourceId]: additional,
+                },
+            };
+        });
+    }, [
+        joinParts,
+        suggestedPair,
+        getJoinCandidates,
+        metricQuery.dimensions,
+        additionalSource.dimensions,
+        additionalSourceId,
+    ]);
     const completeParts = effectiveParts.filter(
         (part) =>
             part.fieldIdBySourceId[PRIMARY_SOURCE_ID] &&
@@ -227,8 +324,10 @@ export const useMergeSetup = () => {
         () =>
             getUnaccountedDimensions(
                 { id: PRIMARY_SOURCE_ID, metricQuery },
-                completeParts.map((part, index) => ({
-                    name: `${JOIN_KEY}_${index}`,
+                completeParts.map((part) => ({
+                    name:
+                        part.name ??
+                        (part.fieldIdBySourceId[PRIMARY_SOURCE_ID] as string),
                     fieldIdBySourceId: {
                         [PRIMARY_SOURCE_ID]: part.fieldIdBySourceId[
                             PRIMARY_SOURCE_ID
@@ -245,8 +344,10 @@ export const useMergeSetup = () => {
                     id: additionalSourceId,
                     metricQuery: additionalMetricQuery,
                 },
-                completeParts.map((part, index) => ({
-                    name: `${JOIN_KEY}_${index}`,
+                completeParts.map((part) => ({
+                    name:
+                        part.name ??
+                        (part.fieldIdBySourceId[PRIMARY_SOURCE_ID] as string),
                     fieldIdBySourceId: {
                         [additionalSourceId]: part.fieldIdBySourceId[
                             additionalSourceId
@@ -260,11 +361,21 @@ export const useMergeSetup = () => {
     /**
      * A dimension only one side carries would repeat the other side's rows
      * once per value. Refused with where and what: the fix is to remove the
-     * dimension, or to select it on both queries and join on it.
+     * dimension, to select it on both queries and join on it, or to have the
+     * other query repeat its values on purpose.
      */
+    const sourceIdsForFanOut = useMemo(
+        () =>
+            [PRIMARY_SOURCE_ID, additionalSourceId].map((id) => ({
+                id,
+                repeatValues: repeatValuesSourceIds.includes(id),
+            })),
+        [additionalSourceId, repeatValuesSourceIds],
+    );
     const fanOut = useMemo(
         () => [
-            ...(unaccountedPrimary.length > 0
+            ...(unaccountedPrimary.length > 0 &&
+            !isFanOutAccepted(sourceIdsForFanOut, PRIMARY_SOURCE_ID)
                 ? [
                       {
                           sourceId: PRIMARY_SOURCE_ID,
@@ -272,7 +383,8 @@ export const useMergeSetup = () => {
                       },
                   ]
                 : []),
-            ...(unaccountedAdditional.length > 0
+            ...(unaccountedAdditional.length > 0 &&
+            !isFanOutAccepted(sourceIdsForFanOut, additionalSourceId)
                 ? [
                       {
                           sourceId: additionalSourceId,
@@ -281,7 +393,12 @@ export const useMergeSetup = () => {
                   ]
                 : []),
         ],
-        [unaccountedPrimary, unaccountedAdditional, additionalSourceId],
+        [
+            unaccountedPrimary,
+            unaccountedAdditional,
+            additionalSourceId,
+            sourceIdsForFanOut,
+        ],
     );
 
     // The join selects take the fields themselves, not ids, so they can show
@@ -306,32 +423,6 @@ export const useMergeSetup = () => {
                         !!item &&
                         (isDimension(item) || isCustomDimension(item)),
                 ),
-        [additionalItemMap, additionalSource.dimensions],
-    );
-
-    // Join keys are dimensions, but they do not need to be selected before
-    // opening this editor. The picker can add a dimension to its query and use
-    // it as the key in one action. Custom dimensions remain limited to ones
-    // already present in the query because they cannot be recreated by id.
-    const availablePrimaryJoinItems = useMemo(
-        () =>
-            Object.entries(primaryItemMap).flatMap(([id, item]) =>
-                isDimension(item) ||
-                (isCustomDimension(item) && metricQuery.dimensions.includes(id))
-                    ? [item]
-                    : [],
-            ),
-        [primaryItemMap, metricQuery.dimensions],
-    );
-    const availableAdditionalJoinItems = useMemo(
-        () =>
-            Object.entries(additionalItemMap).flatMap(([id, item]) =>
-                isDimension(item) ||
-                (isCustomDimension(item) &&
-                    additionalSource.dimensions.includes(id))
-                    ? [item]
-                    : [],
-            ),
         [additionalItemMap, additionalSource.dimensions],
     );
 
@@ -435,38 +526,62 @@ export const useMergeSetup = () => {
         if (!additionalSource.exploreName || completeParts.length === 0)
             return null;
 
-        const joinKey = completeParts.map((part, index) => ({
-            name: `${JOIN_KEY}_${index}`,
+        // A key column is named after the chart's field, unless the saved
+        // chart fixed another name
+        const joinKey = completeParts.map((part) => ({
+            name:
+                part.name ??
+                (part.fieldIdBySourceId[PRIMARY_SOURCE_ID] as string),
             fieldIdBySourceId: {
-                [PRIMARY_SOURCE_ID]: part.fieldIdBySourceId[
+                [primaryRuntimeId]: part.fieldIdBySourceId[
                     PRIMARY_SOURCE_ID
                 ] as string,
-                [additionalSourceId]: part.fieldIdBySourceId[
+                [additionalRuntimeId]: part.fieldIdBySourceId[
                     additionalSourceId
                 ] as string,
             },
         }));
 
+        const repeat = (handle: string) =>
+            repeatValuesSourceIds.includes(handle)
+                ? { repeatValues: true }
+                : {};
         return {
             sources: [
-                { id: PRIMARY_SOURCE_ID, metricQuery },
                 {
-                    id: additionalSourceId,
+                    ...repeat(PRIMARY_SOURCE_ID),
+                    id: primaryRuntimeId,
+                    metricQuery,
+                },
+                {
+                    ...repeat(additionalSourceId),
+                    id: additionalRuntimeId,
                     metricQuery: additionalMetricQuery,
                 },
             ],
             joinKey,
             joinType,
             tableCalculations: [],
+            // The Explorer's sort state lives on the primary query; the merge
+            // sorts its own result by the merged field it maps to
+            sorts: toMergedSorts({
+                sorts: metricQuery.sorts,
+                primarySourceId: primaryRuntimeId,
+                primaryMetricQuery: metricQuery,
+                joinKey,
+            }),
             limit: metricQuery.limit,
         };
     }, [
         additionalSource.exploreName,
         additionalSourceId,
+        primaryRuntimeId,
+        additionalRuntimeId,
         completeParts,
         metricQuery,
         additionalMetricQuery,
         joinType,
+        repeatValuesSourceIds,
     ]);
 
     // The same rules the server refuses on, run here as the merge is built.
@@ -494,12 +609,17 @@ export const useMergeSetup = () => {
                     : [],
             );
         return {
-            [PRIMARY_SOURCE_ID]: Object.fromEntries(collect(primaryItemMap)),
-            [additionalSourceId]: Object.fromEntries(
+            [primaryRuntimeId]: Object.fromEntries(collect(primaryItemMap)),
+            [additionalRuntimeId]: Object.fromEntries(
                 collect(additionalItemMap),
             ),
         };
-    }, [primaryItemMap, additionalItemMap, additionalSourceId]);
+    }, [
+        primaryItemMap,
+        additionalItemMap,
+        primaryRuntimeId,
+        additionalRuntimeId,
+    ]);
 
     const joinKeyErrors = useMemo(
         () =>
@@ -526,13 +646,7 @@ export const useMergeSetup = () => {
           : !effectiveParts.every(
                   (part) =>
                       part.fieldIdBySourceId[PRIMARY_SOURCE_ID] &&
-                      part.fieldIdBySourceId[additionalSourceId] &&
-                      metricQuery.dimensions.includes(
-                          part.fieldIdBySourceId[PRIMARY_SOURCE_ID] as string,
-                      ) &&
-                      additionalSource.dimensions.includes(
-                          part.fieldIdBySourceId[additionalSourceId] as string,
-                      ),
+                      part.fieldIdBySourceId[additionalSourceId],
               )
             ? 'Pick a field from each query to join on'
             : null;
@@ -566,6 +680,8 @@ export const useMergeSetup = () => {
         additionalSource,
         additionalSourceId,
         joinType,
+        repeatValuesSourceIds,
+        setRepeatValues,
         run,
         isRunning,
         runErrors,
@@ -584,6 +700,7 @@ export const useMergeSetup = () => {
         additionalJoinItems,
         availablePrimaryJoinItems,
         availableAdditionalJoinItems,
+        getJoinCandidates,
         suggestedAvailablePair,
         primaryExploreLabel,
         additionalExploreLabel,
@@ -594,5 +711,6 @@ export const useMergeSetup = () => {
         canRun,
         handleRun,
         mergeQuery,
+        sourceNames,
     };
 };

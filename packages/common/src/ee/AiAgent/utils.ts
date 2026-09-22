@@ -11,7 +11,9 @@ import {
     filterAggregationCustomMetrics,
     isCustomChartTypeSlugChartConfig,
     parsePersistedRunQueryArgs,
+    parsePersistedRunQueryPayload,
     toolRunQueryArgsSchemaPersisted,
+    toolRunQueryExpressionResolvedArgsSchema,
 } from './schemas';
 import { AiResultType } from './types';
 import { getValidAiQueryLimit } from './validators';
@@ -40,9 +42,9 @@ export const parseVizConfig = (
         return null;
     }
 
-    // Parse runQuery tool. Persisted artifacts may be V1 or V2;
-    // parsePersistedRunQueryArgs normalizes both to the V2 internal shape.
-    const vizTool = parsePersistedRunQueryArgs(vizConfigUnknown);
+    // Parse every persisted run-query shape to the existing internal domain
+    // type before rendering or replaying it.
+    const vizTool = parsePersistedRunQueryPayload(vizConfigUnknown);
     if (vizTool) {
         const metricQuery = {
             exploreName: vizTool.queryConfig.exploreName,
@@ -80,21 +82,49 @@ export const parseVizConfig = (
     return null;
 };
 
-// Semantic artifacts are builtin-only: a custom chart type answer is stored
-// in its own envelope, never as a slug config under source 'semantic'.
-const isBuiltinSemanticVizConfig = (raw: object): boolean => {
-    const parsed = parseVizConfig(raw);
-    if (!parsed) return false;
-    return !(
-        parsed.type === AiResultType.QUERY_RESULT &&
-        isCustomChartTypeSlugChartConfig(parsed.vizTool.chartConfig)
-    );
+// Semantic artifacts accept every persisted query format, including resolved
+// per-category filter connectors. Custom charts and merges use their own
+// replay envelopes.
+const parseBuiltinSemanticVizConfig = (raw: object) => {
+    const existing = parsePersistedRunQueryArgs(raw);
+    if (existing) {
+        if (
+            existing.mergeConfig !== null ||
+            isCustomChartTypeSlugChartConfig(existing.chartConfig)
+        ) {
+            return null;
+        }
+        return raw as AiLegacySemanticChartArtifactConfig;
+    }
+
+    const resolved = toolRunQueryExpressionResolvedArgsSchema.safeParse(raw);
+    if (
+        !resolved.success ||
+        resolved.data.mergeConfig !== null ||
+        isCustomChartTypeSlugChartConfig(resolved.data.chartConfig)
+    ) {
+        return null;
+    }
+    return resolved.data;
+};
+
+const parseVersionedArtifactQueryConfig = (raw: unknown) => {
+    const existing = toolRunQueryArgsSchemaPersisted.safeParse(raw);
+    if (existing.success) return existing.data;
+
+    const resolved = toolRunQueryExpressionResolvedArgsSchema.safeParse(raw);
+    return resolved.success ? resolved.data : null;
 };
 
 export const parseAiArtifactChartConfig = (
     config: unknown,
 ): AiChartArtifactConfig | null => {
     if (!config || typeof config !== 'object') return null;
+
+    const portableSnapshot =
+        'contentAsCode' in config
+            ? { contentAsCode: config.contentAsCode }
+            : {};
 
     if (isAiComposerChartArtifactConfig(config)) {
         return config;
@@ -107,19 +137,40 @@ export const parseAiArtifactChartConfig = (
         config.schemaVersion === 1 &&
         'dataAppVizUuid' in config &&
         typeof config.dataAppVizUuid === 'string' &&
+        config.dataAppVizUuid.length > 0 &&
         'config' in config
     ) {
-        const parsed = toolRunQueryArgsSchemaPersisted.safeParse(config.config);
+        const parsed = parseVersionedArtifactQueryConfig(config.config);
         if (
-            parsed.success &&
-            !parsed.data.mergeConfig &&
-            isCustomChartTypeSlugChartConfig(parsed.data.chartConfig)
+            parsed !== null &&
+            parsed.mergeConfig === null &&
+            isCustomChartTypeSlugChartConfig(parsed.chartConfig)
         ) {
+            const versionCandidate =
+                'dataAppVizVersion' in config
+                    ? config.dataAppVizVersion
+                    : undefined;
+            if (
+                versionCandidate !== undefined &&
+                (typeof versionCandidate !== 'number' ||
+                    !Number.isInteger(versionCandidate) ||
+                    versionCandidate < 1)
+            ) {
+                return null;
+            }
+            const dataAppVizVersion =
+                typeof versionCandidate === 'number'
+                    ? versionCandidate
+                    : undefined;
             return {
                 source: 'customChartType',
                 schemaVersion: 1,
                 dataAppVizUuid: config.dataAppVizUuid,
-                config: parsed.data,
+                ...(dataAppVizVersion === undefined
+                    ? {}
+                    : { dataAppVizVersion }),
+                config: parsed,
+                ...portableSnapshot,
             };
         }
         return null;
@@ -132,12 +183,13 @@ export const parseAiArtifactChartConfig = (
         config.schemaVersion === 1 &&
         'config' in config
     ) {
-        const parsed = toolRunQueryArgsSchemaPersisted.safeParse(config.config);
-        if (parsed.success && parsed.data.mergeConfig) {
+        const parsed = parseVersionedArtifactQueryConfig(config.config);
+        if (parsed !== null && parsed.mergeConfig !== null) {
             return {
                 source: 'merge',
                 schemaVersion: 1,
-                config: parsed.data,
+                config: parsed,
+                ...portableSnapshot,
             };
         }
         return null;
@@ -163,19 +215,24 @@ export const parseAiArtifactChartConfig = (
         config.source === 'semantic' &&
         'config' in config &&
         config.config &&
-        typeof config.config === 'object' &&
-        isBuiltinSemanticVizConfig(config.config)
+        typeof config.config === 'object'
     ) {
-        return {
-            source: 'semantic',
-            config: config.config as AiLegacySemanticChartArtifactConfig,
-        };
+        const parsed = parseBuiltinSemanticVizConfig(config.config);
+        if (parsed !== null) {
+            return {
+                source: 'semantic',
+                config: parsed,
+                ...portableSnapshot,
+            };
+        }
+        return null;
     }
 
-    if (isBuiltinSemanticVizConfig(config)) {
+    const semantic = parseBuiltinSemanticVizConfig(config);
+    if (semantic !== null) {
         return {
             source: 'semantic',
-            config: config as AiLegacySemanticChartArtifactConfig,
+            config: semantic,
         };
     }
 
@@ -183,8 +240,8 @@ export const parseAiArtifactChartConfig = (
 };
 
 // The saved-chart shape a custom chart type answer renders and saves with:
-// the server-derived uuid from the envelope plus the model's field mapping
-// and option values from the verbatim tool args.
+// the server-derived uuid from the envelope plus the persisted field mapping
+// and option values.
 export const getDataAppVizChartFromArtifact = (
     artifactConfig: AiCustomChartTypeChartArtifactConfig,
 ): DataAppVizChart | null => {
@@ -192,6 +249,9 @@ export const getDataAppVizChartFromArtifact = (
     if (!isCustomChartTypeSlugChartConfig(chartConfig)) return null;
     return {
         dataAppVizUuid: artifactConfig.dataAppVizUuid,
+        ...(artifactConfig.dataAppVizVersion === undefined
+            ? {}
+            : { dataAppVizVersion: artifactConfig.dataAppVizVersion }),
         fieldMapping: chartConfig.fieldMapping,
         ...(chartConfig.options ? { optionValues: chartConfig.options } : {}),
     };

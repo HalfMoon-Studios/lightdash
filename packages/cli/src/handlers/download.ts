@@ -39,6 +39,7 @@ import {
     getErrorMessage,
     GoogleSheetsSyncAsCode,
     LightdashError,
+    normalizeContentAsCodePath,
     ParameterError,
     Project,
     PromotionAction,
@@ -48,8 +49,11 @@ import {
     SqlChartAsCode,
     validateDataAppDependencies,
     VirtualViewAsCode,
+    type ContentAsCodeSettingsStamp,
+    type ContentAsCodeUploadAdvisory,
     type DashboardAsCodeUpsertResult,
     type DataAppCodeDownload,
+    type LightdashProjectConfig,
     type SpaceAsCode,
 } from '@lightdash/common';
 import { Dirent, promises as fs, type Stats } from 'fs';
@@ -66,6 +70,7 @@ import {
 import { getConfig, setAnswer } from '../config';
 import { CLI_VERSION } from '../env';
 import GlobalState from '../globalState';
+import { readAndLoadLightdashProjectConfig } from '../lightdash-config';
 import * as styles from '../styles';
 import {
     createContentAsCodeOutput,
@@ -129,6 +134,7 @@ import {
     lightdashApi,
     setGzipEnabled,
 } from './dbt/apiClient';
+import { downloadHomepages, uploadHomepages } from './homepagesAsCode';
 import {
     LightdashMetadata,
     METADATA_FILENAME,
@@ -169,6 +175,10 @@ export type DownloadHandlerOptions = {
     googleSheets: string[];
     scheduledDeliveries: string[];
     virtualViews: string[];
+    homepages?: string[];
+    includeHomepages?: boolean;
+    skipHomepages?: boolean;
+    publish?: boolean;
     externalConnections: string[]; // external connection slugs (enterprise)
     apps?: string[]; // specific app UUIDs or URLs (enterprise); absent = no explicit selection
     chartTypes?: string[]; // specific custom chart type UUIDs or URLs (enterprise); absent = no explicit selection
@@ -218,6 +228,30 @@ export type DownloadHandlerOptions = {
 
 type FolderScheme = 'flat' | 'nested';
 
+// Keys only a merged chart's merge has read in the order they are
+// thought about; everything else stays alphabetical, so no other file moves.
+const MERGE_DEFINITION_KEY_ORDER = [
+    'chartAs',
+    'queries',
+    'explore',
+    'join',
+    'keys',
+    'keyNames',
+    'by',
+    'direction',
+];
+const compareContentKeys = (a: string, b: string): number => {
+    const rankA = MERGE_DEFINITION_KEY_ORDER.indexOf(a);
+    const rankB = MERGE_DEFINITION_KEY_ORDER.indexOf(b);
+    if (rankA !== -1 || rankB !== -1) {
+        if (rankA === -1) return 1;
+        if (rankB === -1) return -1;
+        return rankA - rankB;
+    }
+    if (a < b) return -1;
+    return a > b ? 1 : 0;
+};
+
 const shouldDownloadAiAgents = ({
     includeAll,
     includeAgents,
@@ -240,6 +274,7 @@ const hasContentFilters = ({
     scheduledDeliveries,
     virtualViews,
     externalConnections,
+    homepages,
     apps,
     chartTypes,
 }: Pick<
@@ -253,6 +288,7 @@ const hasContentFilters = ({
     | 'scheduledDeliveries'
     | 'virtualViews'
     | 'externalConnections'
+    | 'homepages'
     | 'apps'
     | 'chartTypes'
 >): boolean =>
@@ -266,6 +302,7 @@ const hasContentFilters = ({
         scheduledDeliveries,
         virtualViews,
         externalConnections,
+        homepages ?? [],
         apps ?? [],
         chartTypes ?? [],
     ].some((filters) => filters.length > 0);
@@ -279,10 +316,10 @@ const parseContentFilters = (items: string[]): string => {
     if (items.length === 0) return '';
 
     const parsedItems = items.map((item) => {
-        const uuidMatch = item.match(
-            /https?:\/\/.+\/(?:saved|dashboards)\/([a-f0-9-]+)/i,
+        const urlMatch = item.match(
+            /https?:\/\/.+\/(?:saved|dashboards)\/([^/?#]+)/i,
         );
-        return uuidMatch ? uuidMatch[1] : item;
+        return urlMatch ? urlMatch[1] : item;
     });
 
     return `?${new URLSearchParams(
@@ -388,7 +425,7 @@ const writeContent = async (
         | DashboardAsCode;
     const chartYml = yaml.dump(cleanContent, {
         quotingType: '"',
-        sortKeys: true,
+        sortKeys: compareContentKeys,
     });
     await fs.writeFile(itemPath, chartYml);
 
@@ -480,6 +517,19 @@ const isLooseContentFile = (entry: Dirent) => {
     );
 };
 
+// The file's path relative to the project dir, posix; undefined outside it
+const sourceFilePath = (filePath: string): string | undefined => {
+    const relative = path.relative(process.cwd(), filePath);
+    if (
+        path.isAbsolute(relative) ||
+        relative === '..' ||
+        relative.startsWith(`..${path.sep}`)
+    ) {
+        return undefined;
+    }
+    return relative.split(path.sep).join('/');
+};
+
 const processYamlItem = <
     T extends ChartAsCode | DashboardAsCode | SqlChartAsCode,
 >(
@@ -488,6 +538,7 @@ const processYamlItem = <
     stats: Stats,
     folder: 'charts' | 'dashboards',
     metadata: LightdashMetadata,
+    filePath: string,
 ) => {
     if (hasUnsortedKeys(item)) {
         GlobalState.log(
@@ -515,6 +566,8 @@ const processYamlItem = <
         ...item,
         updatedAt: needsUpdating ? stats.mtime : item.updatedAt,
         needsUpdating: needsUpdating ?? true,
+        // Sent with the upsert so write-back returns to this file
+        filePath: sourceFilePath(filePath),
     };
 };
 
@@ -532,7 +585,7 @@ const loadYamlFile = async <
     ]);
 
     const item = yaml.load(fileContent) as T;
-    return processYamlItem(item, file.name, stats, folder, metadata);
+    return processYamlItem(item, file.name, stats, folder, metadata, filePath);
 };
 
 const readCodeFiles = async <
@@ -641,6 +694,7 @@ const readLooseCodeFiles = async (
                                 stats,
                                 'charts',
                                 metadata,
+                                filePath,
                             ),
                         );
                     } else if (
@@ -653,6 +707,7 @@ const readLooseCodeFiles = async (
                                 stats,
                                 'dashboards',
                                 metadata,
+                                filePath,
                             ),
                         );
                     } else if (contentType === ContentAsCodeTypeEnum.SPACE) {
@@ -1220,6 +1275,7 @@ const EXTERNAL_CONNECTION_SECRET_TYPES = new Set([
     'api_key',
     'bearer_token',
     'google_service_account',
+    'oauth_client_credentials',
 ]);
 
 /**
@@ -1967,6 +2023,9 @@ export const downloadHandler = async (
     const projectName = generateSlug(project.name);
 
     const counts: ProjectContentAsCodeCounts = {};
+    // Per-resource app/chart-type failures are reported inline and tallied
+    // here so the process can exit non-zero without aborting the download.
+    let downloadFailures = 0;
     const start = Date.now();
 
     await LightdashAnalytics.track({
@@ -2005,6 +2064,29 @@ export const downloadHandler = async (
                 getDataAppReference,
             ),
         );
+
+        if (
+            !options.appsOnly &&
+            !options.chartTypesOnly &&
+            !options.spacesOnly &&
+            (options.includeHomepages ||
+                options.homepages?.length ||
+                includeAllOptionalContent)
+        ) {
+            await output.runItem({
+                label: 'Homepages',
+                action: () =>
+                    downloadHomepages(
+                        projectId,
+                        options.homepages ?? [],
+                        options.path,
+                        includeAllOptionalContent &&
+                            !options.includeHomepages &&
+                            !options.homepages?.length,
+                    ),
+                detail: (count) => `${count} downloaded`,
+            });
+        }
 
         if (shouldDownloadSpaces) {
             output.startItem('Spaces');
@@ -2495,6 +2577,7 @@ export const downloadHandler = async (
                     skippedNotBuiltCount + skippedWrongKindCount,
                 );
                 counts.appsNum = successCount;
+                downloadFailures += failures.length;
                 output.completeItem(
                     `${successCount} downloaded${
                         skippedNotBuiltCount + skippedWrongKindCount > 0
@@ -2654,6 +2737,7 @@ export const downloadHandler = async (
                     'custom chart type',
                 );
                 counts.chartTypesNum = chartTypesOutcome.successCount;
+                downloadFailures += chartTypesOutcome.failures.length;
                 const chartTypesSkipped =
                     chartTypesOutcome.skippedNotBuiltCount +
                     chartTypesOutcome.skippedWrongKindCount;
@@ -2720,6 +2804,7 @@ export const downloadHandler = async (
                 linkedSkipped,
             );
             counts.appsNum = (counts.appsNum ?? 0) + outcome.successCount;
+            downloadFailures += outcome.failures.length;
             output.completeItem(
                 `${outcome.successCount} downloaded${
                     linkedSkipped > 0 ? `, ${linkedSkipped} skipped` : ''
@@ -2789,6 +2874,7 @@ export const downloadHandler = async (
             counts.chartTypesNum =
                 (counts.chartTypesNum ?? 0) +
                 linkedChartTypesOutcome.successCount;
+            downloadFailures += linkedChartTypesOutcome.failures.length;
             output.completeItem(
                 `${linkedChartTypesOutcome.successCount} downloaded${
                     linkedChartTypesSkipped > 0
@@ -2842,6 +2928,14 @@ export const downloadHandler = async (
                 styles.success(`Downloaded content saved to ${downloadRoot}`),
             );
         }
+        if (downloadFailures > 0) {
+            GlobalState.log(
+                styles.error(
+                    `${downloadFailures} resource(s) failed to download — see errors above.`,
+                ),
+            );
+            process.exitCode = 1;
+        }
 
         await LightdashAnalytics.track({
             event: 'download.completed',
@@ -2870,38 +2964,19 @@ export const downloadHandler = async (
 
 const storeUploadChanges = (
     changes: Record<string, number>,
+    type: 'charts' | 'dashboards',
     promoteChanges: PromotionChanges,
 ): Record<string, number> => {
-    const getPromoteChanges = (
-        resource: 'spaces' | 'charts' | 'dashboards',
-    ) => {
-        const promotions: { action: PromotionAction }[] =
-            promoteChanges[resource];
-        return promotions.reduce<Record<string, number>>(
-            (acc, promoteChange) => {
-                const action = getPromoteAction(promoteChange.action);
-                const key = `${resource} ${action}`;
-                acc[key] = (acc[key] ?? 0) + 1;
-                return acc;
-            },
-            {},
-        );
-    };
-
-    const updatedChanges: Record<string, number> = {
-        ...changes,
-    };
-
-    ['spaces', 'charts', 'dashboards'].forEach((resource) => {
-        const resourceChanges = getPromoteChanges(
-            resource as 'spaces' | 'charts' | 'dashboards',
-        );
-        Object.entries(resourceChanges).forEach(([key, value]) => {
-            updatedChanges[key] = (updatedChanges[key] ?? 0) + value;
-        });
-    });
-
-    return updatedChanges;
+    // The API also echoes untouched spaces and chart tiles; only count the uploaded type
+    const promotions: { action: PromotionAction }[] = promoteChanges[type];
+    return promotions.reduce<Record<string, number>>(
+        (acc, promoteChange) => {
+            const key = `${type} ${getPromoteAction(promoteChange.action)}`;
+            acc[key] = (acc[key] ?? 0) + 1;
+            return acc;
+        },
+        { ...changes },
+    );
 };
 
 const UPLOAD_CHANGE_SUFFIXES = [
@@ -2949,6 +3024,13 @@ const summarizeUploadChanges = (
     return { detail, variant: hasFailures ? 'warning' : undefined };
 };
 
+const hasUploadFailures = (changes: Record<string, number>): boolean =>
+    Object.entries(changes).some(
+        ([key, value]) =>
+            value > 0 &&
+            (key.endsWith('with errors') || key.endsWith('failed')),
+    );
+
 const runUploadChangesPhase = async ({
     output,
     label,
@@ -2982,14 +3064,14 @@ const upsertSingleItem = async <T extends ChartAsCode | DashboardAsCode>(
     publicSpaceCreate?: boolean,
     validate?: boolean,
     spaceNames?: Record<string, string>,
-): Promise<void> => {
+): Promise<'upserted' | 'skipped' | 'failed'> => {
     try {
         if (!force && !item.needsUpdating) {
             GlobalState.debug(
                 `Skipping ${type} "${item.slug}" with no local changes`,
             );
             changes[`${type} skipped`] = (changes[`${type} skipped`] ?? 0) + 1;
-            return;
+            return 'skipped';
         }
         GlobalState.debug(`Upserting ${type} ${item.slug}`);
 
@@ -3023,7 +3105,7 @@ const upsertSingleItem = async <T extends ChartAsCode | DashboardAsCode>(
         );
 
         // Merge storeUploadChanges result into changes in-place
-        const updatedChanges = storeUploadChanges(changes, upsertData);
+        const updatedChanges = storeUploadChanges(changes, type, upsertData);
         Object.keys(updatedChanges).forEach((key) => {
             changes[key] = updatedChanges[key];
         });
@@ -3097,10 +3179,15 @@ const upsertSingleItem = async <T extends ChartAsCode | DashboardAsCode>(
                 }
             }
         }
+        return 'upserted';
     } catch (error: unknown) {
         if (
             error instanceof LightdashError &&
             error.name === 'NotFoundError' &&
+            // Only the missing-space NotFoundError counts as a space skip;
+            // other NotFoundErrors (e.g. a missing custom chart type) are
+            // real failures even with --skip-space-create.
+            error.message.startsWith('Space ') &&
             skipSpaceCreate
         ) {
             GlobalState.log(
@@ -3109,28 +3196,29 @@ const upsertSingleItem = async <T extends ChartAsCode | DashboardAsCode>(
                 ),
             );
             changes[`${type} skipped`] = (changes[`${type} skipped`] ?? 0) + 1;
-        } else {
-            changes[`${type} with errors`] =
-                (changes[`${type} with errors`] ?? 0) + 1;
-            GlobalState.log(
-                styles.error(
-                    `Error upserting ${type}:\n\t"${item.name}" (slug: "${
-                        item.slug
-                    }")\n\t${getErrorMessage(error)}`,
-                ),
-            );
-
-            await LightdashAnalytics.track({
-                event: 'download.error',
-                properties: {
-                    userId: config.user?.userUuid,
-                    organizationId: config.user?.organizationUuid,
-                    projectId,
-                    type,
-                    error: getErrorMessage(error),
-                },
-            });
+            return 'skipped';
         }
+        changes[`${type} with errors`] =
+            (changes[`${type} with errors`] ?? 0) + 1;
+        GlobalState.log(
+            styles.error(
+                `Error upserting ${type}:\n\t"${item.name}" (slug: "${
+                    item.slug
+                }")\n\t${getErrorMessage(error)}`,
+            ),
+        );
+
+        await LightdashAnalytics.track({
+            event: 'download.error',
+            properties: {
+                userId: config.user?.userUuid,
+                organizationId: config.user?.organizationUuid,
+                projectId,
+                type,
+                error: getErrorMessage(error),
+            },
+        });
+        return 'failed';
     }
 };
 
@@ -3152,7 +3240,12 @@ const upsertResources = async <T extends ChartAsCode | DashboardAsCode>(
     concurrency: number = 1,
     extraItems: (T & { needsUpdating: boolean })[] = [],
     spaceNames?: Record<string, string>,
-): Promise<{ changes: Record<string, number>; total: number }> => {
+    skipSlugs?: ReadonlySet<string>,
+): Promise<{
+    changes: Record<string, number>;
+    total: number;
+    failedSlugs: string[];
+}> => {
     const config = await getConfig();
 
     const folderItems = await readCodeFiles<T>(type, customPath);
@@ -3186,14 +3279,42 @@ const upsertResources = async <T extends ChartAsCode | DashboardAsCode>(
                 `Error uploading ${type}: the ${requiredPermission} permission is required`,
             ),
         );
-        return { changes, total: filteredItems.length };
+        return { changes, total: filteredItems.length, failedSlugs: [] };
     }
+
+    // Items whose dependencies failed earlier in the upload are held back so
+    // they are not created in a broken state (e.g. dashboards with null
+    // chart tiles).
+    const uploadableItems = skipSlugs
+        ? filteredItems.filter((item) => !skipSlugs.has(item.slug))
+        : filteredItems;
+    filteredItems
+        .filter((item) => !uploadableItems.includes(item))
+        .forEach((item) => {
+            changes[`${type} dependency skipped`] =
+                (changes[`${type} dependency skipped`] ?? 0) + 1;
+            GlobalState.log(
+                styles.warning(
+                    `Skipped ${type.slice(0, -1)} "${item.slug}" because a chart it references failed to upload`,
+                ),
+            );
+        });
+
+    const failedSlugs: string[] = [];
+    const trackOutcome = (
+        item: T & { needsUpdating: boolean },
+        outcome: 'upserted' | 'skipped' | 'failed',
+    ) => {
+        if (outcome === 'failed') {
+            failedSlugs.push(item.slug);
+        }
+    };
 
     if (concurrency <= 1) {
         // Sequential path — preserves original behavior exactly
-        for (const item of filteredItems) {
+        for (const item of uploadableItems) {
             // eslint-disable-next-line no-await-in-loop
-            await upsertSingleItem(
+            const outcome = await upsertSingleItem(
                 item,
                 type,
                 projectId,
@@ -3205,6 +3326,7 @@ const upsertResources = async <T extends ChartAsCode | DashboardAsCode>(
                 validate,
                 spaceNames,
             );
+            trackOutcome(item, outcome);
         }
     } else {
         // Two-phase parallel path
@@ -3213,7 +3335,7 @@ const upsertResources = async <T extends ChartAsCode | DashboardAsCode>(
         // and in placeholder dashboard creation for charts within dashboards.
         type ItemWithUpdate = T & { needsUpdating: boolean };
         const grouped = groupBy(
-            filteredItems,
+            uploadableItems,
             (item: ItemWithUpdate) => item.spaceSlug,
         ) as Record<string, ItemWithUpdate[]>;
         const seedItems = new Set<T & { needsUpdating: boolean }>();
@@ -3275,7 +3397,7 @@ const upsertResources = async <T extends ChartAsCode | DashboardAsCode>(
         // Phase 1: Sequential seeding (spaces + dashboard placeholders)
         for (const item of seedItems) {
             // eslint-disable-next-line no-await-in-loop
-            await upsertSingleItem(
+            const outcome = await upsertSingleItem(
                 item,
                 type,
                 projectId,
@@ -3287,6 +3409,7 @@ const upsertResources = async <T extends ChartAsCode | DashboardAsCode>(
                 validate,
                 spaceNames,
             );
+            trackOutcome(item, outcome);
         }
 
         // Phase 2: Parallel bulk upload of remaining items
@@ -3294,7 +3417,7 @@ const upsertResources = async <T extends ChartAsCode | DashboardAsCode>(
         await Promise.all(
             remainingItems.map((item) =>
                 limit(async () => {
-                    await upsertSingleItem(
+                    const outcome = await upsertSingleItem(
                         item,
                         type,
                         projectId,
@@ -3306,12 +3429,13 @@ const upsertResources = async <T extends ChartAsCode | DashboardAsCode>(
                         validate,
                         spaceNames,
                     );
+                    trackOutcome(item, outcome);
                 }),
             ),
         );
     }
 
-    return { changes, total: filteredItems.length };
+    return { changes, total: filteredItems.length, failedSlugs };
 };
 
 // readCodeFiles walks the whole download folder recursively, so callers that
@@ -3424,10 +3548,81 @@ const isFilteredWithNoDashboards = (
     dashboardSlugs: string[],
 ): boolean => hasFilters && dashboardSlugs.length === 0;
 
+const reportOpenDraftsForUpload = async (
+    projectUuid: string,
+): Promise<void> => {
+    try {
+        const { openDraftCount } =
+            await lightdashApi<ContentAsCodeUploadAdvisory>({
+                method: 'GET',
+                url: `/api/v1/projects/${projectUuid}/code/upload-advisory`,
+                body: undefined,
+            });
+        if (openDraftCount > 0) {
+            GlobalState.log(
+                styles.warning(
+                    `⚠ ${openDraftCount} open content draft${
+                        openDraftCount === 1 ? '' : 's'
+                    }. Upload will continue; Git content remains authoritative.`,
+                ),
+            );
+        }
+    } catch (error) {
+        GlobalState.log(
+            styles.warning(
+                '⚠ Could not check for open content drafts. Upload will continue.',
+            ),
+        );
+        GlobalState.debug(
+            `Could not load content-as-code upload advisory: ${getErrorMessage(
+                error,
+            )}`,
+        );
+    }
+};
+
+// null when the project dir has no lightdash.config.yml
+const readUploadProjectConfig =
+    async (): Promise<LightdashProjectConfig | null> => {
+        const configExists = await fs
+            .access(path.join(process.cwd(), 'lightdash.config.yml'))
+            .then(() => true)
+            .catch(() => false);
+        if (!configExists) return null;
+        try {
+            return await readAndLoadLightdashProjectConfig(process.cwd());
+        } catch (error) {
+            throw new LightdashError({
+                message: `Upload aborted: lightdash.config.yml exists but could not be read, so the repo's content_as_code settings cannot be honoured. Fix the config and retry. ${getErrorMessage(error)}`,
+                name: 'ParseError',
+                statusCode: 400,
+                data: {},
+            });
+        }
+    };
+
+// The stamped path is the uploaded directory relative to the project dir;
+// a directory outside it has no repo path to stamp
+const getStampedContentPath = (uploadRoot: string): string | undefined => {
+    const relative = path.relative(process.cwd(), uploadRoot);
+    if (
+        path.isAbsolute(relative) ||
+        relative === '..' ||
+        relative.startsWith(`..${path.sep}`)
+    ) {
+        return undefined;
+    }
+    return normalizeContentAsCodePath(relative.split(path.sep).join('/'));
+};
+
 export const uploadHandler = async (
     options: DownloadHandlerOptions,
 ): Promise<void> => {
     GlobalState.setVerbose(options.verbose);
+    const projectConfig = await readUploadProjectConfig();
+    // --path wins; otherwise content_as_code.path from lightdash.config.yml
+    const contentPathOption =
+        options.path ?? projectConfig?.content_as_code?.path;
 
     if (options.spacesOnly && options.skipSpaces) {
         throw new ParameterError(
@@ -3503,7 +3698,7 @@ export const uploadHandler = async (
     let preflightSpaceFiles: SpaceCodeFile[] = [];
     if (shouldReconcileSpaces) {
         try {
-            preflightSpaceFiles = await readSpaceFiles(options.path);
+            preflightSpaceFiles = await readSpaceFiles(contentPathOption);
         } catch (error) {
             throw createSpaceAsCodeUploadError(getErrorMessage(error));
         }
@@ -3522,7 +3717,7 @@ export const uploadHandler = async (
 
     if (isOrganizationUpload) {
         await uploadOrganizationContent({
-            customPath: options.path,
+            customPath: contentPathOption,
             config,
             sendInvites: options.sendInvites,
         });
@@ -3543,6 +3738,30 @@ export const uploadHandler = async (
     // Log current project info
     logSelectedProject(projectSelection, config, 'Uploading to');
 
+    await reportOpenDraftsForUpload(projectId);
+
+    // Persist repo-owned sync settings for the review/write-back workflow.
+    if (projectConfig) {
+        const stamp: ContentAsCodeSettingsStamp = {
+            sync: projectConfig.content_as_code?.sync === true,
+            path: getStampedContentPath(getDownloadFolder(contentPathOption)),
+        };
+        try {
+            await lightdashApi({
+                method: 'POST',
+                url: `/api/v1/projects/${projectId}/code/sync-settings`,
+                body: JSON.stringify(stamp),
+            });
+        } catch (error) {
+            // Older servers don't have this endpoint; stamping is advisory.
+            GlobalState.debug(
+                `Could not stamp content-as-code settings: ${getErrorMessage(
+                    error,
+                )}`,
+            );
+        }
+    }
+
     let changes: Record<string, number> = {};
     const counts: ProjectContentAsCodeCounts = {};
     const start = Date.now();
@@ -3559,7 +3778,7 @@ export const uploadHandler = async (
         operation: 'upload',
         scope: 'project',
     });
-    const uploadRoot = getDownloadFolder(options.path);
+    const uploadRoot = getDownloadFolder(contentPathOption);
     const completeUpload = () => {
         const renderedSummary = output.complete(
             uploadRoot,
@@ -3571,13 +3790,21 @@ export const uploadHandler = async (
                 styles.success(`Uploaded content from ${uploadRoot}`),
             );
         }
+        if (hasUploadFailures(changes)) {
+            GlobalState.log(
+                styles.error(
+                    'Upload completed with failures — see errors above.',
+                ),
+            );
+            process.exitCode = 1;
+        }
     };
 
     try {
         const spaceFiles = preflightSpaceFiles;
         const spaceNames = shouldReconcileSpaces
             ? getSpaceNames(spaceFiles)
-            : await readSpaceNames(options.path);
+            : await readSpaceNames(contentPathOption);
         if (spaceFiles.length > 0) {
             logContentAsCodeDiscovery(
                 `Found ${spaceFiles.length} space definition(s)`,
@@ -3629,7 +3856,7 @@ export const uploadHandler = async (
         // Discover loose YAML files (outside charts/ and dashboards/) classified by contentType
         const looseFiles = await output.runItem({
             label: 'Content files',
-            action: () => readLooseCodeFiles(options.path),
+            action: () => readLooseCodeFiles(contentPathOption),
             detail: ({ charts, dashboards }) =>
                 `${charts.length + dashboards.length} discovered`,
         });
@@ -3664,7 +3891,7 @@ export const uploadHandler = async (
         const loadDashboardItems = () => {
             dashboardItemsPromise =
                 dashboardItemsPromise ??
-                readDashboardItems(options.path, looseFiles.dashboards);
+                readDashboardItems(contentPathOption, looseFiles.dashboards);
             return dashboardItemsPromise;
         };
 
@@ -3682,7 +3909,7 @@ export const uploadHandler = async (
                     chartItems: [
                         ...(await readCodeFiles<ChartAsCode>(
                             'charts',
-                            options.path,
+                            contentPathOption,
                         )),
                         ...looseFiles.charts,
                     ],
@@ -3718,7 +3945,7 @@ export const uploadHandler = async (
                             changes,
                             options.force,
                             uploadPermissions.virtualViews,
-                            options.path,
+                            contentPathOption,
                             virtualViewCandidates,
                         ),
                     onCount: (count) => {
@@ -3749,7 +3976,7 @@ export const uploadHandler = async (
                             changes,
                             options.force,
                             uploadPermissions.externalConnections,
-                            options.path,
+                            contentPathOption,
                         ),
                     onCount: (count) => {
                         counts.externalConnectionsNum = count;
@@ -3927,7 +4154,7 @@ export const uploadHandler = async (
                 );
             }
 
-            const baseDir = getDownloadFolder(options.path);
+            const baseDir = getDownloadFolder(contentPathOption);
             const appsDir = path.join(baseDir, phase.dirName);
 
             let appFolderEntries: import('fs').Dirent[];
@@ -4276,6 +4503,7 @@ export const uploadHandler = async (
             if (uploadFilter) {
                 const unmatchedWarning = unmatchedUploadRefsWarning(
                     [...uploadFilter].filter((ref) => !matchedRefs.has(ref)),
+                    phase.noun,
                 );
                 if (unmatchedWarning) {
                     GlobalState.log(styles.warning(unmatchedWarning));
@@ -4326,6 +4554,11 @@ export const uploadHandler = async (
             }
         }
 
+        // Chart slugs that failed to upload in the Charts phase; dashboards
+        // referencing them are held back so they are not created with broken
+        // (null chart) tiles.
+        const failedChartSlugs = new Set<string>();
+
         changes = await runUploadChangesPhase({
             output,
             label: 'Charts',
@@ -4355,13 +4588,16 @@ export const uploadHandler = async (
                     options.force,
                     chartSlugs,
                     uploadPermissions.charts,
-                    options.path,
+                    contentPathOption,
                     options.skipSpaceCreate,
                     options.public,
                     options.validate,
                     concurrency,
                     looseFiles.charts,
                     spaceNames,
+                );
+                result.failedSlugs.forEach((slug) =>
+                    failedChartSlugs.add(slug),
                 );
                 counts.chartsNum = result.total;
                 return result.changes;
@@ -4381,6 +4617,24 @@ export const uploadHandler = async (
                     );
                     return changes;
                 }
+                let dashboardsToSkip: Set<string> | undefined;
+                if (failedChartSlugs.size > 0) {
+                    dashboardsToSkip = new Set(
+                        (await loadDashboardItems())
+                            .filter((dashboard) =>
+                                dashboard.tiles.some(
+                                    (tile) =>
+                                        'chartSlug' in tile.properties &&
+                                        typeof tile.properties.chartSlug ===
+                                            'string' &&
+                                        failedChartSlugs.has(
+                                            tile.properties.chartSlug,
+                                        ),
+                                ),
+                            )
+                            .map((dashboard) => dashboard.slug),
+                    );
+                }
                 const result = await upsertResources<DashboardAsCode>(
                     'dashboards',
                     projectId,
@@ -4388,13 +4642,14 @@ export const uploadHandler = async (
                     options.force,
                     options.dashboards,
                     uploadPermissions.dashboards,
-                    options.path,
+                    contentPathOption,
                     options.skipSpaceCreate,
                     options.public,
                     options.validate,
                     concurrency,
                     looseFiles.dashboards,
                     spaceNames,
+                    dashboardsToSkip,
                 );
                 counts.dashboardsNum = result.total;
                 return result.changes;
@@ -4418,7 +4673,7 @@ export const uploadHandler = async (
                                 options.agents,
                                 changes,
                                 options.force,
-                                options.path,
+                                contentPathOption,
                                 options.agents.length === 0,
                             ),
                         onCount: (count) => {
@@ -4449,7 +4704,7 @@ export const uploadHandler = async (
                             options.force,
                             ContentAsCodeTypeEnum.ALERT,
                             uploadPermissions.alerts,
-                            options.path,
+                            contentPathOption,
                         ),
                     onCount: (count) => {
                         counts.alertsNum = count;
@@ -4478,7 +4733,7 @@ export const uploadHandler = async (
                             options.force,
                             ContentAsCodeTypeEnum.SCHEDULED_DELIVERY,
                             uploadPermissions.scheduledDeliveries,
-                            options.path,
+                            contentPathOption,
                         ),
                     onCount: (count) => {
                         counts.scheduledDeliveriesNum = count;
@@ -4507,13 +4762,39 @@ export const uploadHandler = async (
                             options.force,
                             ContentAsCodeTypeEnum.GOOGLE_SHEETS_SYNC,
                             uploadPermissions.googleSheets,
-                            options.path,
+                            contentPathOption,
                         ),
                     onCount: (count) => {
                         counts.googleSheetsNum = count;
                     },
                 });
             }
+        }
+
+        if (
+            !options.skipHomepages &&
+            !options.appsOnly &&
+            !options.chartTypesOnly &&
+            (!hasFilters || options.homepages?.length)
+        ) {
+            changes = await runUploadChangesPhase({
+                output,
+                label: 'Homepages',
+                changes,
+                action: () => {
+                    if (hasUploadFailures(changes))
+                        throw new ParameterError(
+                            'Homepage upload blocked because prerequisite content uploads failed',
+                        );
+                    return uploadHomepages(
+                        projectId,
+                        options.homepages ?? [],
+                        changes,
+                        options.publish === true,
+                        contentPathOption,
+                    );
+                },
+            });
         }
 
         const end = Date.now();
@@ -4559,6 +4840,7 @@ export const testHelpers = {
     getDashboardAppSlugs,
     getDashboardChartSlugs,
     hasContentFilters,
+    parseContentFilters,
     isAiAgentsUnavailableError,
     isExternalConnectionsUnavailableError,
     isVirtualViewsUnavailableError,
@@ -4568,6 +4850,7 @@ export const testHelpers = {
     readExternalConnectionFiles,
     readSpaceFiles,
     readSpaceNames,
+    reportOpenDraftsForUpload,
     sanitizeChartForDownload,
     selectVirtualViewCandidates,
     shouldFallBackToEmbeddedSpaces,
@@ -4576,6 +4859,7 @@ export const testHelpers = {
     summarizeUploadChanges,
     upsertAiAgents,
     upsertExternalConnections,
+    upsertResources,
     upsertSpaces,
     upsertVirtualViews,
     validateSpaceIdentity,

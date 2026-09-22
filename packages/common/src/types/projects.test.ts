@@ -1,16 +1,21 @@
 import {
+    BigqueryAuthenticationType,
     buildSafeDbtEnvironmentVariables,
     DbtVersionOptionLatest,
+    DuckdbConnectionType,
+    fillOmittedSecrets,
     getDbtEnvironmentVariableKeyError,
     getDbtVersionSupportedWarehouses,
     getInvalidDbtEnvironmentVariableKeys,
     getLatestSupportDbtVersion,
+    isMissingBigqueryKeyfile,
     isSafeDbtEnvironmentVariableKey,
     isWarehouseSupportedByDbtVersion,
     LATEST_SUPPORTED_DBT_VERSION,
     LIGHTDASH_DBT_PROFILE_ENV_VAR_PREFIX,
     mergeWarehouseCredentials,
     normalizeWarehouseCredentials,
+    omitEmptySecrets,
     PROJECT_DBT_SOURCE_NAME_MAX_LENGTH,
     PROJECT_DBT_SOURCE_NAME_PATTERN,
     resolveDbtVersion,
@@ -18,10 +23,12 @@ import {
     validateProjectDbtSourceName,
     WarehouseTypes,
     type CreateAthenaCredentials,
+    type CreateBigqueryCredentials,
     type CreatePostgresCredentials,
     type CreateRedshiftCredentials,
     type CreateSnowflakeCredentials,
     type CreateWarehouseCredentials,
+    type DuckdbAnalyticsCredentials,
 } from './projects';
 
 describe('project dbt source name validation', () => {
@@ -161,9 +168,58 @@ describe('normalizeWarehouseCredentials', () => {
             ).toBeUndefined();
         },
     );
+
+    test('keeps a numeric Snowflake timeout, including 0', () => {
+        const savedCredentials: CreateSnowflakeCredentials = {
+            type: WarehouseTypes.SNOWFLAKE,
+            account: 'account',
+            user: 'user',
+            database: 'database',
+            warehouse: 'warehouse',
+            schema: 'schema',
+            timeoutSeconds: 0,
+        };
+
+        expect(
+            normalizeWarehouseCredentials(savedCredentials).timeoutSeconds,
+        ).toBe(0);
+    });
 });
 
 describe('mergeWarehouseCredentials', () => {
+    test.each([undefined, false, true])(
+        'preserves or overrides the BigQuery personal credential opt-in (%s)',
+        (allowUserCredentials) => {
+            const base: CreateBigqueryCredentials = {
+                type: WarehouseTypes.BIGQUERY,
+                project: 'project',
+                dataset: 'dataset',
+                timeoutSeconds: undefined,
+                priority: undefined,
+                keyfileContents: {},
+                retries: undefined,
+                location: undefined,
+                maximumBytesBilled: undefined,
+                allowUserCredentials: true,
+            };
+            const {
+                allowUserCredentials: _allowUserCredentials,
+                ...connection
+            } = base;
+            const preview: CreateBigqueryCredentials = {
+                ...connection,
+                dataset: 'preview',
+                ...(allowUserCredentials === undefined
+                    ? {}
+                    : { allowUserCredentials }),
+            };
+
+            expect(
+                mergeWarehouseCredentials(base, preview).allowUserCredentials,
+            ).toBe(allowUserCredentials ?? true);
+        },
+    );
+
     const athenaBase: CreateAthenaCredentials = {
         type: WarehouseTypes.ATHENA,
         region: 'us-east-2',
@@ -354,5 +410,89 @@ describe('latest dbt version', () => {
                 WarehouseTypes.DATABRICKS,
             ),
         ).toBe(true);
+    });
+});
+
+describe('omitted secrets on connection test', () => {
+    const postgres: CreatePostgresCredentials = {
+        type: WarehouseTypes.POSTGRES,
+        host: 'db.internal',
+        port: 5432,
+        dbname: 'analytics',
+        schema: 'public',
+        user: '',
+        password: '',
+        sshTunnelPrivateKey: '',
+    };
+    const bigquery: CreateBigqueryCredentials = {
+        type: WarehouseTypes.BIGQUERY,
+        project: 'lightdash-analytics',
+        dataset: 'analytics',
+        authenticationType: BigqueryAuthenticationType.PRIVATE_KEY,
+        keyfileContents: {},
+        timeoutSeconds: 300,
+        priority: 'interactive',
+        retries: 3,
+        location: 'US',
+        maximumBytesBilled: 1000,
+    };
+
+    it('drops secrets the form sent empty and keeps typed ones', () => {
+        expect(omitEmptySecrets({ ...postgres, password: 'typed' })).toEqual({
+            type: WarehouseTypes.POSTGRES,
+            host: 'db.internal',
+            port: 5432,
+            dbname: 'analytics',
+            schema: 'public',
+            password: 'typed',
+        });
+    });
+
+    it('restores the empty string for string secrets still missing', () => {
+        expect(fillOmittedSecrets(omitEmptySecrets(postgres))).toEqual({
+            ...postgres,
+            sshTunnelPrivateKey: undefined,
+        });
+    });
+
+    it('preserves internal analytics identifiers without adding secrets', () => {
+        const analytics: DuckdbAnalyticsCredentials = {
+            type: WarehouseTypes.DUCKDB,
+            connectionType: DuckdbConnectionType.ANALYTICS,
+            database: 'memory',
+            schema: 'main',
+        };
+
+        expect(fillOmittedSecrets(omitEmptySecrets(analytics))).toEqual(
+            analytics,
+        );
+        expect(fillOmittedSecrets(analytics)).toEqual(analytics);
+    });
+
+    it('flags a private key BigQuery connection without a key file', () => {
+        const withoutKey = { ...bigquery, keyfileContents: undefined };
+        expect(isMissingBigqueryKeyfile(withoutKey)).toBe(true);
+        expect(
+            isMissingBigqueryKeyfile({
+                ...withoutKey,
+                authenticationType: BigqueryAuthenticationType.ADC,
+            }),
+        ).toBe(false);
+        expect(
+            isMissingBigqueryKeyfile({
+                ...bigquery,
+                keyfileContents: { type: 'service_account' },
+            }),
+        ).toBe(false);
+    });
+
+    it('gives ADC and SSO BigQuery connections an empty key file object', () => {
+        expect(
+            fillOmittedSecrets({
+                ...bigquery,
+                authenticationType: BigqueryAuthenticationType.SSO,
+                keyfileContents: undefined,
+            }),
+        ).toMatchObject({ keyfileContents: {} });
     });
 });

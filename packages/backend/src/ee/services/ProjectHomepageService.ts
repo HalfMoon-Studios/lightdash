@@ -1,18 +1,27 @@
 import { subject } from '@casl/ability';
 import {
     ANNOUNCEMENT_BODY_MAX_LENGTH,
+    ANNOUNCEMENT_CATEGORY_META,
     assertUnreachable,
     CommercialFeatureFlags,
+    ContentAsCodeType,
+    convertOrganizationRoleToProjectRole,
     defaultHomepageConfig,
     ForbiddenError,
     getErrorMessage,
+    getHighestProjectRole,
+    isSystemRole,
     NotFoundError,
     ParameterError,
+    parseHomepageAsCode,
     parseHomepageConfig,
     PersistentDownloadFileAccessMode,
     type AnnouncementsPage,
+    type ApiHomepageAsCodeListResponse,
+    type ApiHomepageAsCodeUpsertResponse,
     type CreateAnnouncementRequest,
     type CreateProjectHomepageRequest,
+    type HomepageAsCode,
     type HomepageAssignment,
     type HomepageAudience,
     type HomepageConfig,
@@ -25,6 +34,7 @@ import {
     type ProjectHomepage,
     type ProjectMemberRole,
     type PublishAnnouncementPayload,
+    type RegisteredAccount,
     type ResolvedHomepage,
     type SessionUser,
     type UpdateAnnouncementRequest,
@@ -36,20 +46,29 @@ import { createCanvas, loadImage } from 'canvas';
 import { randomUUID } from 'crypto';
 import { type Readable } from 'stream';
 import { type LightdashAnalytics } from '../../analytics/LightdashAnalytics';
+import { toSessionUser } from '../../auth/account';
 import { type FileStorageClient } from '../../clients/FileStorage/FileStorageClient';
 import { type SlackClient } from '../../clients/Slack/SlackClient';
 import { type LightdashConfig } from '../../config/parseConfig';
 import { type GroupsModel } from '../../models/GroupsModel';
 import { type ProjectModel } from '../../models/ProjectModel/ProjectModel';
 import { type SlackAuthenticationModel } from '../../models/SlackAuthenticationModel';
+import { type UserModel } from '../../models/UserModel';
 import { BaseService } from '../../services/BaseService';
+import type { DocumentService } from '../../services/DocumentService/DocumentService';
 import { type FeatureFlagService } from '../../services/FeatureFlag/FeatureFlagService';
 import { type PersistentDownloadFileService } from '../../services/PersistentDownloadFileService/PersistentDownloadFileService';
-import { secureFetch } from '../../utils/secureFetch/secureFetch';
+import type { RecentContentService } from '../../services/RecentContentService/RecentContentService';
+import {
+    secureFetch,
+    type SecureFetchResult,
+} from '../../utils/secureFetch/secureFetch';
 import { type ProjectHomepageModel } from '../models/ProjectHomepageModel';
 import { type CommercialSchedulerClient } from '../scheduler/SchedulerClient';
+import { downloadHomepageConfig, uploadHomepageConfig } from './homepageAsCode';
 import {
     classifyResourceUrl,
+    isBlockedUnfurl,
     parseOpenGraph,
     parseYoutubeOembed,
 } from './homepageLinkMetadata';
@@ -70,11 +89,13 @@ const ALLOWED_ANNOUNCEMENT_IMAGE_MIME_TYPES = new Set([
 
 const LINK_METADATA_TIMEOUT_MS = 5_000;
 const LINK_METADATA_MAX_BYTES = 256 * 1024;
-// Some providers (e.g. claude.ai) only server-render per-page OpenGraph tags for
-// recognised link-unfurl crawlers, so identify as one while staying honest about
-// who we are.
+const LINK_METADATA_MAX_ATTEMPTS = 3;
+// Some providers (e.g. claude.ai) only serve per-page OpenGraph tags, and skip
+// their bot challenge, for recognised link-unfurl crawlers. Carry Slack's exact
+// unfurler token after our own name so we pass while staying honest about who
+// we are.
 const LINK_PREVIEW_USER_AGENT =
-    'Lightdash-LinkPreview/1.0 (+https://www.lightdash.com; like Slackbot-LinkExpanding)';
+    'Lightdash-LinkPreview/1.0 (+https://www.lightdash.com) Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)';
 
 // Slack's `markdown` block renders standard markdown natively. Not yet in the
 // pinned @slack/types, but it structurally satisfies the SDK's base Block type.
@@ -166,12 +187,13 @@ const readImageDimensions = (buffer: Buffer): ImageDimensions | null =>
     readJpegDimensions(buffer);
 
 export type ProjectHomepageServiceArguments = {
+    documentService: Pick<DocumentService, 'filterViewableUuids'>;
+    recentContentService: Pick<RecentContentService, 'getRecentlyViewed'>;
     projectHomepageModel: Pick<
         ProjectHomepageModel,
         | 'getDefault'
         | 'getByUuid'
         | 'getPublishedDefault'
-        | 'getRecentlyViewed'
         | 'getAssignments'
         | 'updateGroupPriorities'
         | 'resolvePublished'
@@ -191,11 +213,18 @@ export type ProjectHomepageServiceArguments = {
         | 'findOrgHomepageSettings'
         | 'upsertOrgHomepageSettings'
         | 'swapHeroBlocks'
+        | 'getCodeReferences'
+        | 'getCodeGroups'
+        | 'upsertAsCode'
     >;
     analytics: Pick<LightdashAnalytics, 'track'>;
     featureFlagService: Pick<FeatureFlagService, 'get'>;
     groupsModel: Pick<GroupsModel, 'findUserGroups'>;
-    projectModel: Pick<ProjectModel, 'getProjectMemberAccess' | 'getSummary'>;
+    projectModel: Pick<
+        ProjectModel,
+        'getProjectMemberAccess' | 'getProjectGroupAccesses' | 'getSummary'
+    >;
+    userModel: Pick<UserModel, 'getUserDetailsByUuid'>;
     fileStorageClient: FileStorageClient;
     persistentDownloadFileService: PersistentDownloadFileService;
     slackClient: Pick<SlackClient, 'postMessage'>;
@@ -211,6 +240,8 @@ export type ProjectHomepageServiceArguments = {
 };
 
 export class ProjectHomepageService extends BaseService {
+    private readonly documentService: ProjectHomepageServiceArguments['documentService'];
+    private readonly recentContentService: ProjectHomepageServiceArguments['recentContentService'];
     private readonly projectHomepageModel: ProjectHomepageServiceArguments['projectHomepageModel'];
 
     private readonly analytics: ProjectHomepageServiceArguments['analytics'];
@@ -220,6 +251,8 @@ export class ProjectHomepageService extends BaseService {
     private readonly groupsModel: ProjectHomepageServiceArguments['groupsModel'];
 
     private readonly projectModel: ProjectHomepageServiceArguments['projectModel'];
+
+    private readonly userModel: ProjectHomepageServiceArguments['userModel'];
 
     private readonly fileStorageClient: ProjectHomepageServiceArguments['fileStorageClient'];
 
@@ -235,11 +268,14 @@ export class ProjectHomepageService extends BaseService {
 
     constructor(args: ProjectHomepageServiceArguments) {
         super();
+        this.documentService = args.documentService;
         this.projectHomepageModel = args.projectHomepageModel;
+        this.recentContentService = args.recentContentService;
         this.analytics = args.analytics;
         this.featureFlagService = args.featureFlagService;
         this.groupsModel = args.groupsModel;
         this.projectModel = args.projectModel;
+        this.userModel = args.userModel;
         this.fileStorageClient = args.fileStorageClient;
         this.persistentDownloadFileService = args.persistentDownloadFileService;
         this.slackClient = args.slackClient;
@@ -443,7 +479,7 @@ export class ProjectHomepageService extends BaseService {
         groupUuids: string[];
         role: ProjectMemberRole | undefined;
     }> {
-        const [groups, membership] = await Promise.all([
+        const [groups, membership, groupAccesses, user] = await Promise.all([
             organizationUuid
                 ? this.groupsModel.findUserGroups({
                       userUuid,
@@ -451,11 +487,27 @@ export class ProjectHomepageService extends BaseService {
                   })
                 : Promise.resolve([]),
             this.projectModel.getProjectMemberAccess(projectUuid, userUuid),
+            this.projectModel.getProjectGroupAccesses(projectUuid),
+            this.userModel.getUserDetailsByUuid(userUuid),
         ]);
-        return {
-            groupUuids: groups.map((group) => group.uuid),
-            role: membership?.role,
-        };
+        const groupUuids = groups.map((group) => group.uuid);
+        // Custom roles resolve to their stored placeholder, not a scope-derived tier.
+        const highestRole = getHighestProjectRole([
+            {
+                type: 'organization',
+                role: user.role
+                    ? convertOrganizationRoleToProjectRole(user.role)
+                    : undefined,
+            },
+            { type: 'project', role: membership?.role },
+            ...groupAccesses
+                .filter((access) => groupUuids.includes(access.groupUuid))
+                .map((access) => ({
+                    type: 'group' as const,
+                    role: isSystemRole(access.role) ? access.role : undefined,
+                })),
+        ]);
+        return { groupUuids, role: highestRole?.role };
     }
 
     async getResolvedHomepage(
@@ -532,10 +584,15 @@ export class ProjectHomepageService extends BaseService {
     ): Promise<HomepageRecentlyViewedItem[]> {
         await this.assertFlagEnabled(user);
         await this.assertCanView(user, projectUuid);
-        return this.projectHomepageModel.getRecentlyViewed(
+        const entries = await this.recentContentService.getRecentlyViewed(
+            user,
             projectUuid,
-            user.userUuid,
         );
+        return entries.map(({ contentType, uuid, viewedAt }) => ({
+            contentType,
+            uuid,
+            viewedAt,
+        }));
     }
 
     async getHomepageForBuilder(
@@ -580,6 +637,214 @@ export class ProjectHomepageService extends BaseService {
             name: data.name,
             draftConfig,
             createdByUserUuid: user.userUuid,
+        });
+    }
+
+    private async assertCanUseCode(
+        user: SessionUser,
+        projectUuid: string,
+        action: 'view' | 'manage',
+    ): Promise<void> {
+        await this.assertFlagEnabled(user);
+        await this.assertCanManage(user, projectUuid);
+        const { organizationUuid } =
+            await this.projectModel.getSummary(projectUuid);
+        if (
+            this.createAuditedAbility(user).cannot(
+                action,
+                subject('ContentAsCode', { organizationUuid, projectUuid }),
+            )
+        ) {
+            throw new ForbiddenError(
+                'Insufficient permissions to use homepage as code',
+            );
+        }
+    }
+
+    private async assertCanViewDocumentReferences(
+        account: RegisteredAccount,
+        projectUuid: string,
+        documentUuids: Set<string>,
+    ): Promise<void> {
+        if (documentUuids.size === 0) {
+            return;
+        }
+        const allowedDocumentUuids = new Set(
+            await this.documentService.filterViewableUuids(
+                account,
+                [projectUuid],
+                [...documentUuids],
+            ),
+        );
+        if (
+            [...documentUuids].some((uuid) => !allowedDocumentUuids.has(uuid))
+        ) {
+            throw new ParameterError(
+                'Homepage Document reference is missing or inaccessible',
+            );
+        }
+    }
+
+    async downloadHomepagesAsCode(
+        account: RegisteredAccount,
+        projectUuid: string,
+        names: string[] = [],
+    ): Promise<ApiHomepageAsCodeListResponse['results']> {
+        const user = toSessionUser(account);
+        await this.assertCanUseCode(user, projectUuid, 'view');
+        const homepages = await this.projectHomepageModel.list(projectUuid);
+        const selected = homepages.filter(
+            (h) =>
+                h.publishedConfig !== null &&
+                (names.length === 0 || names.includes(h.name)),
+        );
+        for (const homepage of selected) {
+            if (homepages.filter((h) => h.name === homepage.name).length > 1)
+                throw new ParameterError(
+                    `Homepage name "${homepage.name}" is ambiguous in this project`,
+                );
+        }
+        const references =
+            await this.projectHomepageModel.getCodeReferences(projectUuid);
+        const documentUuids = new Set<string>();
+        const assignments =
+            await this.projectHomepageModel.getAssignments(projectUuid);
+        const result: ApiHomepageAsCodeListResponse['results'] = {
+            homepages: selected
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map((homepage) => ({
+                    contentType: ContentAsCodeType.HOMEPAGE,
+                    version: 1,
+                    name: homepage.name,
+                    config: downloadHomepageConfig(
+                        homepage.publishedConfig!,
+                        projectUuid,
+                        references,
+                        this.lightdashConfig.siteUrl,
+                        (uuid) => documentUuids.add(uuid),
+                    ),
+                    publication: {
+                        isDefault: homepage.isDefault,
+                        groups: assignments
+                            .filter(
+                                (a) =>
+                                    a.homepageUuid === homepage.homepageUuid &&
+                                    a.targetType === 'group',
+                            )
+                            .map((a) => {
+                                if (!a.groupName)
+                                    throw new ParameterError(
+                                        'Homepage assignment references a missing group',
+                                    );
+                                return {
+                                    name: a.groupName,
+                                    priority: a.priority,
+                                };
+                            })
+                            .sort(
+                                (a, b) =>
+                                    a.priority - b.priority ||
+                                    a.name.localeCompare(b.name),
+                            ),
+                        roles: assignments
+                            .filter(
+                                (a) =>
+                                    a.homepageUuid === homepage.homepageUuid &&
+                                    a.targetType === 'role',
+                            )
+                            .map((a) => {
+                                if (!a.role)
+                                    throw new ParameterError(
+                                        'Homepage assignment references a missing role',
+                                    );
+                                return a.role;
+                            })
+                            .sort(),
+                    },
+                })),
+            missingNames: names.filter(
+                (name) => !selected.some((h) => h.name === name),
+            ),
+        };
+        await this.assertCanViewDocumentReferences(
+            account,
+            projectUuid,
+            documentUuids,
+        );
+        return result;
+    }
+
+    async upsertHomepageAsCode(
+        account: RegisteredAccount,
+        projectUuid: string,
+        name: string,
+        input: HomepageAsCode,
+        publish: boolean = false,
+    ): Promise<ApiHomepageAsCodeUpsertResponse['results']> {
+        const user = toSessionUser(account);
+        await this.assertCanUseCode(user, projectUuid, 'manage');
+        const document = parseHomepageAsCode(input, name);
+        if (name !== document.name)
+            throw new ParameterError('Homepage path and body names must match');
+        if (publish && document.publication === null)
+            throw new ParameterError(
+                'Publishing a homepage requires publication settings',
+            );
+        const documentUuids = new Set<string>();
+        const config = parseHomepageConfig(
+            uploadHomepageConfig(
+                document.config,
+                projectUuid,
+                await this.projectHomepageModel.getCodeReferences(projectUuid),
+                this.lightdashConfig.siteUrl,
+                (uuid) => documentUuids.add(uuid),
+            ),
+        );
+        await this.assertCanViewDocumentReferences(
+            account,
+            projectUuid,
+            documentUuids,
+        );
+        const groups =
+            await this.projectHomepageModel.getCodeGroups(projectUuid);
+        const publication =
+            document.publication === null
+                ? null
+                : {
+                      ...document.publication,
+                      groups: document.publication.groups.map((group) => {
+                          const matches = groups.filter(
+                              (g) => g.name === group.name,
+                          );
+                          if (matches.length !== 1)
+                              throw new ParameterError(
+                                  `Homepage group "${group.name}" is missing or ambiguous in the destination organization`,
+                              );
+                          return {
+                              groupUuid: matches[0].groupUuid,
+                              priority: group.priority,
+                          };
+                      }),
+                  };
+        if (
+            publication &&
+            (new Set(publication.groups.map((g) => g.groupUuid)).size !==
+                publication.groups.length ||
+                new Set(publication.groups.map((g) => g.priority)).size !==
+                    publication.groups.length ||
+                new Set(publication.roles).size !== publication.roles.length)
+        ) {
+            throw new ParameterError(
+                'Homepage publication contains duplicate groups, priorities, or roles',
+            );
+        }
+        return this.projectHomepageModel.upsertAsCode({
+            projectUuid,
+            name,
+            config,
+            publication,
+            publish,
+            userUuid: user.userUuid,
         });
     }
 
@@ -700,38 +965,60 @@ export class ProjectHomepageService extends BaseService {
         await this.assertCanManage(user, projectUuid);
 
         const provider = classifyResourceUrl(url);
+        const empty: HomepageLinkMetadata = {
+            kind: provider.kind,
+            title: null,
+            description: null,
+            imageUrl: null,
+        };
         try {
             if (provider.fetchKind === 'oembed') {
-                const { bodyText } = await secureFetch(provider.fetchUrl, {
+                const response = await secureFetch(provider.fetchUrl, {
                     method: 'GET',
                     timeoutMs: LINK_METADATA_TIMEOUT_MS,
                     maxResponseBytes: LINK_METADATA_MAX_BYTES,
                     allowedContentTypes: ['application/json'],
                     headers: { 'User-Agent': LINK_PREVIEW_USER_AGENT },
                 });
+                if (isBlockedUnfurl(response)) return empty;
                 let json: unknown = null;
                 try {
-                    json = JSON.parse(bodyText);
+                    json = JSON.parse(response.bodyText);
                 } catch {
                     json = null;
                 }
                 return { kind: provider.kind, ...parseYoutubeOembed(json) };
             }
-            const { bodyText } = await secureFetch(provider.fetchUrl, {
-                method: 'GET',
-                timeoutMs: LINK_METADATA_TIMEOUT_MS,
-                maxResponseBytes: LINK_METADATA_MAX_BYTES,
-                allowedContentTypes: ['text/html'],
-                headers: { 'User-Agent': LINK_PREVIEW_USER_AGENT },
-            });
-            return { kind: provider.kind, ...parseOpenGraph(bodyText) };
-        } catch {
+            const fetchHtml = () =>
+                secureFetch(provider.fetchUrl, {
+                    method: 'GET',
+                    timeoutMs: LINK_METADATA_TIMEOUT_MS,
+                    maxResponseBytes: LINK_METADATA_MAX_BYTES,
+                    allowedContentTypes: ['text/html'],
+                    headers: { 'User-Agent': LINK_PREVIEW_USER_AGENT },
+                });
+            // Bot challenges are intermittent for the same URL, so a retry
+            // usually gets the real page.
+            const fetchUnblockedHtml = async (
+                attempt: number,
+            ): Promise<SecureFetchResult> => {
+                const response = await fetchHtml();
+                if (
+                    !isBlockedUnfurl(response) ||
+                    attempt >= LINK_METADATA_MAX_ATTEMPTS
+                ) {
+                    return response;
+                }
+                return fetchUnblockedHtml(attempt + 1);
+            };
+            const response = await fetchUnblockedHtml(1);
+            if (isBlockedUnfurl(response)) return empty;
             return {
                 kind: provider.kind,
-                title: null,
-                description: null,
-                imageUrl: null,
+                ...parseOpenGraph(response.bodyText),
             };
+        } catch {
+            return empty;
         }
     }
 
@@ -835,6 +1122,50 @@ export class ProjectHomepageService extends BaseService {
             .trim();
     }
 
+    private static announcementCategoryLabel(
+        announcement: ProjectAnnouncement,
+    ): string | null {
+        if (announcement.category == null) {
+            return null;
+        }
+        return ANNOUNCEMENT_CATEGORY_META[announcement.category]?.label ?? null;
+    }
+
+    // Context-line attribution only — omit missing parts so Slack never
+    // shows an empty "Posted by" or a dangling separator.
+    private static announcementSlackAttribution(
+        announcement: ProjectAnnouncement,
+    ): string | null {
+        const parts: string[] = [];
+        const categoryLabel =
+            ProjectHomepageService.announcementCategoryLabel(announcement);
+        if (categoryLabel) {
+            parts.push(categoryLabel);
+        }
+        if (announcement.authorName) {
+            parts.push(`Posted by ${announcement.authorName}`);
+        }
+        return parts.length > 0 ? parts.join(' · ') : null;
+    }
+
+    private static announcementSlackFallbackText(
+        announcement: ProjectAnnouncement,
+    ): string {
+        const categoryLabel =
+            ProjectHomepageService.announcementCategoryLabel(announcement);
+        const author = announcement.authorName;
+        if (categoryLabel && author) {
+            return `📢 ${categoryLabel} from ${author}: ${announcement.title}`;
+        }
+        if (categoryLabel) {
+            return `📢 ${categoryLabel}: ${announcement.title}`;
+        }
+        if (author) {
+            return `📢 New announcement from ${author}: ${announcement.title}`;
+        }
+        return `📢 New announcement: ${announcement.title}`;
+    }
+
     private async notifyAnnouncementToSlack(
         organizationUuid: string,
         projectUuid: string,
@@ -848,6 +1179,8 @@ export class ProjectHomepageService extends BaseService {
         const image = announcement.body
             ? this.announcementSlackImage(announcement.body)
             : null;
+        const attribution =
+            ProjectHomepageService.announcementSlackAttribution(announcement);
         const blocks: (KnownBlock | SlackMarkdownBlock)[] = [
             {
                 type: 'header',
@@ -857,6 +1190,19 @@ export class ProjectHomepageService extends BaseService {
                     emoji: true,
                 },
             },
+            ...(attribution
+                ? [
+                      {
+                          type: 'context' as const,
+                          elements: [
+                              {
+                                  type: 'mrkdwn' as const,
+                                  text: attribution,
+                              },
+                          ],
+                      },
+                  ]
+                : []),
             ...(markdown
                 ? [{ type: 'markdown' as const, text: markdown }]
                 : []),
@@ -879,7 +1225,8 @@ export class ProjectHomepageService extends BaseService {
                 ],
             },
         ];
-        const text = `📢 New announcement: ${announcement.title}`;
+        const text =
+            ProjectHomepageService.announcementSlackFallbackText(announcement);
         try {
             await this.slackClient.postMessage({
                 organizationUuid,

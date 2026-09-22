@@ -70,6 +70,11 @@ export const useExplorerQueryManager = ({
     );
 
     const embed = useEmbed();
+    const customSqlProvenanceChartUuid =
+        embed?.customSqlProvenanceChartUuid ??
+        (embed?.savedChart && 'uuid' in embed.savedChart
+            ? embed.savedChart.uuid
+            : undefined);
     const routeProjectUuid = useProjectUuid();
     const params = useParams<{
         savedQueryUuid: string;
@@ -139,18 +144,18 @@ export const useExplorerQueryManager = ({
         [dispatch],
     );
 
-    // A merge replaces the query it was built from, so once one has run there
-    // is nothing left for this query to render and re-running it is a second
-    // warehouse query for a result nobody sees. It stays enabled while the
-    // merge is being built, because until then its results are what is on
-    // screen.
-    const hasMergedResults = !!useMergeSafe()?.mergeResults;
+    // A merge replaces the query it was built from, so once one has been
+    // submitted there is nothing left for this query to render, and its sorts
+    // may name merged fields the warehouse has never heard of. It stays
+    // enabled while the merge is being built, because until then its results
+    // are what is on screen.
+    const mergeReplacesQuery = !!useMergeSafe()?.replacesQuery;
 
     // Main query executor - creates TanStack Query subscriptions
     const [mainQueryExecutor] = useQueryExecutor(
         validQueryArgs,
         missingRequiredParameters,
-        !hasMergedResults,
+        !mergeReplacesQuery,
         queryUuidHistory,
         setQueryUuidHistory,
     );
@@ -181,6 +186,7 @@ export const useExplorerQueryManager = ({
             dateZoomGranularity,
             minimal,
             usePreAggregateCache: preAggCacheEnabled,
+            customSqlProvenanceChartUuid,
             savedChart: chartConfigForQuery,
         });
 
@@ -201,6 +207,7 @@ export const useExplorerQueryManager = ({
         dateZoomGranularity,
         minimal,
         preAggCacheEnabled,
+        customSqlProvenanceChartUuid,
         chartConfigForQuery,
         dispatch,
     ]);

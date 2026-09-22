@@ -1,6 +1,7 @@
 import {
     Account,
     assertUnreachable,
+    DuckdbExecutionSpec,
     ForbiddenError,
     getContextsForTrigger,
     getQueryLanguage,
@@ -28,7 +29,8 @@ import {
 } from '@lightdash/common';
 import crypto from 'crypto';
 import { Knex } from 'knex';
-import { customAlphabet, nanoid } from 'nanoid';
+import { customAlphabet } from 'nanoid';
+import { setTimeout as abortableSleep } from 'node:timers/promises';
 import { DashboardsTableName } from '../../database/entities/dashboards';
 import {
     DbQueryHistory,
@@ -59,6 +61,7 @@ function convertDbQueryHistoryToQueryHistory(
         metricQuery: queryHistory.metric_query,
         fields: queryHistory.fields,
         requestParameters: queryHistory.request_parameters,
+        usedParameters: queryHistory.used_parameters,
         warehouseQueryId: queryHistory.warehouse_query_id,
         warehouseQueryMetadata: queryHistory.warehouse_query_metadata,
         status: queryHistory.status,
@@ -98,8 +101,9 @@ function getQueryTriggerSafe(context: QueryExecutionContext): QueryTrigger {
 export class QueryHistoryModel {
     readonly database: Knex;
 
-    // Alphanumeric-only nanoid to avoid '--' sequences that break SQL comment stripping in DuckDB
-    private static readonly sqlSafeNanoid = customAlphabet(
+    // Alphanumeric only: a results file is read by name from SQL, and a
+    // '--' in a nanoid would read as a comment to a naive stripper
+    private static readonly resultsFileNanoid = customAlphabet(
         '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz',
     );
 
@@ -150,11 +154,8 @@ export class QueryHistoryModel {
         return crypto.createHash('sha256').update(queryHashKey).digest('hex');
     }
 
-    static createUniqueResultsFileName(
-        cacheKey: string,
-        options?: { sqlSafe: boolean },
-    ) {
-        return `${cacheKey}-${options?.sqlSafe ? QueryHistoryModel.sqlSafeNanoid() : nanoid()}`;
+    static createUniqueResultsFileName(cacheKey: string) {
+        return `${cacheKey}-${QueryHistoryModel.resultsFileNanoid()}`;
     }
 
     async create(
@@ -206,6 +207,7 @@ export class QueryHistoryModel {
                 metric_query: queryHistory.metricQuery,
                 fields: queryHistory.fields,
                 request_parameters: queryHistory.requestParameters,
+                used_parameters: queryHistory.usedParameters,
                 total_row_count: null,
                 warehouse_query_id: null,
                 warehouse_execution_time_ms: null,
@@ -230,6 +232,7 @@ export class QueryHistoryModel {
                 pre_aggregate_execution: null,
                 pre_aggregate_fallback_reason: null,
                 processing_started_at: null,
+                duckdb_execution: null,
             })
             .returning('query_uuid');
 
@@ -415,6 +418,74 @@ export class QueryHistoryModel {
         return result ? convertDbQueryHistoryToQueryHistory(result) : undefined;
     }
 
+    /** The execution spec of a DuckDB source query, written once at submit. */
+    async setDuckdbExecution(
+        queryUuid: string,
+        spec: DuckdbExecutionSpec,
+    ): Promise<void> {
+        await this.database(QueryHistoryTableName)
+            .where('query_uuid', queryUuid)
+            .update({ duckdb_execution: spec });
+    }
+
+    async getDuckdbExecution(
+        queryUuid: string,
+    ): Promise<DuckdbExecutionSpec | null> {
+        const row = await this.database(QueryHistoryTableName)
+            .select('duckdb_execution')
+            .where('query_uuid', queryUuid)
+            .first();
+        return row?.duckdb_execution ?? null;
+    }
+
+    /** Records that a DuckDB source query was served from another run's results. */
+    async markDuckdbCacheHit(queryUuid: string): Promise<void> {
+        await this.database.raw(
+            `UPDATE ${QueryHistoryTableName}
+             SET duckdb_execution = jsonb_set(COALESCE(duckdb_execution, '{}'::jsonb), '{cacheHit}', 'true'::jsonb)
+             WHERE query_uuid = ?`,
+            [queryUuid],
+        );
+    }
+
+    /**
+     * Marks a DuckDB source query as refused by its guard: the error status
+     * and the refusal land in one statement, so whoever polls the row never
+     * sees the error without the refusal.
+     */
+    async recordDuckdbRefusal(
+        queryUuid: string,
+        projectUuid: string,
+        refusal: NonNullable<DuckdbExecutionSpec['refusal']>,
+        error: string,
+        account: Pick<Account, 'isRegisteredUser'> & {
+            user: Pick<Account['user'], 'id'>;
+        },
+    ): Promise<void> {
+        const createdByColumn = account.isRegisteredUser()
+            ? 'created_by_user_uuid'
+            : 'created_by_account';
+        await this.database.raw(
+            `UPDATE ${QueryHistoryTableName}
+             SET status = ?, error = ?, errored_at = NOW(),
+                 duckdb_execution = jsonb_set(COALESCE(duckdb_execution, '{}'::jsonb), '{refusal}', ?::jsonb)
+             WHERE query_uuid = ? AND project_uuid = ? AND ${createdByColumn} = ?`,
+            [
+                QueryHistoryStatus.ERROR,
+                error,
+                JSON.stringify(refusal),
+                queryUuid,
+                projectUuid,
+                account.user.id,
+            ],
+        );
+    }
+
+    /**
+     * Waits for a query to reach a terminal state. With an account the
+     * lookup is creator-scoped, as fetching results is; without one, as a
+     * worker rebuilding a run, it reads the row by uuid alone.
+     */
     async pollForQueryCompletion({
         queryUuid,
         account,
@@ -424,27 +495,35 @@ export class QueryHistoryModel {
         timeoutMs = 5 * 60 * 1000,
         throwOnCancelled = true,
         throwOnError = true,
+        abortSignal,
     }: {
         queryUuid: string;
-        account: Account;
+        account: Account | null;
         projectUuid: string;
         initialBackoffMs?: number;
         maxBackoffMs?: number;
         timeoutMs?: number;
         throwOnCancelled?: boolean;
         throwOnError?: boolean;
+        abortSignal?: AbortSignal;
     }): Promise<QueryHistory> {
         const startTime = Date.now();
-        const getQueryHistory = () => this.get(queryUuid, projectUuid, account);
+        const getQueryHistory = () =>
+            account === null
+                ? this.getByQueryUuid(queryUuid)
+                : this.get(queryUuid, projectUuid, account);
 
         const poll = async (backoffMs: number): Promise<QueryHistory> => {
+            abortSignal?.throwIfAborted();
             if (Date.now() - startTime > timeoutMs) {
                 throw new Error(`Query polling timed out after ${timeoutMs}ms`);
             }
 
             const queryHistory = await getQueryHistory();
             if (!queryHistory) {
-                await sleep(backoffMs);
+                await abortableSleep(backoffMs, undefined, {
+                    signal: abortSignal,
+                });
                 return poll(Math.min(backoffMs * 2, maxBackoffMs));
             }
 
@@ -465,7 +544,9 @@ export class QueryHistoryModel {
                 case QueryHistoryStatus.PENDING:
                 case QueryHistoryStatus.QUEUED:
                 case QueryHistoryStatus.EXECUTING:
-                    await sleep(backoffMs);
+                    await abortableSleep(backoffMs, undefined, {
+                        signal: abortSignal,
+                    });
                     return poll(Math.min(backoffMs * 2, maxBackoffMs));
                 case QueryHistoryStatus.READY:
                     return queryHistory;
@@ -698,11 +779,13 @@ export class QueryHistoryModel {
         windows: Record<QueryHistoryWindow, number>;
         warehouseTimeMsLast7Days: number;
     }> {
+        // Trigger totals span every window, so the tabs keep their counts as
+        // the page's window sections load.
         const triggerCountsQuery = this.buildUserHistoryQuery(
             projectUuid,
             userUuid,
             filters,
-            { skipTrigger: true },
+            { skipTrigger: true, skipWindow: true },
         )
             .select(`${QueryHistoryTableName}.context`)
             .count(`${QueryHistoryTableName}.query_uuid as count`)

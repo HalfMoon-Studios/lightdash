@@ -5,6 +5,50 @@ describe('Dashboard', () => {
         cy.login();
     });
 
+    it('keeps a chart tile title in place on hover', () => {
+        cy.visit('/projects/jaffle-shop/dashboards/jaffle-dashboard/view');
+
+        cy.findByRole('link', {
+            name: 'How much revenue do we have per payment method?',
+        })
+            .scrollIntoView()
+            .then(($title) => {
+                const initialRect = $title[0].getBoundingClientRect();
+                const initialContainerRect =
+                    $title[0].parentElement?.getBoundingClientRect();
+                const initialCardRect = $title
+                    .closest('.mantine-Card-root')[0]
+                    .getBoundingClientRect();
+
+                cy.wrap($title).trigger('mouseover');
+                cy.wrap($title).should('have.attr', 'data-hovered', 'true');
+                cy.wrap($title).should(($hoveredTitle) => {
+                    const hoveredRect =
+                        $hoveredTitle[0].getBoundingClientRect();
+                    const hoveredContainerRect =
+                        $hoveredTitle[0].parentElement?.getBoundingClientRect();
+                    const hoveredCardRect = $hoveredTitle
+                        .closest('.mantine-Card-root')[0]
+                        .getBoundingClientRect();
+
+                    expect(
+                        hoveredRect.left - hoveredCardRect.left,
+                    ).to.be.closeTo(
+                        initialRect.left - initialCardRect.left,
+                        0.5,
+                    );
+                    expect(hoveredRect.top - hoveredCardRect.top).to.be.closeTo(
+                        initialRect.top - initialCardRect.top,
+                        0.5,
+                    );
+                    expect(hoveredContainerRect?.height).to.be.closeTo(
+                        initialContainerRect?.height ?? 0,
+                        0.5,
+                    );
+                });
+            });
+    });
+
     it('Should see dashboard', () => {
         cy.visit(`/projects/${SEED_PROJECT.project_uuid}/dashboards`);
 
@@ -55,8 +99,7 @@ describe('Dashboard', () => {
         // Add filter
         cy.contains('Add filter').click();
 
-        cy.findByTestId('FilterConfiguration/FieldSelect').click();
-        cy.findByTestId('FilterConfiguration/FieldSelectSearch')
+        cy.findByTestId('FilterConfiguration/FieldSelect')
             .click()
             .type('payment');
         cy.wait(200);
@@ -181,9 +224,9 @@ describe('Dashboard', () => {
         cy.findByText('Payment method').click();
         cy.findByText('Unique payment count').click();
         cy.findByText('Save chart').click();
-        cy.findByTestId('ChartCreateModal/NameInput').type(
-            `What's the number of unique payments per payment method?`,
-        );
+        cy.findByTestId('ChartCreateModal/NameInput')
+            .clear()
+            .type(`What's the number of unique payments per payment method?`);
         cy.findByText('Save').click();
         cy.findByText(
             `Success! What's the number of unique payments per payment method? was added to Title`,
@@ -194,8 +237,7 @@ describe('Dashboard', () => {
 
         // Add filter Payment method is credit_card and apply
         cy.contains('Add filter').click();
-        cy.findByTestId('FilterConfiguration/FieldSelect').click();
-        cy.findByTestId('FilterConfiguration/FieldSelectSearch')
+        cy.findByTestId('FilterConfiguration/FieldSelect')
             .click()
             .type('payment');
         cy.wait(200);
@@ -233,9 +275,9 @@ describe('Dashboard', () => {
         cy.findByText('Payment method').click();
         cy.findByText('Total revenue').click();
         cy.findByText('Save chart').click();
-        cy.findByTestId('ChartCreateModal/NameInput').type(
-            `What's the total revenue per payment method?`,
-        );
+        cy.findByTestId('ChartCreateModal/NameInput')
+            .clear()
+            .type(`What's the total revenue per payment method?`);
         cy.findByText('Save').click();
         cy.findByText(
             `Success! What's the total revenue per payment method? was added to Title`,
@@ -292,9 +334,9 @@ describe('Dashboard', () => {
         cy.findByText('Payment method').click();
         cy.findByText('Amount').click();
         cy.findByText('Save chart').click();
-        cy.findByTestId('ChartCreateModal/NameInput').type(
-            `Stg Payments (payment method x amount)?`,
-        );
+        cy.findByTestId('ChartCreateModal/NameInput')
+            .clear()
+            .type(`Stg Payments (payment method x amount)?`);
         cy.findByText('Save').click();
         cy.findByText(
             `Success! Stg Payments (payment method x amount)? was added to Title`,
@@ -371,9 +413,9 @@ describe('Dashboard', () => {
         cy.findByText('Payment method').click();
         cy.findByText('Unique payment count').click();
         cy.findByText('Save chart').click();
-        cy.findByTestId('ChartCreateModal/NameInput').type(
-            `What's the number of unique payments per payment method?`,
-        );
+        cy.findByTestId('ChartCreateModal/NameInput')
+            .clear()
+            .type(`What's the number of unique payments per payment method?`);
         cy.findByText('Save').click();
 
         cy.findByText('Save changes').click();
@@ -425,8 +467,7 @@ describe('Dashboard', () => {
         // Add filter
         cy.contains('Add filter').click();
 
-        cy.findByTestId('FilterConfiguration/FieldSelect').click();
-        cy.findByTestId('FilterConfiguration/FieldSelectSearch')
+        cy.findByTestId('FilterConfiguration/FieldSelect')
             .click()
             .type('payment');
         cy.wait(200);

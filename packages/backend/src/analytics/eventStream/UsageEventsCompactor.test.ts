@@ -19,6 +19,10 @@ vi.mock('../../logging/logger', () => ({
         error: vi.fn(),
     },
 }));
+vi.mock('../../clients/Aws/gcpOAuth', () => ({
+    applyGcpOAuth: vi.fn(),
+    getGcpAccessToken: vi.fn(),
+}));
 
 const s3Mocks = vi.hoisted(() => {
     const listObjectsV2 = vi.fn();
@@ -27,6 +31,8 @@ const s3Mocks = vi.hoisted(() => {
         listObjectsV2 = listObjectsV2;
 
         deleteObjects = deleteObjects;
+
+        destroy = vi.fn();
     }
     return { listObjectsV2, deleteObjects, FakeS3 };
 });
@@ -37,10 +43,15 @@ vi.mock('@aws-sdk/client-s3', () => ({
 
 const duckdbMocks = vi.hoisted(() => {
     const runSqlWithMetrics = vi.fn();
+    const constructor = vi.fn();
     class FakeDuckdbWarehouseClient {
         runSqlWithMetrics = runSqlWithMetrics;
+
+        constructor(...args: unknown[]) {
+            constructor(...args);
+        }
     }
-    return { runSqlWithMetrics, FakeDuckdbWarehouseClient };
+    return { runSqlWithMetrics, FakeDuckdbWarehouseClient, constructor };
 });
 
 vi.mock('@lightdash/warehouses', () => ({
@@ -79,6 +90,10 @@ type MetricsMock = ReturnType<typeof createMetricsMock>;
 const createCompactor = (metrics: MetricsMock) =>
     new UsageEventsCompactor({
         s3Config,
+        usageDimensionsModel: {
+            async *getOrganizations() {},
+            async *getJsonLines() {},
+        },
         prometheusMetrics: metrics as unknown as PrometheusMetrics,
     });
 
@@ -206,7 +221,9 @@ describe('buildCompactionSql', () => {
             'COPY (SELECT "event_name", "org_id", "user_id", "event_ts", "schema_version", ' +
                 '"project_id", "query_id", "status", "context", "explore_name", "chart_id", ' +
                 '"dashboard_id", "cache_hit", "execution_source", "warehouse_type", ' +
-                '"warehouse_execution_time_ms", "total_row_count", "columns_count" ' +
+                '"warehouse_execution_time_ms", "warehouse_ssh_tunnel_ms", ' +
+                '"warehouse_connect_ms", "warehouse_session_ms", "warehouse_query_ms", ' +
+                '"warehouse_fetch_ms", "total_row_count", "columns_count" ' +
                 "FROM read_json(['s3://events-bucket/events/raw/org_id=org-1/stream=query_events/dt=2026-07-01/a.jsonl.gz', " +
                 "'s3://events-bucket/events/raw/org_id=org-1/stream=query_events/dt=2026-07-01/b.jsonl.gz'], " +
                 "format='newline_delimited', " +
@@ -216,6 +233,9 @@ describe('buildCompactionSql', () => {
                 '"explore_name": \'VARCHAR\', "chart_id": \'VARCHAR\', "dashboard_id": \'VARCHAR\', ' +
                 '"cache_hit": \'BOOLEAN\', "execution_source": \'VARCHAR\', "warehouse_type": \'VARCHAR\', ' +
                 '"warehouse_execution_time_ms": \'BIGINT\', ' +
+                '"warehouse_ssh_tunnel_ms": \'BIGINT\', "warehouse_connect_ms": \'BIGINT\', ' +
+                '"warehouse_session_ms": \'BIGINT\', "warehouse_query_ms": \'BIGINT\', ' +
+                '"warehouse_fetch_ms": \'BIGINT\', ' +
                 '"total_row_count": \'BIGINT\', "columns_count": \'INTEGER\'})) ' +
                 `TO 's3://events-bucket/${compactedKey}' (FORMAT PARQUET, COMPRESSION zstd)`,
         );
@@ -270,6 +290,42 @@ describe('UsageEventsCompactor.run', () => {
         expect(Logger.error).toHaveBeenCalledWith(
             expect.stringContaining('duckdb exploded'),
         );
+    });
+
+    it('uses GCS paths and token resolution for workload identity compaction', async () => {
+        const key = rawKey('org-1', 'query_events', '2026-07-01');
+        mockListedKeys([key]);
+        const compactor = new UsageEventsCompactor({
+            s3Config: {
+                endpoint: 'https://storage.googleapis.com',
+                bucket: 'events-bucket',
+                region: 'us-east-1',
+                forcePathStyle: true,
+                authMode: 'gcp_oauth',
+            },
+            prometheusMetrics: null,
+            usageDimensionsModel: {
+                async *getOrganizations() {},
+                async *getJsonLines() {},
+            },
+        });
+        const summary = await compactor.run(NOW);
+        expect(summary.partitionsCompacted).toBe(1);
+        const sql = duckdbMocks.runSqlWithMetrics.mock.calls[0][0];
+        expect(sql).toContain(`read_json(['gs://events-bucket/${key}']`);
+        expect(sql).toContain("TO 'gs://events-bucket/events/compacted/");
+        expect(sql).not.toContain('s3://');
+        expect(duckdbMocks.constructor).toHaveBeenCalledWith(
+            expect.objectContaining({
+                s3Config: expect.objectContaining({
+                    authMode: 'gcp_oauth',
+                    getAccessToken: expect.any(Function),
+                    scope: ['gs://events-bucket/'],
+                }),
+            }),
+            expect.any(Object),
+        );
+        expect(s3Mocks.deleteObjects).toHaveBeenCalledOnce();
     });
 
     it('retries only the raw keys that failed to delete and still compacts the partition', async () => {

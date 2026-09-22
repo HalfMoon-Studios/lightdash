@@ -12,11 +12,14 @@ import {
     SCHEDULER_TASKS,
     SchedulerFormat,
     SessionUser,
+    SpaceMemberRole,
+    SupportedDbtAdapter,
     type Account,
     type ContentVerificationInfo,
     type Dashboard,
     type DashboardChartTile,
     type DashboardFilterRule,
+    type Explore,
     type UpdateDashboard,
 } from '@lightdash/common';
 import { analyticsMock } from '../../analytics/LightdashAnalytics.mock';
@@ -27,6 +30,7 @@ import { AnalyticsModel } from '../../models/AnalyticsModel';
 import type { CatalogModel } from '../../models/CatalogModel/CatalogModel';
 import { ContentVerificationModel } from '../../models/ContentVerificationModel';
 import { DashboardModel } from '../../models/DashboardModel/DashboardModel';
+import { OrganizationMemberProfileModel } from '../../models/OrganizationMemberProfileModel';
 import { OrganizationModel } from '../../models/OrganizationModel';
 import { PinnedListModel } from '../../models/PinnedListModel';
 import type { ProjectModel } from '../../models/ProjectModel/ProjectModel';
@@ -38,7 +42,11 @@ import { SpaceModel } from '../../models/SpaceModel';
 import { SchedulerClient } from '../../scheduler/SchedulerClient';
 import { SavedChartService } from '../SavedChartsService/SavedChartService';
 import type { SchedulerService } from '../SchedulerService/SchedulerService';
-import { SpacePermissionService } from '../SpaceService/SpacePermissionService';
+import {
+    SpacePermissionService,
+    type AccessTarget,
+    type SpaceAccessContextForCasl,
+} from '../SpaceService/SpacePermissionService';
 import { DashboardService } from './DashboardService';
 import {
     chart,
@@ -68,9 +76,30 @@ const dashboardModel = {
 
     permanentDelete: vi.fn(async () => dashboard),
 
+    softDelete: vi.fn(async () => dashboard),
+
     addVersion: vi.fn(async () => dashboard),
 
     getOrphanedCharts: vi.fn(async () => []),
+
+    getDashboardOwnedChartsUsingMetric: vi.fn(
+        async (): Promise<{ uuid: string; name: string }[]> => [],
+    ),
+
+    updateLatestVersionConfig: vi.fn(async () => undefined),
+
+    getDashboardsSummaryByOwner: vi.fn(async () => ({
+        totalCount: 2,
+        byProject: [
+            {
+                projectUuid: 'projectUuid',
+                projectName: 'Jaffle shop',
+                count: 2,
+            },
+        ],
+    })),
+
+    updateOwnerByUser: vi.fn(async () => 2),
 };
 
 const spaceModel = {
@@ -82,6 +111,10 @@ const analyticsModel = {
 };
 const savedChartModel = {
     get: vi.fn(async () => chart),
+    transaction: vi.fn(async (cb: (tx: never) => Promise<void>) =>
+        cb(undefined as never),
+    ),
+    createVersion: vi.fn(async () => chart),
     create: vi.fn(async () => ({ ...chart, uuid: 'duplicated-chart-uuid' })),
     permanentDelete: vi.fn(async () => ({
         uuid: 'chart_uuid',
@@ -98,6 +131,7 @@ const savedSqlModel = {
 };
 
 const projectModel = {
+    getExploreFromCache: vi.fn<ProjectModel['getExploreFromCache']>(),
     getCachedExploreNames: vi.fn(async () => []),
     get: vi.fn(async () => ({ schedulerTimezone: 'UTC' })),
 };
@@ -133,6 +167,9 @@ const searchModel = {
     getDashboardCharts: vi.fn(async () => dashboardChartsResult),
 };
 
+const contentAsCodeProjectSettingsModel = { get: vi.fn() };
+const contentAsCodeSnapshotModel = { get: vi.fn() };
+
 const contentVerificationModel = {
     getByContent: vi.fn(
         async (): Promise<ContentVerificationInfo | null> => null,
@@ -140,7 +177,10 @@ const contentVerificationModel = {
     unverify: vi.fn(async () => undefined),
 };
 
-const spaceContexts = {
+const spaceContexts: Record<
+    string,
+    Omit<SpaceAccessContextForCasl, 'admins'>
+> = {
     [space.space_uuid]: {
         organizationUuid: space.organization_uuid,
         projectUuid: publicSpace.projectUuid,
@@ -161,22 +201,37 @@ const spaceContexts = {
     },
 };
 
+const lookupSpaceContext = (spaceUuid: string) => {
+    if (spaceUuid === space.space_uuid) {
+        return spaceContexts[space.space_uuid];
+    }
+    if (spaceUuid === privateSpace.uuid) {
+        return spaceContexts[privateSpace.uuid];
+    }
+    return spaceContexts[publicSpace.uuid];
+};
+
 const spacePermissionService = {
-    getSpaceAccessContext: vi.fn(
-        async (_userUuid: string, spaceUuid: string) => {
-            if (spaceUuid === space.space_uuid) {
-                return spaceContexts[space.space_uuid];
-            }
-            if (spaceUuid === privateSpace.uuid) {
-                return spaceContexts[privateSpace.uuid];
-            }
-            return spaceContexts[publicSpace.uuid];
-        },
-    ),
-    getSpacesAccessContext: vi.fn(
-        async (_userUuid: string, spaceUuids: string[]) => spaceContexts,
+    resolveAccess: vi.fn(async (_userUuid: string, target: AccessTarget) => ({
+        ...lookupSpaceContext(target.spaceUuid ?? ''),
+        directOnly: false,
+    })),
+    resolveAccessBatch: vi.fn(
+        async (_userUuid: string, targets: { spaceUuid: string }[]) =>
+            targets.map((target) => ({
+                target,
+                context: {
+                    ...lookupSpaceContext(target.spaceUuid),
+                    directOnly: false,
+                },
+            })),
     ),
     getFirstViewableSpaceUuid: vi.fn(async () => publicSpace.uuid),
+};
+
+const catalogModel = {
+    findTablesCachedExploreUuid: vi.fn(async () => ({})),
+    updateFieldsChartUsage: vi.fn(async () => undefined),
 };
 
 vi.spyOn(analyticsMock, 'track');
@@ -192,17 +247,32 @@ describe('DashboardService', () => {
         pinnedListModel: {} as PinnedListModel,
         schedulerModel: schedulerModel as unknown as SchedulerModel,
         searchModel: searchModel as unknown as SearchModel,
-        schedulerService: {} as SchedulerService,
+        schedulerService: {
+            softDeleteByDashboardUuid: vi.fn(),
+        } as unknown as SchedulerService,
         savedChartModel: savedChartModel as unknown as SavedChartModel,
         savedSqlModel: savedSqlModel as unknown as SavedSqlModel,
         savedChartService: {} as SavedChartService, // Mock for test
         projectModel: projectModel as unknown as ProjectModel,
         slackClient: slackClient as unknown as SlackClient,
         schedulerClient: schedulerClient as unknown as SchedulerClient,
-        catalogModel: {} as CatalogModel,
+        contentAsCodeProjectSettingsModel:
+            contentAsCodeProjectSettingsModel as never,
+        contentAsCodeSnapshotModel: contentAsCodeSnapshotModel as never,
+        contentDraftModel: {
+            findOpenDraft: vi.fn(),
+            listOpenForContent: vi.fn(async () => []),
+        } as never,
+        catalogModel: catalogModel as unknown as CatalogModel,
         organizationModel: {
             findColorPalette: vi.fn(async () => null),
         } as unknown as OrganizationModel,
+        organizationMemberProfileModel: {
+            getOrganizationMemberByUuid: vi.fn(async () => ({
+                organizationUuid: user.organizationUuid,
+                userUuid: 'target-user-uuid',
+            })),
+        } as unknown as OrganizationMemberProfileModel,
         spacePermissionService:
             spacePermissionService as unknown as SpacePermissionService,
         contentVerificationModel:
@@ -221,6 +291,11 @@ describe('DashboardService', () => {
             user,
         });
 
+        expect(savedChartModel.get).toHaveBeenCalledWith(
+            chart.uuid,
+            undefined,
+            { projectUuid },
+        );
         expect(savedChartModel.create).toHaveBeenCalledWith(
             projectUuid,
             user.userUuid,
@@ -228,6 +303,138 @@ describe('DashboardService', () => {
                 slug: chart.slug,
                 dashboardUuid,
             }),
+        );
+    });
+
+    test('refuses to duplicate a source chart the user cannot view', async () => {
+        const userWithoutChartAccess = {
+            ...user,
+            ability: new Ability<PossibleAbilities>([
+                { subject: 'Dashboard', action: ['view', 'update'] },
+            ]),
+        };
+
+        await expect(
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (service as any).duplicateChartForDashboard({
+                chartUuid: chart.uuid,
+                projectUuid,
+                dashboardUuid,
+                user: userWithoutChartAccess,
+            }),
+        ).rejects.toThrow(ForbiddenError);
+        expect(savedChartModel.create).not.toHaveBeenCalled();
+    });
+
+    test('a dashboard grant does not authorize copying the chart into a different dashboard', async () => {
+        const grantOnlyUser = {
+            ...user,
+            ability: new Ability<PossibleAbilities>([
+                {
+                    subject: 'SavedChart',
+                    action: ['view'],
+                    conditions: {
+                        access: { $elemMatch: { userUuid: user.userUuid } },
+                    },
+                },
+            ]),
+        };
+        savedChartModel.get.mockResolvedValueOnce({
+            ...chart,
+            dashboardUuid: 'other-dashboard-uuid',
+            spaceUuid: privateSpace.uuid,
+        });
+        // The user holds a viewer grant on the chart's owning dashboard; the
+        // grant must still not authorize copying it into another dashboard.
+        spacePermissionService.resolveAccess.mockImplementationOnce(
+            async (_userUuid: string, target: AccessTarget) => {
+                const targetDashboardUuid =
+                    target.type === 'dashboard'
+                        ? target.dashboardUuid
+                        : undefined;
+                return {
+                    ...spaceContexts[privateSpace.uuid],
+                    access:
+                        targetDashboardUuid === 'other-dashboard-uuid'
+                            ? [
+                                  {
+                                      userUuid: user.userUuid,
+                                      role: SpaceMemberRole.VIEWER,
+                                      hasDirectAccess: true,
+                                      grantedVia: 'dashboard',
+                                  },
+                              ]
+                            : [],
+                    directOnly: targetDashboardUuid === 'other-dashboard-uuid',
+                } as never;
+            },
+        );
+
+        await expect(
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (service as any).duplicateChartForDashboard({
+                chartUuid: chart.uuid,
+                projectUuid,
+                dashboardUuid,
+                user: grantOnlyUser,
+            }),
+        ).rejects.toThrow(ForbiddenError);
+        expect(spacePermissionService.resolveAccess).toHaveBeenCalledWith(
+            user.userUuid,
+            {
+                type: 'space',
+                spaceUuid: privateSpace.uuid,
+            },
+        );
+        expect(savedChartModel.create).not.toHaveBeenCalled();
+    });
+
+    test('a dashboard grant authorizes duplication within the owning dashboard', async () => {
+        const grantOnlyUser = {
+            ...user,
+            ability: new Ability<PossibleAbilities>([
+                {
+                    subject: 'SavedChart',
+                    action: ['view'],
+                    conditions: {
+                        access: { $elemMatch: { userUuid: user.userUuid } },
+                    },
+                },
+            ]),
+        };
+        savedChartModel.get.mockResolvedValueOnce({
+            ...chart,
+            spaceUuid: privateSpace.uuid,
+        });
+        spacePermissionService.resolveAccess.mockResolvedValueOnce({
+            ...spaceContexts[privateSpace.uuid],
+            access: [
+                {
+                    userUuid: user.userUuid,
+                    role: SpaceMemberRole.VIEWER,
+                    hasDirectAccess: true,
+                    grantedVia: 'dashboard',
+                },
+            ],
+            directOnly: true,
+        } as never);
+
+        await expect(
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (service as any).duplicateChartForDashboard({
+                chartUuid: chart.uuid,
+                projectUuid,
+                dashboardUuid,
+                user: grantOnlyUser,
+            }),
+        ).resolves.toBe('duplicated-chart-uuid');
+        expect(spacePermissionService.resolveAccess).toHaveBeenCalledWith(
+            user.userUuid,
+            {
+                type: 'dashboard',
+                dashboardUuid,
+                spaceUuid: privateSpace.uuid,
+            },
         );
     });
 
@@ -243,6 +450,98 @@ describe('DashboardService', () => {
             dashboard.uuid,
             { projectUuid: undefined },
         );
+    });
+
+    test('loads a private dashboard through a direct grant without exposing its space name', async () => {
+        const directViewer = {
+            ...user,
+            ability: defineUserAbility(
+                { ...user, organizationUuid: 'another-org-uuid' },
+                [
+                    {
+                        projectUuid: dashboard.projectUuid,
+                        role: ProjectMemberRole.VIEWER,
+                        userUuid: user.userUuid,
+                        roleUuid: undefined,
+                    },
+                ],
+            ),
+        };
+        const privateDashboard = {
+            ...dashboard,
+            spaceUuid: privateSpace.uuid,
+            spaceName: 'Private finance',
+        };
+        dashboardModel.getByIdOrSlug.mockResolvedValueOnce(privateDashboard);
+        spacePermissionService.resolveAccess.mockResolvedValueOnce({
+            ...spaceContexts[privateSpace.uuid],
+            access: [
+                {
+                    userUuid: user.userUuid,
+                    role: SpaceMemberRole.VIEWER,
+                    hasDirectAccess: true,
+                    projectRole: undefined,
+                    inheritedRole: undefined,
+                    inheritedFrom: undefined,
+                },
+            ],
+            directOnly: true,
+        } as never);
+
+        const result = await service.getByIdOrSlug(
+            directViewer,
+            privateDashboard.uuid,
+        );
+
+        expect(result).toMatchObject({
+            uuid: privateDashboard.uuid,
+            spaceUuid: privateSpace.uuid,
+            spaceName: 'Private finance',
+            access: [
+                expect.objectContaining({
+                    userUuid: user.userUuid,
+                    role: SpaceMemberRole.VIEWER,
+                    hasDirectAccess: true,
+                }),
+            ],
+        });
+        expect(spacePermissionService.resolveAccess).toHaveBeenCalledWith(
+            user.userUuid,
+            {
+                type: 'dashboard',
+                dashboardUuid: privateDashboard.uuid,
+                spaceUuid: privateSpace.uuid,
+            },
+        );
+    });
+
+    test('denies the same private dashboard without a direct grant', async () => {
+        const outsider = {
+            ...user,
+            ability: defineUserAbility(
+                { ...user, organizationUuid: 'another-org-uuid' },
+                [
+                    {
+                        projectUuid: dashboard.projectUuid,
+                        role: ProjectMemberRole.VIEWER,
+                        userUuid: user.userUuid,
+                        roleUuid: undefined,
+                    },
+                ],
+            ),
+        };
+        dashboardModel.getByIdOrSlug.mockResolvedValueOnce({
+            ...dashboard,
+            spaceUuid: privateSpace.uuid,
+        });
+        spacePermissionService.resolveAccess.mockResolvedValueOnce({
+            ...spaceContexts[privateSpace.uuid],
+            directOnly: false,
+        });
+
+        await expect(
+            service.getByIdOrSlug(outsider, dashboard.uuid),
+        ).rejects.toThrow(ForbiddenError);
     });
 
     test('should forward the applied parameter values when exporting content', async () => {
@@ -366,6 +665,24 @@ describe('DashboardService', () => {
         ).rejects.toThrowError(ForbiddenError);
 
         expect(dashboardModel.update).not.toHaveBeenCalled();
+    });
+
+    test('keeps the space name in the update response for a grant-only editor', async () => {
+        spacePermissionService.resolveAccess
+            .mockResolvedValueOnce({
+                ...lookupSpaceContext(dashboard.spaceUuid),
+                directOnly: true,
+            })
+            .mockResolvedValueOnce({
+                ...lookupSpaceContext(dashboard.spaceUuid),
+                directOnly: true,
+            });
+
+        const result = await service.update(user, dashboard.uuid, {
+            name: 'renamed',
+        });
+
+        expect(result.spaceName).toBe(dashboard.spaceName);
     });
 
     test('should get dashboard charts after dashboard access check', async () => {
@@ -569,6 +886,28 @@ describe('DashboardService', () => {
             }),
         );
     });
+    test('should report an owner assignment on top of the update', async () => {
+        (dashboardModel.update as import('vitest').Mock).mockResolvedValueOnce(
+            dashboard,
+        );
+
+        await service.update(user, dashboardUuid, {
+            ...updateDashboard,
+            ownerUserUuid: 'target-user-uuid',
+        });
+
+        expect(analyticsMock.track).toHaveBeenCalledTimes(2);
+        expect(analyticsMock.track).toHaveBeenCalledWith(
+            expect.objectContaining({
+                event: 'dashboard.owner_assigned',
+                properties: expect.objectContaining({
+                    dashboardId: dashboard.uuid,
+                    ownerUserUuid: 'target-user-uuid',
+                    previousOwnerUserUuid: null,
+                }),
+            }),
+        );
+    });
     test('should update dashboard details & version', async () => {
         const result = await service.update(
             user,
@@ -655,6 +994,214 @@ describe('DashboardService', () => {
             }),
         );
     });
+
+    describe('deletion field usage cleanup', () => {
+        const tiles = Array.from(
+            { length: 40 },
+            (_, index): DashboardChartTile => ({
+                uuid: `tile-${index}`,
+                tabUuid: undefined,
+                type: DashboardTileTypes.SAVED_CHART,
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+                properties: {
+                    savedChartUuid: `chart-${index}`,
+                    belongsToDashboard: true,
+                },
+            }),
+        );
+        const explore: Explore = {
+            name: chart.tableName,
+            label: 'Explore',
+            tags: [],
+            targetDatabase: SupportedDbtAdapter.POSTGRES,
+            baseTable: chart.tableName,
+            joinedTables: [],
+            tables: {},
+        };
+
+        afterEach(() => {
+            projectModel.getExploreFromCache.mockReset();
+            savedChartModel.get.mockImplementation(async () => chart);
+            catalogModel.updateFieldsChartUsage.mockImplementation(
+                async () => undefined,
+            );
+        });
+
+        test('reuses a failed lookup and still cleans up a valid chart before deleting', async () => {
+            dashboardModel.getByIdOrSlug.mockResolvedValueOnce({
+                ...dashboard,
+                tiles,
+            });
+            savedChartModel.get.mockResolvedValueOnce({
+                ...chart,
+                tableName: 'missing',
+            });
+            projectModel.getExploreFromCache
+                .mockRejectedValueOnce(new NotFoundError('missing Explore'))
+                .mockResolvedValue(explore);
+
+            await service.delete(user, dashboardUuid);
+
+            expect(projectModel.getExploreFromCache).toHaveBeenCalledTimes(2);
+            expect(catalogModel.updateFieldsChartUsage).toHaveBeenCalledTimes(
+                39,
+            );
+            expect(dashboardModel.permanentDelete).toHaveBeenCalledTimes(1);
+        });
+
+        test('loads the same missing Explore only once per deletion request', async () => {
+            dashboardModel.getByIdOrSlug.mockResolvedValueOnce({
+                ...dashboard,
+                tiles,
+            });
+            projectModel.getExploreFromCache.mockRejectedValue(
+                new NotFoundError('missing Explore'),
+            );
+            await service.delete(user, dashboardUuid);
+            expect(projectModel.getExploreFromCache).toHaveBeenCalledTimes(1);
+            expect(catalogModel.updateFieldsChartUsage).not.toHaveBeenCalled();
+            expect(dashboardModel.permanentDelete).toHaveBeenCalledTimes(1);
+
+            dashboardModel.getByIdOrSlug.mockResolvedValueOnce({
+                ...dashboard,
+                tiles,
+            });
+            await service.delete(user, dashboardUuid);
+            expect(projectModel.getExploreFromCache).toHaveBeenCalledTimes(2);
+        });
+
+        test('does not overlap distinct Explore loads or delete before cleanup settles', async () => {
+            dashboardModel.getByIdOrSlug.mockResolvedValueOnce({
+                ...dashboard,
+                tiles,
+            });
+            let active = 0;
+            let peak = 0;
+            let index = 0;
+            savedChartModel.get.mockImplementation(async () => ({
+                ...chart,
+                tableName: `table-${(index += 1)}`,
+            }));
+            projectModel.getExploreFromCache.mockImplementation(async () => {
+                active += 1;
+                peak = Math.max(peak, active);
+                await new Promise<void>((resolve) => {
+                    setTimeout(resolve, 1);
+                });
+                expect(dashboardModel.permanentDelete).not.toHaveBeenCalled();
+                active -= 1;
+                return explore;
+            });
+            await service.delete(user, dashboardUuid);
+            expect(peak).toBe(1);
+            expect(projectModel.getExploreFromCache).toHaveBeenCalledTimes(40);
+            expect(catalogModel.updateFieldsChartUsage).toHaveBeenCalledTimes(
+                40,
+            );
+            expect(dashboardModel.permanentDelete).toHaveBeenCalledTimes(1);
+        });
+
+        test('continues cleanup after a usage update fails', async () => {
+            dashboardModel.getByIdOrSlug.mockResolvedValueOnce({
+                ...dashboard,
+                tiles,
+            });
+            projectModel.getExploreFromCache.mockResolvedValue(explore);
+            catalogModel.updateFieldsChartUsage.mockRejectedValueOnce(
+                new Error('update failed'),
+            );
+            await service.delete(user, dashboardUuid);
+            expect(catalogModel.updateFieldsChartUsage).toHaveBeenCalledTimes(
+                40,
+            );
+            expect(dashboardModel.permanentDelete).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    describe.each(['delete', 'softDelete'] as const)(
+        '%s with direct dashboard access',
+        (method) => {
+            test.each([
+                {
+                    directRole: SpaceMemberRole.EDITOR,
+                    spaceRole: null,
+                    allowed: false,
+                },
+                {
+                    directRole: SpaceMemberRole.VIEWER,
+                    spaceRole: null,
+                    allowed: false,
+                },
+                {
+                    directRole: SpaceMemberRole.ADMIN,
+                    spaceRole: null,
+                    allowed: true,
+                },
+                {
+                    directRole: SpaceMemberRole.EDITOR,
+                    spaceRole: SpaceMemberRole.EDITOR,
+                    allowed: true,
+                },
+                {
+                    directRole: SpaceMemberRole.EDITOR,
+                    spaceRole: SpaceMemberRole.VIEWER,
+                    allowed: false,
+                },
+            ])(
+                'direct $directRole and space $spaceRole: allowed=$allowed',
+                async ({ directRole, spaceRole, allowed }) => {
+                    const editor = {
+                        ...user,
+                        role: OrganizationMemberRole.EDITOR,
+                        ability: defineUserAbility(
+                            { ...user, role: OrganizationMemberRole.EDITOR },
+                            [],
+                        ),
+                    };
+                    const accessRow = {
+                        userUuid: user.userUuid,
+                        hasDirectAccess: true,
+                        projectRole: undefined,
+                        inheritedRole: undefined,
+                        inheritedFrom: undefined,
+                    };
+                    spacePermissionService.resolveAccess.mockResolvedValueOnce({
+                        organizationUuid: dashboard.organizationUuid,
+                        projectUuid: dashboard.projectUuid,
+                        inheritsFromOrgOrProject: false,
+                        directOnly: spaceRole === null,
+                        access: [
+                            {
+                                ...accessRow,
+                                role: directRole,
+                                grantedVia: 'dashboard' as const,
+                            },
+                            ...(spaceRole
+                                ? [{ ...accessRow, role: spaceRole }]
+                                : []),
+                        ],
+                    });
+
+                    const result = service[method](editor, dashboardUuid);
+
+                    if (allowed) {
+                        await expect(result).resolves.toBeUndefined();
+                    } else {
+                        await expect(result).rejects.toThrow(ForbiddenError);
+                        expect(
+                            dashboardModel.permanentDelete,
+                        ).not.toHaveBeenCalled();
+                        expect(
+                            dashboardModel.softDelete,
+                        ).not.toHaveBeenCalled();
+                    }
+                },
+            );
+        },
+    );
     test('should not see dashboard from other organizations', async () => {
         const anotherUser = {
             ...user,
@@ -768,6 +1315,46 @@ describe('DashboardService', () => {
         };
         const result = await service.getAllByProject(
             editorUser,
+            projectUuid,
+            undefined,
+        );
+
+        expect(result).toEqual([]);
+    });
+    test('correlates access by target, not position: reversed batch results change nothing', async () => {
+        (
+            spacePermissionService.resolveAccessBatch as import('vitest').Mock
+        ).mockImplementationOnce(
+            async (_userUuid: string, targets: { spaceUuid: string }[]) =>
+                targets
+                    .map((target) => ({
+                        target,
+                        context: {
+                            ...lookupSpaceContext(target.spaceUuid),
+                            directOnly: false,
+                        },
+                    }))
+                    .reverse(),
+        );
+
+        const result = await service.getAllByProject(
+            user,
+            projectUuid,
+            undefined,
+        );
+
+        expect(result).toEqual(dashboardsDetails);
+    });
+    test('fails closed when a batch context is undefined (unresolvable space)', async () => {
+        (
+            spacePermissionService.resolveAccessBatch as import('vitest').Mock
+        ).mockImplementationOnce(
+            async (_userUuid: string, targets: { spaceUuid: string }[]) =>
+                targets.map((target) => ({ target, context: undefined })),
+        );
+
+        const result = await service.getAllByProject(
+            user,
             projectUuid,
             undefined,
         );
@@ -1283,6 +1870,241 @@ describe('DashboardService', () => {
             expect(schedulerModel.createScheduler).toHaveBeenCalledWith(
                 expect.objectContaining({ dashboardUuid: dashboard.uuid }),
             );
+        });
+    });
+
+    describe('offboarding dashboard ownership', () => {
+        const managerUser: SessionUser = {
+            ...user,
+            ability: new Ability<PossibleAbilities>([
+                {
+                    subject: 'Dashboard',
+                    action: ['manage'],
+                },
+            ]),
+        };
+
+        test('summarizes owned dashboards when the caller can manage every project', async () => {
+            const summary = await service.getUserDashboardsSummary(
+                managerUser,
+                'target-user-uuid',
+            );
+
+            expect(
+                dashboardModel.getDashboardsSummaryByOwner,
+            ).toHaveBeenCalledWith('target-user-uuid');
+            expect(summary).toEqual({
+                totalCount: 2,
+                byProject: [
+                    {
+                        projectUuid: 'projectUuid',
+                        projectName: 'Jaffle shop',
+                        count: 2,
+                    },
+                ],
+            });
+        });
+
+        test('refuses the summary when the caller cannot manage a project', async () => {
+            const viewerUser: SessionUser = {
+                ...user,
+                ability: new Ability<PossibleAbilities>([
+                    {
+                        subject: 'Dashboard',
+                        action: ['view'],
+                    },
+                ]),
+            };
+
+            await expect(
+                service.getUserDashboardsSummary(
+                    viewerUser,
+                    'target-user-uuid',
+                ),
+            ).rejects.toThrow(ForbiddenError);
+        });
+
+        test('reassigns owned dashboards to another org member', async () => {
+            const result = await service.reassignUserDashboards(
+                managerUser,
+                'target-user-uuid',
+                'new-owner-uuid',
+            );
+
+            expect(dashboardModel.updateOwnerByUser).toHaveBeenCalledWith(
+                'target-user-uuid',
+                'new-owner-uuid',
+                ['projectUuid'],
+            );
+            expect(result).toEqual({ reassignedCount: 2 });
+        });
+    });
+
+    describe('updateCustomMetric', () => {
+        const registryMetric = {
+            name: 'amount_avg',
+            table: 'orders',
+            label: 'Avg amount',
+            sql: '${TABLE}.amount',
+            type: 'average',
+        };
+        const dashboardWithRegistry = {
+            ...dashboard,
+            config: {
+                isDateZoomDisabled: false,
+                customMetrics: [registryMetric],
+            },
+        };
+        const affectedChart = {
+            ...chart,
+            uuid: 'affected_chart_uuid',
+            name: 'Affected chart',
+            metricQuery: {
+                ...chart.metricQuery,
+                additionalMetrics: [registryMetric],
+            },
+        };
+        const updatedMetric = { ...registryMetric, label: 'Avg amount (net)' };
+
+        beforeEach(() => {
+            dashboardModel.getByIdOrSlug.mockResolvedValue(
+                dashboardWithRegistry as never,
+            );
+            dashboardModel.getDashboardOwnedChartsUsingMetric.mockResolvedValue(
+                [{ uuid: affectedChart.uuid, name: affectedChart.name }],
+            );
+            savedChartModel.get.mockResolvedValue(affectedChart as never);
+        });
+
+        test('swaps the registry entry and re-versions the affected charts', async () => {
+            const result = await service.updateCustomMetric(
+                user,
+                dashboardUuid,
+                { metric: updatedMetric as never },
+            );
+
+            expect(result.dryRun).toBe(false);
+            expect(result.customMetrics).toEqual([updatedMetric]);
+            expect(result.affectedCharts).toEqual([
+                { uuid: affectedChart.uuid, name: affectedChart.name },
+            ]);
+            expect(
+                dashboardModel.updateLatestVersionConfig,
+            ).toHaveBeenCalledWith(
+                dashboardUuid,
+                expect.objectContaining({ customMetrics: [updatedMetric] }),
+                undefined,
+            );
+            expect(savedChartModel.createVersion).toHaveBeenCalledTimes(1);
+            expect(savedChartModel.createVersion).toHaveBeenCalledWith(
+                affectedChart.uuid,
+                expect.objectContaining({
+                    metricQuery: expect.objectContaining({
+                        additionalMetrics: [updatedMetric],
+                    }),
+                }),
+                user,
+                undefined,
+            );
+        });
+
+        test('dryRun reports affected charts without writing', async () => {
+            const result = await service.updateCustomMetric(
+                user,
+                dashboardUuid,
+                { metric: updatedMetric as never, dryRun: true },
+            );
+
+            expect(result.dryRun).toBe(true);
+            expect(result.affectedCharts).toEqual([
+                { uuid: affectedChart.uuid, name: affectedChart.name },
+            ]);
+            expect(
+                dashboardModel.updateLatestVersionConfig,
+            ).not.toHaveBeenCalled();
+            expect(savedChartModel.createVersion).not.toHaveBeenCalled();
+        });
+
+        test('delete removes the entry without touching charts', async () => {
+            const result = await service.deleteCustomMetric(
+                user,
+                dashboardUuid,
+                registryMetric.table,
+                registryMetric.name,
+                false,
+            );
+
+            expect(result.customMetrics).toEqual([]);
+            expect(result.affectedCharts).toEqual([
+                { uuid: affectedChart.uuid, name: affectedChart.name },
+            ]);
+            expect(
+                dashboardModel.updateLatestVersionConfig,
+            ).toHaveBeenCalledWith(
+                dashboardUuid,
+                expect.objectContaining({ customMetrics: [] }),
+            );
+            expect(savedChartModel.createVersion).not.toHaveBeenCalled();
+        });
+
+        test('delete dryRun reports affected charts without writing', async () => {
+            const result = await service.deleteCustomMetric(
+                user,
+                dashboardUuid,
+                registryMetric.table,
+                registryMetric.name,
+                true,
+            );
+
+            expect(result.dryRun).toBe(true);
+            expect(
+                dashboardModel.updateLatestVersionConfig,
+            ).not.toHaveBeenCalled();
+        });
+
+        test('delete 404s for a metric not in the registry', async () => {
+            await expect(
+                service.deleteCustomMetric(
+                    user,
+                    dashboardUuid,
+                    'orders',
+                    'unknown_metric',
+                    false,
+                ),
+            ).rejects.toThrowError(NotFoundError);
+        });
+
+        test('blocks dashboards managed as code', async () => {
+            contentAsCodeProjectSettingsModel.get.mockResolvedValueOnce({
+                syncEnabled: true,
+            });
+            contentAsCodeSnapshotModel.get.mockResolvedValueOnce({
+                snapshot: {},
+                snapshotHash: 'hash',
+            });
+
+            await expect(
+                service.updateCustomMetric(user, dashboardUuid, {
+                    metric: updatedMetric as never,
+                }),
+            ).rejects.toThrowError(
+                'Shared metrics cannot be edited on a dashboard managed as code',
+            );
+            expect(
+                dashboardModel.updateLatestVersionConfig,
+            ).not.toHaveBeenCalled();
+        });
+
+        test('rejects identity changes and unknown metrics as not-in-registry', async () => {
+            // Identity is the lookup key, so a rename can never match an entry
+            await expect(
+                service.updateCustomMetric(user, dashboardUuid, {
+                    metric: {
+                        ...updatedMetric,
+                        name: 'renamed_metric',
+                    } as never,
+                }),
+            ).rejects.toThrowError(NotFoundError);
         });
     });
 });

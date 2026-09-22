@@ -1,5 +1,6 @@
 import {
     AllChartsSearchResult,
+    assertUnreachable,
     ContentVerificationInfo,
     DashboardSearchResult,
     findContentToolDefinition,
@@ -10,9 +11,12 @@ import {
 import { tool } from 'ai';
 import moment from 'moment';
 import type { AiAgentFindContentCoverage } from '../../../../analytics/LightdashAnalytics';
+import type { AiDecisionClient } from '../decisions/AiDecisionClient';
+import { rankCandidates } from '../decisions/rankCandidates';
 import type {
     FindContentChartResult,
     FindContentDashboardResult,
+    FindContentDataAppResult,
     FindContentFn,
     FindContentResult,
     FindContentSpaceMetadata,
@@ -21,7 +25,7 @@ import type {
 import { toModelOutput } from '../utils/toModelOutput';
 import { toolErrorHandler } from '../utils/toolErrorHandler';
 import { DASHBOARD_CHARTS_PREVIEW_COUNT, truncate } from '../utils/truncation';
-import { xmlBuilder } from '../xmlBuilder';
+import { escapeXmlText, xmlBuilder } from '../xmlBuilder';
 
 const renderVerified = (verification: ContentVerificationInfo | null) =>
     verification ? (
@@ -32,6 +36,7 @@ const renderVerified = (verification: ContentVerificationInfo | null) =>
     ) : null;
 
 type Dependencies = {
+    decisions?: Pick<AiDecisionClient, 'evaluate'>;
     findContent: FindContentFn;
     siteUrl: string;
     toolDescriptionMaxChars: number;
@@ -40,6 +45,25 @@ type Dependencies = {
 };
 
 const toolDefinition = findContentToolDefinition.for('agent');
+
+const getContentUrl = (content: FindContentResult, siteUrl: string) => {
+    switch (content.contentType) {
+        case 'document':
+            return content.href;
+        case 'space':
+            return null;
+        case 'data_app':
+            return `${siteUrl}/projects/${content.projectUuid}/apps/${content.uuid}/view`;
+        case 'dashboard':
+            return `${siteUrl}/projects/${content.projectUuid}/dashboards/${content.uuid}/view#dashboard-link`;
+        case 'chart':
+            return isSavedChartSearchResult(content)
+                ? `${siteUrl}/projects/${content.projectUuid}/saved/${content.uuid}/view#chart-link#chart-type-${content.chartType}`
+                : `${siteUrl}/projects/${content.projectUuid}/sql-runner/${content.slug}#chart-link#chart-type-${content.chartType}`;
+        default:
+            return assertUnreachable(content, 'Unknown content type');
+    }
+};
 
 const renderSpaceMetadata = (space: FindContentSpaceMetadata) => (
     <space
@@ -65,6 +89,71 @@ const renderSpace = (space: FindContentSpaceResult) => (
         {renderSpaceMetadata(space.space)}
     </spaceResult>
 );
+
+const renderCompactContent = (
+    args: Awaited<ReturnType<FindContentFn>> & {
+        searchQuery: string;
+        verifiedOnly: boolean;
+    },
+    siteUrl: string,
+    descriptionMaxChars: number,
+    detailsToolName: Dependencies['dashboardDetailsToolName'],
+) => {
+    const shown = args.content.slice(0, 8);
+    return (
+        <searchresult
+            searchQuery={args.searchQuery}
+            totalMatches={args.content.length}
+            shown={shown.length}
+        >
+            {shown.length === 0 && args.verifiedOnly
+                ? 'No verified content matched this query. Try other search terms; use verifiedOnly=false only if unverified content is acceptable.'
+                : null}
+            {shown.length < args.content.length
+                ? 'More matches were omitted. Narrow the search query or spaceSlug if the intended item is missing; this is not an exhaustive inventory.'
+                : null}
+            {shown.length > 0
+                ? `Search summaries only. Use ${detailsToolName} to inspect a selected dashboard's charts before making claims about their contents.`
+                : null}
+            {shown.map((content) =>
+                content.contentType === 'space' ? (
+                    renderSpace(content)
+                ) : (
+                    <match
+                        type={content.contentType}
+                        uuid={content.uuid}
+                        slug={content.slug}
+                        name={content.name}
+                        href={getContentUrl(content, siteUrl)}
+                        chartCount={
+                            content.contentType === 'dashboard'
+                                ? content.charts.length
+                                : undefined
+                        }
+                        validationErrorCount={
+                            content.contentType === 'dashboard'
+                                ? content.validationErrors?.length
+                                : undefined
+                        }
+                    >
+                        {content.space && renderSpaceMetadata(content.space)}
+                        {renderVerified(content.verification)}
+                        {content.description ? (
+                            <description>
+                                {escapeXmlText(
+                                    truncate(
+                                        content.description,
+                                        Math.min(descriptionMaxChars, 200),
+                                    ),
+                                )}
+                            </description>
+                        ) : null}
+                    </match>
+                ),
+            )}
+        </searchresult>
+    );
+};
 
 const renderChart = (
     chart: AllChartsSearchResult & Pick<FindContentChartResult, 'space'>,
@@ -198,13 +287,33 @@ const renderDashboard = (
     </dashboard>
 );
 
-const isDashboardResult = (
-    content: FindContentResult,
-): content is FindContentDashboardResult => content.contentType === 'dashboard';
-
-const isSpaceResult = (
-    content: FindContentResult,
-): content is FindContentSpaceResult => content.contentType === 'space';
+const renderDataApp = (
+    dataApp: FindContentDataAppResult,
+    siteUrl: string,
+    toolDescriptionMaxChars: number,
+) => (
+    <dataApp
+        dataAppUuid={dataApp.uuid}
+        slug={dataApp.slug}
+        searchRank={dataApp.search_rank}
+        spaceUuid={dataApp.spaceUuid ?? undefined}
+        viewsCount={dataApp.viewsCount}
+        href={`${siteUrl}/projects/${dataApp.projectUuid}/apps/${dataApp.uuid}/view`}
+    >
+        <name>{dataApp.name}</name>
+        {dataApp.space && renderSpaceMetadata(dataApp.space)}
+        {dataApp.description && (
+            <description>
+                {truncate(dataApp.description, toolDescriptionMaxChars)}
+            </description>
+        )}
+        {dataApp.createdBy && (
+            <createdby>
+                {`${dataApp.createdBy.firstName} ${dataApp.createdBy.lastName}`}
+            </createdby>
+        )}
+    </dataApp>
+);
 
 const renderContent = (
     args: Awaited<ReturnType<FindContentFn>> & {
@@ -214,22 +323,54 @@ const renderContent = (
     siteUrl: string,
     toolDescriptionMaxChars: number,
 ) => {
-    const sortedContent = [...args.content].sort(
-        (a, b) =>
-            Number(b.verification !== null) - Number(a.verification !== null),
-    );
+    const sortedContent = args.content;
     return (
         <searchresult searchQuery={args.searchQuery}>
             {args.verifiedOnly && sortedContent.length === 0
                 ? 'No verified content matched this query. Verified content may still exist under other search terms; re-run with verifiedOnly=false only if unverified content is acceptable.'
                 : null}
             {sortedContent.map((content) => {
-                if (isSpaceResult(content)) {
-                    return renderSpace(content);
+                switch (content.contentType) {
+                    case 'document':
+                        return (
+                            <document
+                                uuid={content.uuid}
+                                name={content.name}
+                                slug={content.slug}
+                                href={content.href}
+                            >
+                                {truncate(
+                                    content.description ?? '',
+                                    toolDescriptionMaxChars,
+                                )}
+                            </document>
+                        );
+                    case 'space':
+                        return renderSpace(content);
+                    case 'data_app':
+                        return renderDataApp(
+                            content,
+                            siteUrl,
+                            toolDescriptionMaxChars,
+                        );
+                    case 'dashboard':
+                        return renderDashboard(
+                            content,
+                            siteUrl,
+                            toolDescriptionMaxChars,
+                        );
+                    case 'chart':
+                        return renderChart(
+                            content,
+                            siteUrl,
+                            toolDescriptionMaxChars,
+                        );
+                    default:
+                        return assertUnreachable(
+                            content,
+                            'Unknown content type',
+                        );
                 }
-                return isDashboardResult(content)
-                    ? renderDashboard(content, siteUrl, toolDescriptionMaxChars)
-                    : renderChart(content, siteUrl, toolDescriptionMaxChars);
             })}
         </searchresult>
     );
@@ -241,6 +382,7 @@ export const getFindContent = ({
     toolDescriptionMaxChars,
     trackCoverage,
     dashboardDetailsToolName,
+    decisions,
 }: Dependencies) =>
     tool({
         ...toolDefinition,
@@ -252,15 +394,40 @@ export const getFindContent = ({
             try {
                 const verifiedOnly = args.verifiedOnly ?? false;
                 const searchQueryResults = await Promise.all(
-                    args.searchQueries.map(async (searchQuery) => ({
-                        searchQuery: searchQuery.label,
-                        verifiedOnly,
-                        ...(await findContent({
+                    args.searchQueries.map(async (searchQuery) => {
+                        const result = await findContent({
                             searchQuery,
                             spaceSlug: args.spaceSlug ?? null,
                             verifiedOnly,
-                        })),
-                    })),
+                        });
+                        const candidates = [...result.content].sort(
+                            (a, b) =>
+                                Number(b.verification !== null) -
+                                Number(a.verification !== null),
+                        );
+                        const ranked = decisions
+                            ? await rankCandidates({
+                                  decisions,
+                                  query: searchQuery.label,
+                                  candidates,
+                                  operation: 'content-relevance',
+                                  describe: (content) => ({
+                                      name: content.name,
+                                      description:
+                                          content.contentType === 'space'
+                                              ? null
+                                              : content.description,
+                                      type: content.contentType,
+                                  }),
+                              })
+                            : null;
+                        return {
+                            ...result,
+                            searchQuery: searchQuery.label,
+                            verifiedOnly,
+                            content: ranked?.candidates ?? candidates,
+                        };
+                    }),
                 );
 
                 for (const searchQueryResult of searchQueryResults) {
@@ -270,7 +437,8 @@ export const getFindContent = ({
                             (c) => c.verification !== null,
                         ).length;
                     const topResultVerified =
-                        verifiedResultCount > 0 && totalResultCount > 0;
+                        totalResultCount > 0 &&
+                        searchQueryResult.content[0].verification !== null;
                     trackCoverage({
                         searchQuery: searchQueryResult.searchQuery,
                         totalResultCount,
@@ -284,11 +452,18 @@ export const getFindContent = ({
                     result: (
                         <searchresults>
                             {searchQueryResults.map((searchQueryResult) =>
-                                renderContent(
-                                    searchQueryResult,
-                                    siteUrl,
-                                    toolDescriptionMaxChars,
-                                ),
+                                decisions
+                                    ? renderCompactContent(
+                                          searchQueryResult,
+                                          siteUrl,
+                                          toolDescriptionMaxChars,
+                                          dashboardDetailsToolName,
+                                      )
+                                    : renderContent(
+                                          searchQueryResult,
+                                          siteUrl,
+                                          toolDescriptionMaxChars,
+                                      ),
                             )}
                         </searchresults>
                     ).toString(),

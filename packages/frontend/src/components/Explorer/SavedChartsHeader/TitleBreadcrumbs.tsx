@@ -3,6 +3,7 @@ import { IconFolder } from '@tabler/icons-react';
 import { type FC } from 'react';
 import { Link } from 'react-router';
 import { useOptionalProjectRoute } from '../../../hooks/useProjectRoute';
+import { useSpaceSummaries } from '../../../hooks/useSpaces';
 import MantineIcon from '../../common/MantineIcon';
 
 type Props = {
@@ -31,6 +32,10 @@ export const TitleBreadCrumbs: FC<Props> = ({
     dashboardName,
 }) => {
     const projectRoute = useOptionalProjectRoute();
+    const spacesQuery = useSpaceSummaries(projectUuid, true);
+    const canAccessSpace =
+        !spacesQuery.isError &&
+        spacesQuery.data?.some((space) => space.uuid === spaceUuid);
     const projectUrlIdentifier =
         projectRoute?.projectUrlIdentifier ?? projectUuid;
     const isChartWithinDashboard = !!(dashboardUuid && dashboardName);
@@ -41,8 +46,6 @@ export const TitleBreadCrumbs: FC<Props> = ({
                     <Group gap="xs">
                         <Tooltip
                             maw={300}
-                            multiline
-                            withinPortal
                             position="bottom"
                             label={
                                 <Text fz="xs">
@@ -55,7 +58,6 @@ export const TitleBreadCrumbs: FC<Props> = ({
                         >
                             {isChartWithinDashboard ? (
                                 <ActionIcon
-                                    variant="subtle"
                                     component={Link}
                                     to={`/projects/${projectUrlIdentifier}/dashboards/${dashboardSlug ?? dashboardUuid}`}
                                 >
@@ -64,23 +66,29 @@ export const TitleBreadCrumbs: FC<Props> = ({
                                         icon={IconFolder}
                                     />
                                 </ActionIcon>
-                            ) : (
+                            ) : canAccessSpace ? (
                                 <Anchor
                                     fw={500}
                                     fz="md"
-                                    c="ldGray.6"
+                                    c="dimmed"
                                     component={Link}
                                     to={`/projects/${projectUrlIdentifier}/spaces/${spaceUuid}`}
-                                    style={{
-                                        maxWidth: `${MAX_WIDTH_TITLE_PX}px`,
-                                        whiteSpace: 'nowrap',
-                                        overflow: 'hidden',
-                                        textOverflow: 'ellipsis',
-                                        display: 'inline-block',
-                                    }}
+                                    truncate
+                                    maw={MAX_WIDTH_TITLE_PX}
+                                    display="inline-block"
                                 >
                                     {spaceName}
                                 </Anchor>
+                            ) : (
+                                <Text
+                                    fw={500}
+                                    fz="md"
+                                    c="dimmed"
+                                    truncate
+                                    maw={MAX_WIDTH_TITLE_PX}
+                                >
+                                    {spaceName}
+                                </Text>
                             )}
                         </Tooltip>
                     </Group>
@@ -91,8 +99,6 @@ export const TitleBreadCrumbs: FC<Props> = ({
                 <>
                     <Tooltip
                         maw={300}
-                        multiline
-                        withinPortal
                         position="bottom"
                         label={
                             <Text fz="xs">
@@ -105,7 +111,7 @@ export const TitleBreadCrumbs: FC<Props> = ({
                     >
                         <Anchor
                             fw={500}
-                            c="ldGray.6"
+                            c="dimmed"
                             fz="md"
                             component={Link}
                             to={`/projects/${projectUrlIdentifier}/dashboards/${dashboardSlug ?? dashboardUuid}`}

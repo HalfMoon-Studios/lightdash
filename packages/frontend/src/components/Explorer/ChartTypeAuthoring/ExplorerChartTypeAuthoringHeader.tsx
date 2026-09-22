@@ -15,12 +15,14 @@ import {
     IconInfoCircle,
     IconPencil,
     IconSparkles,
+    IconX,
 } from '@tabler/icons-react';
 import { useEffect, useRef, useState, type FC, type ReactNode } from 'react';
 import AppUpdateModal from '../../../components/common/modal/AppUpdateModal';
 import AppUpgradeModal from '../../../features/apps/components/AppUpgradeModal';
 import { type SdkUpgradeOffer } from '../../../features/apps/hooks/useSdkUpgradeStatus';
 import { type ChartTypeAppMeta } from '../../../features/chartTypes/builder/appMeta';
+import { getChartTypeIcon } from '../../../features/chartTypes/utils/chartTypeIcons';
 import MantineIcon from '../../common/MantineIcon';
 import { authoringStatusLabel, type AuthoringStatus } from './authoringStatus';
 import classes from './ExplorerChartTypeAuthoringHeader.module.css';
@@ -63,7 +65,6 @@ const ExplorerChartTypeAuthoringHeader: FC<Props> = ({
     const title = app
         ? getAppDisplayName(app.name, app.appUuid)
         : 'New chart type';
-    const headingText = app ? `Editing chart type · ${title}` : title;
 
     // Entering replaces what had focus; land on what this surface is.
     const titleRef = useRef<HTMLHeadingElement>(null);
@@ -74,6 +75,7 @@ const ExplorerChartTypeAuthoringHeader: FC<Props> = ({
     return (
         <Group className={classes.header} gap="sm" wrap="nowrap">
             <Button
+                className={classes.exit}
                 size="xs"
                 variant="default"
                 leftSection={<MantineIcon icon={IconChevronLeft} size={15} />}
@@ -81,36 +83,31 @@ const ExplorerChartTypeAuthoringHeader: FC<Props> = ({
             >
                 Back to chart
             </Button>
+            <Text className={classes.studioLabel} fz="sm" fw={600} c="ldGray.8">
+                Chart Studio
+            </Text>
             <Box className={classes.divider} />
             <Box className={classes.nameCluster}>
+                {app && (
+                    <MantineIcon
+                        icon={getChartTypeIcon(app.icon)}
+                        color="dimmed"
+                    />
+                )}
                 <Title
                     ref={titleRef}
                     id={titleId}
                     order={2}
                     className={classes.title}
                     fz="sm"
-                    fw={600}
-                    title={headingText}
+                    title={title}
                     tabIndex={-1}
                 >
-                    {app && (
-                        <Text span fz="sm" fw={400} c="dimmed">
-                            {'Editing chart type · '}
-                        </Text>
-                    )}
                     {title}
                 </Title>
                 {app && app.description && (
-                    <Tooltip
-                        withArrow
-                        multiline
-                        w={280}
-                        label={app.description}
-                        position="bottom"
-                    >
+                    <Tooltip w={280} label={app.description} position="bottom">
                         <ActionIcon
-                            variant="subtle"
-                            color="gray"
                             size="sm"
                             aria-label="Chart type description"
                         >
@@ -121,8 +118,6 @@ const ExplorerChartTypeAuthoringHeader: FC<Props> = ({
                 {app && (
                     <Tooltip label="Edit details" position="bottom">
                         <ActionIcon
-                            variant="subtle"
-                            color="gray"
                             size="sm"
                             aria-label="Edit chart type details"
                             onClick={() => setIsEditingDetails(true)}
@@ -162,6 +157,15 @@ const ExplorerChartTypeAuthoringHeader: FC<Props> = ({
                         History
                     </Button>
                 )}
+                <Tooltip label="Close Chart Studio" position="bottom">
+                    <ActionIcon
+                        size="sm"
+                        aria-label="Close Chart Studio"
+                        onClick={onDone}
+                    >
+                        <MantineIcon icon={IconX} />
+                    </ActionIcon>
+                </Tooltip>
             </Group>
             {app && isEditingDetails && (
                 <AppUpdateModal
@@ -177,6 +181,7 @@ const ExplorerChartTypeAuthoringHeader: FC<Props> = ({
                     initialDescription={app.description}
                     resourceLabel="Chart Type"
                     icon={IconPencil}
+                    iconPicker={{ initialIcon: app.icon }}
                 />
             )}
             {app && upgrade && isUpgradeModalOpen && (

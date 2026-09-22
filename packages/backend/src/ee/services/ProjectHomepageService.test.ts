@@ -1,17 +1,22 @@
 import { Ability } from '@casl/ability';
 import {
     ANNOUNCEMENT_BODY_MAX_LENGTH,
+    AnnouncementCategory,
+    ContentAsCodeType,
     ForbiddenError,
     NotFoundError,
     OrganizationMemberRole,
     ParameterError,
     ProjectMemberRole,
+    PromotionAction,
     type HomepageConfig,
     type PossibleAbilities,
     type ProjectHomepage,
     type SessionUser,
 } from '@lightdash/common';
 import { Readable } from 'stream';
+import { fromSession } from '../../auth/account';
+import { DocumentService } from '../../services/DocumentService/DocumentService';
 import {
     ProjectHomepageService,
     type ProjectHomepageServiceArguments,
@@ -22,6 +27,18 @@ const ORGANIZATION_UUID = '00000000-0000-0000-0000-000000000001';
 const PROJECT_UUID = '00000000-0000-0000-0000-000000000002';
 const USER_UUID = '00000000-0000-0000-0000-000000000004';
 const HOMEPAGE_UUID = '00000000-0000-0000-0000-000000000010';
+
+type SlackBlock = {
+    type: string;
+    elements?: Array<{ text?: string }>;
+};
+
+const slackContextTexts = (blocks: SlackBlock[]): string[] =>
+    blocks
+        .filter((block) => block.type === 'context')
+        .flatMap((block) => block.elements ?? [])
+        .map((element) => element.text)
+        .filter((text): text is string => text != null);
 
 const validConfig: HomepageConfig = {
     version: 1,
@@ -111,9 +128,11 @@ const makeViewerUser = (): SessionUser => ({
 
 const makeService = ({
     flagEnabled = true,
+    documentService = { filterViewableUuids: vi.fn().mockResolvedValue([]) },
     projectHomepageModel = {},
     groupsModel = {},
     projectModel = {},
+    userModel = {},
     fileStorageClient = {},
     persistentDownloadFileService = {},
     slackClient = {},
@@ -121,11 +140,13 @@ const makeService = ({
     schedulerClient = {},
 }: {
     flagEnabled?: boolean;
+    documentService?: ProjectHomepageServiceArguments['documentService'];
     projectHomepageModel?: Partial<
         ProjectHomepageServiceArguments['projectHomepageModel']
     >;
     groupsModel?: Partial<ProjectHomepageServiceArguments['groupsModel']>;
     projectModel?: Partial<ProjectHomepageServiceArguments['projectModel']>;
+    userModel?: Partial<ProjectHomepageServiceArguments['userModel']>;
     fileStorageClient?: Partial<
         ProjectHomepageServiceArguments['fileStorageClient']
     >;
@@ -139,6 +160,10 @@ const makeService = ({
     >;
 } = {}) =>
     new ProjectHomepageService({
+        documentService,
+        recentContentService: {
+            getRecentlyViewed: vi.fn().mockResolvedValue([]),
+        },
         analytics: { track: vi.fn() },
         featureFlagService: {
             get: vi.fn().mockResolvedValue({
@@ -147,10 +172,12 @@ const makeService = ({
             }),
         },
         projectHomepageModel: {
+            getCodeReferences: vi.fn().mockResolvedValue([]),
+            getCodeGroups: vi.fn().mockResolvedValue([]),
+            upsertAsCode: vi.fn(),
             getDefault: vi.fn().mockResolvedValue(undefined),
             getByUuid: vi.fn().mockResolvedValue(makeHomepage()),
             getPublishedDefault: vi.fn().mockResolvedValue(undefined),
-            getRecentlyViewed: vi.fn().mockResolvedValue([]),
             getAssignments: vi.fn().mockResolvedValue([]),
             updateGroupPriorities: vi.fn().mockResolvedValue(undefined),
             resolvePublished: vi.fn().mockResolvedValue(undefined),
@@ -180,10 +207,18 @@ const makeService = ({
         },
         projectModel: {
             getProjectMemberAccess: vi.fn().mockResolvedValue(undefined),
+            getProjectGroupAccesses: vi.fn().mockResolvedValue([]),
             getSummary: vi.fn().mockResolvedValue({
                 organizationUuid: ORGANIZATION_UUID,
             }),
             ...projectModel,
+        },
+        userModel: {
+            getUserDetailsByUuid: vi.fn().mockResolvedValue({
+                ...baseUser(),
+                role: OrganizationMemberRole.MEMBER,
+            }),
+            ...userModel,
         },
         fileStorageClient: {
             uploadImage: vi.fn(),
@@ -220,6 +255,443 @@ const makeService = ({
     });
 
 describe('ProjectHomepageService', () => {
+    describe('homepage as code', () => {
+        const codeUser = () => {
+            const user = makeAdminUser();
+            return fromSession({
+                ...user,
+                ability: new Ability<PossibleAbilities>([
+                    ...user.ability.rules,
+                    {
+                        action: 'manage',
+                        subject: 'ContentAsCode',
+                        conditions: {
+                            organizationUuid: ORGANIZATION_UUID,
+                            projectUuid: PROJECT_UUID,
+                        },
+                    },
+                ]),
+            });
+        };
+        const document = {
+            contentType: ContentAsCodeType.HOMEPAGE as const,
+            version: 1 as const,
+            name: 'Team homepage',
+            config: {
+                version: 1 as const,
+                rows: [
+                    {
+                        id: 'row-1',
+                        blocks: [
+                            {
+                                id: 'b1',
+                                type: 'markdown' as const,
+                                config: { content: 'hello' },
+                            },
+                        ],
+                    },
+                ],
+            },
+            publication: { isDefault: true, groups: [], roles: [] },
+        };
+
+        it('authorizes only Documents used by the requested export and import, including links', async () => {
+            const filterViewableUuids = vi
+                .fn()
+                .mockResolvedValue(['used', 'linked']);
+            const upsertAsCode = vi
+                .fn()
+                .mockResolvedValue({ action: PromotionAction.CREATE });
+            const config: HomepageConfig = {
+                version: 1,
+                rows: [
+                    {
+                        id: 'row',
+                        blocks: [
+                            {
+                                id: 'collection',
+                                type: 'collection',
+                                config: {
+                                    title: 'Documents',
+                                    items: [
+                                        {
+                                            contentType: 'document',
+                                            uuid: 'used',
+                                        },
+                                    ],
+                                },
+                            },
+                            {
+                                id: 'links',
+                                type: 'markdown',
+                                config: {
+                                    content: `/projects/${PROJECT_UUID}/documents/linked`,
+                                },
+                            },
+                        ],
+                    },
+                ],
+            };
+            const service = makeService({
+                documentService: { filterViewableUuids },
+                projectHomepageModel: {
+                    getCodeReferences: vi.fn().mockResolvedValue([
+                        {
+                            contentType: 'document',
+                            uuid: 'used',
+                            slug: 'used-report',
+                        },
+                        {
+                            contentType: 'document',
+                            uuid: 'linked',
+                            slug: 'linked-report',
+                        },
+                        {
+                            contentType: 'document',
+                            uuid: 'unused',
+                            slug: 'private-report',
+                        },
+                    ]),
+                    list: vi.fn().mockResolvedValue([
+                        makeHomepage({
+                            name: document.name,
+                            publishedConfig: config,
+                        }),
+                        makeHomepage({
+                            name: 'Unrequested',
+                            publishedConfig: {
+                                version: 1,
+                                rows: [
+                                    {
+                                        id: 'row',
+                                        blocks: [
+                                            {
+                                                id: 'link',
+                                                type: 'markdown',
+                                                config: {
+                                                    content: `/projects/${PROJECT_UUID}/documents/unused`,
+                                                },
+                                            },
+                                        ],
+                                    },
+                                ],
+                            },
+                        }),
+                    ]),
+                    upsertAsCode,
+                },
+            });
+            const account = codeUser();
+            const result = await service.downloadHomepagesAsCode(
+                account,
+                PROJECT_UUID,
+                [document.name],
+            );
+            expect(result.homepages).toHaveLength(1);
+            expect(filterViewableUuids).toHaveBeenLastCalledWith(
+                account,
+                [PROJECT_UUID],
+                ['used', 'linked'],
+            );
+            await service.upsertHomepageAsCode(
+                account,
+                PROJECT_UUID,
+                document.name,
+                result.homepages[0],
+            );
+            expect(filterViewableUuids).toHaveBeenCalledTimes(2);
+            expect(filterViewableUuids).toHaveBeenLastCalledWith(
+                account,
+                [PROJECT_UUID],
+                ['used', 'linked'],
+            );
+            expect(upsertAsCode).toHaveBeenCalledWith(
+                expect.objectContaining({ config }),
+            );
+        });
+
+        it('skips Document access resolution when the requested configs contain no Document references', async () => {
+            const filterViewableUuids = vi.fn();
+            const service = makeService({
+                documentService: { filterViewableUuids },
+                projectHomepageModel: {
+                    getCodeReferences: vi.fn().mockResolvedValue([
+                        {
+                            contentType: 'document',
+                            uuid: 'unused',
+                            slug: 'private-report',
+                        },
+                    ]),
+                    list: vi
+                        .fn()
+                        .mockResolvedValue([
+                            makeHomepage({ publishedConfig: validConfig }),
+                        ]),
+                    upsertAsCode: vi
+                        .fn()
+                        .mockResolvedValue({ action: PromotionAction.CREATE }),
+                },
+            });
+            await service.downloadHomepagesAsCode(codeUser(), PROJECT_UUID);
+            await service.upsertHomepageAsCode(
+                codeUser(),
+                PROJECT_UUID,
+                document.name,
+                document,
+            );
+            expect(filterViewableUuids).not.toHaveBeenCalled();
+        });
+
+        it.each(['disabled', 'private'])(
+            'rejects %s Document references on download and upload without exposing their slug',
+            async (state) => {
+                const documentUuid = '00000000-0000-0000-0000-000000000099';
+                const slug = 'confidential-acquisition-plan';
+                const upsertAsCode = vi.fn();
+                const documentService = new DocumentService({
+                    projectModel: {
+                        getSummary: vi.fn().mockResolvedValue({
+                            projectUuid: PROJECT_UUID,
+                            organizationUuid: ORGANIZATION_UUID,
+                        }),
+                    },
+                    featureFlagModel: {
+                        get: vi.fn().mockResolvedValue({
+                            enabled: state !== 'disabled',
+                        }),
+                    },
+                    documentModel: {
+                        listSummariesByUuid: vi.fn().mockResolvedValue([
+                            {
+                                documentUuid,
+                                projectUuid: PROJECT_UUID,
+                                organizationUuid: ORGANIZATION_UUID,
+                                spaceUuid: 'private-space',
+                            },
+                        ]),
+                    },
+                    spacePermissionService: {
+                        resolveAccessBatch: vi.fn().mockResolvedValue([
+                            {
+                                context: {
+                                    projectUuid: PROJECT_UUID,
+                                    organizationUuid: ORGANIZATION_UUID,
+                                    inheritsFromOrgOrProject: false,
+                                    access: [],
+                                },
+                            },
+                        ]),
+                    },
+                } as unknown as ConstructorParameters<
+                    typeof DocumentService
+                >[0]);
+                const config: HomepageConfig = {
+                    version: 1,
+                    rows: [
+                        {
+                            id: 'row',
+                            blocks: [
+                                {
+                                    id: 'collection',
+                                    type: 'collection',
+                                    config: {
+                                        title: 'Documents',
+                                        items: [
+                                            {
+                                                contentType: 'document',
+                                                uuid: documentUuid,
+                                            },
+                                        ],
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                };
+                const service = makeService({
+                    documentService,
+                    projectHomepageModel: {
+                        getCodeReferences: vi.fn().mockResolvedValue([
+                            {
+                                contentType: 'document',
+                                uuid: documentUuid,
+                                slug,
+                            },
+                        ]),
+                        list: vi
+                            .fn()
+                            .mockResolvedValue([
+                                makeHomepage({ publishedConfig: config }),
+                            ]),
+                        upsertAsCode,
+                    },
+                });
+                await expect(
+                    service.downloadHomepagesAsCode(codeUser(), PROJECT_UUID),
+                ).rejects.toThrow(
+                    'Homepage Document reference is missing or inaccessible',
+                );
+                await expect(
+                    service.upsertHomepageAsCode(
+                        codeUser(),
+                        PROJECT_UUID,
+                        document.name,
+                        {
+                            ...document,
+                            config: {
+                                version: 1,
+                                rows: [
+                                    {
+                                        id: 'row',
+                                        blocks: [
+                                            {
+                                                id: 'collection',
+                                                type: 'collection',
+                                                config: {
+                                                    title: 'Documents',
+                                                    items: [
+                                                        {
+                                                            contentType:
+                                                                'document',
+                                                            slug,
+                                                        },
+                                                    ],
+                                                },
+                                            },
+                                        ],
+                                    },
+                                ],
+                            },
+                        },
+                    ),
+                ).rejects.toThrow(
+                    'Homepage Document reference is missing or inaccessible',
+                );
+                expect(upsertAsCode).not.toHaveBeenCalled();
+            },
+        );
+
+        it('exports the published layout, excluding unpublished pages', async () => {
+            const service = makeService({
+                projectHomepageModel: {
+                    list: vi.fn().mockResolvedValue([
+                        makeHomepage({
+                            publishedConfig: validConfig,
+                            draftConfig: { version: 1, rows: [] },
+                        }),
+                        makeHomepage({ name: 'Draft only' }),
+                    ]),
+                },
+            });
+            const result = await service.downloadHomepagesAsCode(
+                codeUser(),
+                PROJECT_UUID,
+                ['Team homepage', 'Draft only'],
+            );
+            expect(result.homepages).toEqual([document]);
+            expect(result.missingNames).toEqual(['Draft only']);
+        });
+
+        it('saves drafts by default and publishes only when explicitly requested, without announcements', async () => {
+            const upsertAsCode = vi
+                .fn()
+                .mockResolvedValue({ action: PromotionAction.CREATE });
+            const publishAnnouncements = vi.fn();
+            const service = makeService({
+                projectHomepageModel: {
+                    upsertAsCode,
+                    publishProjectDraftAnnouncements: publishAnnouncements,
+                },
+            });
+            await service.upsertHomepageAsCode(
+                codeUser(),
+                PROJECT_UUID,
+                document.name,
+                document,
+            );
+            expect(upsertAsCode).toHaveBeenLastCalledWith(
+                expect.objectContaining({ publish: false }),
+            );
+            await service.upsertHomepageAsCode(
+                codeUser(),
+                PROJECT_UUID,
+                document.name,
+                document,
+                true,
+            );
+            expect(upsertAsCode).toHaveBeenLastCalledWith(
+                expect.objectContaining({
+                    publish: true,
+                    publication: document.publication,
+                }),
+            );
+            expect(publishAnnouncements).not.toHaveBeenCalled();
+        });
+
+        it('rejects disabled features, missing code permissions, and access to another project', async () => {
+            await expect(
+                makeService({ flagEnabled: false }).downloadHomepagesAsCode(
+                    codeUser(),
+                    PROJECT_UUID,
+                ),
+            ).rejects.toThrow();
+            await expect(
+                makeService().downloadHomepagesAsCode(
+                    fromSession(makeAdminUser()),
+                    PROJECT_UUID,
+                ),
+            ).rejects.toThrow(ForbiddenError);
+            await expect(
+                makeService().upsertHomepageAsCode(
+                    codeUser(),
+                    'other-project',
+                    document.name,
+                    document,
+                ),
+            ).rejects.toThrow(ForbiddenError);
+        });
+
+        it('rejects duplicate names, unresolved groups, and mismatched identities before writing', async () => {
+            const upsertAsCode = vi.fn();
+            const service = makeService({
+                projectHomepageModel: {
+                    upsertAsCode,
+                    list: vi
+                        .fn()
+                        .mockResolvedValue([
+                            makeHomepage({ publishedConfig: validConfig }),
+                            makeHomepage(),
+                        ]),
+                },
+            });
+            await expect(
+                service.downloadHomepagesAsCode(codeUser(), PROJECT_UUID),
+            ).rejects.toThrow('ambiguous');
+            await expect(
+                service.upsertHomepageAsCode(
+                    codeUser(),
+                    PROJECT_UUID,
+                    'different-name',
+                    document,
+                ),
+            ).rejects.toThrow('names must match');
+            await expect(
+                service.upsertHomepageAsCode(
+                    codeUser(),
+                    PROJECT_UUID,
+                    document.name,
+                    {
+                        ...document,
+                        publication: {
+                            ...document.publication,
+                            groups: [{ name: 'Missing', priority: 0 }],
+                        },
+                    },
+                ),
+            ).rejects.toThrow('missing or ambiguous');
+            expect(upsertAsCode).not.toHaveBeenCalled();
+        });
+    });
     it('accepts fileStorageClient and persistentDownloadFileService in its constructor', () => {
         expect(() => makeService()).not.toThrow();
     });
@@ -488,7 +960,7 @@ describe('ProjectHomepageService', () => {
             projectUuid: PROJECT_UUID,
             title: 'Draft launch',
             body: null,
-            category: null,
+            category: AnnouncementCategory.LAUNCH,
             pinned: false,
             published: true,
             createdByUserUuid: 'user-1',
@@ -529,9 +1001,14 @@ describe('ProjectHomepageService', () => {
         expect(postMessage).toHaveBeenCalledWith(
             expect.objectContaining({
                 channel: 'C1',
-                text: expect.stringContaining('Draft launch'),
+                text: '📢 Launch from Ana: Draft launch',
             }),
         );
+        const [{ blocks }] = postMessage.mock.calls[0];
+        expect(slackContextTexts(blocks)).toEqual([
+            'Launch · Posted by Ana',
+            expect.stringContaining('View on the homepage'),
+        ]);
     });
 
     it('publishHomepage retries the Slack notification without the image block', async () => {
@@ -540,7 +1017,7 @@ describe('ProjectHomepageService', () => {
             projectUuid: PROJECT_UUID,
             title: 'Draft launch',
             body: 'Look ![shot](/api/v1/file/abc123)',
-            category: null,
+            category: AnnouncementCategory.UPDATE,
             pinned: false,
             published: true,
             pendingSlackChannelId: null,
@@ -591,6 +1068,110 @@ describe('ProjectHomepageService', () => {
                 (block: { type: string }) => block.type === 'image',
             ),
         ).toBe(false);
+        expect(retryCall.text).toBe('📢 Update from Ana: Draft launch');
+        expect(slackContextTexts(retryCall.blocks)).toEqual([
+            'Update · Posted by Ana',
+            expect.stringContaining('View on the homepage'),
+        ]);
+    });
+
+    it('publishHomepage Slack notification omits empty author and category attribution', async () => {
+        const publishedAnnouncement = {
+            announcementUuid: 'ann-draft-3',
+            projectUuid: PROJECT_UUID,
+            title: 'Draft launch',
+            body: null,
+            category: null,
+            pinned: false,
+            published: true,
+            createdByUserUuid: null,
+            authorName: null,
+            createdAt: NOW,
+            updatedAt: NOW,
+        };
+        const postMessage = vi.fn().mockResolvedValue(undefined);
+        const service = makeService({
+            projectHomepageModel: {
+                getDefault: vi.fn().mockResolvedValue(makeHomepage()),
+                publish: vi
+                    .fn()
+                    .mockResolvedValue(
+                        makeHomepage({ publishedConfig: validConfig }),
+                    ),
+                publishProjectDraftAnnouncements: vi.fn().mockResolvedValue([
+                    {
+                        announcement: publishedAnnouncement,
+                        slackChannelId: 'C1',
+                    },
+                ]),
+            },
+            slackClient: { postMessage },
+        });
+
+        await service.publishHomepage(
+            makeAdminUser(),
+            PROJECT_UUID,
+            HOMEPAGE_UUID,
+            { type: 'everyone' },
+        );
+
+        const [{ text, blocks }] = postMessage.mock.calls[0];
+        expect(text).toBe('📢 New announcement: Draft launch');
+        expect(slackContextTexts(blocks)).toEqual([
+            expect.stringContaining('View on the homepage'),
+        ]);
+        expect(slackContextTexts(blocks).join(' ')).not.toMatch(
+            /Posted by|Launch|Update|Heads up/i,
+        );
+    });
+
+    it('publishHomepage Slack notification attributes a category without an author', async () => {
+        const publishedAnnouncement = {
+            announcementUuid: 'ann-draft-4',
+            projectUuid: PROJECT_UUID,
+            title: 'Warehouse delay',
+            body: null,
+            category: AnnouncementCategory.HEADS_UP,
+            pinned: false,
+            published: true,
+            createdByUserUuid: null,
+            authorName: null,
+            createdAt: NOW,
+            updatedAt: NOW,
+        };
+        const postMessage = vi.fn().mockResolvedValue(undefined);
+        const service = makeService({
+            projectHomepageModel: {
+                getDefault: vi.fn().mockResolvedValue(makeHomepage()),
+                publish: vi
+                    .fn()
+                    .mockResolvedValue(
+                        makeHomepage({ publishedConfig: validConfig }),
+                    ),
+                publishProjectDraftAnnouncements: vi.fn().mockResolvedValue([
+                    {
+                        announcement: publishedAnnouncement,
+                        slackChannelId: 'C1',
+                    },
+                ]),
+            },
+            slackClient: { postMessage },
+        });
+
+        await service.publishHomepage(
+            makeAdminUser(),
+            PROJECT_UUID,
+            HOMEPAGE_UUID,
+            { type: 'everyone' },
+        );
+
+        const [{ text, blocks }] = postMessage.mock.calls[0];
+        expect(text).toBe('📢 Heads up: Warehouse delay');
+        expect(slackContextTexts(blocks)).toEqual([
+            'Heads up',
+            expect.stringContaining('View on the homepage'),
+        ]);
+        expect(slackContextTexts(blocks).join(' ')).not.toContain('Posted by');
     });
 
     it('discardDraft reverts the draft to the published config for an admin when the flag is on', async () => {
@@ -673,6 +1254,101 @@ describe('ProjectHomepageService', () => {
                 homepage: expect.objectContaining({ name: 'Sales homepage' }),
             }),
         );
+    });
+
+    it('resolves the role tier from the org role when there is no project membership', async () => {
+        const resolvePublished = vi.fn().mockResolvedValue(undefined);
+        const service = makeService({
+            projectHomepageModel: { resolvePublished },
+            userModel: {
+                getUserDetailsByUuid: vi.fn().mockResolvedValue({
+                    ...baseUser(),
+                    role: OrganizationMemberRole.EDITOR,
+                }),
+            },
+        });
+
+        await service.getResolvedHomepage(makeViewerUser(), PROJECT_UUID);
+
+        expect(resolvePublished).toHaveBeenCalledWith(PROJECT_UUID, {
+            groupUuids: [],
+            role: 'editor',
+        });
+    });
+
+    it('resolves the role tier from group project access', async () => {
+        const resolvePublished = vi.fn().mockResolvedValue(undefined);
+        const service = makeService({
+            projectHomepageModel: { resolvePublished },
+            groupsModel: {
+                findUserGroups: vi
+                    .fn()
+                    .mockResolvedValue([{ uuid: 'group-1', name: 'Sales' }]),
+            },
+            projectModel: {
+                getProjectGroupAccesses: vi.fn().mockResolvedValue([
+                    {
+                        projectUuid: PROJECT_UUID,
+                        groupUuid: 'group-1',
+                        role: ProjectMemberRole.DEVELOPER,
+                    },
+                    {
+                        projectUuid: PROJECT_UUID,
+                        groupUuid: 'other-group',
+                        role: ProjectMemberRole.ADMIN,
+                    },
+                ]),
+            },
+        });
+
+        await service.getResolvedHomepage(makeViewerUser(), PROJECT_UUID);
+
+        expect(resolvePublished).toHaveBeenCalledWith(PROJECT_UUID, {
+            groupUuids: ['group-1'],
+            role: 'developer',
+        });
+    });
+
+    it('resolves the role tier to the highest of org, membership and group roles', async () => {
+        const resolvePublished = vi.fn().mockResolvedValue(undefined);
+        const service = makeService({
+            projectHomepageModel: { resolvePublished },
+            groupsModel: {
+                findUserGroups: vi
+                    .fn()
+                    .mockResolvedValue([{ uuid: 'group-1', name: 'Sales' }]),
+            },
+            projectModel: {
+                getProjectMemberAccess: vi.fn().mockResolvedValue({
+                    userUuid: USER_UUID,
+                    projectUuid: PROJECT_UUID,
+                    role: ProjectMemberRole.VIEWER,
+                    email: 'x@y.z',
+                    firstName: 'A',
+                    lastName: 'B',
+                }),
+                getProjectGroupAccesses: vi.fn().mockResolvedValue([
+                    {
+                        projectUuid: PROJECT_UUID,
+                        groupUuid: 'group-1',
+                        role: 'custom-role-uuid',
+                    },
+                ]),
+            },
+            userModel: {
+                getUserDetailsByUuid: vi.fn().mockResolvedValue({
+                    ...baseUser(),
+                    role: OrganizationMemberRole.ADMIN,
+                }),
+            },
+        });
+
+        await service.getResolvedHomepage(makeViewerUser(), PROJECT_UUID);
+
+        expect(resolvePublished).toHaveBeenCalledWith(PROJECT_UUID, {
+            groupUuids: ['group-1'],
+            role: 'admin',
+        });
     });
 
     it('viewAsHomepage is forbidden for a viewer', async () => {
@@ -814,9 +1490,11 @@ describe('ProjectHomepageService', () => {
 
         it('createAnnouncement with publishNow creates it published and notifies Slack immediately', async () => {
             const postMessage = vi.fn().mockResolvedValue(undefined);
-            const createAnnouncement = vi
-                .fn()
-                .mockResolvedValue({ ...madeAnnouncement, published: true });
+            const createAnnouncement = vi.fn().mockResolvedValue({
+                ...madeAnnouncement,
+                published: true,
+                category: AnnouncementCategory.HEADS_UP,
+            });
             const service = makeService({
                 projectHomepageModel: { createAnnouncement },
                 slackClient: { postMessage },
@@ -824,7 +1502,7 @@ describe('ProjectHomepageService', () => {
             await service.createAnnouncement(makeAdminUser(), PROJECT_UUID, {
                 title: 'Launch',
                 body: null,
-                category: null,
+                category: AnnouncementCategory.HEADS_UP,
                 slackChannelId: 'C123',
                 publishNow: true,
             });
@@ -832,8 +1510,16 @@ describe('ProjectHomepageService', () => {
                 expect.objectContaining({ published: true }),
             );
             expect(postMessage).toHaveBeenCalledWith(
-                expect.objectContaining({ channel: 'C123' }),
+                expect.objectContaining({
+                    channel: 'C123',
+                    text: '📢 Heads up from Ana: Launch',
+                }),
             );
+            const [{ blocks }] = postMessage.mock.calls[0];
+            expect(slackContextTexts(blocks)).toEqual([
+                'Heads up · Posted by Ana',
+                expect.stringContaining('View on the homepage'),
+            ]);
         });
 
         it('createAnnouncement with publishNow and no channel publishes without Slack', async () => {
@@ -1008,7 +1694,10 @@ describe('ProjectHomepageService', () => {
             });
             expect(cancelPublishAnnouncement).toHaveBeenCalledWith('ann-9');
             expect(postMessage).toHaveBeenCalledWith(
-                expect.objectContaining({ channel: 'C123' }),
+                expect.objectContaining({
+                    channel: 'C123',
+                    text: '📢 New announcement from Ana: Launch',
+                }),
             );
             expect(result.published).toBe(true);
         });
@@ -1106,8 +1795,16 @@ describe('ProjectHomepageService', () => {
             expect(count).toBe(2);
             expect(postMessage).toHaveBeenCalledTimes(1);
             expect(postMessage).toHaveBeenCalledWith(
-                expect.objectContaining({ channel: 'C123' }),
+                expect.objectContaining({
+                    channel: 'C123',
+                    text: '📢 New announcement from Ana: Launch',
+                }),
             );
+            const [{ blocks }] = postMessage.mock.calls[0];
+            expect(slackContextTexts(blocks)).toEqual([
+                'Posted by Ana',
+                expect.stringContaining('View on the homepage'),
+            ]);
         });
 
         it('createAnnouncement without publishNow stays a draft', async () => {

@@ -58,6 +58,29 @@ const hasSamePivotFields = (
     });
 };
 
+type SeriesRenderProperties = Pick<
+    Series,
+    'type' | 'areaStyle' | 'smooth' | 'showSymbol' | 'yAxisIndex'
+>;
+
+const getRenderPropertiesByField = (
+    existingSeries: Series[] | undefined,
+): Map<string, SeriesRenderProperties> => {
+    const renderProperties = new Map<string, SeriesRenderProperties>();
+    (existingSeries ?? []).forEach((series) => {
+        const field = series.encode.yRef.field;
+        if (renderProperties.has(field)) return;
+        renderProperties.set(field, {
+            type: series.type,
+            areaStyle: series.areaStyle,
+            smooth: series.smooth,
+            showSymbol: series.showSymbol,
+            yAxisIndex: series.yAxisIndex ?? 0,
+        });
+    });
+    return renderProperties;
+};
+
 export type GetExpectedSeriesMapArgs = {
     defaultSmooth?: boolean;
     defaultShowSymbol?: boolean;
@@ -72,6 +95,9 @@ export type GetExpectedSeriesMapArgs = {
     defaultStackLabel?: Series['stackLabel'];
     itemsMap: ItemsMap | undefined;
     columnLimit?: number;
+    existingSeries?: Series[];
+    /** Axis a field starts on when no series of it exists yet; 0 otherwise. */
+    defaultYAxisIndexByField?: Record<string, number>;
 };
 
 export const getExpectedSeriesMap = ({
@@ -88,6 +114,8 @@ export const getExpectedSeriesMap = ({
     defaultStackLabel,
     itemsMap,
     columnLimit,
+    existingSeries,
+    defaultYAxisIndexByField,
 }: GetExpectedSeriesMapArgs) => {
     let expectedSeriesMap: Record<string, Series>;
 
@@ -106,6 +134,14 @@ export const getExpectedSeriesMap = ({
             stackLabel: defaultStackLabel,
         }),
     };
+    const renderPropertiesByField = getRenderPropertiesByField(existingSeries);
+
+    const getPropertiesForField = (field: string) => ({
+        ...defaultProperties,
+        yAxisIndex: defaultYAxisIndexByField?.[field] ?? 0,
+        ...renderPropertiesByField.get(field),
+    });
+
     if (pivotKeys && pivotKeys.length > 0) {
         const { rowKeyMap } = getPivotedDataFromPivotDetails(
             resultsData,
@@ -122,7 +158,7 @@ export const getExpectedSeriesMap = ({
                 let series: Series;
                 if (typeof rowKey === 'string') {
                     series = {
-                        ...defaultProperties,
+                        ...getPropertiesForField(rowKey),
                         encode: {
                             xRef: { field: xField },
                             yRef: {
@@ -131,14 +167,15 @@ export const getExpectedSeriesMap = ({
                         },
                     };
                 } else {
+                    const properties = getPropertiesForField(rowKey.field);
                     series = {
-                        ...defaultProperties,
+                        ...properties,
                         encode: {
                             xRef: { field: xField },
                             yRef: rowKey,
                         },
                         stack:
-                            defaultAreaStyle || isStacked
+                            properties.areaStyle || isStacked
                                 ? rowKey.field
                                 : undefined,
                     };
@@ -150,8 +187,9 @@ export const getExpectedSeriesMap = ({
     } else {
         expectedSeriesMap = (yFields || []).reduce<Record<string, Series>>(
             (sum, yField) => {
+                const properties = getPropertiesForField(yField);
                 const series = {
-                    ...defaultProperties,
+                    ...properties,
                     encode: {
                         xRef: { field: xField },
                         yRef: {
@@ -159,7 +197,7 @@ export const getExpectedSeriesMap = ({
                         },
                     },
                     stack:
-                        isStacked || !!defaultAreaStyle
+                        isStacked || !!properties.areaStyle
                             ? 'stack-all-series'
                             : undefined,
                 };

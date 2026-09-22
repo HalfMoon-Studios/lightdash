@@ -18,7 +18,7 @@ vi.mock('../logging/logger', () => ({
 }));
 
 describe('languageModelUsageToTokens', () => {
-    it('maps AI SDK usage to token classes', () => {
+    it('maps AI SDK usage to token classes, keeping input inclusive of cache', () => {
         expect(
             languageModelUsageToTokens({
                 inputTokens: 1000,
@@ -35,7 +35,10 @@ describe('languageModelUsageToTokens', () => {
                 totalTokens: 1200,
             }),
         ).toEqual({
-            inputTokens: 150,
+            // The value includes the cache tokens (150 uncached + 800 read +
+            // 50 write). It is not the uncached part. The warehouse subtracts
+            // the cache tokens.
+            inputTokens: 1000,
             outputTokens: 200,
             cacheReadTokens: 800,
             cacheWriteTokens: 50,
@@ -44,7 +47,7 @@ describe('languageModelUsageToTokens', () => {
         });
     });
 
-    it('derives non-cached input only when every input class is reported', () => {
+    it('passes the inclusive input through regardless of which cache classes are reported', () => {
         expect(
             languageModelUsageToTokens({
                 inputTokens: 1_000,
@@ -60,7 +63,7 @@ describe('languageModelUsageToTokens', () => {
                 },
                 totalTokens: 1_200,
             }).inputTokens,
-        ).toBe(150);
+        ).toBe(1_000);
 
         expect(
             languageModelUsageToTokens({
@@ -77,7 +80,7 @@ describe('languageModelUsageToTokens', () => {
                 },
                 totalTokens: 1_200,
             }).inputTokens,
-        ).toBeNull();
+        ).toBe(1_000);
     });
 
     it('maps unreported token classes to null', () => {
@@ -168,6 +171,7 @@ describe('emitAiUsage', () => {
             model: 'claude-sonnet-5',
             provider: 'anthropic',
             keyManagement: null,
+            managedAgentRunId: null,
             deepResearchRunId: null,
             deepResearchPhase: null,
             ...tokens,
@@ -228,6 +232,19 @@ describe('emitAiUsage', () => {
         expect(track.mock.calls[0][0].properties.keyManagement).toBeNull();
     });
 
+    it('does not misattribute another feature’s generic run UUID to Autopilot', () => {
+        const track = vi.fn<(event: AiUsageEvent) => void>();
+        registerAiUsageTracker(track);
+        emitAiUsage(
+            {
+                functionId: 'otherFeature',
+                metadata: { feature: 'data-app', runUuid: 'other-run' },
+            },
+            tokens,
+        );
+        expect(track.mock.calls[0][0].properties.managedAgentRunId).toBeNull();
+    });
+
     it('attributes Deep Research usage to its run and phase', () => {
         const track = vi.fn<(event: AiUsageEvent) => void>();
         registerAiUsageTracker(track);
@@ -245,6 +262,7 @@ describe('emitAiUsage', () => {
         );
 
         expect(track.mock.calls[0][0].properties).toMatchObject({
+            managedAgentRunId: null,
             deepResearchRunId: 'run-1',
             deepResearchPhase: 'investigating',
         });

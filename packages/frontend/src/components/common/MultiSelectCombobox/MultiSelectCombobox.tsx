@@ -1,5 +1,7 @@
 import {
+    CheckIcon,
     Combobox,
+    Group,
     Pill,
     PillsInput,
     ScrollArea,
@@ -16,7 +18,6 @@ import {
     type KeyboardEvent,
     type ReactNode,
 } from 'react';
-import classes from './MultiSelectCombobox.module.css';
 
 export type MultiSelectComboboxOption = {
     value: string;
@@ -25,7 +26,7 @@ export type MultiSelectComboboxOption = {
     group?: string;
 };
 
-type Props = Omit<PillsInputProps, 'onChange'> & {
+type Props = Omit<PillsInputProps, 'onChange' | 'ref'> & {
     options: MultiSelectComboboxOption[];
     value: string[];
     selectedValues?: string[];
@@ -43,6 +44,8 @@ type Props = Omit<PillsInputProps, 'onChange'> & {
     nothingFoundMessage?: ReactNode;
     createLabel?: ReactNode;
     onCreate?: (value: string) => void;
+    /** When false, the caller owns the search text after a create, e.g. to keep it while showing a validation error. */
+    clearSearchOnCreate?: boolean;
     shouldCreate?: (value: string) => boolean;
     filterOptions?: boolean;
     /** When false, no dropdown is shown — the input is plain entry (type + Enter). */
@@ -94,6 +97,7 @@ export const MultiSelectCombobox = forwardRef<HTMLInputElement, Props>(
             nothingFoundMessage,
             createLabel,
             onCreate,
+            clearSearchOnCreate = true,
             shouldCreate = (query) => query.trim().length > 0,
             filterOptions = true,
             withDropdown = true,
@@ -205,13 +209,15 @@ export const MultiSelectCombobox = forwardRef<HTMLInputElement, Props>(
             shouldCreate(trimmedSearch) &&
             !options.some((option) => option.value === trimmedSearch);
         const hasOptions = visibleOptions.length > 0 || canCreate;
+        const hasDropdownContent =
+            hasOptions || !!nothingFoundMessage || !!topContent || !!footer;
         const clearable =
             !!onClear && value.length > 0 && !disabled && !readOnly;
 
         const submitCreate = () => {
             if (!canCreate) return;
             onCreate(trimmedSearch);
-            onSearchChange('');
+            if (clearSearchOnCreate) onSearchChange('');
             combobox.resetSelectedOption();
         };
 
@@ -370,7 +376,11 @@ export const MultiSelectCombobox = forwardRef<HTMLInputElement, Props>(
 
                     <Combobox.Dropdown
                         hidden={
-                            !withDropdown || disabled || readOnly || atMaxValues
+                            !withDropdown ||
+                            disabled ||
+                            readOnly ||
+                            atMaxValues ||
+                            !hasDropdownContent
                         }
                     >
                         <Combobox.Options>
@@ -395,16 +405,23 @@ export const MultiSelectCombobox = forwardRef<HTMLInputElement, Props>(
                                                     value={option.value}
                                                     disabled={option.disabled}
                                                     active={selected}
-                                                    className={classes.option}
-                                                    fz="sm"
-                                                    ff="inherit"
-                                                    px="sm"
-                                                    py="xxs"
                                                 >
-                                                    {renderOption?.(
-                                                        option,
-                                                        selected,
-                                                    ) ?? option.label}
+                                                    <Group
+                                                        gap="xs"
+                                                        wrap="nowrap"
+                                                    >
+                                                        <CheckIcon
+                                                            size={12}
+                                                            opacity={
+                                                                selected ? 1 : 0
+                                                            }
+                                                            aria-hidden
+                                                        />
+                                                        {renderOption?.(
+                                                            option,
+                                                            selected,
+                                                        ) ?? option.label}
+                                                    </Group>
                                                 </Combobox.Option>
                                             );
                                         },
@@ -413,9 +430,6 @@ export const MultiSelectCombobox = forwardRef<HTMLInputElement, Props>(
                                         <Combobox.Group
                                             key={`${group.group}-${groupIndex}`}
                                             label={group.group}
-                                            fz="sm"
-                                            ff="inherit"
-                                            px="sm"
                                         >
                                             {children}
                                         </Combobox.Group>
@@ -427,12 +441,7 @@ export const MultiSelectCombobox = forwardRef<HTMLInputElement, Props>(
                                     <Combobox.Option
                                         value={CREATE_VALUE}
                                         data-create-option
-                                        fz="xs"
                                         fw={500}
-                                        c="dark"
-                                        ff="inherit"
-                                        px="sm"
-                                        py="xxs"
                                     >
                                         {createLabel ?? (
                                             <Text c="indigo">

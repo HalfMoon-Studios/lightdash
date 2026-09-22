@@ -1,3 +1,4 @@
+import { type ServiceAccount } from '../ee/serviceAccounts/types';
 // eslint-disable-next-line import/no-cycle
 import { type SpaceDashboard } from './dashboard';
 import { type KnexPaginatedData } from './knex-paginate';
@@ -103,6 +104,7 @@ export type SpaceSummaryBase = Pick<
     dashboardCount: number;
     childSpaceCount: number;
     appCount: number;
+    documentCount: number;
     deletedAt?: Date;
     deletedBy?: {
         userUuid: string;
@@ -154,6 +156,15 @@ export type SpaceInheritanceChain = {
     inheritsFromOrgOrProject: boolean;
 };
 
+// Which content type's direct grant synthesized an access row. Grows one
+// member per content type that ships direct grants.
+export type GrantSource =
+    | 'app'
+    | 'dashboard'
+    | 'saved_chart'
+    | 'sql_chart'
+    | 'document';
+
 // Access data for checking Space access permissions with CASL where only the role/access data matters.
 export type SpaceAccess = {
     userUuid: string;
@@ -168,6 +179,10 @@ export type SpaceAccess = {
         | 'space_group'
         | 'parent_space'
         | undefined;
+    // Present only on rows synthesized from a direct content grant; absent on
+    // space-derived rows. CASL rules never match on it.
+    grantedVia?: GrantSource;
+    grantSourceUuid?: string;
 };
 
 // Full space share with user metadata, used for frontend display
@@ -195,11 +210,25 @@ export type ApiSpaceResponse = {
     results: Space;
 };
 
+/** The viewer's own personal space in a project, when the project has
+ * personal spaces enabled and one exists for them. */
+export type PersonalSpaceSummary = Pick<Space, 'uuid' | 'name' | 'slug'>;
+
+export type ApiPersonalSpaceResponse = {
+    status: 'ok';
+    results: PersonalSpaceSummary | null;
+};
+
 export type SpaceAccessListFilters = {
     searchQuery?: string;
     userUuids?: string[];
     /** Only entries with direct access (user access or space group access) */
     directOnly?: boolean;
+};
+
+export type ApiSpaceServiceAccountCandidatesResponse = {
+    status: 'ok';
+    results: Pick<ServiceAccount, 'userUuid' | 'description'>[];
 };
 
 export type ApiSpaceAccessListResponse = {
@@ -215,13 +244,16 @@ export type SpaceDeleteImpact = {
         chartCount: number;
         dashboardCount: number;
         appCount: number;
+        documentCount: number;
     }[];
     charts: { uuid: string; name: string; spaceUuid: string }[];
     dashboards: { uuid: string; name: string; spaceUuid: string }[];
+    documents: { uuid: string; name: string; spaceUuid: string }[];
     apps: { uuid: string; spaceUuid: string | null }[];
     chartCount: number;
     dashboardCount: number;
     appCount: number;
+    documentCount: number;
 };
 
 export type ApiSpaceDeleteImpactResponse = {

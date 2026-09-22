@@ -13,11 +13,15 @@ import {
     AiWritebackPipelineJobPayload,
     AppBuildFromSourceJobPayload,
     AppGeneratePipelineJobPayload,
+    DataAppInvestigateJobPayload,
     EE_SCHEDULER_TASKS,
     EmbedArtifactVersionJobPayload,
     GenerateArtifactQuestionJobPayload,
     IngestExternalSourceJobPayload,
     JobPriority,
+    MOBILE_PUSH_LIVE_ACTIVITY_START_MAX_ATTEMPTS,
+    MobilePushLiveActivityJobPayload,
+    MobilePushLiveActivityStartJobPayload,
     PublishAnnouncementPayload,
     SlackPromptJobPayload,
 } from '@lightdash/common';
@@ -57,6 +61,58 @@ export const aiAgentMemoryDistillEventRunAt = (now: Date): Date =>
     new Date(now.getTime() + MEMORY_DISTILL_EVENT_DEBOUNCE_MS);
 
 export class CommercialSchedulerClient extends SchedulerClient {
+    async slackAiArtifactImages(payload: SlackPromptJobPayload) {
+        const graphileClient = await this.graphileUtils;
+        const { id: jobId } = await graphileClient.addJob(
+            EE_SCHEDULER_TASKS.SLACK_AI_ARTIFACT_IMAGES,
+            payload,
+            {
+                maxAttempts: 6,
+                jobKey: `slack-ai-artifact-images:${payload.slackPromptUuid}`,
+                jobKeyMode: 'preserve_run_at',
+                queueName: `slack-ai-artifact-images:${payload.slackPromptUuid}`,
+                priority: JobPriority.MEDIUM,
+            },
+        );
+        return { jobId };
+    }
+
+    async mobilePushLiveActivityStart(
+        payload: MobilePushLiveActivityStartJobPayload,
+        runAt: Date = new Date(),
+    ) {
+        const graphileClient = await this.graphileUtils;
+        const { id: jobId } = await graphileClient.addJob(
+            EE_SCHEDULER_TASKS.MOBILE_PUSH_LIVE_ACTIVITY_START,
+            payload,
+            {
+                runAt,
+                maxAttempts: MOBILE_PUSH_LIVE_ACTIVITY_START_MAX_ATTEMPTS,
+                jobKey: `mobile-push-live-activity-start:${payload.liveActivityStartAttemptUuid}`,
+                priority: JobPriority.MEDIUM,
+            },
+        );
+        return { jobId };
+    }
+
+    async mobilePushLiveActivity(
+        payload: MobilePushLiveActivityJobPayload,
+        runAt: Date = new Date(),
+    ) {
+        const graphileClient = await this.graphileUtils;
+        const { id: jobId } = await graphileClient.addJob(
+            EE_SCHEDULER_TASKS.MOBILE_PUSH_LIVE_ACTIVITY,
+            payload,
+            {
+                runAt,
+                maxAttempts: 5,
+                jobKey: `mobile-push-live-activity:${payload.liveActivityUuid}`,
+                priority: JobPriority.MEDIUM,
+            },
+        );
+        return { jobId };
+    }
+
     /**
      * One pending publish per announcement: the stable jobKey (default
      * jobKeyMode `replace`) makes rescheduling an in-place move of `runAt`.
@@ -171,15 +227,21 @@ export class CommercialSchedulerClient extends SchedulerClient {
         return { jobId };
     }
 
-    async aiAgentReviewWriteback(payload: AiAgentReviewWritebackJobPayload) {
+    async aiAgentReviewWriteback(
+        payload: AiAgentReviewWritebackJobPayload,
+        runAt: Date = new Date(),
+        continuation: boolean = false,
+    ) {
         const graphileClient = await this.graphileUtils;
         const { id: jobId } = await graphileClient.addJob(
             EE_SCHEDULER_TASKS.AI_AGENT_REVIEW_WRITEBACK,
             payload,
             {
-                runAt: new Date(),
+                runAt,
                 maxAttempts: 1,
-                jobKey: `ai-agent-review-writeback:${payload.fingerprint}`,
+                jobKey: continuation
+                    ? `ai-agent-review-writeback:${payload.fingerprint}:continuation:${runAt.getTime()}`
+                    : `ai-agent-review-writeback:${payload.fingerprint}`,
             },
         );
         return { jobId };
@@ -230,6 +292,20 @@ export class CommercialSchedulerClient extends SchedulerClient {
                 runAt: new Date(),
                 maxAttempts: 1,
                 jobKey: `ai-agent-review-remediation-run:${payload.remediationUuid}`,
+            },
+        );
+        return { jobId };
+    }
+
+    async dataAppInvestigate(payload: DataAppInvestigateJobPayload) {
+        const graphileClient = await this.graphileUtils;
+        const { id: jobId } = await graphileClient.addJob(
+            EE_SCHEDULER_TASKS.DATA_APP_INVESTIGATE,
+            payload,
+            {
+                runAt: new Date(),
+                maxAttempts: 1,
+                jobKey: `data-app-investigate:${payload.analysisId}:${payload.anomalyId}:${payload.userUuid}`,
             },
         );
         return { jobId };

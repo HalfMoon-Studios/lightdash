@@ -1,4 +1,5 @@
 import {
+    DATA_APP_VIZ_TEMPLATE,
     getErrorMessage,
     LightdashError,
     ParameterError,
@@ -122,9 +123,10 @@ export const resolveUploadFilterUuids = (
  */
 export const unmatchedUploadRefsWarning = (
     unmatched: string[],
+    noun: string = 'app',
 ): string | null => {
     if (unmatched.length === 0) return null;
-    const base = `No local app folder matched: ${unmatched.join(', ')}.`;
+    const base = `No local ${noun} folder matched: ${unmatched.join(', ')}.`;
     return unmatched.some((ref) => isUuid(ref))
         ? `${base} Bundles downloaded with slug identity carry no uuid — select them by slug (the folder name) instead of a UUID or app URL.`
         : base;
@@ -301,9 +303,7 @@ export const classifyAppDownloadError = (
 };
 
 /**
- * Sums changes entries that represent actual upserts — excluding both
- * 'skipped' and 'failed' keys so that failures don't suppress the
- * "all content was skipped" warning.
+ * Sums changes entries that represent actual upserts, excluding skips and failures.
  */
 export const computeUpsertedTotal = (changes: Record<string, number>): number =>
     Object.entries(changes)
@@ -311,12 +311,22 @@ export const computeUpsertedTotal = (changes: Record<string, number>): number =>
         .reduce((sum, [, value]) => sum + value, 0);
 
 /**
- * Returns true when there is at least one skipped item and zero upserted
- * items — the condition that should display the "all skipped" warning.
+ * Show the --force hint only for unchanged content, not bundle skips or failures.
  */
 export const shouldWarnAllSkipped = (
     changes: Record<string, number>,
 ): boolean => {
+    if (
+        Object.entries(changes).some(
+            ([key, value]) =>
+                value > 0 &&
+                (key.includes('failed') ||
+                    key === 'data apps skipped' ||
+                    key === 'chart types skipped'),
+        )
+    ) {
+        return false;
+    }
     const totalSkipped = Object.entries(changes)
         .filter(([key]) => key.includes('skipped'))
         .reduce((sum, [, value]) => sum + value, 0);
@@ -435,6 +445,12 @@ export const downloadAppsToDir = async (args: {
                 buildStaticAuthoringFiles({
                     appName: code.manifest.name,
                     sdkVersion: cliVersion,
+                    // Downloaded chart types get the viz authoring docs, not
+                    // the app SDK skills a viz must not use.
+                    flavor:
+                        code.manifest.template === DATA_APP_VIZ_TEMPLATE
+                            ? 'chart-type'
+                            : 'app',
                 }),
             );
             // Server-provided deps override the scaffold's

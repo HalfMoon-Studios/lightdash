@@ -1,0 +1,28 @@
+/** Modules awaiting an interactive format. This inventory does not grant permissions. */
+export const COMING_SOON_SCOPES = [
+    'view:Document',
+    'manage:Document',
+    'view:ContentAsCode',
+    'create:ContentAsCode',
+    'manage:ContentAsCode',
+    'promote:SavedChart',
+    'promote:Dashboard',
+    'manage:Validation',
+    'view:EmbedDashboardFilters',
+    'view:EmbedDashboardFilterAddition',
+    'view:EmbedDashboardParameters',
+    'view:EmbedCsvExport',
+    'view:EmbedImageExport',
+    'view:EmbedPagePdfExport',
+    'view:EmbedDashboardCsvExport',
+    'view:EmbedDateZoom',
+    'view:EmbedExplore',
+    'view:EmbedUnderlyingData',
+    'view:EmbedDataApps',
+    'view:EmbedAiAgent',
+    'view:Analytics',
+    'view:AiAgentDocument',
+    'manage:AiAgentDocument',
+    // Withdrawn until Recently deleted has a product-agreed entry point (CS-311)
+    'manage:DeletedContent',
+] as const;

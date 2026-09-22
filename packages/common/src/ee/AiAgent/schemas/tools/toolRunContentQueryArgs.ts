@@ -24,6 +24,7 @@ export const toolRunContentQueryArgsSchema = createToolSchema()
                 parameters: z
                     .unknown()
                     .nullable()
+                    .optional()
                     .describe('Optional chart parameter values, or null.'),
             }),
             z.object({
@@ -55,7 +56,9 @@ export type ToolRunContentQueryArgs = z.infer<
 
 export const toolRunContentQueryOutputSchema = z.object({
     result: z.string(),
-    metadata: baseOutputMetadataSchema,
+    metadata: baseOutputMetadataSchema.extend({
+        queryCacheHit: z.boolean().optional(),
+    }),
 });
 
 export type ToolRunContentQueryOutput = z.infer<

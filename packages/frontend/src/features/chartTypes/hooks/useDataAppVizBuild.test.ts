@@ -7,7 +7,7 @@ import { useCancelAppVersion } from '../../apps/hooks/useCancelAppVersion';
 import { useDeleteApp } from '../../apps/hooks/useDeleteApp';
 import { useGenerateApp } from '../../apps/hooks/useGenerateApp';
 import { useIterateApp } from '../../apps/hooks/useIterateApp';
-import { useDataAppVizBuild } from './useDataAppVizBuild';
+import { useDataAppVizBuild, type VizBuildRequest } from './useDataAppVizBuild';
 
 vi.mock('../../apps/hooks/useGenerateApp', () => ({ useGenerateApp: vi.fn() }));
 vi.mock('../../apps/hooks/useIterateApp', () => ({ useIterateApp: vi.fn() }));
@@ -102,6 +102,7 @@ describe('useDataAppVizBuild', () => {
     const setup = (
         initialDataAppVizUuid: string | null = null,
         onCreated = vi.fn(),
+        chartReference?: { uuid: string; includeSampleData: boolean },
     ) => {
         const rendered = renderHookWithProviders(
             ({ dataAppVizUuid }: { dataAppVizUuid: string | null }) =>
@@ -111,6 +112,7 @@ describe('useDataAppVizBuild', () => {
                     itemsMap,
                     dataAppVizUuid,
                     onCreated,
+                    chartReference,
                 }),
             undefined,
             { initialProps: { dataAppVizUuid: initialDataAppVizUuid } },
@@ -127,6 +129,7 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
 
@@ -145,11 +148,170 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
 
         expect(generate.mock.lastCall?.[0]).toMatchObject({
             creationExperience: 'chart_type_builder',
+        });
+    });
+
+    it('does not attach sample rows from the current chart without opt-in', () => {
+        const { result } = setup(null, vi.fn(), {
+            uuid: 'saved-chart-1',
+            includeSampleData: false,
+        });
+
+        act(() =>
+            result.current.send({
+                description: 'a donut of orders by status',
+                fileIds: [],
+                claudeModel: 'sonnet',
+                clarifications: [],
+                externalConnections: [],
+            }),
+        );
+
+        expect(generate.mock.lastCall?.[0].charts).toEqual([
+            { uuid: 'saved-chart-1', includeSampleData: false },
+        ]);
+    });
+
+    it('attaches sample rows from the current chart only after opt-in', () => {
+        const { result } = setup(null, vi.fn(), {
+            uuid: 'saved-chart-1',
+            includeSampleData: false,
+        });
+
+        act(() =>
+            result.current.send({
+                description: 'a donut of orders by status',
+                fileIds: [],
+                claudeModel: 'sonnet',
+                clarifications: [],
+                externalConnections: [],
+                includeSampleData: true,
+            }),
+        );
+
+        expect(generate.mock.lastCall?.[0].charts).toEqual([
+            { uuid: 'saved-chart-1', includeSampleData: true },
+        ]);
+    });
+
+    it('uses bounded current explorer rows for an unsaved chart only after opt-in', () => {
+        const { result } = setup();
+        const sampleRows = Array.from({ length: 12 }, (_, i) => ({
+            orders_status: `current-${i}`,
+        }));
+        const request = {
+            description: 'Use the visible results',
+            fileIds: [],
+            claudeModel: 'sonnet' as const,
+            clarifications: [],
+            externalConnections: [],
+            context: {
+                schema: { fields: [] },
+                fieldMapping: {},
+                sampleRows,
+            },
+        } as unknown as VizBuildRequest;
+
+        act(() => result.current.send(request));
+        expect(generate.mock.lastCall?.[0].prompt).toBe(request.description);
+        expect(generate.mock.lastCall?.[0].vizContext).not.toHaveProperty(
+            'sampleRows',
+        );
+
+        const { result: optedIn } = setup();
+        act(() =>
+            optedIn.current.send({ ...request, includeSampleData: true }),
+        );
+        expect(generate.mock.lastCall?.[0].prompt).toBe(request.description);
+        expect(generate.mock.lastCall?.[0].vizContext).toEqual({
+            schema: request.context?.schema,
+            fieldMapping: request.context?.fieldMapping,
+            sampleRows: sampleRows.slice(0, 10),
+        });
+        expect(generate.mock.lastCall?.[0].charts).toBeUndefined();
+    });
+
+    it('sends an explicit theme selection for new builds and retries it', () => {
+        const { result } = setup();
+
+        act(() =>
+            result.current.send({
+                description: 'Apply theme: Brand',
+                fileIds: [],
+                claudeModel: 'sonnet',
+                clarifications: [],
+                externalConnections: [],
+                designUuid: 'design-1',
+            }),
+        );
+
+        expect(generate.mock.lastCall?.[0]).toMatchObject({
+            designUuid: 'design-1',
+        });
+
+        const handlers = generate.mock.lastCall?.[1] as GenerateHandlers;
+        act(() => handlers.onError(new Error('Network error')));
+        act(() => result.current.retry?.());
+
+        expect(generate.mock.lastCall?.[0]).toMatchObject({
+            designUuid: 'design-1',
+        });
+    });
+
+    it('links attached connections on generate and iterate', () => {
+        const { result } = setup();
+        const connections = [
+            {
+                externalConnectionUuid: 'conn-1',
+                alias: 'ad_images',
+                name: 'Ad images',
+            },
+        ];
+
+        act(() =>
+            result.current.send({
+                description: 'a table of ad thumbnails',
+                fileIds: [],
+                claudeModel: 'sonnet',
+                clarifications: [],
+                externalConnections: connections,
+            }),
+        );
+
+        expect(generate.mock.lastCall?.[0]).toMatchObject({
+            externalConnections: [
+                { externalConnectionUuid: 'conn-1', alias: 'ad_images' },
+            ],
+        });
+        expect(
+            generate.mock.lastCall?.[0].externalConnections?.[0],
+        ).not.toHaveProperty('name');
+
+        const handlers = generate.mock.lastCall?.[1] as GenerateHandlers;
+        act(() => handlers.onSuccess({ appUuid: 'viz-1', version: 1 }));
+        finishBuild(finishedVersion());
+
+        const { result: iterating } = setup('viz-1');
+        act(() =>
+            iterating.current.send({
+                description: 'show the thumbnail urls as images',
+                fileIds: [],
+                claudeModel: 'sonnet',
+                clarifications: [],
+                externalConnections: connections,
+            }),
+        );
+
+        expect(iterate.mock.lastCall?.[0]).toMatchObject({
+            externalConnections: [
+                { externalConnectionUuid: 'conn-1', alias: 'ad_images' },
+            ],
         });
     });
 
@@ -167,6 +329,7 @@ describe('useDataAppVizBuild', () => {
                         answer: 'monthly',
                     },
                 ],
+                externalConnections: [],
             }),
         );
         expect(generate.mock.lastCall?.[0]).toMatchObject({
@@ -182,6 +345,7 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
         expect(generate.mock.lastCall?.[0].clarifications).toBeUndefined();
@@ -196,6 +360,7 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'opus',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
         expect(generate.mock.lastCall?.[0]).toMatchObject({
@@ -213,6 +378,7 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'haiku',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
         expect(iterate.mock.lastCall?.[0]).toMatchObject({
@@ -231,6 +397,7 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
         const handlers = generate.mock.lastCall?.[1] as GenerateHandlers;
@@ -250,6 +417,7 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
         const handlers = generate.mock.lastCall?.[1] as GenerateHandlers;
@@ -275,6 +443,7 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
         const handlers = generate.mock.lastCall?.[1] as GenerateHandlers;
@@ -295,6 +464,7 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
         const handlers = generate.mock.lastCall?.[1] as GenerateHandlers;
@@ -317,6 +487,7 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
 
@@ -335,6 +506,87 @@ describe('useDataAppVizBuild', () => {
         expect(result.current.isBuilding).toBe(false);
     });
 
+    it('sends an explicit theme selection for revisions and retries it', () => {
+        const { result } = setup('viz-1');
+
+        act(() =>
+            result.current.send({
+                description: 'Apply theme: Brand',
+                fileIds: [],
+                claudeModel: 'sonnet',
+                clarifications: [],
+                externalConnections: [],
+                designUuid: 'design-1',
+            }),
+        );
+
+        expect(iterate.mock.lastCall?.[0]).toMatchObject({
+            designUuid: 'design-1',
+        });
+
+        const handlers = iterate.mock.lastCall?.[1] as GenerateHandlers;
+        act(() => handlers.onSuccess({ appUuid: 'viz-1', version: 2 }));
+        finishBuild(
+            finishedVersion({ version: 2, status: 'error', error: 'Nope' }),
+        );
+        act(() => result.current.retry?.());
+
+        expect(iterate.mock.lastCall?.[0]).toMatchObject({
+            designUuid: 'design-1',
+        });
+    });
+
+    it('sends null to remove a theme and omits an unchanged theme selection', () => {
+        const { result, rerender } = setup();
+
+        act(() =>
+            result.current.send({
+                description: 'Remove theme',
+                fileIds: [],
+                claudeModel: 'sonnet',
+                clarifications: [],
+                externalConnections: [],
+                designUuid: null,
+            }),
+        );
+
+        expect(generate.mock.lastCall?.[0]).toHaveProperty('designUuid', null);
+
+        rerender({ dataAppVizUuid: 'viz-1' });
+        const handlers = generate.mock.lastCall?.[1] as GenerateHandlers;
+        act(() => handlers.onSuccess({ appUuid: 'new-viz', version: 1 }));
+        finishBuild(finishedVersion());
+
+        act(() =>
+            result.current.send({
+                description: 'Remove theme',
+                fileIds: [],
+                claudeModel: 'sonnet',
+                clarifications: [],
+                externalConnections: [],
+                designUuid: null,
+            }),
+        );
+
+        expect(iterate.mock.lastCall?.[0]).toHaveProperty('designUuid', null);
+
+        const iterateHandlers = iterate.mock.lastCall?.[1] as GenerateHandlers;
+        act(() => iterateHandlers.onSuccess({ appUuid: 'viz-1', version: 2 }));
+        finishBuild(finishedVersion({ version: 2 }));
+
+        act(() =>
+            result.current.send({
+                description: 'make the bars teal',
+                fileIds: [],
+                claudeModel: 'sonnet',
+                clarifications: [],
+                externalConnections: [],
+            }),
+        );
+
+        expect(iterate.mock.lastCall?.[0]).not.toHaveProperty('designUuid');
+    });
+
     it('does not offer a revision as a draft', () => {
         const { result } = setup('viz-1');
 
@@ -344,6 +596,7 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
         const handlers = iterate.mock.lastCall?.[1] as GenerateHandlers;
@@ -372,6 +625,7 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
         act(() =>
@@ -412,6 +666,7 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
         act(() =>
@@ -434,6 +689,7 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
         const iterateHandlers = iterate.mock.lastCall?.[1] as GenerateHandlers;
@@ -466,6 +722,7 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
         const handlers = iterate.mock.lastCall?.[1] as GenerateHandlers;
@@ -488,6 +745,7 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
         const handlers = generate.mock.lastCall?.[1] as GenerateHandlers;
@@ -498,6 +756,7 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
 
@@ -513,6 +772,7 @@ describe('useDataAppVizBuild', () => {
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
         const generateHandlers = generate.mock

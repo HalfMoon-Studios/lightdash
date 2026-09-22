@@ -8,12 +8,21 @@ import { AppAccessModel } from './AppAccessModel';
 import { AppModel } from './AppModel';
 import { CatalogModel } from './CatalogModel/CatalogModel';
 import { CommentModel } from './CommentModel/CommentModel';
+import { ContentAsCodeProjectSettingsModel } from './ContentAsCodeProjectSettingsModel';
+import { ContentAsCodeSnapshotModel } from './ContentAsCodeSnapshotModel';
+import { ContentAsCodeWritebackModel } from './ContentAsCodeWritebackModel';
+import { ContentDraftModel } from './ContentDraftModel';
 import { ContentModel } from './ContentModel/ContentModel';
+import { ContentReviewRequestModel } from './ContentReviewRequestModel';
+import { ContentReviewSettingsModel } from './ContentReviewSettingsModel';
 import { ContentVerificationModel } from './ContentVerificationModel';
 import { DashboardAccessModel } from './DashboardAccessModel';
 import { DashboardModel } from './DashboardModel/DashboardModel';
 import { PersonalAccessTokenModel } from './DashboardModel/PersonalAccessTokenModel';
 import { DeploySessionModel } from './DeploySessionModel';
+import { DirectAccessModel } from './DirectAccessModel';
+import { DocumentAccessModel } from './DocumentAccessModel';
+import { DocumentModel } from './DocumentModel';
 import { DownloadAuditModel } from './DownloadAuditModel';
 import { DownloadFileModel } from './DownloadFileModel';
 import { EmailModel } from './EmailModel';
@@ -24,7 +33,10 @@ import { GitUserCredentialsModel } from './GitUserCredentials/GitUserCredentials
 import { GroupsModel } from './GroupsModel';
 import { HeadlessBrowserLoginGrantModel } from './HeadlessBrowserLoginGrantModel';
 import { InviteLinkModel } from './InviteLinkModel';
+import { JiraAppInstallationsModel } from './JiraAppInstallations/JiraAppInstallationsModel';
 import { JobModel } from './JobModel/JobModel';
+import { LinearAppInstallationsModel } from './LinearAppInstallations/LinearAppInstallationsModel';
+import { ManagedSignInModel } from './ManagedSignInModel';
 import { McpContextModel } from './McpContextModel';
 import { MigrationModel } from './MigrationModel/MigrationModel';
 import { NotificationsModel } from './NotificationsModel/NotificationsModel';
@@ -49,6 +61,7 @@ import { ProjectModel } from './ProjectModel/ProjectModel';
 import { ProjectParametersModel } from './ProjectParametersModel';
 import { PullRequestsModel } from './PullRequestsModel';
 import { QueryHistoryModel } from './QueryHistoryModel/QueryHistoryModel';
+import { RecentContentModel } from './RecentContentModel';
 import { ResourceViewItemModel } from './ResourceViewItemModel';
 import { RolesModel } from './RolesModel';
 import { SavedChartAccessModel } from './SavedChartAccessModel';
@@ -67,9 +80,11 @@ import { SpacePermissionModel } from './SpacePermissionModel';
 import { SpotlightTableConfigModel } from './SpotlightTableConfigModel';
 import { SshKeyPairModel } from './SshKeyPairModel';
 import { TagsModel } from './TagsModel';
+import { UsageDimensionsModel } from './UsageDimensionsModel';
 import { UserAttributesModel } from './UserAttributesModel';
 import { UserAvatarModel } from './UserAvatarModel';
 import { UserFavoritesModel } from './UserFavoritesModel';
+import { UserLearnProgressModel } from './UserLearnProgressModel';
 import { UserModel } from './UserModel';
 import { UserOAuthGrantsModel } from './UserOAuthGrantsModel';
 import { UserOnboardingModel } from './UserOnboardingModel';
@@ -84,12 +99,18 @@ import { WarehouseConnectCodeModel } from './WarehouseConnectCodeModel';
 
 export type ModelManifest = {
     analyticsModel: AnalyticsModel;
+    recentContentModel: RecentContentModel;
     appAccessModel: AppAccessModel;
     appModel: AppModel;
     commentModel: CommentModel;
     dashboardModel: DashboardModel;
     dashboardAccessModel: DashboardAccessModel;
+    documentAccessModel: DocumentAccessModel;
+    savedChartAccessModel: SavedChartAccessModel;
+    savedSqlAccessModel: SavedSqlAccessModel;
     deploySessionModel: DeploySessionModel;
+    directAccessModel: DirectAccessModel;
+    documentModel: DocumentModel;
     downloadFileModel: DownloadFileModel;
     downloadAuditModel: DownloadAuditModel;
     persistentDownloadFileModel: PersistentDownloadFileModel;
@@ -97,10 +118,13 @@ export type ModelManifest = {
     githubAppInstallationsModel: GithubAppInstallationsModel;
     gitUserCredentialsModel: GitUserCredentialsModel;
     gitlabAppInstallationsModel: GitlabAppInstallationsModel;
+    jiraAppInstallationsModel: JiraAppInstallationsModel;
+    linearAppInstallationsModel: LinearAppInstallationsModel;
     groupsModel: GroupsModel;
     headlessBrowserLoginGrantModel: HeadlessBrowserLoginGrantModel;
     inviteLinkModel: InviteLinkModel;
     jobModel: JobModel;
+    managedSignInModel: ManagedSignInModel;
     mcpContextModel: McpContextModel;
     migrationModel: MigrationModel;
     notificationsModel: NotificationsModel;
@@ -112,7 +136,9 @@ export type ModelManifest = {
     organizationMemberProfileModel: OrganizationMemberProfileModel;
     userAvatarModel: UserAvatarModel;
     userOnboardingModel: UserOnboardingModel;
+    userLearnProgressModel: UserLearnProgressModel;
     organizationModel: OrganizationModel;
+    usageDimensionsModel: UsageDimensionsModel;
     organizationDomainVerificationModel: OrganizationDomainVerificationModel;
     organizationEmailDomainModel: OrganizationEmailDomainModel;
     organizationSettingsModel: OrganizationSettingsModel;
@@ -128,7 +154,6 @@ export type ModelManifest = {
     resourceViewItemModel: ResourceViewItemModel;
     rolesModel: RolesModel;
     savedChartModel: SavedChartModel;
-    savedChartAccessModel: SavedChartAccessModel;
     schedulerModel: SchedulerModel;
     searchModel: SearchModel;
     sessionModel: SessionModel;
@@ -149,8 +174,13 @@ export type ModelManifest = {
     validationModel: ValidationModel;
     catalogModel: CatalogModel;
     savedSqlModel: SavedSqlModel;
-    savedSqlAccessModel: SavedSqlAccessModel;
     contentModel: ContentModel;
+    contentAsCodeProjectSettingsModel: ContentAsCodeProjectSettingsModel;
+    contentAsCodeSnapshotModel: ContentAsCodeSnapshotModel;
+    contentAsCodeWritebackModel: ContentAsCodeWritebackModel;
+    contentDraftModel: ContentDraftModel;
+    contentReviewRequestModel: ContentReviewRequestModel;
+    contentReviewSettingsModel: ContentReviewSettingsModel;
     contentVerificationModel: ContentVerificationModel;
     tagsModel: TagsModel;
     featureFlagModel: FeatureFlagModel;
@@ -178,11 +208,14 @@ export type ModelManifest = {
     aiRouterModel: unknown;
     mcpToolCallModel: unknown;
     managedAgentModel: unknown;
+    mobilePushNotificationModel: unknown;
     aiOrganizationSettingsModel: unknown;
     embedModel: unknown;
     serviceAccountModel: unknown;
+    scimRequestLogModel: unknown;
     externalConnectionModel: unknown;
     schedulerAiAugmentationModel: unknown;
+    dataAppAnalysisModel: unknown;
 };
 
 /**
@@ -279,10 +312,24 @@ export class ModelRepository
      */
     protected modelInstances: Partial<ModelManifest> = {};
 
+    public getRecentContentModel(): RecentContentModel {
+        return this.getModel(
+            'recentContentModel',
+            () => new RecentContentModel(this.database),
+        );
+    }
+
     public getAnalyticsModel(): AnalyticsModel {
         return this.getModel(
             'analyticsModel',
             () => new AnalyticsModel({ database: this.database }),
+        );
+    }
+
+    public getUsageDimensionsModel(): UsageDimensionsModel {
+        return this.getModel(
+            'usageDimensionsModel',
+            () => new UsageDimensionsModel(this.database),
         );
     }
 
@@ -296,7 +343,12 @@ export class ModelRepository
     public getAppModel(): AppModel {
         return this.getModel(
             'appModel',
-            () => new AppModel({ database: this.database }),
+            () =>
+                new AppModel({
+                    database: this.database,
+                    dataAppCodingAgent:
+                        this.lightdashConfig.appRuntime.dataAppCodingAgent,
+                }),
         );
     }
 
@@ -323,6 +375,41 @@ export class ModelRepository
         return this.getModel(
             'dashboardAccessModel',
             () => new DashboardAccessModel(this.database),
+        );
+    }
+
+    public getDocumentAccessModel(): DocumentAccessModel {
+        return this.getModel(
+            'documentAccessModel',
+            () => new DocumentAccessModel(this.database),
+        );
+    }
+
+    public getSavedChartAccessModel(): SavedChartAccessModel {
+        return this.getModel(
+            'savedChartAccessModel',
+            () => new SavedChartAccessModel(this.database),
+        );
+    }
+
+    public getSavedSqlAccessModel(): SavedSqlAccessModel {
+        return this.getModel(
+            'savedSqlAccessModel',
+            () => new SavedSqlAccessModel(this.database),
+        );
+    }
+
+    public getDirectAccessModel(): DirectAccessModel {
+        return this.getModel(
+            'directAccessModel',
+            () => new DirectAccessModel(this.database),
+        );
+    }
+
+    public getDocumentModel(): DocumentModel {
+        return this.getModel(
+            'documentModel',
+            () => new DocumentModel({ database: this.database }),
         );
     }
 
@@ -397,6 +484,28 @@ export class ModelRepository
         );
     }
 
+    public getLinearAppInstallationsModel(): LinearAppInstallationsModel {
+        return this.getModel(
+            'linearAppInstallationsModel',
+            () =>
+                new LinearAppInstallationsModel({
+                    database: this.database,
+                    encryptionUtil: this.utils.getEncryptionUtil(),
+                }),
+        );
+    }
+
+    public getJiraAppInstallationsModel(): JiraAppInstallationsModel {
+        return this.getModel(
+            'jiraAppInstallationsModel',
+            () =>
+                new JiraAppInstallationsModel({
+                    database: this.database,
+                    encryptionUtil: this.utils.getEncryptionUtil(),
+                }),
+        );
+    }
+
     public getGroupsModel(): GroupsModel {
         return this.getModel(
             'groupsModel',
@@ -460,10 +569,17 @@ export class ModelRepository
         );
     }
 
+    public getManagedSignInModel(): ManagedSignInModel {
+        return this.getModel(
+            'managedSignInModel',
+            () => new ManagedSignInModel({ database: this.database }),
+        );
+    }
+
     public getOauthModel(): OAuth2Model {
         return this.getModel(
             'oauthModel',
-            () => new OAuth2Model(this.database),
+            () => new OAuth2Model(this.database, this.lightdashConfig),
         );
     }
 
@@ -512,6 +628,13 @@ export class ModelRepository
         return this.getModel(
             'userOnboardingModel',
             () => new UserOnboardingModel({ database: this.database }),
+        );
+    }
+
+    public getUserLearnProgressModel(): UserLearnProgressModel {
+        return this.getModel(
+            'userLearnProgressModel',
+            () => new UserLearnProgressModel({ database: this.database }),
         );
     }
 
@@ -654,13 +777,6 @@ export class ModelRepository
                     contentVerificationModel:
                         this.getContentVerificationModel(),
                 }),
-        );
-    }
-
-    public getSavedChartAccessModel(): SavedChartAccessModel {
-        return this.getModel(
-            'savedChartAccessModel',
-            () => new SavedChartAccessModel(this.database),
         );
     }
 
@@ -835,17 +951,55 @@ export class ModelRepository
         );
     }
 
-    public getSavedSqlAccessModel(): SavedSqlAccessModel {
-        return this.getModel(
-            'savedSqlAccessModel',
-            () => new SavedSqlAccessModel(this.database),
-        );
-    }
-
     public getContentModel(): ContentModel {
         return this.getModel(
             'contentModel',
             () => new ContentModel({ database: this.database }),
+        );
+    }
+
+    public getContentAsCodeProjectSettingsModel(): ContentAsCodeProjectSettingsModel {
+        return this.getModel(
+            'contentAsCodeProjectSettingsModel',
+            () =>
+                new ContentAsCodeProjectSettingsModel({
+                    database: this.database,
+                }),
+        );
+    }
+
+    public getContentAsCodeSnapshotModel(): ContentAsCodeSnapshotModel {
+        return this.getModel(
+            'contentAsCodeSnapshotModel',
+            () => new ContentAsCodeSnapshotModel({ database: this.database }),
+        );
+    }
+
+    public getContentAsCodeWritebackModel(): ContentAsCodeWritebackModel {
+        return this.getModel(
+            'contentAsCodeWritebackModel',
+            () => new ContentAsCodeWritebackModel({ database: this.database }),
+        );
+    }
+
+    public getContentDraftModel(): ContentDraftModel {
+        return this.getModel(
+            'contentDraftModel',
+            () => new ContentDraftModel({ database: this.database }),
+        );
+    }
+
+    public getContentReviewRequestModel(): ContentReviewRequestModel {
+        return this.getModel(
+            'contentReviewRequestModel',
+            () => new ContentReviewRequestModel({ database: this.database }),
+        );
+    }
+
+    public getContentReviewSettingsModel(): ContentReviewSettingsModel {
+        return this.getModel(
+            'contentReviewSettingsModel',
+            () => new ContentReviewSettingsModel({ database: this.database }),
         );
     }
 
@@ -869,6 +1023,10 @@ export class ModelRepository
 
     public getAiAgentModel<ModelImplT>(): ModelImplT {
         return this.getModel('aiAgentModel');
+    }
+
+    public getMobilePushNotificationModel<ModelImplT>(): ModelImplT {
+        return this.getModel('mobilePushNotificationModel');
     }
 
     public getAiAgentMemoryModel<ModelImplT>(): ModelImplT {
@@ -927,6 +1085,10 @@ export class ModelRepository
         return this.getModel('schedulerAiAugmentationModel');
     }
 
+    public getDataAppAnalysisModel<ModelImplT>(): ModelImplT {
+        return this.getModel('dataAppAnalysisModel');
+    }
+
     public getAiAgentReviewClassifierModel<ModelImplT>(): ModelImplT {
         return this.getModel('aiAgentReviewClassifierModel');
     }
@@ -960,6 +1122,10 @@ export class ModelRepository
 
     public getServiceAccountModel<ModelImplT>(): ModelImplT {
         return this.getModel('serviceAccountModel');
+    }
+
+    public getScimRequestLogModel<ModelImplT>(): ModelImplT {
+        return this.getModel('scimRequestLogModel');
     }
 
     public getExternalConnectionModel<ModelImplT>(): ModelImplT {

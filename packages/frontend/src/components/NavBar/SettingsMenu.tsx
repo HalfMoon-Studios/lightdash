@@ -10,8 +10,10 @@ import { Link } from 'react-router';
 import { useActiveProjectUuid } from '../../hooks/useActiveProject';
 import useApp from '../../providers/App/useApp';
 import MantineIcon from '../common/MantineIcon';
+import { useNavBarMenuProps } from './NavBarPortalContext';
 
-const SettingsMenu: FC = () => {
+const SettingsMenu: FC<{ withLabel?: boolean }> = ({ withLabel = false }) => {
+    const menuProps = useNavBarMenuProps();
     const {
         user: { data: user },
     } = useApp();
@@ -40,13 +42,11 @@ const SettingsMenu: FC = () => {
 
     return (
         <Menu
-            withArrow
-            shadow="lg"
             position="bottom-end"
             arrowOffset={16}
             offset={-2}
             zIndex={getDefaultZIndex('max')}
-            portalProps={{ target: '#navbar-header' }}
+            {...menuProps}
         >
             <Menu.Target>
                 <Button
@@ -56,6 +56,7 @@ const SettingsMenu: FC = () => {
                     data-testid="settings-menu"
                 >
                     <MantineIcon icon={IconSettings} />
+                    {withLabel && ' Settings'}
                 </Button>
             </Menu.Target>
 

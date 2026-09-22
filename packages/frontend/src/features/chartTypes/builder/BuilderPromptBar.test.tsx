@@ -1,20 +1,93 @@
 import {
+    type ApiAppVersionSummary,
+    type AppVersionResources,
     type DataAppClaudeModel,
     type DataAppCodexModel,
 } from '@lightdash/common';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { forwardRef, useImperativeHandle, useRef, type ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '../../../testing/testUtils';
 import { type ClarificationRound } from '../../apps/hooks/useClarificationRound';
 import { type DataAppModelSelection } from '../../apps/hooks/useDataAppModelSelection';
+import { type UseElementPickerResult } from '../../apps/hooks/useElementPicker';
+import { appVersion } from '../../apps/testing/appVersionHistory';
 import {
     type DataAppVizBuildState,
     type VizBuildRequest,
 } from '../hooks/useDataAppVizBuild';
 import { clarificationStub } from '../testing/clarificationRoundStub';
 import BuilderPromptBar from './BuilderPromptBar';
+
+const attachmentAdd = vi.hoisted(() => vi.fn());
+const showToastError = vi.hoisted(() => vi.fn());
+vi.mock('../../../hooks/toaster/useToaster', () => ({
+    default: () => ({ showToastError }),
+}));
+
+const connections = vi.hoisted(() => ({
+    linked: [] as {
+        alias: string;
+        connection: {
+            externalConnectionUuid: string;
+            name: string;
+            origin: string;
+        };
+    }[],
+    unlink: vi.fn(),
+}));
+vi.mock('../../../hooks/useProjectUuid', () => ({
+    useProjectUuid: () => 'p1',
+}));
+vi.mock('../../../hooks/useProject', () => ({
+    useProject: () => ({ data: undefined }),
+}));
+vi.mock('../../externalConnections/hooks/useExternalConnections', () => ({
+    useExternalConnections: () => ({
+        isInitialLoading: false,
+        data: [
+            {
+                externalConnectionUuid: 'stores',
+                name: 'Stores API',
+                origin: 'https://stores.example.com',
+            },
+        ],
+    }),
+}));
+vi.mock('../../externalConnections/hooks/useAppExternalConnections', () => ({
+    useAppExternalConnections: () => ({ data: connections.linked }),
+}));
+vi.mock(
+    '../../externalConnections/hooks/useUnlinkAppExternalConnection',
+    () => ({
+        useUnlinkAppExternalConnection: () => ({ mutate: connections.unlink }),
+    }),
+);
+
+const themeQuery = vi.hoisted(() => ({
+    data: [
+        { designUuid: 'brand', name: 'Brand', isDefault: true },
+        { designUuid: 'nvidia', name: 'Fake NVIDIA', isDefault: false },
+    ],
+    isLoading: false,
+    isError: false,
+    isSuccess: true,
+    refetch: vi.fn(),
+}));
+vi.mock('../../organizationDesigns/hooks/useOrganizationDesigns', () => ({
+    useOrganizationDesigns: () => themeQuery,
+}));
+const themedVersion = (designUuid: string | null = 'brand') =>
+    appVersion({
+        resources: {
+            design:
+                designUuid === null
+                    ? null
+                    : { designUuid, name: 'Saved brand', fileCount: 1 },
+        } as AppVersionResources,
+    });
 
 // The real composer is TipTap; a text input carries the same handle contract.
 vi.mock('../../../components/common/PromptComposer/PromptComposer', () => ({
@@ -27,6 +100,8 @@ vi.mock('../../../components/common/PromptComposer/PromptComposer', () => ({
         {
             placeholder: string;
             toolbarRight: ReactNode;
+            toolbarLeft: ReactNode;
+            attachments: ReactNode;
             onEmptyChange: (isEmpty: boolean) => void;
             onSubmit: () => void;
             submitDisabled?: boolean;
@@ -36,6 +111,8 @@ vi.mock('../../../components/common/PromptComposer/PromptComposer', () => ({
         {
             placeholder,
             toolbarRight,
+            toolbarLeft,
+            attachments,
             onEmptyChange,
             onSubmit,
             submitDisabled,
@@ -61,6 +138,7 @@ vi.mock('../../../components/common/PromptComposer/PromptComposer', () => ({
         }));
         return (
             <div>
+                {toolbarLeft}
                 <input
                     ref={inputRef}
                     placeholder={placeholder}
@@ -80,6 +158,7 @@ vi.mock('../../../components/common/PromptComposer/PromptComposer', () => ({
                     }}
                 />
                 {toolbarRight}
+                {attachments}
             </div>
         );
     }),
@@ -90,7 +169,7 @@ vi.mock('../hooks/useVizComposerAttachments', () => ({
         attachments: [],
         fileIds: [],
         isUploading: false,
-        add: vi.fn(),
+        add: attachmentAdd,
         remove: vi.fn(),
         clear: vi.fn(),
     }),
@@ -140,39 +219,705 @@ const promptBar = ({
     build = buildState(),
     isBuilding = false,
     latestReadyVersion = null,
+    latestVersion = null,
+    hasVersions = true,
+    isNewChart = !hasVersions,
     model = modelSelection('sonnet'),
     onCancelBuild = isBuilding ? vi.fn() : null,
     narration = { reasoning: [], activity: [] },
     // A round with nothing to ask passes the request straight to the build,
     // which is what most of these tests are watching for.
     clarification = clarificationStub({ send: build.send }),
+    buildContext,
+    elementPicker,
+    onCaptureScreenshot,
 }: {
     build?: DataAppVizBuildState;
     isBuilding?: boolean;
     latestReadyVersion?: number | null;
+    latestVersion?: ApiAppVersionSummary | null;
+    hasVersions?: boolean;
+    isNewChart?: boolean;
     model?: DataAppModelSelection;
     onCancelBuild?: (() => void) | null;
     narration?: { reasoning: string[]; activity: string[] };
     clarification?: ClarificationRound<VizBuildRequest>;
+    buildContext?: VizBuildRequest['context'];
+    elementPicker?: UseElementPickerResult;
+    onCaptureScreenshot?: () => Promise<File>;
 } = {}) => (
-    <BuilderPromptBar
-        projectUuid="p1"
-        composerAppUuid="draft-1"
-        sessionKey="session-1"
-        hasVersions
-        isBuilding={isBuilding}
-        buildingPrompt={isBuilding ? 'make it teal' : null}
-        elapsed={isBuilding ? '0:07' : null}
-        latestReadyVersion={latestReadyVersion}
-        build={build}
-        onCancelBuild={onCancelBuild}
-        narration={narration}
-        modelSelection={model}
-        clarification={clarification}
-    />
+    <MemoryRouter>
+        <BuilderPromptBar
+            projectUuid="p1"
+            composerAppUuid="draft-1"
+            sessionKey="session-1"
+            hasVersions={hasVersions}
+            isNewChart={isNewChart}
+            latestVersion={latestVersion}
+            isBuilding={isBuilding}
+            buildingPrompt={isBuilding ? 'make it teal' : null}
+            elapsed={isBuilding ? '0:07' : null}
+            latestReadyVersion={latestReadyVersion}
+            build={build}
+            onCancelBuild={onCancelBuild}
+            narration={narration}
+            modelSelection={model}
+            clarification={clarification}
+            buildContext={buildContext}
+            elementPicker={elementPicker}
+            onCaptureScreenshot={onCaptureScreenshot}
+        />
+    </MemoryRouter>
 );
 
 describe('BuilderPromptBar', () => {
+    beforeEach(() => {
+        attachmentAdd.mockClear();
+        showToastError.mockClear();
+        connections.linked = [];
+        connections.unlink.mockClear();
+        themeQuery.isLoading = false;
+        themeQuery.isError = false;
+        themeQuery.isSuccess = true;
+    });
+
+    it('stages a captured render as a screenshot', async () => {
+        const screenshot = new File(['png'], 'screenshot.png', {
+            type: 'image/png',
+        });
+        renderWithProviders(
+            promptBar({
+                onCaptureScreenshot: vi.fn().mockResolvedValue(screenshot),
+            }),
+        );
+
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Attach screenshot' }),
+        );
+
+        await waitFor(() =>
+            expect(attachmentAdd).toHaveBeenCalledWith([screenshot], {
+                kind: 'screenshot',
+            }),
+        );
+    });
+
+    it('reports a screenshot capture failure', async () => {
+        renderWithProviders(
+            promptBar({
+                onCaptureScreenshot: vi
+                    .fn()
+                    .mockRejectedValue(new Error('Preview unavailable')),
+            }),
+        );
+
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Attach screenshot' }),
+        );
+
+        await waitFor(() =>
+            expect(showToastError).toHaveBeenCalledWith({
+                title: 'Failed to capture screenshot',
+                subtitle: 'Preview unavailable',
+            }),
+        );
+        expect(attachmentAdd).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        { label: 'missing', sampleRows: undefined },
+        { label: 'empty', sampleRows: [] },
+    ])(
+        'hides sample sharing when real query rows are $label',
+        ({ sampleRows }) => {
+            renderWithProviders(
+                promptBar({
+                    buildContext: {
+                        schema: {
+                            fields: [],
+                            configOptions: [],
+                            colorPalette: null,
+                        },
+                        sampleRows,
+                    },
+                }),
+            );
+            expect(
+                screen.queryByRole('button', { name: 'Include sample data' }),
+            ).not.toBeInTheDocument();
+        },
+    );
+
+    it('omits sample consent when query rows disappear before sending', async () => {
+        const send = vi.fn();
+        const view = renderWithProviders(
+            promptBar({
+                build: buildState({ send }),
+                buildContext: { sampleRows: [{ orders_status: 'paid' }] },
+            }),
+        );
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Include sample data' }),
+        );
+        view.rerender(
+            promptBar({
+                build: buildState({ send }),
+                buildContext: {
+                    schema: {
+                        fields: [],
+                        configOptions: [],
+                        colorPalette: null,
+                    },
+                },
+            }),
+        );
+        await userEvent.type(
+            screen.getByPlaceholderText('Ask for a change…'),
+            'Make the labels larger',
+        );
+        await userEvent.keyboard('{Enter}');
+        expect(send.mock.lastCall?.[0].includeSampleData).not.toBe(true);
+        expect(send.mock.lastCall?.[0].context).not.toHaveProperty(
+            'sampleRows',
+        );
+    });
+
+    it('keeps current sample rows out of a prompt until explicitly selected', async () => {
+        const send = vi.fn();
+        const sampleRows = Array.from({ length: 12 }, (_, i) => ({
+            orders_status: `status-${i}`,
+        }));
+        renderWithProviders(
+            promptBar({
+                build: buildState({ send }),
+                buildContext: {
+                    schema: { fields: [] },
+                    fieldMapping: {},
+                    sampleRows,
+                } as never,
+            }),
+        );
+
+        await userEvent.type(
+            screen.getByPlaceholderText('Ask for a change…'),
+            'First',
+        );
+        await userEvent.keyboard('{Enter}');
+        expect(send.mock.lastCall?.[0].context).not.toHaveProperty(
+            'sampleRows',
+        );
+
+        const sampleDataButton = screen.getByRole('button', {
+            name: 'Include sample data',
+        });
+        expect(sampleDataButton).toHaveAttribute('aria-pressed', 'false');
+        await userEvent.click(sampleDataButton);
+        expect(sampleDataButton).toHaveAttribute('aria-pressed', 'true');
+        await userEvent.keyboard(' ');
+        expect(sampleDataButton).toHaveAttribute('aria-pressed', 'false');
+        await userEvent.keyboard(' ');
+        expect(sampleDataButton).toHaveAttribute('aria-pressed', 'true');
+        await userEvent.type(
+            screen.getByPlaceholderText('Ask for a change…'),
+            'Second',
+        );
+        await userEvent.keyboard('{Enter}');
+        expect(send.mock.lastCall?.[0].context.sampleRows).toEqual(
+            sampleRows.slice(0, 10),
+        );
+        expect(
+            screen.getByRole('button', { name: 'Include sample data' }),
+        ).toHaveAttribute('aria-pressed', 'false');
+
+        await userEvent.type(
+            screen.getByPlaceholderText('Ask for a change…'),
+            'Third',
+        );
+        await userEvent.keyboard('{Enter}');
+        expect(send.mock.lastCall?.[0].context).not.toHaveProperty(
+            'sampleRows',
+        );
+    });
+
+    it('hides sample data consent when the server disables it', async () => {
+        const send = vi.fn();
+        renderWithProviders(
+            promptBar({
+                build: buildState({ send }),
+                buildContext: { sampleRows: [{ orders_status: 'paid' }] },
+            }),
+            {
+                health: {
+                    dataApps: { previewOrigin: null, sampleDataEnabled: false },
+                },
+            },
+        );
+
+        await waitFor(() =>
+            expect(
+                screen.queryByRole('button', {
+                    name: 'Include sample data',
+                }),
+            ).not.toBeInTheDocument(),
+        );
+        await userEvent.type(
+            screen.getByPlaceholderText('Ask for a change…'),
+            'Make a chart',
+        );
+        await userEvent.keyboard('{Enter}');
+        expect(send.mock.lastCall?.[0].includeSampleData).not.toBe(true);
+        expect(send.mock.lastCall?.[0].context).toBeUndefined();
+    });
+
+    it('shows selected elements and lets the author remove one', async () => {
+        const remove = vi.fn();
+        const elementPicker = {
+            available: true,
+            enabled: false,
+            refs: [{ tag: 'button', text: 'Save', loc: '' }],
+            toggle: vi.fn(),
+            remove,
+            clear: vi.fn(),
+            iframeProps: {},
+        } as unknown as UseElementPickerResult;
+        renderWithProviders(promptBar({ elementPicker }));
+
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Remove <button> Save' }),
+        );
+        expect(remove).toHaveBeenCalledWith(elementPicker.refs[0]);
+    });
+
+    it('keeps theme selection in the context tray, outside composer options', async () => {
+        renderWithProviders(promptBar({ hasVersions: false }));
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Composer options' }),
+        );
+        expect(
+            screen.queryByRole('button', { name: /Choose theme|Apply theme/ }),
+        ).not.toBeInTheDocument();
+        expect(
+            screen.getByRole('button', { name: 'Attach an image or file' }),
+        ).toBeInTheDocument();
+        expect(
+            screen.getByRole('button', { name: 'Add external connections' }),
+        ).toBeInTheDocument();
+        await userEvent.keyboard('{Escape}');
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Theme: Brand' }),
+        );
+        expect(
+            screen.queryByRole('button', { name: 'Back to composer options' }),
+        ).not.toBeInTheDocument();
+        await userEvent.click(
+            screen.getByRole('menuitem', { name: 'Fake NVIDIA' }),
+        );
+        expect(
+            screen.getByRole('button', { name: 'Theme: Fake NVIDIA' }),
+        ).toBeInTheDocument();
+        expect(
+            screen.queryByRole('button', { name: 'Back to composer options' }),
+        ).not.toBeInTheDocument();
+    });
+
+    it('changes the inline model without sending the draft', async () => {
+        const model = modelSelection('sonnet');
+        const send = vi.fn();
+        renderWithProviders(promptBar({ model, build: buildState({ send }) }));
+        await userEvent.type(
+            screen.getByPlaceholderText('Ask for a change…'),
+            'Keep this draft',
+        );
+        await userEvent.click(screen.getByRole('button', { name: 'Sonnet' }));
+        await userEvent.click(screen.getByRole('menuitem', { name: /Opus/ }));
+        expect(model.setModel).toHaveBeenCalledWith('opus');
+        expect(screen.getByPlaceholderText('Ask for a change…')).toHaveValue(
+            'Keep this draft',
+        );
+        expect(send).not.toHaveBeenCalled();
+    });
+
+    it('opens the file chooser from composer options', async () => {
+        const { container } = renderWithProviders(promptBar());
+        const input =
+            container.querySelector<HTMLInputElement>('input[type="file"]')!;
+        const click = vi.spyOn(input, 'click');
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Composer options' }),
+        );
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Attach an image or file' }),
+        );
+        expect(click).toHaveBeenCalledOnce();
+    });
+
+    it('keeps back navigation available in the connections panel', async () => {
+        renderWithProviders(promptBar());
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Composer options' }),
+        );
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Add external connections' }),
+        );
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Back to composer options' }),
+        );
+        expect(
+            screen.getByRole('button', { name: 'Attach an image or file' }),
+        ).toBeInTheDocument();
+    });
+
+    it('adds connection chips, removes them, and sends only the selected connections', async () => {
+        const send = vi.fn();
+        renderWithProviders(promptBar({ build: buildState({ send }) }));
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Composer options' }),
+        );
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Add external connections' }),
+        );
+        await userEvent.click(
+            screen.getByRole('checkbox', { name: /Stores API/ }),
+        );
+        await userEvent.click(screen.getByRole('button', { name: 'Done' }));
+        expect(
+            screen.getByRole('button', {
+                name: 'Remove connection: Stores API',
+            }),
+        ).toBeInTheDocument();
+        await userEvent.click(
+            screen.getByRole('button', {
+                name: 'Remove connection: Stores API',
+            }),
+        );
+        expect(screen.queryByText('Stores API')).not.toBeInTheDocument();
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Composer options' }),
+        );
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Add external connections' }),
+        );
+        await userEvent.click(
+            screen.getByRole('checkbox', { name: /Stores API/ }),
+        );
+        await userEvent.click(screen.getByRole('button', { name: 'Done' }));
+        await userEvent.type(
+            screen.getByPlaceholderText('Ask for a change…'),
+            'Plot the stores',
+        );
+        await userEvent.click(screen.getByLabelText('Send'));
+        expect(send).toHaveBeenCalledWith(
+            expect.objectContaining({
+                externalConnections: [
+                    {
+                        externalConnectionUuid: 'stores',
+                        name: 'Stores API',
+                        alias: 'stores_api',
+                    },
+                ],
+            }),
+        );
+    });
+
+    it('shows linked connections as chips and preserves the unlink confirmation', async () => {
+        connections.linked = [
+            {
+                alias: 'stores_api',
+                connection: {
+                    externalConnectionUuid: 'stores',
+                    name: 'Stores API',
+                    origin: 'https://stores.example.com',
+                },
+            },
+        ];
+        renderWithProviders(promptBar());
+        await userEvent.click(
+            screen.getByRole('button', {
+                name: 'Manage connection: Stores API',
+            }),
+        );
+        await userEvent.click(
+            screen.getByRole('checkbox', { name: /Stores API/ }),
+        );
+        expect(
+            screen.getByRole('dialog', { name: 'Unlink Stores API?' }),
+        ).toHaveTextContent('Unlink Stores API?');
+        expect(connections.unlink).not.toHaveBeenCalled();
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Keep connection' }),
+        );
+        expect(connections.unlink).not.toHaveBeenCalled();
+    });
+
+    it('uses the organization default for a new chart and sends the selected theme after clarification', async () => {
+        const send = vi.fn();
+        renderWithProviders(
+            promptBar({
+                hasVersions: false,
+                clarification: clarificationStub({ send }),
+            }),
+        );
+        expect(
+            screen.getByRole('button', { name: 'Theme: Brand' }),
+        ).toBeInTheDocument();
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Theme: Brand' }),
+        );
+        await userEvent.click(
+            screen.getByRole('menuitem', { name: 'Fake NVIDIA' }),
+        );
+        expect(send).not.toHaveBeenCalled();
+        await userEvent.type(
+            screen.getByPlaceholderText('Describe a new chart type…'),
+            'A heatmap',
+        );
+        await userEvent.click(screen.getByLabelText('Send'));
+        expect(send).toHaveBeenCalledWith(
+            expect.objectContaining({
+                description: 'A heatmap',
+                designUuid: 'nvidia',
+            }),
+        );
+    });
+
+    it('sends explicit no theme for new charts instead of restoring the organization default', async () => {
+        const send = vi.fn();
+        renderWithProviders(
+            promptBar({ hasVersions: false, build: buildState({ send }) }),
+        );
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Theme: Brand' }),
+        );
+        await userEvent.click(
+            screen.getByRole('menuitem', { name: /^No theme/ }),
+        );
+        expect(
+            screen.getByRole('button', { name: 'Apply theme' }),
+        ).toBeInTheDocument();
+        await userEvent.type(
+            screen.getByPlaceholderText('Describe a new chart type…'),
+            'A heatmap',
+        );
+        await userEvent.click(screen.getByLabelText('Send'));
+        expect(send).toHaveBeenCalledWith(
+            expect.objectContaining({ designUuid: null }),
+        );
+    });
+
+    it('reopens with the saved theme and rebuilds on a theme change without sending the draft prompt', async () => {
+        const send = vi.fn();
+        renderWithProviders(
+            promptBar({
+                latestVersion: themedVersion(),
+                build: buildState({ send }),
+            }),
+        );
+        await userEvent.type(
+            screen.getByPlaceholderText('Ask for a change…'),
+            'Keep this draft',
+        );
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Theme: Brand' }),
+        );
+        await userEvent.click(
+            screen.getByRole('menuitem', { name: 'Fake NVIDIA' }),
+        );
+        expect(send).toHaveBeenCalledWith({
+            description: 'Apply theme: Fake NVIDIA',
+            designUuid: 'nvidia',
+            fileIds: [],
+            clarifications: [],
+            externalConnections: [],
+            claudeModel: 'sonnet',
+        });
+        expect(screen.getByPlaceholderText('Ask for a change…')).toHaveValue(
+            'Keep this draft',
+        );
+    });
+
+    it('keeps existing unthemed charts unthemed and ordinary edits inherit', async () => {
+        const send = vi.fn();
+        renderWithProviders(
+            promptBar({
+                latestVersion: themedVersion(null),
+                build: buildState({ send }),
+            }),
+        );
+        expect(
+            screen.getByRole('button', { name: 'Apply theme' }),
+        ).toBeInTheDocument();
+        await userEvent.type(
+            screen.getByPlaceholderText('Ask for a change…'),
+            'Change the labels',
+        );
+        await userEvent.click(screen.getByLabelText('Send'));
+        expect(send.mock.calls[0][0]).not.toHaveProperty('designUuid');
+    });
+
+    it('removes an existing theme with an explicit null', async () => {
+        const send = vi.fn();
+        renderWithProviders(
+            promptBar({
+                latestVersion: themedVersion(),
+                build: buildState({ send }),
+            }),
+        );
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Theme: Brand' }),
+        );
+        await userEvent.click(
+            screen.getByRole('menuitem', { name: /^No theme/ }),
+        );
+        expect(send).toHaveBeenCalledWith(
+            expect.objectContaining({
+                description: 'Remove theme',
+                designUuid: null,
+            }),
+        );
+    });
+
+    it('disables theme changes during builds and while themes load', () => {
+        const { rerender } = renderWithProviders(
+            promptBar({ isBuilding: true, latestVersion: themedVersion() }),
+        );
+        expect(
+            screen.getByRole('button', { name: 'Theme: Brand' }),
+        ).toBeDisabled();
+        themeQuery.isLoading = true;
+        themeQuery.isSuccess = false;
+        rerender(promptBar({ hasVersions: false }));
+        expect(
+            screen.getByRole('button', { name: 'Theme: Loading themes…' }),
+        ).toBeDisabled();
+    });
+
+    it('keeps the saved theme name when it no longer exists in the organization list', () => {
+        renderWithProviders(
+            promptBar({ latestVersion: themedVersion('deleted') }),
+        );
+        expect(
+            screen.getByRole('button', { name: 'Theme: Saved brand' }),
+        ).toBeInTheDocument();
+    });
+
+    it('does not attach a theme change to prompts queued during the first build', async () => {
+        const send = vi.fn();
+        const { rerender } = renderWithProviders(
+            promptBar({
+                hasVersions: false,
+                isBuilding: true,
+                build: buildState({ send }),
+            }),
+        );
+        await userEvent.type(
+            screen.getByPlaceholderText('Ask for another change…'),
+            'Keep the labels',
+        );
+        await userEvent.click(screen.getByLabelText('Queue message'));
+        rerender(
+            promptBar({
+                latestReadyVersion: 1,
+                latestVersion: themedVersion(),
+                build: buildState({ send }),
+            }),
+        );
+        await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+        expect(send.mock.calls[0][0]).toMatchObject({
+            description: 'Keep the labels',
+        });
+        expect(send.mock.calls[0][0]).not.toHaveProperty('designUuid');
+    });
+
+    it('sends the organization default on the first build without requiring a selection', async () => {
+        const send = vi.fn();
+        renderWithProviders(
+            promptBar({ hasVersions: false, build: buildState({ send }) }),
+        );
+        await userEvent.type(
+            screen.getByPlaceholderText('Describe a new chart type…'),
+            'A bar chart',
+        );
+        await userEvent.click(screen.getByLabelText('Send'));
+        expect(send).toHaveBeenCalledWith(
+            expect.objectContaining({ designUuid: 'brand' }),
+        );
+    });
+
+    it('retries a failed theme listing', async () => {
+        themeQuery.isError = true;
+        themeQuery.isSuccess = false;
+        renderWithProviders(promptBar({ latestVersion: themedVersion() }));
+        expect(
+            screen.getByRole('button', { name: 'Theme: Brand' }),
+        ).toBeDisabled();
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Retry themes' }),
+        );
+        expect(themeQuery.refetch).toHaveBeenCalled();
+    });
+
+    it('blocks a first build when the theme list could not be loaded', async () => {
+        themeQuery.isError = true;
+        themeQuery.isSuccess = false;
+        const send = vi.fn();
+        renderWithProviders(
+            promptBar({ hasVersions: false, build: buildState({ send }) }),
+        );
+        await userEvent.type(
+            screen.getByPlaceholderText('Describe a new chart type…'),
+            'A bar chart',
+        );
+        expect(
+            screen.getByRole('button', { name: 'Theme: Themes unavailable' }),
+        ).toBeDisabled();
+        expect(screen.getByLabelText('Send')).toBeDisabled();
+        expect(send).not.toHaveBeenCalled();
+    });
+
+    it('does not rebuild when selecting the current theme', async () => {
+        const send = vi.fn();
+        renderWithProviders(
+            promptBar({
+                latestVersion: themedVersion(),
+                build: buildState({ send }),
+            }),
+        );
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Theme: Brand' }),
+        );
+        await userEvent.click(
+            screen.getByRole('menuitem', { name: /Brand Default/ }),
+        );
+        expect(send).not.toHaveBeenCalled();
+    });
+
+    it('disables an already-open theme menu when a build begins', async () => {
+        const send = vi.fn();
+        const { rerender } = renderWithProviders(
+            promptBar({
+                latestVersion: themedVersion(),
+                build: buildState({ send }),
+            }),
+        );
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Theme: Brand' }),
+        );
+        rerender(
+            promptBar({
+                latestVersion: themedVersion(),
+                isBuilding: true,
+                build: buildState({ send }),
+            }),
+        );
+        expect(
+            screen.getByRole('menuitem', { name: 'Fake NVIDIA' }),
+        ).toBeDisabled();
+        await userEvent.click(
+            screen.getByRole('menuitem', { name: 'Fake NVIDIA' }),
+        );
+        expect(send).not.toHaveBeenCalled();
+    });
+
     it('builds with the picked model', async () => {
         const send = vi.fn();
         renderWithProviders(
@@ -193,10 +938,11 @@ describe('BuilderPromptBar', () => {
             fileIds: [],
             claudeModel: 'haiku',
             clarifications: [],
+            externalConnections: [],
         });
     });
 
-    it('shows the model it will build with', () => {
+    it('shows the model it will build with beside send', () => {
         renderWithProviders(promptBar({ model: modelSelection('opus') }));
 
         expect(screen.getByText('Opus')).toBeInTheDocument();
@@ -222,6 +968,7 @@ describe('BuilderPromptBar', () => {
             fileIds: [],
             codexModel: 'gpt-5.6-sol',
             clarifications: [],
+            externalConnections: [],
         });
     });
 
@@ -260,9 +1007,12 @@ describe('BuilderPromptBar', () => {
         await waitFor(() =>
             expect(send).toHaveBeenCalledWith({
                 description: 'hide the axis labels',
+                context: undefined,
+                includeSampleData: false,
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
 
@@ -275,6 +1025,74 @@ describe('BuilderPromptBar', () => {
         );
 
         expect(screen.queryByText('Sending…')).not.toBeInTheDocument();
+    });
+
+    it('refreshes queued schema, mapping, and opted-in sample data', async () => {
+        const send = vi.fn();
+        const oldContext = {
+            schema: {
+                fields: [
+                    {
+                        name: 'old',
+                        label: 'Old',
+                        type: 'dimension',
+                        required: true,
+                    },
+                ],
+            },
+            fieldMapping: { old: 'orders_old' },
+            sampleRows: [{ orders_old: 'at submit' }],
+        } as unknown as NonNullable<VizBuildRequest['context']>;
+        const newContext = {
+            schema: {
+                fields: [
+                    {
+                        name: 'new',
+                        label: 'New',
+                        type: 'dimension',
+                        required: true,
+                    },
+                ],
+            },
+            fieldMapping: { new: 'orders_new' },
+            sampleRows: [{ orders_new: 'after build' }],
+        } as unknown as NonNullable<VizBuildRequest['context']>;
+        const view = renderWithProviders(
+            promptBar({
+                build: buildState({ isBuilding: true, send }),
+                isBuilding: true,
+                buildContext: oldContext,
+            }),
+        );
+
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Include sample data' }),
+        );
+        await userEvent.type(
+            screen.getByPlaceholderText('Ask for another change…'),
+            'Revise it',
+        );
+        await userEvent.keyboard('{Enter}');
+
+        view.rerender(
+            promptBar({
+                build: buildState({ send }),
+                latestReadyVersion: 2,
+                buildContext: newContext,
+            }),
+        );
+
+        await waitFor(() =>
+            expect(send).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    context: {
+                        schema: newContext.schema,
+                        fieldMapping: newContext.fieldMapping,
+                        sampleRows: newContext.sampleRows,
+                    },
+                }),
+            ),
+        );
     });
 
     it('moves queued prompts back into the composer for editing', async () => {
@@ -367,11 +1185,47 @@ describe('BuilderPromptBar', () => {
         await waitFor(() =>
             expect(send).toHaveBeenCalledWith({
                 description: 'group by quarter instead',
+                context: undefined,
+                includeSampleData: false,
                 fileIds: [],
                 claudeModel: 'sonnet',
                 clarifications: [],
+                externalConnections: [],
             }),
         );
+    });
+
+    it('switches a single build action between stop and queue as the draft changes', async () => {
+        const cancel = vi.fn();
+        renderWithProviders(
+            promptBar({ isBuilding: true, onCancelBuild: cancel }),
+        );
+        const input = screen.getByPlaceholderText('Ask for another change…');
+        expect(
+            screen.getByRole('button', { name: 'Stop generation' }),
+        ).toBeEnabled();
+        expect(
+            screen.queryByRole('button', { name: 'Queue message' }),
+        ).not.toBeInTheDocument();
+        await userEvent.type(input, 'Make it green');
+        expect(
+            screen.queryByRole('button', { name: 'Stop generation' }),
+        ).not.toBeInTheDocument();
+        expect(
+            screen.getByRole('button', { name: 'Queue message' }),
+        ).toBeEnabled();
+        expect(screen.queryByText('Enter to queue')).not.toBeInTheDocument();
+        await userEvent.clear(input);
+        expect(
+            screen.getByRole('button', { name: 'Stop generation' }),
+        ).toBeEnabled();
+        expect(
+            screen.queryByRole('button', { name: 'Queue message' }),
+        ).not.toBeInTheDocument();
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Stop generation' }),
+        );
+        expect(cancel).toHaveBeenCalledOnce();
     });
 
     it('preserves the existing first-build cancel behavior with queued prompts', async () => {
@@ -392,12 +1246,62 @@ describe('BuilderPromptBar', () => {
             screen.getByPlaceholderText('Ask for another change…'),
             'make the markers red',
         );
-        await userEvent.keyboard('{Enter}');
+
+        expect(
+            screen.queryByRole('button', { name: 'Stop generation' }),
+        ).not.toBeInTheDocument();
+        expect(
+            screen.getByRole('button', { name: 'Queue message' }),
+        ).toBeEnabled();
+
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Queue message' }),
+        );
+        expect(
+            screen.getByRole('button', { name: 'Stop generation' }),
+        ).toBeInTheDocument();
+        expect(
+            screen.queryByRole('button', { name: 'Queue message' }),
+        ).not.toBeInTheDocument();
 
         await userEvent.click(screen.getByText('Cancel'));
 
         expect(discard).toHaveBeenCalledOnce();
         expect(interrupt).not.toHaveBeenCalled();
+    });
+
+    it('stops an active build without draining queued prompts', async () => {
+        const send = vi.fn();
+        const cancel = vi.fn();
+        const view = renderWithProviders(
+            promptBar({
+                build: buildState({ isBuilding: true, send }),
+                isBuilding: true,
+                latestReadyVersion: 1,
+                onCancelBuild: cancel,
+            }),
+        );
+
+        await userEvent.type(
+            screen.getByPlaceholderText('Ask for another change…'),
+            'make the markers red',
+        );
+        await userEvent.keyboard('{Enter}');
+
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Stop generation' }),
+        );
+        expect(cancel).toHaveBeenCalledOnce();
+
+        view.rerender(
+            promptBar({
+                build: buildState({ send }),
+                latestReadyVersion: 2,
+            }),
+        );
+
+        expect(send).not.toHaveBeenCalled();
+        expect(screen.getByText('make the markers red')).toBeInTheDocument();
     });
 
     it('does not drain queued prompts after cancellation', async () => {
@@ -563,11 +1467,20 @@ describe('BuilderPromptBar', () => {
             fileIds: [],
             claudeModel: 'sonnet',
             clarifications: [],
+            externalConnections: [],
         });
     });
 
     it('reports the wait on the clarifier, and hands the prompt back on cancel', async () => {
-        const abandon = vi.fn(() => 'show revenue split by team');
+        const abandon = vi.fn(
+            (): VizBuildRequest => ({
+                description: 'show revenue split by team',
+                fileIds: [],
+                claudeModel: 'haiku',
+                clarifications: [],
+                externalConnections: [],
+            }),
+        );
         renderWithProviders(
             promptBar({
                 clarification: clarificationStub({
@@ -663,5 +1576,49 @@ describe('BuilderPromptBar', () => {
             'Could not cancel: Request timed out',
         );
         expect(screen.getByText('Cancel')).toBeEnabled();
+    });
+
+    it('offers attaching external connections from composer options', async () => {
+        renderWithProviders(promptBar());
+        await userEvent.click(
+            screen.getByRole('button', { name: 'Composer options' }),
+        );
+        expect(
+            screen.getByRole('button', { name: 'Add external connections' }),
+        ).toBeInTheDocument();
+    });
+
+    it('restores the attached connections when the clarifier is cancelled', async () => {
+        const abandon = vi.fn(
+            (): VizBuildRequest => ({
+                description: 'a map of stores',
+                fileIds: [],
+                claudeModel: 'haiku',
+                clarifications: [],
+                externalConnections: [
+                    {
+                        externalConnectionUuid: 'connection-1',
+                        name: 'Stores API',
+                        alias: 'stores_api',
+                    },
+                ],
+            }),
+        );
+        renderWithProviders(
+            promptBar({
+                clarification: clarificationStub({
+                    clarifyingPrompt: 'a map of stores',
+                    abandon,
+                }),
+            }),
+        );
+
+        await userEvent.click(screen.getByText('Cancel'));
+
+        expect(
+            screen.getByRole('button', {
+                name: 'Remove connection: Stores API',
+            }),
+        ).toBeInTheDocument();
     });
 });

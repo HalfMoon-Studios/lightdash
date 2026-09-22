@@ -2,6 +2,8 @@ import {
     assertUnreachable,
     DEFAULT_RESULTS_PAGE_SIZE,
     DownloadFileType,
+    isBigqueryTokenErrorMessage,
+    LightdashCustomSqlProvenanceChartUuidHeader,
     MAX_SAFE_INTEGER,
     ParameterError,
     QueryExecutionContext,
@@ -21,6 +23,7 @@ import {
     type PivotConfiguration,
     type ReadyQueryResultsPage,
     type ResultRow,
+    type UUID,
 } from '@lightdash/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -43,6 +46,7 @@ export type QueryResultsProps = {
     parameters?: ParametersValuesMap;
     pivotConfiguration?: PivotConfiguration;
     pivotResults?: boolean;
+    customSqlProvenanceChartUuid?: UUID;
 };
 
 /**
@@ -62,16 +66,27 @@ const isRedshiftIamTokenErrorMessage = (message: string): boolean => {
     );
 };
 
-const getAsyncQueryError = (message: string | null): ApiError => {
+const getAsyncQueryErrorType = (
+    message: string,
+): Pick<ApiError['error'], 'name' | 'statusCode'> => {
+    if (isRedshiftIamTokenErrorMessage(message)) {
+        return { name: 'RedshiftIamTokenError', statusCode: 401 };
+    }
+    if (isBigqueryTokenErrorMessage(message)) {
+        return { name: 'BigqueryTokenError', statusCode: 401 };
+    }
+    return { name: 'Error', statusCode: 500 };
+};
+
+export const getAsyncQueryError = (message: string | null): ApiError => {
     const errorMessage = message || 'Query failed';
-    const isRedshiftIamTokenError =
-        isRedshiftIamTokenErrorMessage(errorMessage);
+    const { name, statusCode } = getAsyncQueryErrorType(errorMessage);
 
     return {
         status: 'error',
         error: {
-            name: isRedshiftIamTokenError ? 'RedshiftIamTokenError' : 'Error',
-            statusCode: isRedshiftIamTokenError ? 401 : 500,
+            name,
+            statusCode,
             message: errorMessage,
             data: {},
         },
@@ -81,13 +96,22 @@ const getAsyncQueryError = (message: string | null): ApiError => {
 const executeAsyncMetricQuery = async (
     projectUuid: string,
     data: ExecuteAsyncMetricQueryRequestParams,
-    options: { signal?: AbortSignal },
+    options: {
+        signal?: AbortSignal;
+        customSqlProvenanceChartUuid?: UUID;
+    },
 ): Promise<ApiExecuteAsyncMetricQueryResults> => {
     return lightdashApi<ApiExecuteAsyncMetricQueryResults>({
         url: `/projects/${projectUuid}/query/metric-query`,
         version: 'v2',
         method: 'POST',
         body: JSON.stringify(data),
+        headers: options.customSqlProvenanceChartUuid
+            ? {
+                  [LightdashCustomSqlProvenanceChartUuidHeader]:
+                      options.customSqlProvenanceChartUuid,
+              }
+            : undefined,
         signal: options.signal,
     });
 };
@@ -194,7 +218,10 @@ const executeAsyncQuery = (
                 parameters: data.parameters,
                 pivotConfiguration: data.pivotConfiguration,
             },
-            { signal },
+            {
+                signal,
+                customSqlProvenanceChartUuid: data.customSqlProvenanceChartUuid,
+            },
         );
     }
     return Promise.reject(new ParameterError('Missing QueryResultsProps'));
@@ -297,6 +324,11 @@ const getResultsPage = async (
         method: 'GET',
     });
 };
+
+// Headless renders poll many tiles at once, so poll them less often
+const isHeadlessBrowser = () => navigator.userAgent.includes('HeadlessChrome');
+const getInitialBackoffMs = () => (isHeadlessBrowser() ? 1000 : 250);
+const getMaxBackoffMs = () => (isHeadlessBrowser() ? 5000 : 1000);
 
 export type InfiniteQueryResults = Partial<
     Pick<
@@ -402,8 +434,7 @@ export const useInfiniteQueryResults = (
 
     const queryClient = useQueryClient();
 
-    // Initial backoff time in ms
-    const backoffRef = useRef(250);
+    const backoffRef = useRef(getInitialBackoffMs());
 
     const nextPage = useQuery<
         ApiGetAsyncQueryResults & { clientFetchTimeMs: number },
@@ -427,11 +458,11 @@ export const useInfiniteQueryResults = (
             switch (status) {
                 case QueryHistoryStatus.ERROR:
                 case QueryHistoryStatus.EXPIRED: {
-                    backoffRef.current = 250;
+                    backoffRef.current = getInitialBackoffMs();
                     throw getAsyncQueryError(results.error);
                 }
                 case QueryHistoryStatus.CANCELLED: {
-                    backoffRef.current = 250;
+                    backoffRef.current = getInitialBackoffMs();
                     throw <ApiError>{
                         status: 'error',
                         error: {
@@ -452,11 +483,12 @@ export const useInfiniteQueryResults = (
                             fetchArgs,
                         ]),
                     );
-                    // Implement backoff: 250ms -> 500ms -> 1000ms (then stay at 1000ms)
-                    if (backoffRef.current < 1000) {
+                    // Double the backoff until it reaches the cap
+                    const maxBackoffMs = getMaxBackoffMs();
+                    if (backoffRef.current < maxBackoffMs) {
                         backoffRef.current = Math.min(
                             backoffRef.current * 2,
-                            1000,
+                            maxBackoffMs,
                         );
                     }
                     return {
@@ -465,7 +497,7 @@ export const useInfiniteQueryResults = (
                     };
                 }
                 case QueryHistoryStatus.READY: {
-                    backoffRef.current = 250;
+                    backoffRef.current = getInitialBackoffMs();
                     return {
                         ...results,
                         clientFetchTimeMs,
@@ -513,6 +545,7 @@ export const useInfiniteQueryResults = (
         if (hasQueryUuidChanged || hasProjectUuidChanged) {
             // Reset fetched pages before updating the fetch args
             setFetchedPages([]);
+            backoffRef.current = getInitialBackoffMs();
             // Reset fetchAll before updating the fetch args
             setFetchAll(false);
             setFetchArgs({

@@ -1,5 +1,6 @@
 import { APP_UPGRADE_PROMPT_LABEL } from '@lightdash/common';
 import { fireEvent, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,7 +12,7 @@ import VersionHistoryPanel from './VersionHistoryPanel';
 const styles = readFileSync(
     join(
         process.cwd(),
-        'src/features/chartTypes/builder/VersionHistoryPanel.module.css',
+        'src/features/apps/components/AppVersionHistoryPanel.module.css',
     ),
     'utf8',
 );
@@ -33,6 +34,7 @@ const defaultProps = {
     hasEarlier: false,
     isFetchingEarlier: false,
     fetchEarlier: vi.fn(),
+    currentThreadNumber: null,
 };
 
 const twoVersions = [
@@ -53,12 +55,13 @@ describe('VersionHistoryPanel', () => {
         const labels = screen.getAllByText(/^v\d+$/);
         expect(labels.map((l) => l.textContent)).toEqual(['v2', 'v1']);
         expect(screen.getByText('add a legend')).toBeInTheDocument();
-        expect(screen.getByText('Current')).toBeInTheDocument();
+        expect(screen.getByText('v2')).toHaveAttribute('data-tone', 'live');
+        expect(screen.getByText('v1')).toHaveAttribute('data-tone', 'past');
     });
 
-    it('pins an older version on click and unpins from the current one', () => {
+    it('previews an older version from its button and unpins from the current one', () => {
         const onView = vi.fn();
-        renderWithProviders(
+        const { unmount } = renderWithProviders(
             <VersionHistoryPanel
                 {...defaultProps}
                 versions={twoVersions}
@@ -66,10 +69,27 @@ describe('VersionHistoryPanel', () => {
             />,
         );
 
-        fireEvent.click(screen.getByLabelText('View v1'));
+        expect(screen.getAllByRole('button', { name: 'Preview' })).toHaveLength(
+            1,
+        );
+        fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
         expect(onView).toHaveBeenCalledWith(1);
+        unmount();
 
-        fireEvent.click(screen.getByLabelText('View v2'));
+        renderWithProviders(
+            <VersionHistoryPanel
+                {...defaultProps}
+                versions={twoVersions}
+                viewedVersion={1}
+                onView={onView}
+            />,
+        );
+        fireEvent.click(screen.getByRole('button', { name: 'Previewing' }));
+        expect(onView).toHaveBeenCalledWith(null);
+
+        // The current version offers Preview too while v1 is pinned.
+        onView.mockClear();
+        fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
         expect(onView).toHaveBeenCalledWith(null);
     });
 
@@ -82,7 +102,9 @@ describe('VersionHistoryPanel', () => {
             />,
         );
 
-        expect(screen.getByText('Viewing')).toBeInTheDocument();
+        expect(
+            screen.getByRole('button', { name: 'Previewing' }),
+        ).toBeInTheDocument();
 
         fireEvent.click(screen.getByText('Restore'));
         expect(screen.getByTestId('restore-modal')).toHaveTextContent(
@@ -109,16 +131,6 @@ describe('VersionHistoryPanel', () => {
         expect(styles).not.toMatch(/animation:\s*ldPulse/);
     });
 
-    it('uses the theme-aware neutral selection surface', () => {
-        const activeEntryStyles = styles.match(
-            /\.entry\[data-active='true'\]\s*\{([^}]*)\}/s,
-        )?.[1];
-
-        expect(activeEntryStyles).toContain('var(--mantine-color-ldGray-1)');
-        expect(activeEntryStyles).toContain('var(--mantine-color-dark-5)');
-        expect(styles).not.toContain('ldBrandViolet');
-    });
-
     it('writes a live entry for a build not yet in history', () => {
         renderWithProviders(
             <VersionHistoryPanel
@@ -136,7 +148,7 @@ describe('VersionHistoryPanel', () => {
         expect(screen.getByText('make it teal')).toBeInTheDocument();
     });
 
-    it('explains a failed version and offers no preview of it', () => {
+    it('explains a failed version on its pill and offers no preview of it', async () => {
         const onView = vi.fn();
         renderWithProviders(
             <VersionHistoryPanel
@@ -153,10 +165,14 @@ describe('VersionHistoryPanel', () => {
             />,
         );
 
-        expect(screen.getByText('Failed')).toBeInTheDocument();
-        expect(screen.getByText('Sandbox crashed')).toBeInTheDocument();
+        const pill = screen.getByText('v3');
+        expect(pill).toHaveAttribute('data-tone', 'failed');
+        await userEvent.hover(pill);
+        expect(await screen.findByText('Sandbox crashed')).toBeInTheDocument();
 
-        fireEvent.click(screen.getByLabelText('View v3'));
+        expect(screen.getAllByRole('button', { name: 'Preview' })).toHaveLength(
+            1,
+        );
         expect(onView).not.toHaveBeenCalled();
     });
 
@@ -254,7 +270,7 @@ describe('VersionHistoryPanel', () => {
         expect(fetchEarlier).toHaveBeenCalledTimes(1);
     });
 
-    it('closes from its own header', () => {
+    it('collapses from its named panel header', () => {
         const onClose = vi.fn();
         renderWithProviders(
             <VersionHistoryPanel
@@ -264,7 +280,84 @@ describe('VersionHistoryPanel', () => {
             />,
         );
 
-        fireEvent.click(screen.getByLabelText('Close history'));
+        expect(
+            screen.getByRole('heading', { name: 'Version history' }),
+        ).toBeInTheDocument();
+        fireEvent.click(
+            screen.getByRole('button', { name: 'Collapse version history' }),
+        );
         expect(onClose).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('VersionHistoryPanel schema changes', () => {
+    const schema = (fields: string[]) => ({
+        fields: fields.map((name) => ({
+            name,
+            label: name[0].toUpperCase() + name.slice(1),
+            type: 'dimension' as const,
+            required: true,
+        })),
+        configOptions: [],
+        colorPalette: null,
+    });
+    const withSchema = (
+        version: number,
+        fields: string[],
+        prompt = `v${version} prompt`,
+    ) =>
+        appVersion({
+            version,
+            prompt,
+            resources: {
+                images: [],
+                files: [],
+                charts: [],
+                dashboardName: null,
+                clarifications: [],
+                vizSchema: schema(fields),
+            },
+        });
+
+    it('summarises what changed against the previous declared schema and expands the detail', () => {
+        renderWithProviders(
+            <VersionHistoryPanel
+                {...defaultProps}
+                latestReadyVersion={3}
+                versions={[
+                    withSchema(3, ['category', 'region']),
+                    appVersion({
+                        version: 2,
+                        status: 'error',
+                        prompt: 'broken',
+                    }),
+                    withSchema(1, ['category']),
+                ]}
+            />,
+        );
+
+        expect(screen.getByText('+1 field')).toBeInTheDocument();
+        expect(
+            screen.queryByLabelText('What changed in v1'),
+        ).not.toBeInTheDocument();
+        expect(screen.queryByText('Region')).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByLabelText('What changed in v3'));
+
+        expect(screen.getByText('Region')).toBeInTheDocument();
+    });
+
+    it('stays quiet when the declaration did not move', () => {
+        renderWithProviders(
+            <VersionHistoryPanel
+                {...defaultProps}
+                versions={[
+                    withSchema(2, ['category']),
+                    withSchema(1, ['category']),
+                ]}
+            />,
+        );
+
+        expect(screen.queryByText('What changed')).not.toBeInTheDocument();
     });
 });

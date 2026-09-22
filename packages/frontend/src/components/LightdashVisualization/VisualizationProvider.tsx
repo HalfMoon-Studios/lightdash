@@ -2,13 +2,14 @@ import {
     assertUnreachable,
     ChartType,
     FeatureFlags,
-    isDimension,
+    MERGE_TABLE_NAME,
     type ApiErrorDetail,
     type ChartConfig,
     type DashboardFilters,
     type DateZoom,
     type EChartsSeries,
     type ItemsMap,
+    type MergeFieldOrigins,
     type MetricQuery,
     type ParametersValuesMap,
     type PivotValue,
@@ -27,11 +28,14 @@ import {
     type FC,
     type RefObject,
 } from 'react';
+import { resolveMergeColumnOrder } from '../../features/mergeQuery/utils/resolveMergeColumnOrder';
 import { type CartesianTypeOptions } from '../../hooks/cartesianChartConfig/useCartesianChartConfig';
 import { type SeriesLike } from '../../hooks/useChartColorConfig/types';
 import { useChartColorConfig } from '../../hooks/useChartColorConfig/useChartColorConfig';
 import {
+    calculateFallbackSeriesColors,
     calculateSeriesLikeIdentifier,
+    getDimensionValueColor,
     isGroupedSeries,
 } from '../../hooks/useChartColorConfig/utils';
 import usePivotDimensions from '../../hooks/usePivotDimensions';
@@ -39,7 +43,10 @@ import { type InfiniteQueryResults } from '../../hooks/useQueryResults';
 import { useServerFeatureFlag } from '../../hooks/useServerOrClientFeatureFlag';
 import { type EChartsReact } from '../EChartsReactWrapper';
 import { type EchartsSeriesClickEvent } from '../SimpleChart';
-import Context, { type EmbeddedDashboardInteractivity } from './context';
+import Context, {
+    type EmbeddedDashboardInteractivity,
+    type SavedChartReference,
+} from './context';
 import { type useVisualizationContext } from './useVisualizationContext';
 import VisualizationBigNumberConfig from './VisualizationBigNumberConfig';
 import VisualizationCartesianConfig from './VisualizationConfigCartesian';
@@ -63,6 +70,8 @@ export type VisualizationProviderProps = {
         metricQuery?: MetricQuery;
         fields?: ItemsMap;
         resolvedTimezone?: string;
+        /** Where each field came from when the results are a merge. */
+        fieldOrigins?: MergeFieldOrigins;
     };
     parameters?: ParametersValuesMap;
     isLoading: boolean;
@@ -76,6 +85,7 @@ export type VisualizationProviderProps = {
     onPivotDimensionsChange?: (value: string[] | undefined) => void;
     onPivotRowsChange?: (value: string[] | undefined) => void;
     savedChartUuid?: string;
+    savedChartReference?: SavedChartReference;
     dashboardFilters?: DashboardFilters;
     invalidateCache?: boolean;
     colorPalette: string[];
@@ -109,6 +119,7 @@ const VisualizationProvider: FC<
     onPivotRowsChange,
     children,
     savedChartUuid,
+    savedChartReference,
     dashboardFilters,
     invalidateCache,
     colorPalette,
@@ -154,6 +165,7 @@ const VisualizationProvider: FC<
             metricQuery?: MetricQuery;
             fields?: ItemsMap;
             resolvedTimezone?: string;
+            fieldOrigins?: MergeFieldOrigins;
         }
     >();
 
@@ -179,22 +191,20 @@ const VisualizationProvider: FC<
     // If we don't toggle any fields, (eg: when you `explore from here`) columnOrder on tableConfig might be empty
     // so we initialize it with the fields from resultData
     const defaultColumnOrder = useMemo(() => {
-        if (columnOrder.length > 0) {
-            return columnOrder;
-        } else {
-            const metricQuery = resultsData?.metricQuery;
-            const metricQueryFields =
-                metricQuery !== undefined
-                    ? [
-                          ...metricQuery.dimensions,
-                          ...metricQuery.metrics,
-                          ...metricQuery.tableCalculations.map(
-                              ({ name }) => name,
-                          ),
-                      ]
-                    : [];
-            return metricQueryFields;
+        const metricQuery = resultsData?.metricQuery;
+        const metricQueryFields =
+            metricQuery !== undefined
+                ? [
+                      ...metricQuery.dimensions,
+                      ...metricQuery.metrics,
+                      ...metricQuery.tableCalculations.map(({ name }) => name),
+                  ]
+                : [];
+        // A merged result is keyed by merged ids, which a chart saved before it was merged does not carry
+        if (metricQuery?.exploreName === MERGE_TABLE_NAME) {
+            return resolveMergeColumnOrder(metricQueryFields, columnOrder);
         }
+        return columnOrder.length > 0 ? columnOrder : metricQueryFields;
     }, [resultsData?.metricQuery, columnOrder]);
 
     /**
@@ -214,15 +224,7 @@ const VisualizationProvider: FC<
                 ? computedSeries
                 : chartConfig.config.eChartsConfig.series;
 
-        const sortedSeriesIdentifiers = (allSeries ?? [])
-            .map((series) => calculateSeriesLikeIdentifier(series).join('|'))
-            .sort((a, b) => b.localeCompare(a));
-
-        return Object.fromEntries(
-            sortedSeriesIdentifiers.map((identifier, i) => {
-                return [identifier, colorPalette[i % colorPalette.length]];
-            }),
-        );
+        return calculateFallbackSeriesColors(allSeries ?? [], colorPalette);
     }, [chartConfig, colorPalette, computedSeries]);
 
     const handleChartConfigChange = useCallback(
@@ -247,13 +249,12 @@ const VisualizationProvider: FC<
     const getGroupColor = useCallback(
         (groupPrefix: string, identifier: string) => {
             if (itemsMap) {
-                const dimension = itemsMap[groupPrefix];
-                if (dimension && isDimension(dimension)) {
-                    const colors = dimension.colors;
-                    if (colors && colors[identifier]) {
-                        return colors[identifier];
-                    }
-                }
+                const fixedColor = getDimensionValueColor(
+                    itemsMap,
+                    groupPrefix,
+                    identifier,
+                );
+                if (fixedColor) return fixedColor;
             }
 
             return calculateKeyColorAssignment(groupPrefix, identifier);
@@ -294,17 +295,12 @@ const VisualizationProvider: FC<
             }
             if (itemsMap && pivot) {
                 const { field, value } = pivot;
-                const dimension = itemsMap[field];
-                if (
-                    dimension &&
-                    isDimension(dimension) &&
-                    typeof value === 'string'
-                ) {
-                    const colors = dimension.colors;
-                    if (colors && colors[value]) {
-                        return colors[value];
-                    }
-                }
+                const fixedColor = getDimensionValueColor(
+                    itemsMap,
+                    field,
+                    value,
+                );
+                if (fixedColor) return fixedColor;
             }
 
             /**
@@ -364,6 +360,7 @@ const VisualizationProvider: FC<
         getSeriesColor,
         chartConfig,
         savedChartUuid,
+        savedChartReference,
         parameters,
         containerWidth,
         containerHeight,
@@ -392,6 +389,7 @@ const VisualizationProvider: FC<
                     colorPalette={colorPalette}
                     tableCalculationsMetadata={tableCalculationsMetadata}
                     parameters={parameters}
+                    unsavedMetricQuery={unsavedMetricQuery}
                 >
                     {({ visualizationConfig }) => (
                         <Context.Provider
@@ -412,6 +410,7 @@ const VisualizationProvider: FC<
                     colorPalette={colorPalette}
                     tableCalculationsMetadata={tableCalculationsMetadata}
                     parameters={parameters}
+                    unsavedMetricQuery={unsavedMetricQuery}
                 >
                     {({ visualizationConfig }) => (
                         <Context.Provider

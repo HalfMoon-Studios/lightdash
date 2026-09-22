@@ -404,6 +404,30 @@ describe('getMetadata parameters', () => {
         return explore;
     };
 
+    it('omits only field inventories for internal preload while preserving rules and parameters', () => {
+        const explore = makeParameterizedExplore();
+        explore.aiHint = 'Use net revenue after refunds.';
+        const args = {
+            requests: [{ type: 'explore' as const, exploreIds: ['sales'] }],
+        };
+        const dependencies = {
+            availableExplores: [explore],
+            projectParameterDefinitions: {},
+        };
+        const full = executeGetMetadata(args, dependencies);
+        const compact = executeGetMetadata(args, dependencies, {
+            includeFieldLists: false,
+        });
+        expect(compact.structuredContent).toEqual(full.structuredContent);
+        expect(compact.result).toContain('Use net revenue after refunds.');
+        expect(compact.result).toContain('orders.metric');
+        expect(compact.result).toContain('default: "revenue"');
+        expect(compact.result).toContain('options: revenue, active_users');
+        expect(compact.result).not.toContain('base dimensions');
+        expect(compact.result).not.toContain('base metrics');
+        expect(full.result).toContain('base dimensions');
+    });
+
     it('renders referenced parameter definitions on the explore', async () => {
         const result = await execute(makeParameterizedExplore(), [
             { type: 'explore', exploreIds: ['sales'] },
@@ -490,5 +514,43 @@ describe('getMetadata parameters', () => {
             status: 'found',
             requiredParameters: ['orders.metric'],
         });
+    });
+});
+
+describe('fast source details', () => {
+    it('adds whole join predicates and table filters only when enabled', () => {
+        const explore = makeExplore({});
+        explore.joinedTables = [
+            {
+                table: 'users',
+                sqlOn: '${orders.user_id} = ${users.id}',
+                compiledSqlOn: 'orders.user_id = users.id',
+                always: true,
+            },
+        ];
+        explore.tables.orders.sqlWhere = 'orders.deleted_at IS NULL';
+        const args = {
+            requests: [{ type: 'explore' as const, exploreIds: ['sales'] }],
+        };
+        const dependencies = {
+            availableExplores: [explore],
+            projectParameterDefinitions: {},
+        };
+        const legacy = executeGetMetadata(args, dependencies);
+        const fast = executeGetMetadata(args, {
+            ...dependencies,
+            includeSourceDetails: true,
+        });
+        expect(fast.result).toContain(explore.joinedTables[0].sqlOn);
+        expect(fast.result).toContain('orders.deleted_at IS NULL');
+        expect(legacy.result).not.toContain('sqlOn');
+        expect(legacy.result).not.toContain('orders.deleted_at IS NULL');
+        expect(fast.structuredContent).toEqual(legacy.structuredContent);
+        expect(
+            executeGetMetadata(args, {
+                ...dependencies,
+                includeSourceDetails: false,
+            }),
+        ).toEqual(legacy);
     });
 });

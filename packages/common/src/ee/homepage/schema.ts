@@ -33,13 +33,19 @@ const greetingBlockSchema = z.object({
 });
 
 const collectionItemRefSchema = z.object({
-    contentType: z.enum(['chart', 'dashboard', 'space', 'data_app']),
+    contentType: z.enum([
+        'chart',
+        'dashboard',
+        'space',
+        'data_app',
+        'document',
+    ]),
     uuid: z.string(),
 });
 
 const contentLayoutSchema = z.enum(['card', 'list']);
 
-const collectionBlockSchema = z.object({
+export const collectionBlockSchema = z.object({
     id: z.string(),
     type: z.literal('collection'),
     config: z.object({
@@ -60,7 +66,7 @@ const collectionBlockSchema = z.object({
         limit: z.number().int().positive().optional(),
         layout: contentLayoutSchema.optional(),
         contentTypes: z
-            .array(z.enum(['chart', 'dashboard', 'space', 'data_app']))
+            .array(collectionItemRefSchema.shape.contentType)
             .optional(),
     }),
 });
@@ -74,7 +80,7 @@ const resourceItemSchema = z.object({
     appUuid: z.string().optional(),
 });
 
-const resourcesBlockSchema = z.object({
+export const resourcesBlockSchema = z.object({
     id: z.string(),
     type: z.literal('resources'),
     config: z.object({
@@ -105,10 +111,16 @@ const quickActionSchema = z
             dashboardUuid: z.string(),
             label: z.string(),
         }),
+        z.object({
+            type: z.literal('space'),
+            spaceUuid: z.string(),
+            label: z.string(),
+        }),
+        z.object({ type: z.literal('my-space') }),
     ])
     .and(z.object({ primary: z.boolean().optional() }));
 
-const quickActionsBlockSchema = z.object({
+export const quickActionsBlockSchema = z.object({
     id: z.string(),
     type: z.literal('quick-actions'),
     config: z.object({ actions: z.array(quickActionSchema) }),
@@ -124,10 +136,16 @@ const ctaTargetSchema = z.discriminatedUnion('type', [
         dashboardUuid: z.string(),
         label: z.string(),
     }),
+    z.object({
+        type: z.literal('space'),
+        spaceUuid: z.string(),
+        label: z.string(),
+    }),
+    z.object({ type: z.literal('my-space') }),
     z.object({ type: z.literal('link'), url: z.string() }),
 ]);
 
-const ctaBlockSchema = z.object({
+export const ctaBlockSchema = z.object({
     id: z.string(),
     type: z.literal('cta'),
     config: z.object({

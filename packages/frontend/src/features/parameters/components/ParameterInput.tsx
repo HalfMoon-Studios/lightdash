@@ -3,6 +3,7 @@ import {
     FieldType,
     getItemId,
     isLightdashParameterOption,
+    resolveParameterDefault,
     type FilterableItem,
     type LightdashProjectParameter,
     type ParametersValuesMap,
@@ -13,6 +14,7 @@ import {
     Group,
     MultiSelect,
     Select,
+    type ComboboxItem,
     type ComboboxItemGroup,
 } from '@mantine/core';
 import { IconPlus } from '@tabler/icons-react';
@@ -145,10 +147,11 @@ export const ParameterInput: FC<ParameterInputProps> = ({
     }, [results, shouldFetch]);
 
     const placeholder = useMemo(() => {
-        const defaultValues = parameter.default
-            ? Array.isArray(parameter.default)
-                ? parameter.default
-                : [parameter.default]
+        const resolvedDefault = resolveParameterDefault(parameter);
+        const defaultValues = resolvedDefault
+            ? Array.isArray(resolvedDefault)
+                ? resolvedDefault
+                : [resolvedDefault]
             : undefined;
         return defaultValues
             ? `${
@@ -314,7 +317,7 @@ export const ParameterInput: FC<ParameterInputProps> = ({
                                       fetchedLabelMap.get(option) ??
                                       formatDisplayValue(option),
                               })),
-                      } satisfies ComboboxItemGroup,
+                      } satisfies ComboboxItemGroup<ComboboxItem>,
                   ]
                 : [];
 
@@ -367,7 +370,7 @@ export const ParameterInput: FC<ParameterInputProps> = ({
                 }Options loaded at ${refreshedAt.toLocaleTimeString()} - ↻ Click to refresh`;
 
                 return (
-                    <Box fz={11} className={styles.refreshItem}>
+                    <Box fz="xs" className={styles.refreshItem}>
                         {refreshLabel}
                     </Box>
                 );

@@ -8,7 +8,9 @@ import DashboardCreateModal from '../components/common/modal/DashboardCreateModa
 import Page from '../components/common/Page/Page';
 import PageBreadcrumbs from '../components/common/PageBreadcrumbs';
 import InfiniteResourceTable from '../components/common/ResourceView/InfiniteResourceTable';
+import { ColumnVisibility } from '../components/common/ResourceView/types';
 import { useDashboards } from '../hooks/dashboard/useDashboards';
+import { useContentAuthoringEnabled } from '../hooks/useContentAuthoringEnabled';
 import { useProjectUrlIdentifier } from '../hooks/useProjectRoute';
 import { useProjectUuid } from '../hooks/useProjectUuid';
 import useCreateInAnySpaceAccess from '../hooks/user/useCreateInAnySpaceAccess';
@@ -16,6 +18,7 @@ import useApp from '../providers/App/useApp';
 import { FavoritesProvider } from '../providers/Favorites/FavoritesProvider';
 
 const SavedDashboards = () => {
+    const authoringEnabled = useContentAuthoringEnabled();
     const navigate = useNavigate();
     const projectUuid = useProjectUuid();
     const projectUrlIdentifier = useProjectUrlIdentifier();
@@ -66,6 +69,9 @@ const SavedDashboards = () => {
                             userCanCreateDashboards &&
                             !isDemo && (
                                 <Button
+                                    display={
+                                        authoringEnabled ? undefined : 'none'
+                                    }
                                     leftSection={<IconPlus size={18} />}
                                     onClick={handleCreateDashboard}
                                 >
@@ -78,6 +84,10 @@ const SavedDashboards = () => {
                         filters={{
                             projectUuid,
                             contentTypes: [ContentType.DASHBOARD],
+                        }}
+                        ownerFilter
+                        columnVisibility={{
+                            [ColumnVisibility.OWNER]: true,
                         }}
                     />
                 </Stack>

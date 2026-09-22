@@ -9,7 +9,7 @@ import {
     type ChartConfig,
     type DataAppVizChart,
     type EChartsSeries,
-    type ToolRunQueryArgs,
+    type PersistedRunQueryPayload,
 } from '@lightdash/common';
 import {
     Box,
@@ -57,7 +57,7 @@ import {
 type Props = {
     vizQueryData: ApiAiAgentThreadMessageVizQuery;
     results: InfiniteQueryResults;
-    chartConfig: ToolRunQueryArgs;
+    chartConfig: PersistedRunQueryPayload;
     // Set for custom chart type answers (from the artifact envelope): the
     // saved-chart shape the dedicated renderer mounts with.
     customChartType?: DataAppVizChart | null;
@@ -122,7 +122,10 @@ export const AiVisualizationRenderer: FC<Props> = ({
 
     const { metricQuery, fields, resolvedTimezone } = vizQueryData.query;
     const tableName = metricQuery?.exploreName;
-    const allowsAnalyticalInteraction = interactionMode === 'full';
+    // Merged result columns do not belong to a single explore. Drill-down
+    // and underlying-data requests cannot use their synthetic query.
+    const allowsAnalyticalInteraction =
+        interactionMode === 'full' && !vizQueryData.mergeQuery;
     const { data: explore } = useExplore(
         loadExplore && allowsAnalyticalInteraction ? tableName : undefined,
     );
@@ -355,12 +358,13 @@ export const AiVisualizationRenderer: FC<Props> = ({
                     </Box>
 
                     {displayDetails ? (
-                        <Stack gap="xs" style={{ flexShrink: 0 }}>
+                        <Stack gap="xs" flex="0 0 auto">
                             <Flex align="center" justify="flex-start">
                                 <Button
                                     size="compact-xs"
                                     variant="subtle"
                                     color="ldGray"
+                                    c="dimmed"
                                     aria-expanded={detailsExpanded}
                                     rightSection={
                                         <MantineIcon
@@ -397,7 +401,7 @@ export const AiVisualizationRenderer: FC<Props> = ({
                                         .join(' · ')}
                                 </Button>
                             </Flex>
-                            <Collapse in={detailsExpanded}>
+                            <Collapse expanded={detailsExpanded}>
                                 <Stack gap="xs">
                                     <ErrorBoundary>
                                         {displayMetricsAndDimensions && (

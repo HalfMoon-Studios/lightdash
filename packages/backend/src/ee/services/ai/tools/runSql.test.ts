@@ -1,4 +1,6 @@
 import { type AiWebAppPrompt, type SlackPrompt } from '@lightdash/common';
+import { EMPTY_QUERY_GUIDANCE } from '../decisions/queryReview';
+import type { QueryReviewer } from '../decisions/queryReview';
 import { getRunSql } from './runSql';
 
 type RunSqlTool = ReturnType<typeof getRunSql>;
@@ -7,12 +9,14 @@ type RunSqlOutput = {
     metadata?: { status: string };
 };
 type MakeToolOptions = {
+    reviewQuery?: QueryReviewer;
     autoApproveSql?: boolean;
     autoApproveSqlUserUuid?: string | null;
     waitForSqlApproval?: import('vitest').Mock;
     recordSqlApproval?: import('vitest').Mock;
     maxQueryLimit?: number;
     enableDataAccess?: boolean;
+    slackLinksOnly?: boolean;
 };
 
 const executeRunSql = (
@@ -37,6 +41,7 @@ const makePrompt = (): AiWebAppPrompt => ({
     agentUuid: 'agent-uuid',
     promptUuid: 'prompt-uuid',
     threadUuid: 'thread-uuid',
+    threadCreatedFrom: 'web_app',
     createdByUserUuid: 'user-uuid',
     userUuid: 'user-uuid',
     prompt: 'How many users do we have?',
@@ -57,12 +62,14 @@ const makeSlackPrompt = (): SlackPrompt => ({
 });
 
 const makeTool = ({
+    reviewQuery,
     autoApproveSql = false,
     autoApproveSqlUserUuid = null,
     waitForSqlApproval = vi.fn().mockResolvedValue('approved'),
     recordSqlApproval = vi.fn().mockResolvedValue(true),
     maxQueryLimit = 5000,
     enableDataAccess = true,
+    slackLinksOnly = false,
     useSlackStreamCard = false,
     prompt = makePrompt(),
     sqlScope = null,
@@ -72,6 +79,7 @@ const makeTool = ({
     sqlScope?: { schemas: string[]; catalogs?: string[] } | null;
 } = {}) => {
     const dependencies = {
+        reviewQuery,
         updateProgress: vi.fn().mockResolvedValue(undefined),
         runSqlJob: vi.fn().mockResolvedValue({
             queryUuid: 'query-uuid',
@@ -92,6 +100,7 @@ const makeTool = ({
         autoApproveSqlUserUuid,
         maxQueryLimit,
         enableDataAccess,
+        slackLinksOnly,
         useSlackStreamCard,
         sqlScope,
     };
@@ -402,5 +411,138 @@ describe('getRunSql agent SQL scope', () => {
 
         expect(dependencies.runSqlJob).toHaveBeenCalled();
         expect(output.metadata?.status).toBe('success');
+    });
+});
+
+describe('getRunSql Slack links only', () => {
+    const largeResult = {
+        queryUuid: 'query-uuid',
+        rows: Array.from({ length: 30 }, (_, index) => ({ answer: index })),
+        columns: ['answer'],
+        rowCount: 30,
+    };
+
+    it('does not upload the full CSV into the Slack thread', async () => {
+        const { tool, dependencies } = makeTool({
+            prompt: makeSlackPrompt(),
+            slackLinksOnly: true,
+        });
+        dependencies.runSqlJob.mockResolvedValue(largeResult);
+
+        const output = await executeRunSql(tool);
+
+        expect(output.metadata?.status).toBe('success');
+        expect(dependencies.sendFile).not.toHaveBeenCalled();
+    });
+
+    it('keeps uploading the full CSV when the setting is off', async () => {
+        const { tool, dependencies } = makeTool({
+            prompt: makeSlackPrompt(),
+        });
+        dependencies.runSqlJob.mockResolvedValue(largeResult);
+
+        await executeRunSql(tool);
+
+        expect(dependencies.sendFile).toHaveBeenCalledWith(
+            expect.objectContaining({ filename: 'lightdash-sql-results.csv' }),
+        );
+    });
+});
+
+describe('SQL query review', () => {
+    it.each([0, 1])(
+        'reviews SQL and conditionally diagnoses its %s-row result',
+        async (rowCount) => {
+            const reviewQuery = vi
+                .fn()
+                .mockImplementation(async (_plan, result) =>
+                    result?.emptyResult
+                        ? EMPTY_QUERY_GUIDANCE + result.review
+                        : ' Query/question review: requested top-N differs.',
+                );
+            const { tool, dependencies } = makeTool({
+                reviewQuery,
+                maxQueryLimit: 20,
+            });
+            dependencies.runSqlJob.mockResolvedValue({
+                queryUuid: 'query',
+                rows: rowCount ? [{ answer: 1 }] : [],
+                columns: ['answer'],
+                rowCount,
+            });
+            const output = await executeRunSql(tool);
+            expect(output.metadata?.status).toBe('success');
+            expect(output.result).toContain('requested top-N differs');
+            expect(reviewQuery).toHaveBeenNthCalledWith(1, {
+                kind: 'sql',
+                sql: 'select 1 as answer',
+                limit: 20,
+            });
+            expect(reviewQuery).toHaveBeenCalledTimes(rowCount ? 1 : 2);
+            if (!rowCount)
+                expect(reviewQuery).toHaveBeenNthCalledWith(
+                    2,
+                    { kind: 'sql', sql: 'select 1 as answer', limit: 20 },
+                    {
+                        emptyResult: true,
+                        review: ' Query/question review: requested top-N differs.',
+                    },
+                );
+            expect(dependencies.runSqlJob).toHaveBeenCalledExactlyOnceWith({
+                sql: 'select 1 as answer',
+                limit: 20,
+            });
+            if (!rowCount)
+                expect(output.result).toContain('Preserve the user’s scope');
+        },
+    );
+    it.each(['disabled', 'rejected', 'scope'] as const)(
+        'does not review SQL when %s',
+        async (reason) => {
+            const reviewQuery = vi.fn().mockResolvedValue('advice');
+            const { tool } = makeTool({
+                reviewQuery,
+                enableDataAccess: reason !== 'disabled',
+                waitForSqlApproval: vi
+                    .fn()
+                    .mockResolvedValue(
+                        reason === 'rejected' ? 'rejected' : 'approved',
+                    ),
+                sqlScope: reason === 'scope' ? { schemas: ['allowed'] } : null,
+            });
+            await executeRunSql(
+                tool,
+                'call',
+                reason === 'scope'
+                    ? 'SELECT * FROM forbidden.orders'
+                    : 'SELECT 1',
+            );
+            expect(reviewQuery).not.toHaveBeenCalled();
+        },
+    );
+    it('starts review while the approved warehouse query is still running', async () => {
+        const reviewQuery = vi.fn().mockResolvedValue('advice');
+        const { tool, dependencies } = makeTool({ reviewQuery });
+        let resolveQuery!: (value: {
+            queryUuid: string;
+            rows: { answer: number }[];
+            columns: string[];
+            rowCount: number;
+        }) => void;
+        dependencies.runSqlJob.mockImplementation(
+            () =>
+                new Promise((resolve) => {
+                    resolveQuery = resolve;
+                }),
+        );
+        const output = executeRunSql(tool);
+        await vi.waitFor(() => expect(reviewQuery).toHaveBeenCalledOnce());
+        resolveQuery({
+            queryUuid: 'query',
+            rows: [{ answer: 1 }],
+            columns: ['answer'],
+            rowCount: 1,
+        });
+        expect((await output).result).toContain('advice');
     });
 });

@@ -47,7 +47,8 @@ export { getPermissionsFromAbilityRules } from './authorization/abilityPermissio
 export * from './authorization/buildAccountHelpers';
 export { collapseAbilityRules } from './authorization/collapseAbilityRules';
 export { canMutateVerifiedContent } from './authorization/canMutateVerifiedContent';
-export * from './authorization/directAccessRole';
+export { getDashboardDeleteAccess } from './authorization/getDashboardDeleteAccess';
+export { getDocumentDeleteAccess } from './authorization/getDocumentDeleteAccess';
 export {
     defineUserAbility,
     getUserAbilityBuilder,
@@ -55,6 +56,7 @@ export {
     type ProjectAbilityProfile,
 } from './authorization/index';
 export * from './authorization/jwtAbility';
+export * from './authorization/embedPermissions';
 export { getOrganizationMemberRolePermissions } from './authorization/organizationMemberAbility';
 export { projectMemberAbilities } from './authorization/projectMemberAbility';
 export * from './authorization/parseAccount';
@@ -69,10 +71,12 @@ export * from './authorization/types';
 export * from './compiler/compilationReport';
 export * from './compiler/exploreCompiler';
 export * from './compiler/filtersCompiler';
+export * from './compiler/joinInflation';
 export * from './compiler/lightdashModelConverter';
 export * from './compiler/parameters';
 export * from './compiler/referenceLookup';
 export * from './compiler/translator';
+export * from './parameters/parameterDefaults';
 export * from './parameters/reservedParameters';
 export * from './constants/screenshot';
 export * from './constants/sessionStorageKeys';
@@ -82,15 +86,19 @@ export { default as DbtSchemaEditor } from './dbt/DbtSchemaEditor/DbtSchemaEdito
 export * from './dbt/manifest';
 export * from './dbt/metricFlow';
 export * from './dbt/projectMergedManifest';
-export * from './dbt/validation';
+// './dbt/validation' is not re-exported: it eagerly imports ~3.6 MB of dbt JSON
+// schemas. Import it from '@lightdash/common/dbt/validation' instead.
 export * from './ee';
 export * from './preAggregates';
 export * from './pivot/derivePivotConfigFromChart';
 export * from './pivot/deriveDataAppVizPivotConfig';
+export * from './pivot/pivotColumnName';
 export * from './pivot/pivotConfig';
 export * from './pivot/pivotQueryResults';
 export * from './pivot/utils';
 export { default as chartAsCodeSchema } from './schemas/json/chart-as-code-1.0.json';
+export * from './types/document';
+export * from './utils/document';
 export { default as dashboardAsCodeSchema } from './schemas/json/dashboard-as-code-1.0.json';
 export { default as lightdashDbtYamlSchema } from './schemas/json/lightdash-dbt-2.0.json';
 export { default as lightdashProjectContextSchema } from './schemas/json/lightdash-project-context-2.0.json';
@@ -105,6 +113,7 @@ export * from './types/any';
 export * from './types/api';
 export * from './types/api/comments';
 export * from './types/api/errors';
+export * from './types/api/mobilePushNotifications';
 export * from './types/api/notifications';
 export * from './types/api/paginatedQuery';
 export * from './types/api/parameters';
@@ -121,8 +130,10 @@ export * from './types/comments';
 export * from './types/conditionalFormatting';
 export * from './types/content';
 export * from './types/contentSlug';
+export * from './types/contentReviewRequests';
 export * from './types/contentVerification';
 export * from './types/dashboard';
+export * from './types/directAccess';
 export * from './types/emailWhitelabel';
 export * from './types/dataTimezonePreview';
 export * from './types/fieldImpact';
@@ -149,10 +160,13 @@ export * from './types/funnel';
 export * from './types/gdrive';
 export * from './types/gitIntegration';
 export * from './types/groups';
+export * from './types/jira';
+export * from './types/linear';
 export * from './types/job';
 export * from './types/knex-paginate';
 export * from './types/lightdashModel';
 export * from './types/lightdashProjectConfig';
+export * from './types/managedSignIn';
 export * from './types/mergeQuery';
 export * from './types/metricQuery';
 export * from './types/metricsExplorer';
@@ -215,20 +229,30 @@ export {
     RedshiftAuthenticationType,
     resolveDbtVersion,
     playgroundProjectTriggers,
+    fillOmittedSecrets,
+    isMissingBigqueryKeyfile,
+    omitEmptySecrets,
     sensitiveCredentialsFieldNames,
     SnowflakeAuthenticationType,
     stripDucklakeNestedSensitive,
     SupportedDbtVersions,
     supportsOptionalUserCredentials,
+    allowsOptionalUserCredentials,
     WAREHOUSE_TYPES_WITH_OPTIONAL_USER_CREDENTIALS,
     WarehouseTypes,
 } from './types/projects';
 export type {
     AgentSqlScope,
+    ApiCreateTrainingPreviewResponse,
     ApiEnsurePlaygroundProjectResponse,
+    ApiEnableLearnResponse,
+    ApiLearnAccessResponse,
+    EnableLearnResults,
+    LearnAccess,
     ApiGetProjectGroupAccesses,
     ApiProjectResponse,
     EnsurePlaygroundProjectRequest,
+    CreateTrainingPreviewResults,
     EnsurePlaygroundProjectResults,
     PlaygroundProjectTrigger,
     AthenaCredentials,
@@ -310,6 +334,7 @@ export type {
     UpdateAgentSqlScope,
     UpdateQueryTimezoneSettings,
     UpdateSchedulerSettings,
+    CreateWarehouseCredentialsWithOptionalSecrets,
     WarehouseCredentials,
     WarehouseLocation,
 } from './types/projects';
@@ -336,6 +361,7 @@ export * from './types/space';
 export * from './types/spotlightTableConfig';
 export * from './types/sqlRunner';
 export * from './types/SshKeyPair';
+export * from './types/sshTunnel';
 export * from './types/table';
 export * from './types/tags';
 export * from './types/timeFrames';
@@ -344,6 +370,7 @@ export * from './types/user';
 export * from './types/userAvatars';
 export * from './types/userAttributes';
 export * from './types/userOnboarding';
+export * from './types/learnProgress';
 export * from './types/userWarehouseCredentials';
 export * from './types/validation';
 export * from './types/warehouse';
@@ -377,9 +404,12 @@ export * from './utils/i18n/chartAsCode';
 export * from './utils/i18n/dashboardAsCode';
 export * from './utils/i18n/merge';
 export * from './utils/i18n/types';
+export * from './utils/i18n/uiStrings';
 export * from './utils/item';
 export * from './utils/mergeQueryItems';
+export * from './utils/mergeTotals';
 export * from './utils/queryHistoryList';
+export * from './utils/resultColumns';
 export * from './utils/loadLightdashProjectConfig';
 export * from './utils/lightdashSqlVariables';
 export * from './utils/metricsExplorer';
@@ -407,6 +437,7 @@ export * from './utils/virtualView';
 export * from './utils/warehouse';
 export * from './utils/warehouseLocation';
 export * from './utils/warehouseResourceLimits';
+export * from './utils/zodJsonSchema';
 export * from './visualizations/BigNumberDataModel';
 export * from './visualizations/CartesianChartDataModel';
 export * from './visualizations/helpers/getCartesianAxisFormatterConfig';
@@ -454,12 +485,18 @@ export const getEmailSchema = () =>
             message: 'Email address must not contain whitespaces',
         });
 
+export const PASSWORD_REQUIREMENT_MESSAGES = [
+    'must be at least 8 characters long',
+    'must contain a letter',
+    'must contain a number or symbol',
+] as const;
+
 export const getPasswordSchema = () =>
     z
         .string()
-        .min(8, { message: 'must be at least 8 characters long' })
-        .regex(/[a-zA-Z]/, { message: 'must contain a letter' })
-        .regex(/[\d\W_]/, { message: 'must contain a number or symbol' });
+        .min(8, { error: PASSWORD_REQUIREMENT_MESSAGES[0] })
+        .regex(/[a-zA-Z]/, { error: PASSWORD_REQUIREMENT_MESSAGES[1] })
+        .regex(/[\d\W_]/, { error: PASSWORD_REQUIREMENT_MESSAGES[2] });
 
 export const validatePassword = (password: string): boolean =>
     getPasswordSchema().safeParse(password).success;
@@ -656,11 +693,14 @@ export const hasSpecialCharacters = (text: string) => /[^a-zA-Z ]/g.test(text);
 export const CompleteUserSchema = z.object({
     organizationName: getOrganizationNameSchema().optional(),
     jobTitle: z.string().min(0),
+    // Only collected from the person creating the organization; invited
+    // members skip it (their onboarding omits this field from the schema).
     howDidYouHearAboutUs: z
         .string()
         .trim()
         .min(1, 'Please let us know how you heard about Lightdash')
-        .max(1000),
+        .max(1000)
+        .optional(),
     enableEmailDomainAccess: z.boolean().default(false),
     isMarketingOptedIn: z.boolean().default(true),
     isTrackingAnonymized: z.boolean().default(false),
@@ -1204,3 +1244,14 @@ export const SPACE_TREE_2: TreeCreateSpace[] = [
         ],
     },
 ] as const;
+
+export * from './compiler/compileLightdashModels';
+
+export * from './lightdash/LightdashModelEditor';
+export * from './lightdash/convertCustomMetricToLightdash';
+export * from './types/analyticsProject';
+export * from './types/recentContent';
+
+export * from './utils/dashboardTilePositions';
+
+export * from './utils/savedMerge';

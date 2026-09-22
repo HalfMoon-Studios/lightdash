@@ -5,7 +5,11 @@ import {
     WarehouseTypes,
     type WarehouseCredentials,
 } from '../types/projects';
-import type { WarehouseSqlBuilder } from '../types/warehouse';
+import type {
+    UnnestSql,
+    UnnestSqlArgs,
+    WarehouseSqlBuilder,
+} from '../types/warehouse';
 import { VizAggregationOptions } from '../visualizations/types';
 import assertUnreachable from './assertUnreachable';
 
@@ -56,7 +60,10 @@ export const getConnectionDefaults = (
                     schema: nonEmpty(credentials.schema),
                 };
             }
-            if (credentials.connectionType === DuckdbConnectionType.EMBEDDED) {
+            if (
+                credentials.connectionType === DuckdbConnectionType.EMBEDDED ||
+                credentials.connectionType === DuckdbConnectionType.ANALYTICS
+            ) {
                 return {
                     database: undefined,
                     schema: nonEmpty(credentials.schema),
@@ -77,6 +84,32 @@ export const getConnectionDefaults = (
 // `NULL = NULL` is NULL in standard SQL, which silently drops rows in JOINs.
 export const defaultNullSafeEqualSql = (left: string, right: string): string =>
     `(${left} = ${right} OR (${left} IS NULL AND ${right} IS NULL))`;
+
+// UNNEST yields the element itself, so the alias addresses it directly.
+export const getBigqueryUnnestSql = ({
+    parentElementSql,
+    columnSegment,
+    alias,
+}: UnnestSqlArgs): UnnestSql => ({
+    fromSql: `UNNEST(${parentElementSql}.${columnSegment}) AS \`${alias}\` WITH OFFSET AS \`${alias}__offset\``,
+    elementSql: `\`${alias}\``,
+    offsetSql: `\`${alias}__offset\``,
+    joinCondition: 'TRUE',
+});
+
+// posexplode_outer yields a (pos, col) row; the element lives in `col`. Any
+// ON clause, even ON TRUE, makes Databricks plan the lateral join as a hash
+// join plus shuffle instead of a single generate, so the join carries none.
+export const getDatabricksUnnestSql = ({
+    parentElementSql,
+    columnSegment,
+    alias,
+}: UnnestSqlArgs): UnnestSql => ({
+    fromSql: `LATERAL posexplode_outer(${parentElementSql}.${columnSegment}) AS \`${alias}\`(\`${alias}__offset\`, col)`,
+    elementSql: `\`${alias}\`.col`,
+    offsetSql: `\`${alias}__offset\``,
+    joinCondition: null,
+});
 
 /**
  * @deprecated use WarehouseSqlBuilder.getFieldQuoteChar instead

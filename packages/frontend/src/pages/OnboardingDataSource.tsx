@@ -144,7 +144,7 @@ const DataSourcePicker: FC = () => {
     return (
         <Box className={classes.column}>
             <Stack align="center" gap="xs">
-                <Title order={1} ta="center" fw={700}>
+                <Title order={1} ta="center">
                     Add a data source
                 </Title>
                 <Text size="md" c="dimmed" ta="center">
@@ -157,8 +157,9 @@ const DataSourcePicker: FC = () => {
                 <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
                     {popularWarehouses.map((warehouse) => (
                         <Paper
+                            component="button"
+                            type="button"
                             key={warehouse.key}
-                            withBorder
                             radius="md"
                             className={`${classes.heroCard} ${classes.warehouseCardEnabled}`}
                             onClick={() =>
@@ -184,8 +185,9 @@ const DataSourcePicker: FC = () => {
                 <SimpleGrid cols={{ base: 2, sm: 3, md: 4 }} spacing="md">
                     {allWarehouses.map((warehouse) => (
                         <Paper
+                            component="button"
+                            type="button"
                             key={warehouse.key}
-                            withBorder
                             radius="md"
                             className={`${classes.warehouseCard} ${classes.warehouseCardEnabled}`}
                             onClick={() =>

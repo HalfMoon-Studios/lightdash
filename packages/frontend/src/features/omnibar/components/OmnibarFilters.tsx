@@ -1,5 +1,6 @@
 import {
     assertUnreachable,
+    FeatureFlags,
     SearchItemType,
     type OrganizationMemberProfile,
     type SearchFilters,
@@ -16,6 +17,7 @@ import {
     IconCircleCheck,
     IconCodeCircle,
     IconFolder,
+    IconFileText,
     IconLayoutDashboard,
     IconLayoutNavbarInactive,
     IconRectangle,
@@ -29,6 +31,7 @@ import CalendarRangePicker from '../../../components/common/DatePickers/Calendar
 import { type CalendarDateRange } from '../../../components/common/DatePickers/types';
 import MantineIcon from '../../../components/common/MantineIcon';
 import { useOrganizationUsers } from '../../../hooks/useOrganizationUsers';
+import { useServerFeatureFlag } from '../../../hooks/useServerOrClientFeatureFlag';
 import { allSearchItemTypes } from '../types/searchItem';
 import { getDateFilterLabel } from '../utils/getDateFilterLabel';
 import { getSearchItemLabel } from '../utils/getSearchItemLabel';
@@ -41,6 +44,8 @@ const getOmnibarItemIcon = (itemType: SearchItemType) => {
     switch (itemType) {
         case SearchItemType.FIELD:
             return IconRectangle;
+        case SearchItemType.DOCUMENT:
+            return IconFileText;
         case SearchItemType.DASHBOARD:
             return IconLayoutDashboard;
         case SearchItemType.DASHBOARD_TAB:
@@ -120,6 +125,12 @@ const FilterRightSection: FC<{ isActive: boolean; onClear: () => void }> = ({
     );
 
 const OmnibarFilters: FC<Props> = ({ filters, onSearchFilterChange }) => {
+    const documentsFlag = useServerFeatureFlag(FeatureFlags.Documents);
+    const searchItemTypes = allSearchItemTypes.filter(
+        (type) =>
+            type !== SearchItemType.DOCUMENT ||
+            (documentsFlag.data?.enabled === true && !documentsFlag.isError),
+    );
     const [isDateMenuOpen, dateMenuHandlers] = useDisclosure(false);
     const [isCreatedByExpanded, setIsCreatedByExpanded] = useState(false);
     const createdByInputRef = useRef<HTMLInputElement>(null);
@@ -167,13 +178,7 @@ const OmnibarFilters: FC<Props> = ({ filters, onSearchFilterChange }) => {
             wrap="nowrap"
             className={classes.filtersRow}
         >
-            <Menu
-                position="bottom-start"
-                withArrow
-                shadow="md"
-                arrowOffset={11}
-                offset={2}
-            >
+            <Menu position="bottom-start" withArrow arrowOffset={11} offset={2}>
                 <Menu.Target>
                     <Button
                         size="compact-xs"
@@ -247,7 +252,7 @@ const OmnibarFilters: FC<Props> = ({ filters, onSearchFilterChange }) => {
                     >
                         Verified
                     </Menu.Item>
-                    {allSearchItemTypes.map((type) => (
+                    {searchItemTypes.map((type) => (
                         <Menu.Item
                             key={type}
                             leftSection={
@@ -276,7 +281,6 @@ const OmnibarFilters: FC<Props> = ({ filters, onSearchFilterChange }) => {
             <Menu
                 position="bottom-start"
                 withArrow
-                shadow="md"
                 arrowOffset={11}
                 offset={2}
                 opened={isDateMenuOpen}
@@ -360,7 +364,6 @@ const OmnibarFilters: FC<Props> = ({ filters, onSearchFilterChange }) => {
                 <Select
                     ref={createdByInputRef}
                     size="xs"
-                    radius="md"
                     w={200}
                     classNames={{ input: classes.createdByInput }}
                     placeholder="Search a user..."

@@ -3,6 +3,9 @@ import {
     DimensionType,
     FilterOperator,
     FilterType,
+    MetricType,
+    NotFoundError,
+    parseAiArtifactChartConfig,
 } from '@lightdash/common';
 import type { AgentSelectOption } from './getSlackBlocks';
 import {
@@ -18,6 +21,28 @@ import {
     getSqlArtifactCardBlocks,
 } from './getSlackBlocks';
 import { mockOrdersExplore } from './validationExplore.mock';
+
+const parseStoredChartConfig = (raw: unknown) => {
+    const parsed = parseAiArtifactChartConfig(raw);
+    if (parsed === null) throw new Error('Expected a valid chart config');
+    return parsed;
+};
+
+const parseStoredArtifact = <
+    const Artifact extends { artifactType: unknown; chartConfig: unknown },
+>(
+    artifact: Artifact,
+) => {
+    const { artifactType } = artifact;
+    if (artifactType !== 'chart' && artifactType !== 'dashboard') {
+        throw new Error('Expected a valid artifact type');
+    }
+    return {
+        ...artifact,
+        artifactType,
+        chartConfig: parseStoredChartConfig(artifact.chartConfig),
+    };
+};
 
 describe('Slack AI agent blocks', () => {
     it('maps known tool names to readable task titles', () => {
@@ -314,6 +339,120 @@ describe('Slack AI agent blocks', () => {
         ]);
     });
 
+    it('renders filter expression artifacts with independent category connectors', async () => {
+        let sharedParams: string | undefined;
+        const queryConfig = {
+            exploreName: 'test_explore',
+            dimensions: ['orders_customer_name'],
+            metrics: ['orders_order_count'],
+            sorts: [],
+            limit: 500,
+            parameters: null,
+            customMetrics: null,
+            tableCalculations: null,
+        };
+        const artifact = parseStoredArtifact({
+            artifactUuid: 'artifact-1',
+            threadUuid: 'thread-1',
+            promptUuid: 'prompt-1',
+            artifactType: 'chart',
+            savedQueryUuid: null,
+            savedDashboardUuid: null,
+            createdAt: new Date(),
+            versionNumber: 1,
+            versionUuid: 'version-1',
+            title: 'Orders by customer',
+            description: null,
+            dashboardConfig: null,
+            versionCreatedAt: new Date(),
+            verifiedByUserUuid: null,
+            verifiedAt: null,
+            chartConfig: {
+                source: 'semantic',
+                config: {
+                    title: 'Orders by customer',
+                    description: 'Orders by customer',
+                    queryConfig: {
+                        ...queryConfig,
+                        filters: {
+                            dimensions: {
+                                connector: 'and',
+                                rules: [
+                                    {
+                                        fieldId: 'orders_customer_name',
+                                        fieldType: DimensionType.STRING,
+                                        fieldFilterType: FilterType.STRING,
+                                        operator: FilterOperator.EQUALS,
+                                        values: ['Acme'],
+                                    },
+                                    {
+                                        fieldId: 'orders_product_category',
+                                        fieldType: DimensionType.STRING,
+                                        fieldFilterType: FilterType.STRING,
+                                        operator: FilterOperator.EQUALS,
+                                        values: ['Hardware'],
+                                    },
+                                ],
+                            },
+                            metrics: {
+                                connector: 'or',
+                                rules: [
+                                    {
+                                        fieldId: 'orders_total_revenue',
+                                        fieldType: MetricType.SUM,
+                                        fieldFilterType: FilterType.NUMBER,
+                                        operator: FilterOperator.GREATER_THAN,
+                                        values: [10],
+                                    },
+                                    {
+                                        fieldId: 'orders_order_count',
+                                        fieldType: MetricType.COUNT,
+                                        fieldFilterType: FilterType.NUMBER,
+                                        operator: FilterOperator.LESS_THAN,
+                                        values: [2],
+                                    },
+                                ],
+                            },
+                            tableCalculations: null,
+                        },
+                    },
+                    chartConfig: null,
+                    mergeConfig: null,
+                },
+            },
+        });
+
+        const blocks = await getModernArtifactCardBlocks(
+            {
+                promptUuid: 'prompt-1',
+                projectUuid: 'project-1',
+                threadUuid: 'thread-1',
+            } as never,
+            'https://lightdash.example.com',
+            500,
+            async (_path, params) => {
+                sharedParams = params;
+                return 'https://lightdash.example.com/share/chart';
+            },
+            async () => mockOrdersExplore,
+            async () => true,
+            'agent-1',
+            [artifact],
+            [],
+        );
+
+        expect(blocks).toMatchObject([
+            { type: 'card', title: { text: 'Orders by customer' } },
+        ]);
+        const savedRaw = new URLSearchParams(sharedParams).get(
+            'create_saved_chart_version',
+        );
+        if (savedRaw === null) throw new Error('Expected saved chart state');
+        const saved = JSON.parse(savedRaw);
+        expect(saved.metricQuery.filters.dimensions).toHaveProperty('and');
+        expect(saved.metricQuery.filters.metrics).toHaveProperty('or');
+    });
+
     it('uses generateVisualization chart image URLs as card hero images', async () => {
         const blocks = await getModernArtifactCardBlocks(
             {
@@ -328,7 +467,7 @@ describe('Slack AI agent blocks', () => {
             async () => true,
             'agent-1',
             [
-                {
+                parseStoredArtifact({
                     artifactUuid: 'artifact-1',
                     threadUuid: 'thread-1',
                     promptUuid: 'prompt-1',
@@ -360,7 +499,7 @@ describe('Slack AI agent blocks', () => {
                         },
                         chartConfig: null,
                     },
-                },
+                }),
             ],
             [
                 {
@@ -437,6 +576,7 @@ describe('Slack AI agent blocks', () => {
                         source: 'customChartType',
                         schemaVersion: 1,
                         dataAppVizUuid: 'data-app-viz-1',
+                        dataAppVizVersion: 2,
                         config: {
                             title: 'Monthly Orders by Status',
                             description: 'Orders by month and status',
@@ -459,7 +599,11 @@ describe('Slack AI agent blocks', () => {
                                 fieldMapping: {
                                     x: 'orders_order_date_month',
                                     y: 'orders_unique_order_count',
-                                    series: 'orders_status',
+
+                                    series: [
+                                        'orders_status',
+                                        'orders_order_date_month',
+                                    ],
                                 },
                                 options: null,
                             },
@@ -468,8 +612,9 @@ describe('Slack AI agent blocks', () => {
                 },
             ],
             [],
-            async (dataAppVizUuid) => {
+            async (dataAppVizUuid, dataAppVizVersion) => {
                 expect(dataAppVizUuid).toBe('data-app-viz-1');
+                expect(dataAppVizVersion).toBe(2);
                 return [
                     {
                         name: 'x',
@@ -483,6 +628,7 @@ describe('Slack AI agent blocks', () => {
                         label: 'Series',
                         type: 'series',
                         required: false,
+                        multiple: true,
                     },
                 ];
             },
@@ -498,17 +644,21 @@ describe('Slack AI agent blocks', () => {
             type: ChartType.DATA_APP_VIZ,
             config: {
                 dataAppVizUuid: 'data-app-viz-1',
+                dataAppVizVersion: 2,
                 fieldMapping: {
                     x: 'orders_order_date_month',
                     y: 'orders_unique_order_count',
-                    series: 'orders_status',
+
+                    series: ['orders_status', 'orders_order_date_month'],
                 },
             },
         });
-        expect(saved.pivotConfig).toEqual({ columns: ['orders_status'] });
+        expect(saved.pivotConfig).toEqual({
+            columns: ['orders_status', 'orders_order_date_month'],
+        });
     });
 
-    it('keeps the table fallback for custom chart type answers when the schema is unavailable', async () => {
+    it('keeps the table fallback for legacy custom chart type answers when the schema is unavailable', async () => {
         let sharedParams: string | undefined;
         await getModernArtifactCardBlocks(
             {
@@ -585,6 +735,121 @@ describe('Slack AI agent blocks', () => {
         expect(saved.pivotConfig).toBeUndefined();
     });
 
+    it('keeps other Slack cards when a pinned chart version is unavailable without offering a substitute save', async () => {
+        const sharedParams: string[] = [];
+        let requestedVersion: number | undefined;
+        const blocks = await getModernArtifactCardBlocks(
+            {
+                promptUuid: 'prompt-1',
+                projectUuid: 'project-1',
+                threadUuid: 'thread-1',
+            } as never,
+            'https://lightdash.example.com',
+            500,
+            async (_path, params) => {
+                sharedParams.push(params);
+                return 'https://lightdash.example.com/share/chart';
+            },
+            async () => ({}) as never,
+            async () => true,
+            'agent-1',
+            [
+                {
+                    artifactUuid: 'artifact-1',
+                    threadUuid: 'thread-1',
+                    promptUuid: 'prompt-1',
+                    artifactType: 'chart',
+                    savedQueryUuid: null,
+                    savedDashboardUuid: null,
+                    createdAt: new Date(),
+                    versionNumber: 1,
+                    versionUuid: 'version-1',
+                    title: 'Pinned Orders',
+                    description: null,
+                    dashboardConfig: null,
+                    versionCreatedAt: new Date(),
+                    verifiedByUserUuid: null,
+                    verifiedAt: null,
+                    chartConfig: {
+                        source: 'customChartType',
+                        schemaVersion: 1,
+                        dataAppVizUuid: 'data-app-viz-1',
+                        dataAppVizVersion: 2,
+                        config: {
+                            title: 'Pinned Orders',
+                            description: 'Orders by month',
+                            queryConfig: {
+                                exploreName: 'orders',
+                                dimensions: ['orders_order_date_month'],
+                                metrics: ['orders_unique_order_count'],
+                                sorts: [],
+                                limit: 500,
+                                parameters: null,
+                                customMetrics: [],
+                                tableCalculations: [],
+                                filters: null,
+                            },
+                            chartConfig: {
+                                customChartTypeSlug: 'fuzzy-bar',
+                                fieldMapping: {
+                                    x: 'orders_order_date_month',
+                                    y: 'orders_unique_order_count',
+                                },
+                                options: null,
+                            },
+                        },
+                    },
+                },
+                {
+                    artifactUuid: 'artifact-2',
+                    threadUuid: 'thread-1',
+                    promptUuid: 'prompt-1',
+                    artifactType: 'dashboard',
+                    savedQueryUuid: null,
+                    savedDashboardUuid: null,
+                    createdAt: new Date(),
+                    versionNumber: 1,
+                    versionUuid: 'version-2',
+                    title: 'Orders Dashboard',
+                    description: null,
+                    dashboardConfig: {},
+                    versionCreatedAt: new Date(),
+                    verifiedByUserUuid: null,
+                    verifiedAt: null,
+                    chartConfig: null,
+                },
+            ] as never,
+            [],
+            async (_dataAppVizUuid, dataAppVizVersion) => {
+                requestedVersion = dataAppVizVersion;
+                throw new NotFoundError(
+                    'Custom chart type version 2 is unavailable. Regenerate the chart to use a renderable version.',
+                );
+            },
+        );
+
+        expect(requestedVersion).toBe(2);
+        expect(sharedParams).toEqual([]);
+        expect(blocks).toMatchObject([
+            {
+                type: 'carousel',
+                elements: [
+                    {
+                        title: { text: 'Pinned Orders' },
+                        body: {
+                            text: 'Custom chart type version 2 is unavailable. Regenerate the chart to use a renderable version.',
+                        },
+                    },
+                    { title: { text: 'Orders Dashboard' } },
+                ],
+            },
+        ]);
+        const cards = (
+            blocks[0] as unknown as { elements: Array<{ actions?: unknown }> }
+        ).elements;
+        expect(cards[0].actions).toBeUndefined();
+    });
+
     it('omits the hero but keeps the Open image button when the image URL is unreachable', async () => {
         const blocks = await getModernArtifactCardBlocks(
             {
@@ -599,7 +864,7 @@ describe('Slack AI agent blocks', () => {
             async () => false,
             'agent-1',
             [
-                {
+                parseStoredArtifact({
                     artifactUuid: 'artifact-1',
                     threadUuid: 'thread-1',
                     promptUuid: 'prompt-1',
@@ -631,7 +896,7 @@ describe('Slack AI agent blocks', () => {
                         },
                         chartConfig: null,
                     },
-                },
+                }),
             ],
             [
                 {
@@ -730,7 +995,7 @@ describe('Slack AI agent blocks', () => {
             async () => ({}) as never,
             async () => true,
             'agent-1',
-            [artifact],
+            [parseStoredArtifact(artifact)],
             [
                 attempt(
                     'call-1',
@@ -770,6 +1035,96 @@ describe('Slack AI agent blocks', () => {
         ],
         metrics: null,
         tableCalculations: null,
+    });
+
+    it('attributes immediate images by version when other charts render in the background', async () => {
+        const artifacts = ['deferred', 'immediate'].map((versionUuid) =>
+            parseStoredArtifact({
+                artifactUuid: `artifact-${versionUuid}`,
+                threadUuid: 'thread-1',
+                promptUuid: 'prompt-1',
+                artifactType: 'chart',
+                savedQueryUuid: null,
+                savedDashboardUuid: null,
+                createdAt: new Date(),
+                versionNumber: 1,
+                versionUuid,
+                title: versionUuid,
+                description: null,
+                dashboardConfig: null,
+                versionCreatedAt: new Date(),
+                verifiedByUserUuid: null,
+                verifiedAt: null,
+                chartConfig: {
+                    title: versionUuid,
+                    description: versionUuid,
+                    queryConfig: {
+                        exploreName: 'orders',
+                        dimensions: ['orders_order_date_month'],
+                        metrics: ['orders_unique_order_count'],
+                        sorts: [],
+                        limit: 500,
+                        parameters: null,
+                        customMetrics: [],
+                        tableCalculations: [],
+                        filters: statusFilter(versionUuid),
+                    },
+                    chartConfig: null,
+                },
+            }),
+        );
+        const blocks = await getModernArtifactCardBlocks(
+            {
+                promptUuid: 'prompt-1',
+                projectUuid: 'project-1',
+                threadUuid: 'thread-1',
+            } as never,
+            'https://lightdash.example.com',
+            500,
+            async () => 'https://lightdash.example.com/share/chart',
+            async () => ({}) as never,
+            async () => true,
+            'agent-1',
+            artifacts,
+            ['immediate', 'deferred'].map((versionUuid) => ({
+                uuid: versionUuid,
+                promptUuid: 'prompt-1',
+                toolCallId: versionUuid,
+                toolType: 'built-in',
+                toolName: 'generateVisualization',
+                result: 'ok',
+                createdAt: new Date(),
+                metadata: {
+                    status: 'success',
+                    artifactVersionUuid: versionUuid,
+                    ...(versionUuid === 'immediate'
+                        ? {
+                              chartImageUrl:
+                                  'https://files.slack.com/immediate.png',
+                          }
+                        : {}),
+                } as never,
+            })),
+            undefined,
+            true,
+        );
+        expect(blocks).toMatchObject([
+            {
+                type: 'carousel',
+                elements: [
+                    { block_id: 'ai_agent_chart_card_deferred' },
+                    {
+                        block_id: 'ai_agent_chart_card_immediate',
+                        hero_image: {
+                            image_url: 'https://files.slack.com/immediate.png',
+                        },
+                    },
+                ],
+            },
+        ]);
+        expect(
+            (blocks[0] as unknown as { elements: unknown[] }).elements[0],
+        ).not.toHaveProperty('hero_image');
     });
 
     it('renders one turn with multiple chart versions as a carousel', async () => {
@@ -842,7 +1197,7 @@ describe('Slack AI agent blocks', () => {
                     'Completed orders by month',
                     'completed',
                 ),
-            ],
+            ].map(parseStoredArtifact),
             [
                 attempt('call-1', 'https://files.slack.com/placed.png'),
                 attempt('call-2', 'https://files.slack.com/shipped.png'),
@@ -942,7 +1297,7 @@ describe('Slack AI agent blocks', () => {
                 retryVersion('version-1'),
                 retryVersion('version-2'),
                 retryVersion('version-3'),
-            ],
+            ].map(parseStoredArtifact),
             [
                 attempt('call-1', 'https://files.slack.com/attempt-1.png'),
                 attempt('call-2', 'https://files.slack.com/attempt-2.png'),
@@ -962,63 +1317,77 @@ describe('Slack AI agent blocks', () => {
         expect(blocks).toHaveLength(1);
     });
 
-    it('collapses a retry that changed the query but kept the title', async () => {
-        const retryVersion = (versionUuid: string, grain: string) => ({
-            artifactUuid: 'artifact-1',
-            threadUuid: 'thread-1',
-            promptUuid: 'prompt-1',
-            artifactType: 'chart' as const,
-            savedQueryUuid: null,
-            savedDashboardUuid: null,
-            createdAt: new Date(),
-            versionNumber: Number(versionUuid.split('-')[1]),
-            versionUuid,
-            title: 'Unique order count over time by status',
-            description: null,
-            dashboardConfig: null,
-            versionCreatedAt: new Date(),
-            verifiedByUserUuid: null,
-            verifiedAt: null,
-            chartConfig: {
-                title: 'Unique order count over time by status',
-                description: 'Unique order count over time by status',
-                queryConfig: {
-                    exploreName: 'orders',
-                    dimensions: [`orders_order_date_${grain}`],
-                    metrics: ['orders_unique_order_count'],
-                    sorts: [],
-                    limit: 500,
-                    parameters: null,
-                    customMetrics: [],
-                    tableCalculations: [],
-                    filters: statusFilter('completed'),
-                },
-                chartConfig: null,
-            },
-        });
-
-        const blocks = await getModernArtifactCardBlocks(
-            {
-                promptUuid: 'prompt-1',
-                projectUuid: 'project-1',
+    it.each([false, true])(
+        'changes retry card identity only with fast decisions (%s)',
+        async (enabled) => {
+            const retryVersion = (versionUuid: string, grain: string) => ({
+                artifactUuid: 'artifact-1',
                 threadUuid: 'thread-1',
-            } as never,
-            'https://lightdash.example.com',
-            500,
-            async () => 'https://lightdash.example.com/share/chart',
-            async () => ({}) as never,
-            async () => true,
-            'agent-1',
-            [
-                retryVersion('version-1', 'day'),
-                retryVersion('version-2', 'month'),
-            ],
-            [],
-        );
+                promptUuid: 'prompt-1',
+                artifactType: 'chart' as const,
+                savedQueryUuid: null,
+                savedDashboardUuid: null,
+                createdAt: new Date(),
+                versionNumber: Number(versionUuid.split('-')[1]),
+                versionUuid,
+                title: 'Unique order count over time by status',
+                description: null,
+                dashboardConfig: null,
+                versionCreatedAt: new Date(),
+                verifiedByUserUuid: null,
+                verifiedAt: null,
+                chartConfig: {
+                    title: 'Unique order count over time by status',
+                    description: 'Unique order count over time by status',
+                    queryConfig: {
+                        exploreName: 'orders',
+                        dimensions: [`orders_order_date_${grain}`],
+                        metrics: ['orders_unique_order_count'],
+                        sorts: [],
+                        limit: 500,
+                        parameters: null,
+                        customMetrics: [],
+                        tableCalculations: [],
+                        filters: statusFilter('completed'),
+                    },
+                    chartConfig: null,
+                },
+            });
 
-        expect(blocks).toHaveLength(1);
-        expect(blocks).toMatchObject([{ type: 'card' }]);
-    });
+            const blocks = await getModernArtifactCardBlocks(
+                {
+                    promptUuid: 'prompt-1',
+                    projectUuid: 'project-1',
+                    threadUuid: 'thread-1',
+                } as never,
+                'https://lightdash.example.com',
+                500,
+                async () => 'https://lightdash.example.com/share/chart',
+                async () => ({}) as never,
+                async () => true,
+                'agent-1',
+                [
+                    retryVersion('version-1', 'day'),
+                    retryVersion('version-2', 'month'),
+                ].map(parseStoredArtifact),
+                [],
+                undefined,
+                enabled,
+            );
+
+            expect(blocks).toHaveLength(1);
+            expect(blocks).toMatchObject(
+                enabled
+                    ? [
+                          {
+                              type: 'carousel',
+                              elements: [{ type: 'card' }, { type: 'card' }],
+                          },
+                      ]
+                    : [{ type: 'card' }],
+            );
+        },
+    );
 
     it('keeps distinct charts with different titles as separate cards', async () => {
         const chartVersion = (
@@ -1074,7 +1443,7 @@ describe('Slack AI agent blocks', () => {
             [
                 chartVersion('version-1', 'Placed orders', 'placed'),
                 chartVersion('version-2', 'Completed orders', 'completed'),
-            ],
+            ].map(parseStoredArtifact),
             [],
         );
 
@@ -1160,7 +1529,7 @@ describe('Slack AI agent blocks', () => {
             [
                 chartVersion('version-1', 'line', 'line'),
                 chartVersion('version-2', 'bar', null),
-            ],
+            ].map(parseStoredArtifact),
             [],
         );
 
@@ -1192,7 +1561,7 @@ describe('Slack AI agent blocks', () => {
             async () => true,
             'agent-1',
             [
-                {
+                parseStoredArtifact({
                     artifactUuid: 'artifact-1',
                     threadUuid: 'thread-1',
                     promptUuid: 'prompt-1',
@@ -1236,7 +1605,7 @@ describe('Slack AI agent blocks', () => {
                             secondaryYAxisMetric: null,
                         },
                     },
-                },
+                }),
             ],
             [],
         );
@@ -1276,7 +1645,7 @@ describe('Slack AI agent blocks', () => {
             async () => true,
             'agent-1',
             [
-                {
+                parseStoredArtifact({
                     artifactUuid: 'artifact-1',
                     threadUuid: 'thread-1',
                     promptUuid: 'prompt-1',
@@ -1308,7 +1677,7 @@ describe('Slack AI agent blocks', () => {
                         },
                         chartConfig: null,
                     },
-                },
+                }),
             ],
             [],
         );
@@ -1339,7 +1708,7 @@ describe('Slack AI agent blocks', () => {
             async () => true,
             'agent-1',
             [
-                {
+                parseStoredArtifact({
                     artifactUuid: 'artifact-1',
                     threadUuid: 'thread-1',
                     promptUuid: 'prompt-1',
@@ -1371,7 +1740,7 @@ describe('Slack AI agent blocks', () => {
                         },
                         chartConfig: null,
                     },
-                },
+                }),
             ],
             [],
         );

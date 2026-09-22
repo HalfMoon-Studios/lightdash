@@ -15,17 +15,22 @@ import {
     IconLayoutSidebarLeftExpand,
 } from '@tabler/icons-react';
 import {
+    lazy,
     memo,
+    Suspense,
     useCallback,
+    useEffect,
     useLayoutEffect,
     useMemo,
     useState,
     type FC,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { useSearchParams } from 'react-router';
 import ErrorBoundary from '../../../features/errorBoundary/ErrorBoundary';
 import {
     explorerActions,
+    selectChartTypeAuthoring,
     selectIsEditMode,
     selectIsVisualizationConfigOpen,
     selectIsVisualizationExpanded,
@@ -52,9 +57,7 @@ import VisualizationProvider from '../../LightdashVisualization/VisualizationPro
 import { type EchartsSeriesClickEvent } from '../../SimpleChart';
 import SortButton from '../../SortButton';
 import ExplorerChartSidebar from '../ChartGallery/ExplorerChartSidebar';
-import { useIsChartGalleryEnabled } from '../ChartGallery/useIsChartGalleryEnabled';
 import { DevCopyChartDebugData } from '../ExplorerHeader/DevCopyChartDebugData';
-import VisualizationConfig from '../VisualizationCard/VisualizationConfig';
 import { SeriesContextMenu } from './SeriesContextMenu';
 import { useDirtyPivotConfiguration } from './useDirtyPivotConfiguration';
 import { useExplorerChartColorPalette } from './useExplorerChartColorPalette';
@@ -62,6 +65,11 @@ import { useExplorerResultsData } from './useExplorerResultsData';
 import useVisualizationConfigPortalTarget from './useVisualizationConfigPortalTarget';
 import VisualizationTimezone from './VisualizationTimezone';
 import VisualizationWarning from './VisualizationWarning';
+
+// Lazy-load so the Explorer bundle stays small when nothing is authored.
+const ExplorerChartTypeAuthoring = lazy(
+    () => import('../ChartTypeAuthoring/ExplorerChartTypeAuthoring'),
+);
 
 export type EchartsClickEvent = {
     event: EchartsSeriesClickEvent;
@@ -92,10 +100,13 @@ const VisualizationCard: FC<Props> = memo((props) => {
     const dispatch = useExplorerDispatch();
     // In fullscreen the chart card header is hidden so the chart owns the viewport
     const { isFullscreen } = useFullscreen();
-    const isChartGalleryEnabled = useIsChartGalleryEnabled();
 
     // Get savedChart from Redux
     const savedChart = useExplorerSelector(selectSavedChart);
+
+    // Authoring opens the builder modal from inside this card's provider
+    // tree, so the modal's config column shares the chart's viz context.
+    const chartTypeAuthoring = useExplorerSelector(selectChartTypeAuthoring);
 
     const sorts = useExplorerSelector(selectSorts);
 
@@ -197,10 +208,19 @@ const VisualizationCard: FC<Props> = memo((props) => {
         [dispatch],
     );
 
-    const portalTarget = useVisualizationConfigPortalTarget(
-        isVisualizationConfigOpen,
-        { followHost: isChartGalleryEnabled },
-    );
+    // Deep link (e.g. the removed-chart-type recovery hint): arrive in edit
+    // mode with the config sidebar already open, then drop the param.
+    const [searchParams, setSearchParams] = useSearchParams();
+    useEffect(() => {
+        if (!isEditMode || searchParams.get('openVizConfig') !== 'true') return;
+        openVisualizationConfig();
+        const next = new URLSearchParams(searchParams);
+        next.delete('openVizConfig');
+        setSearchParams(next, { replace: true });
+    }, [isEditMode, searchParams, setSearchParams, openVisualizationConfig]);
+
+    const { target: portalTarget, ref: visualizationConfigButtonRef } =
+        useVisualizationConfigPortalTarget(isVisualizationConfigOpen);
 
     const {
         ref: measureRef,
@@ -232,7 +252,11 @@ const VisualizationCard: FC<Props> = memo((props) => {
     );
 
     const apiErrorDetail = useMemo(() => {
-        const queryError = query.error?.error ?? queryResults.error?.error;
+        // Once a merge owns the screen, the Explorer's own query is idle and
+        // any error it still holds is stale.
+        const queryError = merge?.replacesQuery
+            ? undefined
+            : (query.error?.error ?? queryResults.error?.error);
 
         if (merge?.runError) return merge.runError.error;
         if (merge?.runErrors.length) {
@@ -261,6 +285,7 @@ const VisualizationCard: FC<Props> = memo((props) => {
         missingRequiredParameters,
         merge?.runError,
         merge?.runErrors,
+        merge?.replacesQuery,
     ]);
 
     const dirtyPivotConfiguration = useDirtyPivotConfiguration();
@@ -314,6 +339,14 @@ const VisualizationCard: FC<Props> = memo((props) => {
                 columnOrder={visualizationColumnOrder}
                 onSeriesContextMenu={onSeriesContextMenu}
                 savedChartUuid={isEditMode ? undefined : savedChart?.uuid}
+                savedChartReference={
+                    savedChart
+                        ? {
+                              uuid: savedChart.uuid,
+                              chartConfig: savedChart.chartConfig,
+                          }
+                        : undefined
+                }
                 onChartConfigChange={handleSetChartConfig}
                 onChartTypeChange={handleSetChartType}
                 onPivotDimensionsChange={handleSetPivotFields}
@@ -334,6 +367,18 @@ const VisualizationCard: FC<Props> = memo((props) => {
                     title="Chart"
                     isOpen={isOpen}
                     isVisualizationCard
+                    // Walkthrough look for view:SavedChart: the chart is
+                    // the first thing to read on a saved chart. See
+                    // scripts/scope-tours.
+                    tourProps={{
+                        'data-tour-scope': 'view:SavedChart',
+                        'data-tour-look': '1',
+                        'data-tour-after':
+                            '[data-tour-anchor="chart-row"][data-tour-value="Orders over time"]',
+                        'data-tour-label': 'The chart shows the answer',
+                        'data-tour-docs':
+                            'explore/explore-view.mdx#the-explore-page:li3',
+                    }}
                     hideHeading={isFullscreen || minimal}
                     minimal={minimal}
                     onToggle={toggleSection}
@@ -375,6 +420,7 @@ const VisualizationCard: FC<Props> = memo((props) => {
                                 />
                                 {isEditMode ? (
                                     <Button
+                                        ref={visualizationConfigButtonRef}
                                         {...COLLAPSABLE_CARD_BUTTON_PROPS}
                                         onClick={
                                             isVisualizationConfigOpen
@@ -402,28 +448,18 @@ const VisualizationCard: FC<Props> = memo((props) => {
                                  * TODO: use Mantine Portal with reuseTargetNode flag to avoid rendering additional divs
                                  */}
                                 {portalTarget &&
+                                    // The modal owns the config while a type
+                                    // is authored; a second mount in the
+                                    // sidebar would echo its state.
+                                    !chartTypeAuthoring &&
                                     createPortal(
-                                        isChartGalleryEnabled ? (
-                                            <ExplorerChartSidebar
-                                                chartType={
-                                                    unsavedChartVersion
-                                                        .chartConfig.type
-                                                }
-                                                onClose={
-                                                    closeVisualizationConfig
-                                                }
-                                            />
-                                        ) : (
-                                            <VisualizationConfig
-                                                chartType={
-                                                    unsavedChartVersion
-                                                        .chartConfig.type
-                                                }
-                                                onClose={
-                                                    closeVisualizationConfig
-                                                }
-                                            />
-                                        ),
+                                        <ExplorerChartSidebar
+                                            chartType={
+                                                unsavedChartVersion.chartConfig
+                                                    .type
+                                            }
+                                            onClose={closeVisualizationConfig}
+                                        />,
                                         portalTarget,
                                     )}
 
@@ -471,6 +507,13 @@ const VisualizationCard: FC<Props> = memo((props) => {
                         </>
                     )}
                 </CollapsableCard>
+                {chartTypeAuthoring && (
+                    <Suspense fallback={null}>
+                        <ExplorerChartTypeAuthoring
+                            authoring={chartTypeAuthoring}
+                        />
+                    </Suspense>
+                )}
             </VisualizationProvider>
         </ErrorBoundary>
     );

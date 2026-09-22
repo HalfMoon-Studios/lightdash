@@ -22,6 +22,7 @@ import useApp from '../providers/App/useApp';
 import { convertDateFilters } from '../utils/dateFilter';
 import useToaster from './toaster/useToaster';
 import { invalidateContent } from './useContent';
+import { useOptionalProjectRoute } from './useProjectRoute';
 import { useProjectUuid } from './useProjectUuid';
 import useSearchParams from './useSearchParams';
 
@@ -90,9 +91,12 @@ const updateSavedQuery = async (
 export const getSavedQuery = async (
     id: string,
     projectUuid: string,
+    includeUnpublishedDraft = false,
 ): Promise<SavedChart> =>
     lightdashApi<SavedChart>({
-        url: `/projects/${projectUuid}/saved/${id}`,
+        url: `/projects/${projectUuid}/saved/${id}${
+            includeUnpublishedDraft ? '?includeUnpublishedDraft=true' : ''
+        }`,
         version: 'v2',
         method: 'GET',
         body: undefined,
@@ -123,6 +127,7 @@ const addVersionSavedQuery = async ({
 interface Args {
     uuidOrSlug?: string;
     projectUuid?: string;
+    includeUnpublishedDraft?: boolean;
     useQueryOptions?: UseQueryOptions<SavedChart, ApiError>;
 }
 
@@ -130,12 +135,22 @@ export const useSavedQuery = ({
     uuidOrSlug,
     projectUuid,
     useQueryOptions,
+    includeUnpublishedDraft = false,
 }: Args) =>
     useQuery<SavedChart, ApiError>({
-        queryKey: ['saved_query', uuidOrSlug, projectUuid],
+        queryKey: [
+            'saved_query',
+            uuidOrSlug,
+            projectUuid,
+            includeUnpublishedDraft,
+        ],
         queryFn: async () => {
             if (!projectUuid) throw new Error('projectUuid is required');
-            return getSavedQuery(uuidOrSlug || '', projectUuid);
+            return getSavedQuery(
+                uuidOrSlug || '',
+                projectUuid,
+                includeUnpublishedDraft,
+            );
         },
         enabled: uuidOrSlug !== undefined && !!projectUuid,
         retry: false,
@@ -318,12 +333,20 @@ export const useUpdateMutation = (
                     'color-palette',
                 ]);
 
-                queryClient.setQueryData(
-                    ['saved_query', data.uuid, data.projectUuid],
+                queryClient.setQueriesData(
+                    {
+                        queryKey: ['saved_query', data.uuid, data.projectUuid],
+                    },
                     data,
                 );
-                queryClient.setQueryData(
-                    ['saved_query', params.savedQueryUuid, data.projectUuid],
+                queryClient.setQueriesData(
+                    {
+                        queryKey: [
+                            'saved_query',
+                            params.savedQueryUuid,
+                            data.projectUuid,
+                        ],
+                    },
                     data,
                 );
 
@@ -336,7 +359,9 @@ export const useUpdateMutation = (
                 });
 
                 showToastSuccess({
-                    title: `Success! Chart was saved.`,
+                    title: data.hasUnpublishedChanges
+                        ? 'Chart draft saved for review'
+                        : 'Success! Chart was saved.',
                     action: dashboardUuid
                         ? {
                               children: 'Open dashboard',
@@ -363,13 +388,17 @@ export const useCreateMutation = ({
     redirectOnSuccess = true,
     showToastOnSuccess = true,
     showViewChartAction = true,
+    projectUuid: explicitProjectUuid,
 }: {
     redirectOnSuccess?: boolean;
     showToastOnSuccess?: boolean;
     showViewChartAction?: boolean;
+    /** Overrides the route/embed project — for surfaces not mounted under a project route */
+    projectUuid?: string;
 } = {}) => {
     const navigate = useNavigate();
-    const projectUuid = useProjectUuid();
+    const routeProjectUuid = useProjectUuid();
+    const projectUuid = explicitProjectUuid ?? routeProjectUuid;
     const queryClient = useQueryClient();
     const { embedToken } = useEmbed();
     const isEmbedded = embedToken !== undefined;
@@ -508,6 +537,7 @@ export const useAddVersionMutation = (options?: {
     const queryClient = useQueryClient();
     const params = useParams();
     const dashboardUuid = useSearchParams('fromDashboard');
+    const projectRoute = useOptionalProjectRoute();
 
     const { showToastSuccess, showToastError, showToastApiError } =
         useToaster();
@@ -529,12 +559,20 @@ export const useAddVersionMutation = (options?: {
                 'color-palette',
             ]);
 
-            queryClient.setQueryData(
-                ['saved_query', data.uuid, data.projectUuid],
+            queryClient.setQueriesData(
+                {
+                    queryKey: ['saved_query', data.uuid, data.projectUuid],
+                },
                 data,
             );
-            queryClient.setQueryData(
-                ['saved_query', params.savedQueryUuid, data.projectUuid],
+            queryClient.setQueriesData(
+                {
+                    queryKey: [
+                        'saved_query',
+                        params.savedQueryUuid,
+                        data.projectUuid,
+                    ],
+                },
                 data,
             );
             await queryClient.resetQueries(['savedChartResults', data.uuid]);
@@ -556,7 +594,9 @@ export const useAddVersionMutation = (options?: {
 
             if (dashboardUuid)
                 showToastSuccess({
-                    title: `Success! Chart was updated.`,
+                    title: data.hasUnpublishedChanges
+                        ? 'Chart draft saved for review'
+                        : 'Success! Chart was updated.',
                     action: {
                         children: 'Open dashboard',
                         icon: IconArrowRight,
@@ -568,11 +608,13 @@ export const useAddVersionMutation = (options?: {
                 });
             else {
                 showToastSuccess({
-                    title: `Success! Chart was updated.`,
+                    title: data.hasUnpublishedChanges
+                        ? 'Chart draft saved for review'
+                        : 'Success! Chart was updated.',
                 });
                 if (redirectOnSuccess) {
                     void navigate(
-                        `/projects/${data.projectUuid}/saved/${data.slug}/view`,
+                        `/projects/${projectRoute?.projectUrlIdentifier ?? data.projectUuid}/saved/${data.slug}/view`,
                     );
                 }
             }

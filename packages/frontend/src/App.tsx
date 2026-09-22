@@ -1,13 +1,11 @@
 import { ModalsProvider } from '@mantine/modals';
 import { wrapCreateBrowserRouterV7 } from '@sentry/react';
+import { lazy, Suspense } from 'react';
+import { flushSync } from 'react-dom';
 import { createBrowserRouter, Outlet, RouterProvider } from 'react-router';
+import { APP_ROUTES } from './AppRoutes';
 import { DocumentTitle } from './components/common/DocumentTitle';
 import VersionAutoUpdater from './components/VersionAutoUpdater/VersionAutoUpdater';
-import {
-    CommercialMobileRoutes,
-    CommercialWebAppRoutes,
-} from './ee/CommercialRoutes';
-import { AgentOnboardingCompletionWatcher } from './ee/features/agentOnboarding/AgentOnboardingCompletionWatcher';
 import { AiAgentsGlobalProvider } from './ee/features/aiCopilot/components/Launcher/AiAgentsGlobalProvider';
 import { parseEmbedThemeParams } from './ee/providers/Embed/parseEmbedThemeParams';
 import BuildSkewRefresher from './features/buildHashHandshake/BuildSkewRefresher';
@@ -16,7 +14,6 @@ import ChunkErrorRouteBoundary from './features/errorBoundary/ChunkErrorRouteBou
 import ErrorBoundary from './features/errorBoundary/ErrorBoundary';
 import { SourceCodeEditorProvider } from './features/sourceCodeEditor';
 import ChartColorMappingContextProvider from './hooks/useChartColorConfig/ChartColorMappingContextProvider';
-import MobileRoutes from './MobileRoutes';
 import AbilityProvider from './providers/Ability/AbilityProvider';
 import ActiveJobProvider from './providers/ActiveJob/ActiveJobProvider';
 import AppProvider from './providers/App/AppProvider';
@@ -26,17 +23,17 @@ import ReactQueryProvider from './providers/ReactQuery/ReactQueryProvider';
 import SchedulerJobsProvider from './providers/SchedulerJobs/SchedulerJobsProvider';
 import ThirdPartyProvider from './providers/ThirdPartyServicesProvider';
 import TrackingProvider from './providers/Tracking/TrackingProvider';
-import Routes from './Routes';
-import { IS_MOBILE } from './utils/isMobile';
 
 installChunkLoadErrorHandler();
 
-// const isMobile =
-//     /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
-//         navigator.userAgent,
-//     ) || window.innerWidth < 768;
-
-const isMobile = IS_MOBILE;
+// Renders nothing — it only watches for a finished onboarding run and
+// redirects. Keeping it off the entry graph means a signed-out visitor never
+// pays for the agent-onboarding hooks just to see the login page.
+const AgentOnboardingCompletionWatcher = lazy(() =>
+    import('./ee/features/agentOnboarding/AgentOnboardingCompletionWatcher').then(
+        (module) => ({ default: module.AgentOnboardingCompletionWatcher }),
+    ),
+);
 
 const isMinimalPage = window.location.pathname.startsWith('/minimal');
 
@@ -58,14 +55,12 @@ const router = sentryCreateBrowserRouter([
         errorElement: <ChunkErrorRouteBoundary />,
         element: (
             <AppProvider>
-                <FullscreenProvider enabled={isMobile || !isMinimalPage}>
+                <FullscreenProvider enabled={!isMinimalPage}>
                     <VersionAutoUpdater />
                     <BuildSkewRefresher />
-                    <ThirdPartyProvider enabled={isMobile || !isMinimalPage}>
+                    <ThirdPartyProvider enabled={!isMinimalPage}>
                         <ErrorBoundary wrapper={{ mt: '4xl' }}>
-                            <TrackingProvider
-                                enabled={isMobile || !isMinimalPage}
-                            >
+                            <TrackingProvider enabled={!isMinimalPage}>
                                 <AbilityProvider>
                                     <ActiveJobProvider>
                                         <SchedulerJobsProvider>
@@ -73,7 +68,11 @@ const router = sentryCreateBrowserRouter([
                                                 <SourceCodeEditorProvider>
                                                     <AiAgentsGlobalProvider>
                                                         {!isMinimalPage && (
-                                                            <AgentOnboardingCompletionWatcher />
+                                                            <Suspense
+                                                                fallback={null}
+                                                            >
+                                                                <AgentOnboardingCompletionWatcher />
+                                                            </Suspense>
                                                         )}
                                                         <Outlet />
                                                     </AiAgentsGlobalProvider>
@@ -88,11 +87,15 @@ const router = sentryCreateBrowserRouter([
                 </FullscreenProvider>
             </AppProvider>
         ),
-        children: isMobile
-            ? [...MobileRoutes, ...CommercialMobileRoutes]
-            : [...Routes, ...CommercialWebAppRoutes],
+        children: APP_ROUTES,
     },
 ]);
+
+const flushRouterUpdate = (callback: () => unknown) => {
+    flushSync(callback);
+    return undefined;
+};
+
 const App = () => (
     <>
         <DocumentTitle />
@@ -100,7 +103,10 @@ const App = () => (
         <ReactQueryProvider>
             <MantineProvider forceColorScheme={embedForcedColorScheme}>
                 <ModalsProvider>
-                    <RouterProvider router={router} />
+                    <RouterProvider
+                        router={router}
+                        flushSync={flushRouterUpdate}
+                    />
                 </ModalsProvider>
             </MantineProvider>
         </ReactQueryProvider>

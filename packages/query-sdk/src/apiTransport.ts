@@ -9,6 +9,8 @@
  */
 
 import type {
+    AiPromptRequest,
+    AiPromptResult,
     Column,
     DownloadResultsFileType,
     DownloadResultsLimit,
@@ -31,7 +33,11 @@ import type {
     VizDrillDownIntent,
     VizUnderlyingDataIntent,
 } from './types';
-import { VIZ_DRILL_DOWN_PATH, VIZ_UNDERLYING_DATA_PATH } from './types';
+import {
+    VIZ_DRILL_DOWN_PATH,
+    VIZ_UNDERLYING_DATA_OPEN_PATH,
+    VIZ_UNDERLYING_DATA_PATH,
+} from './types';
 
 // Mirrors the explorer's `useInfiniteQueryResults` polling rhythm so the
 // SDK behaves like a normal Lightdash chart: 500-row pages, exponential
@@ -707,7 +713,7 @@ function mapApiRowsToQueryResult({
     fields: Record<string, FieldMeta>;
     fieldIds: string[];
     fieldNameForId: (fieldId: string) => string;
-}): Pick<QueryResult, 'rows' | 'columns' | 'format'> {
+}): Pick<QueryResult, 'rows' | 'columns' | 'format' | 'rowKeys'> {
     const idToName = new Map<string, string>();
     for (const fieldId of fieldIds) {
         idToName.set(fieldId, fieldNameForId(fieldId));
@@ -765,7 +771,12 @@ function mapApiRowsToQueryResult({
         return String(rawVal ?? '');
     };
 
-    return { rows, columns: resultColumns, format };
+    return {
+        rows,
+        columns: resultColumns,
+        format,
+        rowKeys: Object.fromEntries(idToName),
+    };
 }
 
 /**
@@ -1152,6 +1163,16 @@ export function createApiTransport(
             };
         },
 
+        async aiPrompt(request: AiPromptRequest): Promise<AiPromptResult> {
+            const { appUuid, prompt, sources, focus } = request;
+            const { text } = await fetchFn<{ text: string }>(
+                'POST',
+                `/api/v2/projects/${config.projectUuid}/apps/${appUuid}/analysis/prompt`,
+                { prompt, sources, ...(focus ? { focus } : {}) },
+            );
+            return { text };
+        },
+
         async externalFetch(
             _alias: string,
             _opts: ExternalFetchOptions,
@@ -1224,6 +1245,16 @@ export function createApiTransport(
                 queryUuid: execResult.queryUuid,
                 options,
             });
+        },
+
+        async openVizUnderlyingData(
+            intent: Omit<VizUnderlyingDataIntent, 'limit'>,
+        ): Promise<void> {
+            await fetchFn<Record<string, never>>(
+                'POST',
+                VIZ_UNDERLYING_DATA_OPEN_PATH,
+                intent,
+            );
         },
 
         async openVizDrillDown(intent: VizDrillDownIntent): Promise<void> {

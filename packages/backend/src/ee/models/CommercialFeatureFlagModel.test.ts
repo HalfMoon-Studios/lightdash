@@ -6,17 +6,30 @@ import { CommercialFeatureFlagModel } from './CommercialFeatureFlagModel';
 
 const database = knex({ client: MockClient, dialect: 'pg' });
 
-const createModel = () =>
+const createModel = (config: Partial<typeof lightdashConfigMock> = {}) =>
     new CommercialFeatureFlagModel({
         database,
         lightdashConfig: {
             ...lightdashConfigMock,
             enabledFeatureFlags: new Set<string>(),
             disabledFeatureFlags: new Set<string>(),
+            ...config,
         },
     });
 
-describe('CommercialFeatureFlagModel direct access', () => {
+const createGatedCopilotModel = () =>
+    createModel({
+        ai: {
+            ...lightdashConfigMock.ai,
+            copilot: {
+                ...lightdashConfigMock.ai.copilot,
+                enabled: true,
+                requiresFeatureFlag: true,
+            },
+        },
+    });
+
+describe('CommercialFeatureFlagModel ai copilot', () => {
     let tracker: Tracker;
 
     beforeAll(() => {
@@ -29,55 +42,38 @@ describe('CommercialFeatureFlagModel direct access', () => {
 
     it('fails closed without a user and issues no flag queries', async () => {
         await expect(
-            createModel().get({
-                featureFlagId: CommercialFeatureFlags.DirectAccess,
+            createGatedCopilotModel().get({
+                featureFlagId: CommercialFeatureFlags.AiCopilot,
             }),
         ).resolves.toEqual({
-            id: CommercialFeatureFlags.DirectAccess,
+            id: CommercialFeatureFlags.AiCopilot,
             enabled: false,
         });
         expect(tracker.history.select).toHaveLength(0);
     });
 
-    it('is default-off when no organization override can be resolved', async () => {
-        tracker.on.select('feature_flags').response(undefined);
-
-        await expect(
-            createModel().get({
-                featureFlagId: CommercialFeatureFlags.DirectAccess,
-                user: {
-                    userUuid: 'user-uuid',
-                    organizationUuid: 'organization-uuid',
-                },
-            }),
-        ).resolves.toEqual({
-            id: CommercialFeatureFlags.DirectAccess,
-            enabled: false,
-        });
-    });
-
-    it('enables through an organization-level override', async () => {
+    it('resolves through the database when a user is present', async () => {
         tracker.on.select('feature_flags').responseOnce({
-            flag_id: CommercialFeatureFlags.DirectAccess,
+            flag_id: CommercialFeatureFlags.AiCopilot,
             default_enabled: null,
         });
         tracker.on.select('feature_flag_overrides').responseOnce({
-            flag_id: CommercialFeatureFlags.DirectAccess,
+            flag_id: CommercialFeatureFlags.AiCopilot,
             organization_uuid: 'organization-uuid',
             user_uuid: null,
             enabled: true,
         });
 
         await expect(
-            createModel().get({
-                featureFlagId: CommercialFeatureFlags.DirectAccess,
+            createGatedCopilotModel().get({
+                featureFlagId: CommercialFeatureFlags.AiCopilot,
                 user: {
                     userUuid: 'user-uuid',
                     organizationUuid: 'organization-uuid',
                 },
             }),
         ).resolves.toEqual({
-            id: CommercialFeatureFlags.DirectAccess,
+            id: CommercialFeatureFlags.AiCopilot,
             enabled: true,
         });
     });

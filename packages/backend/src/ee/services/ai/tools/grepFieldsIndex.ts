@@ -59,7 +59,12 @@ export const summarizeRequiredFilters = (explore: Explore): string | null => {
         const kind = filter.required === false ? 'suggested' : 'required';
         return `${kind} ${fieldId} ${filter.operator}${values}`;
     });
-    return `⚠ table filters: ${parts.join('; ')}`;
+    const requiredFilterGuidance = filters.some(
+        (filter) => filter.required !== false,
+    )
+        ? '. Required filter values are replaceable defaults, not fixed data limits; use a compatible query filter on the same field or a derived time dimension of that field when the requested scope differs.'
+        : '';
+    return `⚠ table filters: ${parts.join('; ')}${requiredFilterGuidance}`;
 };
 
 /** One greppable "file": a field flattened with its searchable annotations. */
@@ -113,6 +118,16 @@ export const buildExploreIndex = (explores: Explore[]): ExploreEntry[] =>
             .join('\n')
             .toLowerCase(),
     }));
+
+const exploreIndexCache = new WeakMap<Explore[], ExploreEntry[]>();
+
+export const getCachedExploreIndex = (explores: Explore[]): ExploreEntry[] => {
+    const cached = exploreIndexCache.get(explores);
+    if (cached) return cached;
+    const index = buildExploreIndex(explores);
+    exploreIndexCache.set(explores, index);
+    return index;
+};
 
 /**
  * @param verifiedUsage Project-wide verified-chart usage keyed
@@ -184,6 +199,28 @@ export const buildFieldIndex = (
         }
     }
     return entries;
+};
+
+const fieldIndexCache = new WeakMap<
+    Explore[],
+    WeakMap<Map<string, number>, FieldEntry[]>
+>();
+
+/** Reuses the immutable, permission-filtered catalog index within one run. */
+export const getCachedFieldIndex = (
+    explores: Explore[],
+    verifiedUsage: Map<string, number>,
+): FieldEntry[] => {
+    let byUsage = fieldIndexCache.get(explores);
+    if (!byUsage) {
+        byUsage = new WeakMap();
+        fieldIndexCache.set(explores, byUsage);
+    }
+    const cached = byUsage.get(verifiedUsage);
+    if (cached) return cached;
+    const index = buildFieldIndex(explores, verifiedUsage);
+    byUsage.set(verifiedUsage, index);
+    return index;
 };
 
 /**
@@ -297,7 +334,7 @@ const STOPWORDS = new Set(
  * stopwords and short tokens, dedupes, and keeps the most distinctive terms so
  * we can pre-grep the catalog before the agent's first turn.
  */
-export const extractKeywords = (text: string): string[] => {
+export const extractKeywords = (text: string, limit = 6): string[] => {
     const tokens = text.toLowerCase().match(/[a-z0-9_]+/g) ?? [];
     const seen = new Set<string>();
     const kept: string[] = [];
@@ -307,7 +344,7 @@ export const extractKeywords = (text: string): string[] => {
             kept.push(token);
         }
     }
-    return kept.slice(0, 6);
+    return kept.slice(0, limit);
 };
 
 /**
@@ -368,22 +405,40 @@ const fieldLine = (f: FieldEntry): string => {
     return `  ${f.path}  [${f.kind} ${f.type}]${verified}${params} ${f.label}${defaultTimeDimension}${desc}`;
 };
 
-export const renderCandidateBlock = (candidates: FieldEntry[]): string => {
+export const renderCandidateBlock = (
+    candidates: FieldEntry[],
+    exploreRanks?: ReadonlyMap<string, number>,
+    ranked = false,
+    metadataPreloaded = false,
+): string => {
     const byExplore = new Map<string, FieldEntry[]>();
     for (const c of candidates) {
         const list = byExplore.get(c.exploreName) ?? [];
         list.push(c);
         byExplore.set(c.exploreName, list);
     }
-    const blocks = [...byExplore.entries()].map(([exploreName, fields]) => {
+    const groups = [...byExplore.entries()];
+    if (exploreRanks) {
+        groups.sort(
+            (a, b) =>
+                (exploreRanks.get(a[0]) ?? Infinity) -
+                (exploreRanks.get(b[0]) ?? Infinity),
+        );
+    }
+    const blocks = groups.map(([exploreName, fields]) => {
         const lines = fields.map(fieldLine).join('\n');
         return `${exploreName} (${fields[0]?.exploreLabel ?? exploreName})\n${lines}`;
     });
-    return [
-        'Candidate fields pre-grepped from the catalog for this question (deterministic keyword match — VERIFY these fit before using, and call grepFields yourself if you need different angles or none of these match):',
-        '',
-        ...blocks,
-    ].join('\n');
+    let guidance =
+        'Candidate fields pre-grepped from the catalog for this question (deterministic keyword match — VERIFY these fit before using, and call grepFields yourself if you need different angles or none of these match):';
+    if (metadataPreloaded) {
+        guidance =
+            'Catalog candidates ranked for field meaning and explore grain. Verify against the preloaded metadata below; use getMetadata for missing details and grepFields for other candidates:';
+    } else if (ranked) {
+        guidance =
+            'Catalog candidates ranked for field meaning and explore grain. VERIFY definitions, joins and filters with getMetadata before querying; use grepFields for other candidates:';
+    }
+    return [guidance, '', ...blocks].join('\n');
 };
 
 /**

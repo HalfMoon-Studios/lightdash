@@ -17,6 +17,7 @@ const app = {
     appUuid: 'viz-1',
     name: 'Revenue changes waterfall',
     description: 'By tier',
+    icon: null,
 };
 
 const renderHeader = (
@@ -47,9 +48,10 @@ describe('ExplorerChartTypeAuthoringHeader', () => {
     it('names the surface with a focused heading and says nothing while describing', () => {
         renderHeader();
 
+        expect(screen.getByText('Chart Studio')).toBeInTheDocument();
         const heading = screen.getByRole('heading', {
             level: 2,
-            name: 'Editing chart type · Revenue changes waterfall',
+            name: 'Revenue changes waterfall',
         });
         expect(heading).toHaveFocus();
         expect(screen.getByRole('status')).toHaveTextContent('');
@@ -115,7 +117,7 @@ describe('ExplorerChartTypeAuthoringHeader', () => {
         ).toBeInTheDocument();
     });
 
-    it('always offers a way back and reports whether history is open', async () => {
+    it('keeps Close, Back, and History in the workflow header', async () => {
         const props = renderHeader({ isHistoryOpen: true });
 
         expect(screen.getByRole('button', { name: 'History' })).toHaveAttribute(
@@ -123,8 +125,11 @@ describe('ExplorerChartTypeAuthoringHeader', () => {
             'true',
         );
         await userEvent.click(
+            screen.getByRole('button', { name: 'Close Chart Studio' }),
+        );
+        await userEvent.click(
             screen.getByRole('button', { name: 'Back to chart' }),
         );
-        expect(props.onDone).toHaveBeenCalledTimes(1);
+        expect(props.onDone).toHaveBeenCalledTimes(2);
     });
 });

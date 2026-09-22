@@ -2,9 +2,11 @@ import {
     createFilterRuleFromField,
     DimensionType,
     FieldType,
+    FilterOperator,
     type FilterableDimension,
+    type FilterRule,
 } from '@lightdash/common';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '../../../testing/testUtils';
 import FilterRuleForm from './FilterRuleForm';
@@ -29,18 +31,33 @@ const visibleDimension: FilterableDimension = {
     hidden: false,
 };
 
-const renderFilterRuleForm = (dimension: FilterableDimension) =>
+const timestampDimension: FilterableDimension = {
+    ...visibleDimension,
+    type: DimensionType.TIMESTAMP,
+    name: 'created_at',
+    label: 'Created at',
+    sql: '${TABLE}.created_at',
+};
+
+const renderFilterRuleForm = (
+    dimension: FilterableDimension,
+    filterRule: FilterRule = createFilterRuleFromField(dimension),
+    onChange = vi.fn(),
+) => {
     renderWithProviders(
         <FiltersProvider itemsMap={{}}>
             <FilterRuleForm
-                fields={[visibleDimension, hiddenDimension]}
-                filterRule={createFilterRuleFromField(dimension)}
+                fields={[visibleDimension, hiddenDimension, timestampDimension]}
+                filterRule={filterRule}
                 isEditMode
-                onChange={vi.fn()}
+                onChange={onChange}
                 onDelete={vi.fn()}
             />
         </FiltersProvider>,
     );
+
+    return { onChange };
+};
 
 describe('FilterRuleForm', () => {
     beforeAll(() => {
@@ -53,6 +70,44 @@ describe('FilterRuleForm', () => {
 
     afterAll(() => {
         delete (Element.prototype as Partial<Element>).scrollIntoView;
+    });
+
+    it('uses the original non-wrapping Group layout on desktop', async () => {
+        const matchMedia = vi.mocked(window.matchMedia);
+        const defaultImplementation = matchMedia.getMockImplementation();
+        matchMedia.mockImplementation(
+            (query) =>
+                ({
+                    matches: query.startsWith('(min-width:'),
+                    media: query,
+                    onchange: null,
+                    addListener: vi.fn(),
+                    removeListener: vi.fn(),
+                    addEventListener: vi.fn(),
+                    removeEventListener: vi.fn(),
+                    dispatchEvent: vi.fn(),
+                }) as MediaQueryList,
+        );
+
+        try {
+            renderFilterRuleForm(visibleDimension);
+
+            await waitFor(() =>
+                expect(
+                    screen.getByTestId('FilterRuleForm/filter-rule'),
+                ).toHaveStyle('--group-wrap: nowrap'),
+            );
+        } finally {
+            matchMedia.mockImplementation(defaultImplementation!);
+        }
+    });
+
+    it('wraps filter controls on mobile', () => {
+        renderFilterRuleForm(visibleDimension);
+
+        expect(screen.getByTestId('FilterRuleForm/filter-rule')).toHaveStyle(
+            '--group-wrap: wrap',
+        );
     });
 
     it('locks a hidden field and explains why in a tooltip', async () => {
@@ -82,5 +137,30 @@ describe('FilterRuleForm', () => {
         expect(
             screen.queryByRole('option', { name: hiddenDimension.label }),
         ).toBeNull();
+    });
+
+    it('preserves a timestamp value when changing to is between', async () => {
+        const user = userEvent.setup();
+        const timestampValue = '2024-11-01T10:00:00-05:00';
+        const filterRule = {
+            ...createFilterRuleFromField(timestampDimension),
+            values: [timestampValue],
+        };
+        const { onChange } = renderFilterRuleForm(
+            timestampDimension,
+            filterRule,
+        );
+
+        await user.click(screen.getByDisplayValue('is'));
+        await user.click(
+            await screen.findByRole('option', { name: 'is between' }),
+        );
+
+        expect(onChange).toHaveBeenCalledWith({
+            ...filterRule,
+            operator: FilterOperator.IN_BETWEEN,
+            values: [timestampValue],
+            settings: undefined,
+        });
     });
 });

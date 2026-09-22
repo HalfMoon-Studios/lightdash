@@ -9,11 +9,14 @@ import {
     type DataAppVizSchema,
     type Explore,
     type Item,
+    type ItemsMap,
     type ResultRow,
 } from '@lightdash/common';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { type ComponentProps } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ChartColorMappingContext } from '../../../hooks/useChartColorConfig/context';
 import { renderWithProviders } from '../../../testing/testUtils';
 import DataAppVizTestPanel from './DataAppVizTestPanel';
 import { buildTestMetricQuery, isMappingComplete } from './dataAppVizTestQuery';
@@ -33,16 +36,22 @@ vi.mock('../../../components/common/FieldSelect', () => ({
         items,
         onChange,
         placeholder,
+        'aria-label': ariaLabel,
+        'aria-describedby': ariaDescribedBy,
     }: {
         items: Item[];
         onChange: (item: Item | undefined) => void;
         placeholder: string;
+        'aria-label'?: string;
+        'aria-describedby'?: string;
     }) => {
         fieldSelectItems.push(items);
         return (
             <button
                 type="button"
                 data-testid="field-select"
+                aria-label={ariaLabel}
+                aria-describedby={ariaDescribedBy}
                 onClick={() => onChange(items[0])}
             >
                 {placeholder}
@@ -75,6 +84,9 @@ vi.mock('../../../hooks/useExplores', () => ({
 vi.mock('../../../hooks/useExplore', () => ({
     useExploreByProjectUuid: exploreByProjectMock,
 }));
+vi.mock('../../../hooks/useServerOrClientFeatureFlag', () => ({
+    useServerFeatureFlag: () => ({ data: { enabled: true } }),
+}));
 vi.mock('../../../providers/Explorer/useQueryExecutor', () => ({
     useQueryExecutor: queryExecutorMock,
 }));
@@ -87,12 +99,21 @@ import { useQueryExecutor } from '../../../providers/Explorer/useQueryExecutor';
 
 const schema: DataAppVizSchema = {
     fields: [
-        { name: 'source', label: 'Source', type: 'dimension', required: true },
+        {
+            name: 'source',
+            label: 'Source',
+            type: 'dimension',
+            required: true,
+            description: 'The label for each funnel stage',
+            examples: ['Listing started', 0, false, null],
+        },
         { name: 'target', label: 'Target', type: 'series', required: false },
         { name: 'value', label: 'Value', type: 'metric', required: true },
     ],
     configOptions: [],
     colorPalette: null,
+    inputGuidance:
+        'Use one row per stage in order. Reshape separate metrics or flags into stage/count rows before mapping.',
 };
 
 const makeDimension = (name: string, hidden: boolean): CompiledDimension => ({
@@ -106,6 +127,7 @@ const makeDimension = (name: string, hidden: boolean): CompiledDimension => ({
     tableLabel: 'Orders',
     sql: '',
     hidden,
+    colors: name === 'visible' ? { Retail: '#00ff00' } : undefined,
 });
 
 const makeMetric = (name: string, hidden: boolean): CompiledMetric => ({
@@ -177,6 +199,14 @@ const resultRows: ResultRow[] = [
     },
 ];
 
+const TestDataAppVizPanel = (
+    props: ComponentProps<typeof DataAppVizTestPanel>,
+) => (
+    <ChartColorMappingContext.Provider value={{ colorMappings: new Map() }}>
+        <DataAppVizTestPanel {...props} />
+    </ChartColorMappingContext.Provider>
+);
+
 describe('isMappingComplete', () => {
     it('is false until every required field is mapped', () => {
         expect(isMappingComplete(schema, {})).toBe(false);
@@ -223,6 +253,56 @@ describe('buildTestMetricQuery', () => {
         });
         expect(q.dimensions).toEqual(['orders_status']);
         expect(q.metrics).toEqual(['orders_total']);
+    });
+
+    it('flattens ordered multiple bindings into the test query', () => {
+        const q = buildTestMetricQuery(
+            'orders',
+            {
+                ...schema,
+                fields: schema.fields.map((field) =>
+                    field.name === 'value'
+                        ? { ...field, multiple: true }
+                        : field,
+                ),
+            },
+            {
+                source: 'orders_status',
+                value: ['orders_total', 'orders_average_order_size'],
+            },
+            {},
+        );
+
+        expect(q.metrics).toEqual([
+            'orders_total',
+            'orders_average_order_size',
+        ]);
+    });
+
+    it('routes a multiple column slot by each selected field kind', () => {
+        const q = buildTestMetricQuery(
+            'orders',
+            {
+                ...schema,
+                fields: [
+                    {
+                        name: 'columns',
+                        label: 'Columns',
+                        type: 'column',
+                        required: true,
+                        multiple: true,
+                    },
+                ],
+            },
+            { columns: ['orders_visible', 'orders_visible_metric'] },
+            {
+                orders_visible: makeDimension('visible', false),
+                orders_visible_metric: makeMetric('visible_metric', false),
+            } as ItemsMap,
+        );
+
+        expect(q.dimensions).toEqual(['orders_visible']);
+        expect(q.metrics).toEqual(['orders_visible_metric']);
     });
 });
 
@@ -297,7 +377,7 @@ describe('DataAppVizTestPanel', () => {
 
         await user.click(screen.getByPlaceholderText('Select an explore'));
         await user.click(await screen.findByText('Orders'));
-        await user.click(screen.getByRole('button', { name: 'Select source' }));
+        await user.click(screen.getByRole('button', { name: 'Source' }));
         await user.click(
             screen.getByRole('button', { name: /run test query/i }),
         );
@@ -307,7 +387,7 @@ describe('DataAppVizTestPanel', () => {
 
     it('lists the declared fields and the explore picker up-front', () => {
         renderWithProviders(
-            <DataAppVizTestPanel
+            <TestDataAppVizPanel
                 projectUuid="p1"
                 schema={schema}
                 onContextChange={vi.fn()}
@@ -322,9 +402,82 @@ describe('DataAppVizTestPanel', () => {
         expect(screen.getByText('Value')).toBeInTheDocument();
     });
 
+    it('shows chart setup guidance without inline field descriptions', async () => {
+        const user = userEvent.setup();
+        renderWithProviders(
+            <TestDataAppVizPanel
+                projectUuid="p1"
+                schema={schema}
+                onContextChange={vi.fn()}
+            />,
+        );
+
+        expect(
+            screen.getByRole('region', { name: 'How to use this chart type' }),
+        ).toBeVisible();
+        expect(
+            screen.getByText(
+                'Use one row per stage in order. Reshape separate metrics or flags into stage/count rows before mapping.',
+            ),
+        ).not.toBeVisible();
+        expect(
+            screen.getByText('The label for each funnel stage'),
+        ).not.toBeVisible();
+        expect(
+            screen.queryByText('Examples: Listing started, 0, false, null'),
+        ).not.toBeInTheDocument();
+
+        const setupHelp = screen.getByRole('button', {
+            name: 'How to use this chart type',
+        });
+        expect(setupHelp).toHaveAttribute('aria-expanded', 'false');
+        await user.click(setupHelp);
+        expect(setupHelp).toHaveAttribute('aria-expanded', 'true');
+        await waitFor(() =>
+            expect(screen.getByText(/^Use one row per stage/)).toBeVisible(),
+        );
+
+        await user.hover(screen.getByRole('img', { name: 'About Source' }));
+        expect(await screen.findByRole('tooltip')).toHaveTextContent(
+            'The label for each funnel stage',
+        );
+        expect(
+            screen.queryByText('Examples: Listing started, 0, false, null'),
+        ).not.toBeInTheDocument();
+        expect(
+            screen
+                .getAllByText('The label for each funnel stage')
+                .some((element) => !element.hasAttribute('hidden')),
+        ).toBe(true);
+    });
+
+    it('links each field picker to its own mapping guidance after selecting an explore', async () => {
+        const user = userEvent.setup();
+        renderWithProviders(
+            <TestDataAppVizPanel
+                projectUuid="p1"
+                schema={schema}
+                onContextChange={vi.fn()}
+            />,
+        );
+
+        await user.click(screen.getByPlaceholderText('Select an explore'));
+        await user.click(await screen.findByText('Orders'));
+
+        expect(
+            screen.getByRole('button', { name: 'Source' }),
+        ).toHaveAccessibleDescription('The label for each funnel stage');
+        expect(
+            screen.getByRole('button', { name: 'Value' }),
+        ).not.toHaveAttribute('aria-describedby');
+        expect(
+            screen.queryByRole('img', { name: 'About Value' }),
+        ).not.toBeInTheDocument();
+    });
+
     it('requests the same filtered Explore list as Explorer', () => {
         renderWithProviders(
-            <DataAppVizTestPanel
+            <TestDataAppVizPanel
                 projectUuid="p1"
                 schema={schema}
                 onContextChange={vi.fn()}
@@ -337,7 +490,7 @@ describe('DataAppVizTestPanel', () => {
     it('hides the run action until an explore is selected', async () => {
         const user = userEvent.setup();
         renderWithProviders(
-            <DataAppVizTestPanel
+            <TestDataAppVizPanel
                 projectUuid="p1"
                 schema={schema}
                 onContextChange={vi.fn()}
@@ -360,7 +513,7 @@ describe('DataAppVizTestPanel', () => {
     it('republishes option edits after a successful query', async () => {
         const onContextChange = vi.fn();
         renderWithProviders(
-            <DataAppVizTestPanel
+            <TestDataAppVizPanel
                 projectUuid="p1"
                 schema={configurableSchema}
                 onContextChange={onContextChange}
@@ -371,9 +524,16 @@ describe('DataAppVizTestPanel', () => {
         await waitFor(() =>
             expect(onContextChange).toHaveBeenLastCalledWith({
                 fieldMapping: { source: 'orders_visible' },
+                fields: {
+                    orders_visible: { label: 'visible', tableLabel: 'Orders' },
+                },
                 rows: resultRows,
                 options: { showLegend: true },
                 colorPalette: ['#111111'],
+                seriesColors: {},
+                valueColors: {
+                    orders_visible: { Retail: '#00ff00' },
+                },
                 pivotDetails: null,
                 underlyingData: { enabled: false },
                 drillDown: { enabled: false },
@@ -386,9 +546,16 @@ describe('DataAppVizTestPanel', () => {
         await waitFor(() =>
             expect(onContextChange).toHaveBeenLastCalledWith({
                 fieldMapping: { source: 'orders_visible' },
+                fields: {
+                    orders_visible: { label: 'visible', tableLabel: 'Orders' },
+                },
                 rows: resultRows,
                 options: { showLegend: false },
                 colorPalette: ['#111111'],
+                seriesColors: {},
+                valueColors: {
+                    orders_visible: { Retail: '#00ff00' },
+                },
                 pivotDetails: null,
                 underlyingData: { enabled: false },
                 drillDown: { enabled: false },
@@ -399,7 +566,7 @@ describe('DataAppVizTestPanel', () => {
     it('republishes palette edits after a successful query', async () => {
         const onContextChange = vi.fn();
         renderWithProviders(
-            <DataAppVizTestPanel
+            <TestDataAppVizPanel
                 projectUuid="p1"
                 schema={configurableSchema}
                 onContextChange={onContextChange}
@@ -410,9 +577,16 @@ describe('DataAppVizTestPanel', () => {
         await waitFor(() =>
             expect(onContextChange).toHaveBeenLastCalledWith({
                 fieldMapping: { source: 'orders_visible' },
+                fields: {
+                    orders_visible: { label: 'visible', tableLabel: 'Orders' },
+                },
                 rows: resultRows,
                 options: { showLegend: true },
                 colorPalette: ['#111111'],
+                seriesColors: {},
+                valueColors: {
+                    orders_visible: { Retail: '#00ff00' },
+                },
                 pivotDetails: null,
                 underlyingData: { enabled: false },
                 drillDown: { enabled: false },
@@ -425,9 +599,16 @@ describe('DataAppVizTestPanel', () => {
         await waitFor(() =>
             expect(onContextChange).toHaveBeenLastCalledWith({
                 fieldMapping: { source: 'orders_visible' },
+                fields: {
+                    orders_visible: { label: 'visible', tableLabel: 'Orders' },
+                },
                 rows: resultRows,
                 options: { showLegend: true },
                 colorPalette: ['#123456', '#abcdef'],
+                seriesColors: {},
+                valueColors: {
+                    orders_visible: { Retail: '#00ff00' },
+                },
                 pivotDetails: null,
                 underlyingData: { enabled: false },
                 drillDown: { enabled: false },
@@ -442,7 +623,7 @@ describe('DataAppVizTestPanel', () => {
         } as unknown as ReturnType<typeof useExploreByProjectUuid>);
 
         renderWithProviders(
-            <DataAppVizTestPanel
+            <TestDataAppVizPanel
                 projectUuid="p1"
                 schema={{
                     fields: [
@@ -482,7 +663,7 @@ describe('DataAppVizTestPanel', () => {
         });
 
         renderWithProviders(
-            <DataAppVizTestPanel
+            <TestDataAppVizPanel
                 projectUuid="p1"
                 schema={{
                     ...schema,
@@ -497,9 +678,9 @@ describe('DataAppVizTestPanel', () => {
 
         await user.click(screen.getByPlaceholderText('Select an explore'));
         await user.click(await screen.findByText('Orders'));
-        await user.click(screen.getByRole('button', { name: 'Select source' }));
-        await user.click(screen.getByRole('button', { name: 'Select target' }));
-        await user.click(screen.getByRole('button', { name: 'Select value' }));
+        await user.click(screen.getByRole('button', { name: 'Source' }));
+        await user.click(screen.getByRole('button', { name: 'Target' }));
+        await user.click(screen.getByRole('button', { name: 'Value' }));
         await user.click(
             screen.getByRole('button', { name: /run test query/i }),
         );
@@ -566,7 +747,7 @@ describe('DataAppVizTestPanel', () => {
         const onContextChange = vi.fn();
 
         renderWithProviders(
-            <DataAppVizTestPanel
+            <TestDataAppVizPanel
                 projectUuid="p1"
                 schema={{
                     ...schema,
@@ -581,9 +762,9 @@ describe('DataAppVizTestPanel', () => {
 
         await user.click(screen.getByPlaceholderText('Select an explore'));
         await user.click(await screen.findByText('Orders'));
-        await user.click(screen.getByRole('button', { name: 'Select source' }));
-        await user.click(screen.getByRole('button', { name: 'Select target' }));
-        await user.click(screen.getByRole('button', { name: 'Select value' }));
+        await user.click(screen.getByRole('button', { name: 'Source' }));
+        await user.click(screen.getByRole('button', { name: 'Target' }));
+        await user.click(screen.getByRole('button', { name: 'Value' }));
         await user.click(
             screen.getByRole('button', { name: /run test query/i }),
         );

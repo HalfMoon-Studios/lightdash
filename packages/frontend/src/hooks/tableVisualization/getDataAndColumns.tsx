@@ -5,10 +5,10 @@ import {
     isCustomDimension,
     isDimension,
     isField,
-    isNumericItem,
     normalizePivotMatchRaw,
     type ItemsMap,
     type GroupedPivotRowSubtotals,
+    type MergeColumnTotal,
     type ParametersValuesMap,
     type ResultRow,
     type ResultValue,
@@ -22,11 +22,14 @@ import {
     TableHeaderRegularLabel,
 } from '../../components/common/Table/Table.styles';
 import TotalCalculationErrorCell from '../../components/common/Table/TotalCalculationErrorCell';
+import TotalFromSourceCell from '../../components/common/Table/TotalFromSourceCell';
+import TotalNotComputableCell from '../../components/common/Table/TotalNotComputableCell';
 import {
     columnHelper,
     type TableColumn,
     type TableHeader,
 } from '../../components/common/Table/types';
+import { canHaveWarehouseTotal } from '../../utils/canHaveWarehouseTotal';
 import { getFormattedValueCell } from '../useColumns';
 
 type Args = {
@@ -41,6 +44,10 @@ type Args = {
     totals?: Record<string, number>;
     totalsLoading?: boolean;
     totalsError?: unknown;
+    /** Totals over a merged result exist only for some metric types. */
+    isMergedResult?: boolean;
+    /** Where each merged column's total comes from, by field id. */
+    mergeColumnTotals?: Record<string, MergeColumnTotal>;
     groupedSubtotals?: Record<string, Record<string, number>[]>;
     subtotalsLoading?: boolean;
     subtotalsError?: unknown;
@@ -190,6 +197,8 @@ const getDataAndColumns = ({
     totals,
     totalsLoading,
     totalsError,
+    isMergedResult,
+    mergeColumnTotals = {},
     groupedSubtotals,
     subtotalsLoading,
     subtotalsError,
@@ -260,22 +269,42 @@ const getDataAndColumns = ({
                     cell: (info) => getFormattedValueCell(info, parameters),
 
                     footer: () => {
+                        const mergeTotal = mergeColumnTotals[itemId];
                         if (totals?.[itemId] !== undefined) {
-                            return formatItemValue(
+                            const value = formatItemValue(
                                 item,
                                 totals[itemId],
                                 false,
                                 parameters,
                             );
+                            return mergeTotal?.from === 'sourceQuery' ? (
+                                <TotalFromSourceCell
+                                    value={value}
+                                    sourceLabel={mergeTotal.sourceLabel}
+                                />
+                            ) : (
+                                value
+                            );
                         }
-                        if (totalsError && isNumericItem(item)) {
+                        if (
+                            isMergedResult &&
+                            canHaveWarehouseTotal(item) &&
+                            mergeTotal?.from === null
+                        ) {
+                            return (
+                                <TotalNotComputableCell
+                                    reason={mergeTotal.reason}
+                                />
+                            );
+                        }
+                        if (totalsError && canHaveWarehouseTotal(item)) {
                             return (
                                 <TotalCalculationErrorCell
                                     error={totalsError}
                                 />
                             );
                         }
-                        if (totalsLoading && isNumericItem(item)) {
+                        if (totalsLoading && canHaveWarehouseTotal(item)) {
                             return (
                                 <Skeleton
                                     height={16}
@@ -335,7 +364,7 @@ const getDataAndColumns = ({
                             if (
                                 subtotalValue === undefined &&
                                 subtotalsError &&
-                                isNumericItem(item)
+                                canHaveWarehouseTotal(item)
                             ) {
                                 return (
                                     <TotalCalculationErrorCell
@@ -347,7 +376,7 @@ const getDataAndColumns = ({
                             if (
                                 subtotalValue === undefined &&
                                 subtotalsLoading &&
-                                isNumericItem(item)
+                                canHaveWarehouseTotal(item)
                             ) {
                                 return (
                                     <Skeleton

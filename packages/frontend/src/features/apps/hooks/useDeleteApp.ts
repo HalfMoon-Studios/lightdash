@@ -2,6 +2,7 @@ import { type ApiError } from '@lightdash/common';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { lightdashApi } from '../../../api';
 import useToaster from '../../../hooks/toaster/useToaster';
+import { captureChartTypeError } from '../../chartTypes/utils/captureChartTypeError';
 
 type DeleteAppParams = {
     projectUuid: string;
@@ -30,6 +31,9 @@ export const useDeleteApp = () => {
             void queryClient.invalidateQueries({ queryKey: ['content'] });
             void queryClient.invalidateQueries({ queryKey: ['data-app-vizs'] });
             void queryClient.invalidateQueries({
+                queryKey: ['registry-chart-types', variables.projectUuid],
+            });
+            void queryClient.invalidateQueries({
                 queryKey: ['app', variables.projectUuid, variables.appUuid],
             });
             void queryClient.invalidateQueries({
@@ -43,10 +47,14 @@ export const useDeleteApp = () => {
                 title: variables.successTitle ?? 'Data app deleted',
             });
         },
-        onError: ({ error }) => {
+        onError: (apiError, variables) => {
+            captureChartTypeError('dataAppDelete', apiError, {
+                projectUuid: variables.projectUuid,
+                appUuid: variables.appUuid,
+            });
             showToastApiError({
                 title: 'Failed to delete app',
-                apiError: error,
+                apiError: apiError.error,
             });
         },
     });

@@ -21,6 +21,7 @@ import {
     type ResultColumn,
 } from '@lightdash/common';
 import {
+    ActionIcon,
     Box,
     Button,
     Flex,
@@ -32,13 +33,14 @@ import {
     Tooltip,
     type PopoverProps,
 } from '@mantine/core';
-import { IconRotate2, IconSql } from '@tabler/icons-react';
+import { IconInfoCircle, IconRotate2, IconSql } from '@tabler/icons-react';
 import { produce } from 'immer';
 import { useCallback, useMemo, useRef, useState, type FC } from 'react';
 import { flushSync } from 'react-dom';
 import FieldIcon from '../../../components/common/Filters/FieldIcon';
 import FieldLabel from '../../../components/common/Filters/FieldLabel';
 import MantineIcon from '../../../components/common/MantineIcon';
+import { useUiStrings } from '../../../ee/providers/Embed/useUiStrings';
 import useDashboardTileStatusContext from '../../../providers/Dashboard/useDashboardTileStatusContext';
 import { DEFAULT_TAB, FilterActions, FilterTabs } from './constants';
 import classes from './FilterConfiguration.module.css';
@@ -97,6 +99,7 @@ const FilterConfiguration: FC<Props> = ({
     onSave,
     onEditRequirementRules,
 }) => {
+    const getUiString = useUiStrings();
     const [selectedTabId, setSelectedTabId] = useState<FilterTabs>(DEFAULT_TAB);
     const [selectedField, setSelectedField] = useState<
         DashboardFilterableField | undefined
@@ -405,9 +408,11 @@ const FilterConfiguration: FC<Props> = ({
         !!draftFilterRule?.required &&
         !hasFilterValueSet(draftFilterRule);
 
-    const applyDisabledTooltipLabel = isLockedRequiredMissingValue
-        ? 'A locked, required filter must have a value'
-        : 'Filter field and value required';
+    const applyDisabledTooltipLabel = getUiString(
+        isLockedRequiredMissingValue
+            ? 'filters.config.applyLockedRequiredTooltip'
+            : 'filters.config.applyRequiredTooltip',
+    );
 
     // Render nested dropdowns inside the popover (not portaled) so selecting an
     // option doesn't register as an outside click and close the whole popover.
@@ -429,33 +434,44 @@ const FilterConfiguration: FC<Props> = ({
                 {isCreatingNew || isEditMode || isTemporary ? (
                     <Tabs.List mb="md">
                         <Tooltip
-                            label="Select the value you want to filter your dimension by"
+                            label={getUiString(
+                                'filters.config.filterSettingsTabTooltip',
+                            )}
                             position="top-start"
                         >
                             <Tabs.Tab value={FilterTabs.SETTINGS}>
-                                Filter Settings
+                                {getUiString(
+                                    'filters.config.filterSettingsTab',
+                                )}
                             </Tabs.Tab>
                         </Tooltip>
 
                         <Tooltip
-                            label={
+                            label={getUiString(
                                 tabs.length > 1
-                                    ? 'Select which tabs and tiles this filter applies to'
-                                    : 'Select tiles to apply filter to and which field to filter by'
-                            }
+                                    ? 'filters.config.tabsAndTilesTabTooltip'
+                                    : 'filters.config.tilesTabTooltip',
+                            )}
                             position="top-start"
                         >
                             <Tabs.Tab
                                 value={FilterTabs.TILES}
                                 disabled={!draftFilterRule}
                             >
-                                {tabs.length > 1 ? 'Tabs & tiles' : 'Tiles'}
+                                {getUiString(
+                                    tabs.length > 1
+                                        ? 'filters.config.tabsAndTilesTab'
+                                        : 'filters.config.tilesTab',
+                                )}
                             </Tabs.Tab>
                         </Tooltip>
                     </Tabs.List>
                 ) : null}
 
-                <Tabs.Panel value={FilterTabs.SETTINGS} w={400}>
+                <Tabs.Panel
+                    value={FilterTabs.SETTINGS}
+                    w="min(400px, calc(100vw - 56px))"
+                >
                     <Stack gap="sm">
                         {isCreatingNew ? (
                             !!fields && fields.length > 0 ? (
@@ -475,13 +491,17 @@ const FilterConfiguration: FC<Props> = ({
                                     size="xs"
                                     label={
                                         <Text fw={500} fz="sm">
-                                            Select a column to filter{' '}
+                                            {getUiString(
+                                                'filters.config.selectColumn',
+                                            )}{' '}
                                             <Text c="red" span>
                                                 *
                                             </Text>{' '}
                                         </Text>
                                     }
-                                    placeholder="Search column..."
+                                    placeholder={getUiString(
+                                        'filters.config.searchColumnPlaceholder',
+                                    )}
                                     comboboxProps={{
                                         withinPortal:
                                             inlinePopoverProps.withinPortal,
@@ -514,6 +534,31 @@ const FilterConfiguration: FC<Props> = ({
                                     </Text>
                                 ) : (
                                     <FieldLabel item={selectedField} fz="sm" />
+                                )}
+                                {selectedField.description?.trim() && (
+                                    <Tooltip
+                                        label={selectedField.description}
+                                        events={{
+                                            hover: true,
+                                            focus: true,
+                                            touch: true,
+                                        }}
+                                        multiline
+                                        maw={300}
+                                        withinPortal={false}
+                                    >
+                                        <ActionIcon
+                                            size="xs"
+                                            aria-label={
+                                                selectedField.description
+                                            }
+                                        >
+                                            <MantineIcon
+                                                icon={IconInfoCircle}
+                                                color="dimmed"
+                                            />
+                                        </ActionIcon>
+                                    </Tooltip>
                                 )}
                             </Group>
                         ) : (
@@ -570,7 +615,7 @@ const FilterConfiguration: FC<Props> = ({
                 {draftFilterRule && selectedTabId === FilterTabs.TILES && (
                     <Tabs.Panel
                         value={FilterTabs.TILES}
-                        w={500}
+                        w="min(500px, calc(100vw - 56px))"
                         data-testid="DashboardFilterConfiguration/ChartTiles"
                     >
                         <TileFilterConfiguration
@@ -588,18 +633,22 @@ const FilterConfiguration: FC<Props> = ({
             </Tabs>
 
             <Flex gap="sm">
-                <Box style={{ flexGrow: 1 }} />
+                <Box flex={1} />
 
                 {!isTemporary &&
                     isFilterModified &&
                     selectedTabId === FilterTabs.SETTINGS &&
                     !isEditMode && (
                         <Tooltip
-                            label="Reset to original value"
+                            label={getUiString(
+                                'filters.config.resetToOriginal',
+                            )}
                             position="left"
                         >
                             <Button
-                                aria-label="Reset filter to original value"
+                                aria-label={getUiString(
+                                    'filters.config.resetToOriginalAria',
+                                )}
                                 size="xs"
                                 variant="default"
                                 color="gray"
@@ -617,7 +666,6 @@ const FilterConfiguration: FC<Props> = ({
                     <Box>
                         <Button
                             size="xs"
-                            variant="filled"
                             disabled={
                                 isApplyDisabled || isLockedRequiredMissingValue
                             }
@@ -628,8 +676,12 @@ const FilterConfiguration: FC<Props> = ({
                             // reaches the Apply button — so a real-user click
                             // would otherwise need two presses to apply.
                             onMouseDown={handleApply}
+                            onClick={(event) => {
+                                // Keyboard and assistive activation do not emit mousedown.
+                                if (event.detail === 0) handleApply();
+                            }}
                         >
-                            Apply
+                            {getUiString('filters.apply')}
                         </Button>
                     </Box>
                 </Tooltip>

@@ -9,7 +9,9 @@ import {
     type SessionUser,
 } from '@lightdash/common';
 import { analyticsMock } from '../../analytics/LightdashAnalytics.mock';
+import { fromSession } from '../../auth/account';
 import { lightdashConfigMock } from '../../config/lightdashConfig.mock';
+import type { ServiceAccountModel } from '../../ee/models/ServiceAccountModel';
 import { OrganizationMemberProfileModel } from '../../models/OrganizationMemberProfileModel';
 import { OrganizationModel } from '../../models/OrganizationModel';
 import { PinnedListModel } from '../../models/PinnedListModel';
@@ -28,6 +30,74 @@ import {
     createTestUser,
 } from './SpaceService.mock';
 
+describe('Document deletion impact', () => {
+    it.each([
+        { enabled: false, canView: true },
+        { enabled: true, canView: false },
+        { enabled: true, canView: true },
+    ])('gates document metadata with %j', async ({ enabled, canView }) => {
+        const user = createTestUser({
+            organizationUuid: 'org',
+            projectUuid: 'project',
+        }) as SessionUser;
+        user.ability.update(
+            canView ? [{ action: 'view', subject: 'Document' }] : [],
+        );
+        const document = {
+            uuid: 'doc',
+            name: 'Private report',
+            spaceUuid: 'space',
+        };
+        const getDocumentsInSpaces = vi
+            .fn()
+            .mockImplementation(async (spaceUuids: string[]) =>
+                spaceUuids.includes('space') ? [document] : [],
+            );
+        const service = new SpaceService({
+            featureFlagModel: { get: vi.fn().mockResolvedValue({ enabled }) },
+            spaceModel: {
+                getDescendantSpaceUuids: vi.fn().mockResolvedValue([]),
+                find: vi.fn().mockResolvedValue([
+                    {
+                        uuid: 'space',
+                        name: 'Space',
+                        parentSpaceUuid: null,
+                        chartCount: 0,
+                        dashboardCount: 0,
+                        appCount: 0,
+                    },
+                ]),
+                getSpaceQueries: vi.fn().mockResolvedValue([]),
+                getSpaceSqlCharts: vi.fn().mockResolvedValue([]),
+                getSpaceDashboards: vi.fn().mockResolvedValue([]),
+                getSpaceApps: vi.fn().mockResolvedValue([]),
+                getDocumentsInSpaces,
+            },
+            spacePermissionService: {
+                can: vi.fn().mockResolvedValue(true),
+                resolveAccessBatch: vi.fn().mockResolvedValue([
+                    {
+                        target: { type: 'space', spaceUuid: 'space' },
+                        context: {
+                            organizationUuid: 'org',
+                            projectUuid: 'project',
+                            access: [],
+                            inheritsFromOrgOrProject: true,
+                        },
+                    },
+                ]),
+            },
+        } as unknown as ConstructorParameters<typeof SpaceService>[0]);
+        const result = await service.getDeleteImpact(user, 'space');
+        expect(result.documents).toEqual(enabled && canView ? [document] : []);
+        expect(result.documentCount).toBe(enabled && canView ? 1 : 0);
+        expect(result.spaces[0].documentCount).toBe(result.documentCount);
+        if (!enabled) {
+            expect(getDocumentsInSpaces).not.toHaveBeenCalled();
+        }
+    });
+});
+
 describe('SpaceService', () => {
     let service: SpaceService;
     const mockGetSpaceAccessContext = vi.fn();
@@ -36,6 +106,9 @@ describe('SpaceService', () => {
         mockGetSpaceAccessContext.mockReset();
 
         service = new SpaceService({
+            featureFlagModel: {
+                get: vi.fn().mockResolvedValue({ enabled: false }),
+            } as never,
             analytics: analyticsMock,
             lightdashConfig: lightdashConfigMock,
             projectModel: {} as ProjectModel,
@@ -45,7 +118,7 @@ describe('SpaceService', () => {
                 {} as OrganizationMemberProfileModel,
             pinnedListModel: {} as PinnedListModel,
             spacePermissionService: {
-                getSpaceAccessContext: mockGetSpaceAccessContext,
+                resolveAccess: mockGetSpaceAccessContext,
             } as unknown as SpacePermissionService,
             savedChartService: {} as SavedChartService,
             dashboardService: {} as DashboardService,
@@ -72,6 +145,9 @@ describe('SpaceService', () => {
                 can: vi.fn(async () => true),
             };
             const moveService = new SpaceService({
+                featureFlagModel: {
+                    get: vi.fn().mockResolvedValue({ enabled: false }),
+                } as never,
                 analytics: analyticsMock,
                 lightdashConfig: lightdashConfigMock,
                 projectModel: {} as ProjectModel,
@@ -941,6 +1017,7 @@ describe('SpaceService.updateSpace - permission copy on inherit toggle', () => {
         updateWithCopiedPermissions: vi.fn(),
         addSpaceAccess: vi.fn(),
         get: vi.fn(),
+        findPersonalSpace: vi.fn(),
         getSpaceBreadcrumbs: vi.fn(),
         getSpaceQueries: vi.fn(),
         getSpaceDashboards: vi.fn(),
@@ -949,7 +1026,7 @@ describe('SpaceService.updateSpace - permission copy on inherit toggle', () => {
     const mockSpacePermissionService = {
         can: vi.fn(),
         getAccessibleSpaceUuids: vi.fn(),
-        getSpaceAccessContext: vi.fn(),
+        resolveAccess: vi.fn(),
         getAllSpaceAccessContext: vi.fn(),
         mergeAdminAccess: vi.fn(),
         getPaginatedSpaceAccess: vi.fn(),
@@ -968,6 +1045,9 @@ describe('SpaceService.updateSpace - permission copy on inherit toggle', () => {
         vi.resetAllMocks();
 
         service = new SpaceService({
+            featureFlagModel: {
+                get: vi.fn().mockResolvedValue({ enabled: false }),
+            } as never,
             analytics: analyticsMock,
             lightdashConfig: lightdashConfigMock,
             projectModel: {} as ProjectModel,
@@ -991,7 +1071,7 @@ describe('SpaceService.updateSpace - permission copy on inherit toggle', () => {
                 Promise.resolve(uuids),
         );
         // Default: user has direct access (so auto-add doesn't fire)
-        mockSpacePermissionService.getSpaceAccessContext.mockResolvedValue({
+        mockSpacePermissionService.resolveAccess.mockResolvedValue({
             organizationUuid: 'org-uuid',
             projectUuid: 'project-uuid',
             inheritsFromOrgOrProject: true,
@@ -1034,6 +1114,79 @@ describe('SpaceService.updateSpace - permission copy on inherit toggle', () => {
         mockSpacePermissionService.getUserMetadataByUuids.mockResolvedValue({});
         mockSpacePermissionService.getRawDirectAccess.mockResolvedValue({
             'space-uuid': { users: [], groups: [] },
+        });
+    });
+
+    describe('getPersonalSpace', () => {
+        const mockProjectModel = { getSummary: vi.fn() };
+        const viewer = {
+            ...mockUser,
+            userId: 42,
+            organizationUuid: 'test-org-uuid',
+        } as unknown as SessionUser;
+        const withProjectModel = () =>
+            new SpaceService({
+                featureFlagModel: {
+                    get: vi.fn().mockResolvedValue({ enabled: false }),
+                } as never,
+                analytics: analyticsMock,
+                lightdashConfig: lightdashConfigMock,
+                projectModel: mockProjectModel as unknown as ProjectModel,
+                spaceModel: mockSpaceModel as unknown as SpaceModel,
+                organizationModel: {} as OrganizationModel,
+                organizationMemberProfileModel:
+                    {} as OrganizationMemberProfileModel,
+                pinnedListModel: {} as PinnedListModel,
+                spacePermissionService:
+                    mockSpacePermissionService as unknown as SpacePermissionService,
+                savedChartService: {} as SavedChartService,
+                dashboardService: {} as DashboardService,
+                appGenerateService: undefined,
+            });
+
+        test('returns the viewer’s personal space', async () => {
+            mockProjectModel.getSummary.mockResolvedValue({
+                organizationUuid: 'test-org-uuid',
+            });
+            mockSpaceModel.findPersonalSpace.mockResolvedValue({
+                uuid: 'personal-space-uuid',
+                name: 'Test User',
+                slug: 'test-user',
+            });
+
+            await expect(
+                withProjectModel().getPersonalSpace('project-uuid', viewer),
+            ).resolves.toEqual({
+                uuid: 'personal-space-uuid',
+                name: 'Test User',
+                slug: 'test-user',
+            });
+            expect(mockSpaceModel.findPersonalSpace).toHaveBeenCalledWith(
+                'project-uuid',
+                42,
+            );
+        });
+
+        test('returns null when the viewer has no personal space', async () => {
+            mockProjectModel.getSummary.mockResolvedValue({
+                organizationUuid: 'test-org-uuid',
+            });
+            mockSpaceModel.findPersonalSpace.mockResolvedValue(null);
+
+            await expect(
+                withProjectModel().getPersonalSpace('project-uuid', viewer),
+            ).resolves.toBeNull();
+        });
+
+        test('is forbidden for a project the viewer cannot see', async () => {
+            mockProjectModel.getSummary.mockResolvedValue({
+                organizationUuid: 'another-org-uuid',
+            });
+
+            await expect(
+                withProjectModel().getPersonalSpace('project-uuid', viewer),
+            ).rejects.toBeInstanceOf(ForbiddenError);
+            expect(mockSpaceModel.findPersonalSpace).not.toHaveBeenCalled();
         });
     });
 
@@ -1339,7 +1492,7 @@ describe('SpaceService.updateSpace - permission copy on inherit toggle', () => {
         mockSpaceModel.isRootSpace.mockResolvedValue(true);
 
         // User has EDITOR access inherited from project (no direct access)
-        mockSpacePermissionService.getSpaceAccessContext.mockResolvedValue({
+        mockSpacePermissionService.resolveAccess.mockResolvedValue({
             organizationUuid: 'org-uuid',
             projectUuid: 'project-uuid',
             inheritsFromOrgOrProject: true,
@@ -1387,7 +1540,7 @@ describe('SpaceService.updateSpace - permission copy on inherit toggle', () => {
         mockSpaceModel.isRootSpace.mockResolvedValue(true);
 
         // User has EDITOR access inherited (not direct) on the target space
-        mockSpacePermissionService.getSpaceAccessContext.mockResolvedValue({
+        mockSpacePermissionService.resolveAccess.mockResolvedValue({
             organizationUuid: 'org-uuid',
             projectUuid: 'project-uuid',
             inheritsFromOrgOrProject: true,
@@ -1445,7 +1598,7 @@ describe('SpaceService.updateSpace - permission copy on inherit toggle', () => {
         mockSpaceModel.isRootSpace.mockResolvedValue(true);
 
         // User already has direct access
-        mockSpacePermissionService.getSpaceAccessContext.mockResolvedValue({
+        mockSpacePermissionService.resolveAccess.mockResolvedValue({
             organizationUuid: 'org-uuid',
             projectUuid: 'project-uuid',
             inheritsFromOrgOrProject: true,
@@ -1494,16 +1647,14 @@ describe('SpaceService.updateSpace - permission copy on inherit toggle', () => {
         );
 
         // turnInheritOff is false (going public), so no copy or auto-add
-        expect(
-            mockSpacePermissionService.getSpaceAccessContext,
-        ).toHaveBeenCalledOnce();
+        expect(mockSpacePermissionService.resolveAccess).toHaveBeenCalledOnce();
         expect(
             mockSpaceModel.updateWithCopiedPermissions,
         ).not.toHaveBeenCalled();
     });
 
     test('getSpace returns only the requesting org admin when the resolver omits them', async () => {
-        mockSpacePermissionService.getSpaceAccessContext.mockResolvedValue({
+        mockSpacePermissionService.resolveAccess.mockResolvedValue({
             organizationUuid: 'org-uuid',
             projectUuid: 'project-uuid',
             inheritsFromOrgOrProject: false,
@@ -1534,9 +1685,13 @@ describe('SpaceService.updateSpace - permission copy on inherit toggle', () => {
             'space-uuid',
         );
 
-        expect(
-            mockSpacePermissionService.getSpaceAccessContext,
-        ).toHaveBeenCalledWith(mockUser.userUuid, 'space-uuid');
+        expect(mockSpacePermissionService.resolveAccess).toHaveBeenCalledWith(
+            mockUser.userUuid,
+            {
+                type: 'space',
+                spaceUuid: 'space-uuid',
+            },
+        );
         expect(
             mockSpacePermissionService.getAllSpaceAccessContext,
         ).not.toHaveBeenCalled();
@@ -1561,7 +1716,7 @@ describe('SpaceService.updateSpace - permission copy on inherit toggle', () => {
             inheritedRole: undefined,
             inheritedFrom: undefined,
         };
-        mockSpacePermissionService.getSpaceAccessContext.mockResolvedValue({
+        mockSpacePermissionService.resolveAccess.mockResolvedValue({
             organizationUuid: 'org-uuid',
             projectUuid: 'project-uuid',
             inheritsFromOrgOrProject: false,
@@ -1604,7 +1759,7 @@ describe('SpaceService.updateSpace - permission copy on inherit toggle', () => {
             inheritedRole: OrganizationMemberRole.ADMIN,
             inheritedFrom: 'organization' as const,
         };
-        mockSpacePermissionService.getSpaceAccessContext.mockResolvedValue({
+        mockSpacePermissionService.resolveAccess.mockResolvedValue({
             organizationUuid: 'org-uuid',
             projectUuid: 'project-uuid',
             inheritsFromOrgOrProject: true,
@@ -1639,6 +1794,9 @@ describe('SpaceService.updateSpace - permission copy on inherit toggle', () => {
 });
 
 describe('SpaceService - space share target validation', () => {
+    const mockServiceAccountModel = {
+        getSpaceShareCandidates: vi.fn(),
+    };
     const mockUser = createTestUser({
         organizationRole: OrganizationMemberRole.ADMIN,
     });
@@ -1664,9 +1822,14 @@ describe('SpaceService - space share target validation', () => {
         vi.resetAllMocks();
 
         service = new SpaceService({
+            featureFlagModel: {
+                get: vi.fn().mockResolvedValue({ enabled: false }),
+            } as never,
             analytics: analyticsMock,
             lightdashConfig: lightdashConfigMock,
             projectModel: mockProjectModel as unknown as ProjectModel,
+            serviceAccountModel:
+                mockServiceAccountModel as unknown as ServiceAccountModel,
             spaceModel: mockSpaceModel as unknown as SpaceModel,
             organizationModel: {} as OrganizationModel,
             organizationMemberProfileModel:
@@ -1680,6 +1843,7 @@ describe('SpaceService - space share target validation', () => {
         });
 
         mockSpacePermissionService.can.mockResolvedValue(true);
+        mockServiceAccountModel.getSpaceShareCandidates.mockResolvedValue([]);
         mockSpaceModel.getSpaceSummary.mockResolvedValue({
             uuid: 'test-space-uuid',
             organizationUuid: 'test-org-uuid',
@@ -1688,6 +1852,76 @@ describe('SpaceService - space share target validation', () => {
     });
 
     describe('addSpaceUserAccess', () => {
+        it.each(Object.values(SpaceMemberRole))(
+            'grants a live service account %s access using its backing user UUID',
+            async (role) => {
+                mockOrganizationMemberProfileModel.findOrganizationMemberUuids.mockResolvedValue(
+                    [],
+                );
+                mockServiceAccountModel.getSpaceShareCandidates.mockResolvedValue(
+                    [
+                        {
+                            userUuid: 'service-account-user',
+                            description: 'Automation',
+                        },
+                    ],
+                );
+
+                await service.addSpaceUserAccess(
+                    mockUser as SessionUser,
+                    'test-space-uuid',
+                    'service-account-user',
+                    role,
+                );
+
+                expect(
+                    mockServiceAccountModel.getSpaceShareCandidates,
+                ).toHaveBeenCalledWith('test-org-uuid', [
+                    'service-account-user',
+                ]);
+                expect(mockSpaceModel.addSpaceAccess).toHaveBeenCalledWith(
+                    'test-space-uuid',
+                    'service-account-user',
+                    role,
+                );
+            },
+        );
+
+        it.each([
+            'foreign-account-user',
+            'deleted-account-user',
+            'missing-account-user',
+        ])('rejects an ineligible recipient %s', async (userUuid) => {
+            mockOrganizationMemberProfileModel.findOrganizationMemberUuids.mockResolvedValue(
+                [],
+            );
+            await expect(
+                service.addSpaceUserAccess(
+                    mockUser as SessionUser,
+                    'test-space-uuid',
+                    userUuid,
+                    SpaceMemberRole.VIEWER,
+                ),
+            ).rejects.toThrow(NotFoundError);
+            expect(mockSpaceModel.addSpaceAccess).not.toHaveBeenCalled();
+        });
+
+        it('rejects callers who cannot manage the space before looking up recipients', async () => {
+            mockSpacePermissionService.can.mockResolvedValue(false);
+            await expect(
+                service.addSpaceUserAccess(
+                    mockUser as SessionUser,
+                    'test-space-uuid',
+                    'service-account-user',
+                    SpaceMemberRole.VIEWER,
+                ),
+            ).rejects.toThrow(ForbiddenError);
+            expect(
+                mockServiceAccountModel.getSpaceShareCandidates,
+            ).not.toHaveBeenCalled();
+            expect(mockSpaceModel.addSpaceAccess).not.toHaveBeenCalled();
+        });
+
         it('adds access when the target user is a member of the organization', async () => {
             mockOrganizationMemberProfileModel.findOrganizationMemberUuids.mockResolvedValue(
                 ['target-user-uuid'],
@@ -1722,6 +1956,66 @@ describe('SpaceService - space share target validation', () => {
             ).rejects.toThrowError(NotFoundError);
 
             expect(mockSpaceModel.addSpaceAccess).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('getSpaceServiceAccountCandidates', () => {
+        const account = fromSession({
+            ...mockUser,
+            abilityRules: mockUser.ability.rules,
+        } as SessionUser);
+
+        it('returns the eligible accounts for the actual space organization', async () => {
+            const candidates = [
+                { userUuid: 'service-account-user', description: 'Automation' },
+            ];
+            mockServiceAccountModel.getSpaceShareCandidates.mockResolvedValue(
+                candidates,
+            );
+            await expect(
+                service.getSpaceServiceAccountCandidates(
+                    account,
+                    'test-project-uuid',
+                    'test-space-uuid',
+                ),
+            ).resolves.toEqual(candidates);
+            expect(mockSpaceModel.getSpaceSummary).toHaveBeenCalledWith(
+                'test-space-uuid',
+                { projectUuid: 'test-project-uuid' },
+            );
+            expect(
+                mockServiceAccountModel.getSpaceShareCandidates,
+            ).toHaveBeenCalledWith('test-org-uuid');
+        });
+
+        it('rejects a space outside the requested project before disclosing accounts', async () => {
+            mockSpaceModel.getSpaceSummary.mockRejectedValue(
+                new NotFoundError('Space not found'),
+            );
+            await expect(
+                service.getSpaceServiceAccountCandidates(
+                    account,
+                    'other-project-uuid',
+                    'test-space-uuid',
+                ),
+            ).rejects.toThrow(NotFoundError);
+            expect(
+                mockServiceAccountModel.getSpaceShareCandidates,
+            ).not.toHaveBeenCalled();
+        });
+
+        it('requires permission to manage the space', async () => {
+            mockSpacePermissionService.can.mockResolvedValue(false);
+            await expect(
+                service.getSpaceServiceAccountCandidates(
+                    account,
+                    'test-project-uuid',
+                    'test-space-uuid',
+                ),
+            ).rejects.toThrow(ForbiddenError);
+            expect(
+                mockServiceAccountModel.getSpaceShareCandidates,
+            ).not.toHaveBeenCalled();
         });
     });
 

@@ -21,11 +21,16 @@ const settingsWithKeys: AiOrganizationSettings = {
     deepResearchLimits: AI_DEEP_RESEARCH_DEFAULT_LIMITS,
     deepResearchRawSqlEnabled: false,
     mcpContentWritesEnabled: true,
+    mcpAgentsEnabled: true,
     requireExplicitSlackChannelLinking: false,
     defaultAiAgentModelConfig: null,
     modelVisibility: null,
-    providerApiKeysSet: { anthropic: true, openai: false },
-    providerApiKeyHints: { anthropic: 'sk-ant-api03-R2D...igAA', openai: null },
+    providerApiKeysSet: { anthropic: true, google: false, openai: false },
+    providerApiKeyHints: {
+        anthropic: 'sk-ant-api03-R2D...igAA',
+        google: null,
+        openai: null,
+    },
 };
 
 describe('validateDeepResearchLimits', () => {
@@ -34,6 +39,23 @@ describe('validateDeepResearchLimits', () => {
             validateDeepResearchLimits(AI_DEEP_RESEARCH_DEFAULT_LIMITS),
         ).not.toThrow();
     });
+
+    it('allows positive integer values in unrecognized fields', () => {
+        const limits = { ...AI_DEEP_RESEARCH_DEFAULT_LIMITS, extraLimit: 1 };
+
+        expect(() => validateDeepResearchLimits(limits)).not.toThrow();
+    });
+
+    it.each([0, -1, 1.5, 'invalid'])(
+        'rejects invalid values in unrecognized fields: %s',
+        (extraLimit) => {
+            const limits = { ...AI_DEEP_RESEARCH_DEFAULT_LIMITS, extraLimit };
+
+            expect(() => validateDeepResearchLimits(limits)).toThrow(
+                'extraLimit must be a positive integer',
+            );
+        },
+    );
 
     it.each([
         ['maxTokens', 0],
@@ -66,6 +88,21 @@ describe('findUnconfiguredProviderKeyWrites', () => {
             findUnconfiguredProviderKeyWrites(
                 { openai: 'sk-123' },
                 { openai: {} },
+            ),
+        ).toEqual([]);
+    });
+
+    it('applies the same configured-provider guard to Google keys', () => {
+        expect(
+            findUnconfiguredProviderKeyWrites(
+                { google: 'AIza-fake-gemini-key' },
+                { openai: {} },
+            ),
+        ).toEqual(['google']);
+        expect(
+            findUnconfiguredProviderKeyWrites(
+                { google: 'AIza-fake-gemini-key' },
+                { google: {} },
             ),
         ).toEqual([]);
     });
@@ -264,22 +301,15 @@ describe('upsertSettings model validation', () => {
         storedDefault?: unknown;
     } = {}) => {
         const upsert = vi.fn(async (_org: string, data: unknown) => data);
-        const updateAiAgentMemoryEnabled = vi.fn();
-        const transaction = vi.fn(
-            async (callback: (trx: unknown) => Promise<unknown>) =>
-                callback('transaction'),
-        );
         const service = new AiOrganizationSettingsService({
             aiOrganizationSettingsModel: {
                 findByOrganizationUuid: async () => ({
                     defaultAiAgentModelConfig: storedDefault,
                 }),
                 upsert,
-                transaction,
             },
             organizationModel: {
                 getAiAgentMemoryEnabled: async () => false,
-                updateAiAgentMemoryEnabled,
             },
             commercialFeatureFlagModel: {
                 get: async () => ({ enabled: true }),
@@ -302,18 +332,7 @@ describe('upsertSettings model validation', () => {
         (
             service as unknown as { createAuditedAbility: () => unknown }
         ).createAuditedAbility = () => ({ can: () => true });
-        const getSettings = vi.fn().mockResolvedValue({
-            organizationUuid: 'org-uuid',
-            aiAgentMemoryEnabled: false,
-        });
-        service.getSettings = getSettings;
-        return {
-            service,
-            getSettings,
-            upsert,
-            transaction,
-            updateAiAgentMemoryEnabled,
-        };
+        return { service, upsert };
     };
 
     const user = { organizationUuid: 'org-uuid' } as never;
@@ -392,6 +411,61 @@ describe('upsertSettings model validation', () => {
         expect(upsert).not.toHaveBeenCalled();
     });
 
+    it.each([
+        ['maxToolCalls', 1],
+        ['maxToolCalls', 2],
+        ['deadlineMs', 1],
+        ['deadlineMs', 999],
+        ['maxTokens', 10_000_001],
+        ['maxSteps', 1_001],
+        ['maxToolCalls', 1_001],
+        ['maxWarehouseQueries', 1_001],
+        ['deadlineMs', 3_600_001],
+    ] as const)(
+        'rejects out-of-range %s=%s before writing',
+        async (key, value) => {
+            const { service, upsert } = buildService();
+
+            await expect(
+                service.upsertSettings(user, {
+                    deepResearchLimits: {
+                        ...AI_DEEP_RESEARCH_DEFAULT_LIMITS,
+                        [key]: value,
+                    },
+                }),
+            ).rejects.toThrow(ParameterError);
+            expect(upsert).not.toHaveBeenCalled();
+        },
+    );
+
+    it.each([
+        {
+            maxTokens: 1,
+            maxSteps: 1,
+            maxToolCalls: 3,
+            maxWarehouseQueries: 1,
+            deadlineMs: 1_000,
+        },
+        {
+            maxTokens: 10_000_000,
+            maxSteps: 1_000,
+            maxToolCalls: 1_000,
+            maxWarehouseQueries: 1_000,
+            deadlineMs: 3_600_000,
+        },
+    ])(
+        'persists inclusive limit boundaries: %j',
+        async (deepResearchLimits) => {
+            const { service, upsert } = buildService();
+
+            await service.upsertSettings(user, { deepResearchLimits });
+
+            expect(upsert).toHaveBeenCalledWith('org-uuid', {
+                deepResearchLimits,
+            });
+        },
+    );
+
     it('forwards valid Deep Research limits to the model', async () => {
         const { service, upsert } = buildService();
         const deepResearchLimits = {
@@ -419,42 +493,6 @@ describe('upsertSettings model validation', () => {
         expect(upsert).toHaveBeenCalledWith('org-uuid', {
             deepResearchRawSqlEnabled: true,
         });
-    });
-
-    it('stores an explicit off setting without writing AI settings', async () => {
-        const { service, getSettings, upsert, updateAiAgentMemoryEnabled } =
-            buildService();
-
-        await service.upsertSettings(user, { aiAgentMemoryEnabled: false });
-
-        expect(upsert).not.toHaveBeenCalled();
-        expect(updateAiAgentMemoryEnabled).toHaveBeenCalledWith(
-            'org-uuid',
-            false,
-        );
-        expect(getSettings).toHaveBeenCalledWith(user);
-    });
-
-    it('updates memory with other settings in one transaction', async () => {
-        const { service, transaction, upsert, updateAiAgentMemoryEnabled } =
-            buildService();
-
-        await service.upsertSettings(user, {
-            aiAgentMemoryEnabled: false,
-            aiAgentsVisible: false,
-        });
-
-        expect(transaction).toHaveBeenCalledOnce();
-        expect(upsert).toHaveBeenCalledWith(
-            'org-uuid',
-            { aiAgentsVisible: false },
-            'transaction',
-        );
-        expect(updateAiAgentMemoryEnabled).toHaveBeenCalledWith(
-            'org-uuid',
-            false,
-            'transaction',
-        );
     });
 
     it('repoints a stored default that the new visibility hides', async () => {
@@ -575,4 +613,76 @@ describe('isExplicitSlackChannelLinkingRequired', () => {
             service.isExplicitSlackChannelLinkingRequired('org-uuid'),
         ).resolves.toBe(true);
     });
+});
+
+describe('isDataAppContinueInAskAiEnabled', () => {
+    const buildService = (
+        stored: { dataAppContinueInAskAiEnabled?: boolean } | null,
+    ) =>
+        new AiOrganizationSettingsService({
+            aiOrganizationSettingsModel: {
+                findByOrganizationUuid: vi.fn().mockResolvedValue(stored),
+            },
+        } as never);
+
+    it.each([
+        [null, true],
+        [{}, true],
+        [{ dataAppContinueInAskAiEnabled: true }, true],
+        [{ dataAppContinueInAskAiEnabled: false }, false],
+    ])('resolves stored=%j as %s (on by default)', async (stored, expected) => {
+        await expect(
+            buildService(stored).isDataAppContinueInAskAiEnabled('org-uuid'),
+        ).resolves.toBe(expected);
+    });
+});
+
+describe('isDataAppAutoAnalysisEnabled', () => {
+    const buildService = (
+        stored: { dataAppAutoAnalysisEnabled?: boolean } | null,
+    ) =>
+        new AiOrganizationSettingsService({
+            aiOrganizationSettingsModel: {
+                findByOrganizationUuid: vi.fn().mockResolvedValue(stored),
+            },
+        } as never);
+
+    it.each([
+        [null, false],
+        [{}, false],
+        [{ dataAppAutoAnalysisEnabled: true }, true],
+        [{ dataAppAutoAnalysisEnabled: false }, false],
+    ])(
+        'resolves stored=%j as %s (off by default)',
+        async (stored, expected) => {
+            await expect(
+                buildService(stored).isDataAppAutoAnalysisEnabled('org-uuid'),
+            ).resolves.toBe(expected);
+        },
+    );
+});
+
+describe('isDataAppRuntimeAiEnabled', () => {
+    const buildService = (
+        stored: { dataAppRuntimeAiEnabled?: boolean } | null,
+    ) =>
+        new AiOrganizationSettingsService({
+            aiOrganizationSettingsModel: {
+                findByOrganizationUuid: vi.fn().mockResolvedValue(stored),
+            },
+        } as never);
+
+    it.each([
+        [null, false],
+        [{}, false],
+        [{ dataAppRuntimeAiEnabled: false }, false],
+        [{ dataAppRuntimeAiEnabled: true }, true],
+    ])(
+        'resolves stored=%j as %s (off by default)',
+        async (stored, expected) => {
+            await expect(
+                buildService(stored).isDataAppRuntimeAiEnabled('org-uuid'),
+            ).resolves.toBe(expected);
+        },
+    );
 });

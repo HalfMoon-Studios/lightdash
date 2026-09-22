@@ -3,6 +3,7 @@ import {
     ChartKind,
     ChartSourceType,
     ResourceViewItemType,
+    getDocumentUrl,
     type ResourceViewChartItem,
     type ResourceViewItem,
 } from '@lightdash/common';
@@ -16,6 +17,8 @@ export const getResourceTypeName = (item: ResourceViewItem) => {
             return 'Space';
         case ResourceViewItemType.DATA_APP:
             return 'Data app';
+        case ResourceViewItemType.DOCUMENT:
+            return 'Document';
         case ResourceViewItemType.CHART:
             switch (item.data.chartKind) {
                 case undefined:
@@ -78,6 +81,18 @@ const getChartResourceUrl = (
     }
 };
 
+export const getViewStatsResourceType = (
+    item: ResourceViewItem,
+): 'chart' | 'dashboard' | undefined => {
+    if (item.type === ResourceViewItemType.DASHBOARD) return 'dashboard';
+    if (
+        item.type === ResourceViewItemType.CHART &&
+        item.data.source !== ChartSourceType.SQL
+    )
+        return 'chart';
+    return undefined;
+};
+
 export const getResourceUrl = (
     projectUuid: string,
     item: ResourceViewItem,
@@ -93,6 +108,12 @@ export const getResourceUrl = (
             return `/projects/${projectUrlIdentifier}/spaces/${item.data.uuid}`;
         case ResourceViewItemType.DATA_APP:
             return `/projects/${projectUuid}/apps/${item.data.uuid}/view`;
+        case ResourceViewItemType.DOCUMENT:
+            return getDocumentUrl(
+                projectUrlIdentifier,
+                item.data.uuid,
+                item.data.slug,
+            );
         default:
             return assertUnreachable(item, `Can't get URL for ${itemType}`);
     }
@@ -108,6 +129,8 @@ export const getResourceName = (type: ResourceViewItemType) => {
             return 'Space';
         case ResourceViewItemType.DATA_APP:
             return 'Data app';
+        case ResourceViewItemType.DOCUMENT:
+            return 'Document';
         default:
             return assertUnreachable(type, 'Resource type not supported');
     }

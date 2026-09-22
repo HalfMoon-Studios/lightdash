@@ -2,6 +2,7 @@ import {
     type DataAppVizChart,
     type DataAppVizFieldMapping,
     type DataAppVizOptionValue,
+    type DataAppVizOptionValues,
 } from '@lightdash/common';
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
@@ -12,7 +13,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
  */
 export type SelectedDataAppViz = Pick<
     DataAppVizChart,
-    'dataAppVizUuid' | 'fieldMapping'
+    'dataAppVizUuid' | 'dataAppVizVersion' | 'fieldMapping'
 > &
     Required<Pick<DataAppVizChart, 'optionValues'>>;
 
@@ -28,9 +29,20 @@ export interface DataAppVizVisualizationConfigAndData {
         dataAppVizUuid: string,
         fieldMapping: DataAppVizFieldMapping,
     ) => void;
+    setDataAppVizVersion: (dataAppVizVersion: number) => void;
+    /**
+     * Move the chart to a newer version of its type. The caller reconciles
+     * the binding and options against that version's contract, for the same
+     * reason `setDataAppVizUuid` takes its mapping ready-made.
+     */
+    upgradeDataAppVizVersion: (
+        dataAppVizVersion: number,
+        fieldMapping: DataAppVizFieldMapping,
+        optionValues: DataAppVizOptionValues,
+    ) => void;
     /** Back to pointing at no viz; bindings and options go with it. */
     clearDataAppViz: () => void;
-    setField: (fieldName: string, fieldId: string | null) => void;
+    setField: (fieldName: string, fieldId: string | string[] | null) => void;
     /** `dataAppVizUuid` is the viz the edited control belonged to. */
     setOption: (
         dataAppVizUuid: string,
@@ -55,6 +67,7 @@ const toSelected = (
     return chartConfig !== undefined && dataAppVizUuid !== null
         ? {
               dataAppVizUuid,
+              dataAppVizVersion: chartConfig.dataAppVizVersion,
               fieldMapping: chartConfig.fieldMapping,
               optionValues: chartConfig.optionValues ?? {},
           }
@@ -93,13 +106,20 @@ const useDataAppVizVisualizationConfig = (
     // A viz switched from outside this hook (the chart gallery goes through
     // the store) arrives as a new initial config while the hook stays mounted.
     const externalDataAppVizUuid = readDataAppVizUuid(initialChartConfig);
+    const externalDataAppVizVersion = initialChartConfig?.dataAppVizVersion;
     useLayoutEffect(() => {
         const currentUuid = configRef.current?.dataAppVizUuid ?? null;
-        if (externalDataAppVizUuid === currentUuid) return;
+        const currentVersion = configRef.current?.dataAppVizVersion;
+        if (
+            externalDataAppVizUuid === currentUuid &&
+            externalDataAppVizVersion === currentVersion
+        ) {
+            return;
+        }
         const next = toSelected(initialChartConfig);
         configRef.current = next;
         setConfigState(next);
-    }, [externalDataAppVizUuid, initialChartConfig]);
+    }, [externalDataAppVizUuid, externalDataAppVizVersion, initialChartConfig]);
 
     const commit = useCallback((next: SelectedDataAppViz | null) => {
         configRef.current = next;
@@ -123,17 +143,51 @@ const useDataAppVizVisualizationConfig = (
 
     const clearDataAppViz = useCallback(() => commit(null), [commit]);
 
-    const setField = useCallback(
-        (fieldName: string, fieldId: string | null) => {
+    const setDataAppVizVersion = useCallback(
+        (dataAppVizVersion: number) => {
+            const selected = configRef.current;
+            if (
+                selected === null ||
+                selected.dataAppVizVersion === dataAppVizVersion
+            ) {
+                return;
+            }
+            commit({ ...selected, dataAppVizVersion });
+        },
+        [commit],
+    );
+
+    const upgradeDataAppVizVersion = useCallback(
+        (
+            dataAppVizVersion: number,
+            fieldMapping: DataAppVizFieldMapping,
+            optionValues: DataAppVizOptionValues,
+        ) => {
             const selected = configRef.current;
             if (selected === null) return;
-            const nextMapping = { ...selected.fieldMapping };
-            if (fieldId === null) {
-                delete nextMapping[fieldName];
+            commit({
+                ...selected,
+                dataAppVizVersion,
+                fieldMapping,
+                optionValues,
+            });
+        },
+        [commit],
+    );
+
+    const setField = useCallback(
+        (fieldName: string, fieldId: string | string[] | null) => {
+            const selected = configRef.current;
+            if (selected === null) return;
+            const fieldMapping = { ...selected.fieldMapping };
+            if (Array.isArray(fieldId)) {
+                fieldMapping[fieldName] = fieldId;
+            } else if (fieldId === null) {
+                delete fieldMapping[fieldName];
             } else {
-                nextMapping[fieldName] = fieldId;
+                fieldMapping[fieldName] = fieldId;
             }
-            commit({ ...selected, fieldMapping: nextMapping });
+            commit({ ...selected, fieldMapping });
         },
         [commit],
     );
@@ -163,6 +217,8 @@ const useDataAppVizVisualizationConfig = (
         validConfig: config,
         dataAppVizUuid: config?.dataAppVizUuid ?? null,
         setDataAppVizUuid,
+        setDataAppVizVersion,
+        upgradeDataAppVizVersion,
         clearDataAppViz,
         setField,
         setOption,

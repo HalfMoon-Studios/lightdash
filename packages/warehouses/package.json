@@ -1,6 +1,6 @@
 {
   "name": "@lightdash/warehouses",
-  "version": "2.9.1",
+  "version": "2.286.8",
   "description": "Warehouse connectors for Lightdash",
   "license": "MIT",
   "repository": {
@@ -22,8 +22,8 @@
     "test": "vitest run --config vitest.config.ts",
     "typecheck": "tsc --project tsconfig.json --noEmit --composite false",
     "copy-files": "copyfiles -u 1 src/warehouseClients/ca-bundle-aws-redshift.crt src/warehouseClients/ca-bundle-aws-rds-global.pem dist/",
-    "build": "pnpm run copy-files && tsc --build tsconfig.json",
-    "dev": "pnpm run copy-files && tsc --build --watch --preserveWatchOutput tsconfig.json",
+    "build": "pnpm run copy-files && tsc --build tsconfig.build.json",
+    "dev": "pnpm run copy-files && tsc --build --watch --preserveWatchOutput tsconfig.build.json",
     "release": "pnpm publish --no-git-checks --access public"
   },
   "dependencies": {
@@ -53,6 +53,6 @@
     "@types/ssh2": "1.11.15",
     "copyfiles": "2.4.1",
     "typescript": "7.0.2",
-    "vitest": "4.1.6"
+    "vitest": "4.1.11"
   }
 }

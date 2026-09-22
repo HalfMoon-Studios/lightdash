@@ -1,6 +1,7 @@
 import { type ParametersValuesMap, type PivotConfiguration } from '../..';
 import type { QueryExecutionContext } from '../analytics';
 import type { ConditionalFormattingConfig } from '../conditionalFormatting';
+import type { DocumentQueryReference } from '../document';
 import type { DownloadFileType } from '../downloadFile';
 import type { AndFilterGroup, DashboardFilters, Filters } from '../filter';
 import { type MergeQuery, type MetricSourcedMergeQuery } from '../mergeQuery';
@@ -60,6 +61,9 @@ export type ExecuteAsyncDashboardChartRequestParams =
         dateZoom?: DateZoom;
         limit?: number | null | undefined;
         pivotResults?: boolean;
+        // Run the caller's own unpublished chart draft instead of the
+        // published chart, so a tile matches what the author sees
+        includeUnpublishedDraft?: boolean;
     };
 
 /** A merge run: the spec that produced it, recorded verbatim. */
@@ -200,7 +204,7 @@ export type ExecuteAsyncFieldValueSearchRequestParams =
         forceRefresh?: boolean;
     };
 
-export type ExecuteAsyncQueryRequestParams =
+export type ExecuteAsyncQueryRequestParams = (
     | ExecuteAsyncMetricQueryRequestParams
     | ExecuteAsyncMergeQueryRequestParams
     | ExecuteAsyncComposeMergeQueryRequestParams
@@ -210,7 +214,8 @@ export type ExecuteAsyncQueryRequestParams =
     | ExecuteAsyncDashboardChartRequestParams
     | ExecuteAsyncUnderlyingDataRequestParams
     | ExecuteAsyncDashboardSqlChartRequestParams
-    | ExecuteAsyncFieldValueSearchRequestParams;
+    | ExecuteAsyncFieldValueSearchRequestParams
+) & { documentSource?: DocumentQueryReference };
 
 // Recovers dateZoom from a persisted request-parameters union without duck-typing at call sites.
 export const getDateZoomFromRequestParameters = (

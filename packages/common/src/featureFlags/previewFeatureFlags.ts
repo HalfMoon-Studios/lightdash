@@ -7,13 +7,13 @@ import { FeatureFlags } from '../types/featureFlags';
  * redeploy. Keep the reason next to each entry.
  */
 const PREVIEW_EXCLUDED_FEATURE_FLAGS: ReadonlySet<string> = new Set<string>([
+    // Documents are opt-in while the foundation and authoring workflows ship.
+    FeatureFlags.Documents,
     // Blocks or degrades every page.
     FeatureFlags.OrganizationTrialBlock,
     FeatureFlags.OrganizationTrialWarning,
     // Changes query or compile semantics, so QA results would be misleading.
-    FeatureFlags.NaiveTimestampFilterRebase,
     FeatureFlags.CalculateSeriesColor,
-    FeatureFlags.ReplaceCustomMetricsOnCompile,
     // Needs per-org worker queues that previews don't run.
     FeatureFlags.ScheduledDeliveryPerOrgQueue,
     // Changes the signup flow and needs SMTP for the email OTP. The register
@@ -26,15 +26,24 @@ const PREVIEW_EXCLUDED_FEATURE_FLAGS: ReadonlySet<string> = new Set<string>([
     FeatureFlags.AiReviewReplayCapture,
     // Security hardening: previews must not accept long-lived GitHub PATs.
     FeatureFlags.AiMcpGithubPat,
-    // The Explorer E2E specs drive the legacy chart type picker, which the
-    // gallery replaces; keep previews on the shipped path until it has its
-    // own coverage. QA can still turn it on with a feature_flag_overrides row.
-    FeatureFlags.ExplorerChartGallery,
+    // Same reason: the dashboard E2E specs drive the navigate-away "New chart"
+    // flow, which the in-dashboard modal replaces. Opt-in POC — keep previews
+    // on the shipped path until it has its own coverage. The metrics layer
+    // rides inside the modal, so it must stay off with it.
+    FeatureFlags.InDashboardChartEditor,
+    FeatureFlags.DashboardCustomMetrics,
     // Derived from instance configuration: left to their config handler so a
     // preview never advertises a feature whose backend isn't configured.
     CommercialFeatureFlags.AiCopilot,
+    // Changes permission semantics per org: makes the org custom role's PAT
+    // scope authoritative. Opt-in only; QA enables via feature_flag_overrides.
+    CommercialFeatureFlags.PatScopeAuthoritative,
     FeatureFlags.ResultsCacheEnabled,
     FeatureFlags.EnableTimezoneSupport,
+    // Changes cache pricing on the operator's Anthropic bill, and makes the
+    // coding agent summarize long sessions: opt-in only, rolled out per org
+    // from Console.
+    FeatureFlags.DataAppAgentCostOptimizations,
 ]);
 
 export const ALL_FEATURE_FLAG_IDS: readonly string[] = [

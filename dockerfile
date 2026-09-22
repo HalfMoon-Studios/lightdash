@@ -5,7 +5,7 @@
 FROM duckdb/duckdb:1.5.2@sha256:5658472bf45cce867048a17201b9d38d4632507e7df4a69994f8236599f69d45 AS duckdb-extensions
 RUN ["/duckdb", "-c", "INSTALL httpfs; INSTALL aws;"]
 
-FROM ghcr.io/pnpm/pnpm:11.20.0@sha256:d77573aba1649491010d3d252214be47197c0706417793cf393ac47cc324f315 AS pnpm-cli
+FROM ghcr.io/pnpm/pnpm:12.3.4@sha256:b81d53184f670fe19d1a33f9d5041907d314b31d596838e8133cbd83d45be043 AS pnpm-cli
 
 # -----------------------------
 # Stage 0: pnpm setup base
@@ -145,6 +145,7 @@ RUN --mount=type=secret,id=TURBO_TOKEN \
 FROM prod-builder AS build-warehouses
 COPY --from=build-common /usr/app/packages/common/ ./packages/common/
 COPY packages/warehouses/tsconfig.json ./packages/warehouses/
+COPY packages/warehouses/tsconfig.build.json ./packages/warehouses/
 COPY packages/warehouses/src/ ./packages/warehouses/src/
 RUN --mount=type=secret,id=TURBO_TOKEN \
     export TURBO_TOKEN=$(cat /run/secrets/TURBO_TOKEN 2>/dev/null || echo "") && \
@@ -156,6 +157,7 @@ COPY --from=build-common /usr/app/packages/common/ ./packages/common/
 COPY --from=build-formula /usr/app/packages/formula/ ./packages/formula/
 COPY --from=build-warehouses /usr/app/packages/warehouses/ ./packages/warehouses/
 COPY packages/backend/tsconfig.json ./packages/backend/
+COPY packages/backend/tsconfig.build.json ./packages/backend/
 COPY packages/backend/tsconfig.sentry.json ./packages/backend/
 COPY packages/backend/tsoa.yml ./packages/backend/
 COPY packages/backend/src/ ./packages/backend/src/
@@ -224,6 +226,7 @@ ARG SENTRY_ENVIRONMENT=""
 
 RUN if [ -n "${SENTRY_AUTH_TOKEN}" ] && [ -n "${SENTRY_ORG}" ] && [ -n "${SENTRY_RELEASE_VERSION}" ] && [ -n "${SENTRY_FRONTEND_PROJECT}" ] && [ -n "${SENTRY_BACKEND_PROJECT}" ] && [ -n "${SENTRY_ENVIRONMENT}" ]; then \
     npm install -g @sentry/cli; \
+    export PATH="$(npm prefix -g)/bin:${PATH}"; \
     echo "Creating Sentry releases and processing sourcemaps"; \
     # Create releases for both projects \
     sentry-cli releases new "${SENTRY_RELEASE_VERSION}" --project "${SENTRY_FRONTEND_PROJECT}"; \
@@ -306,6 +309,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fontconfig \
     # Required so headless chart screenshots can render CJK glyphs
     fonts-noto-cjk \
+    # Required so DuckDB httpfs can verify HTTPS object storage (Node carries its own trust store)
+    ca-certificates \
     dumb-init \
     # Optional: jemalloc allocator reduces native memory fragmentation vs glibc malloc.
     # Dormant unless activated via LD_PRELOAD env var per customer.

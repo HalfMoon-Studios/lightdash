@@ -31,6 +31,9 @@ export const ToolNameSchema = z.enum([
     'loadSkill',
     'loadProjectContext',
     'loadMcpTools',
+    'generateDataApp',
+    'iterateDataApp',
+    'listDataAppThemes',
     'editDbtProject',
     'editProjectContext',
     'editRepo',
@@ -62,7 +65,10 @@ export const isToolName = (toolName: string): toolName is ToolName =>
     ToolNameSchema.safeParse(toolName).success;
 
 // display messages schema
-export const ToolDisplayMessagesSchema = z.record(ToolNameSchema, z.string());
+export const ToolDisplayMessagesSchema = z.partialRecord(
+    ToolNameSchema,
+    z.string(),
+);
 
 export const TOOL_DISPLAY_MESSAGES = ToolDisplayMessagesSchema.parse({
     findExplores: 'Finding relevant explores',
@@ -94,6 +100,8 @@ export const TOOL_DISPLAY_MESSAGES = ToolDisplayMessagesSchema.parse({
     loadSkill: 'Loading built-in skill',
     loadProjectContext: 'Loading project context',
     loadMcpTools: 'Loading MCP tools',
+    generateDataApp: 'Starting a data app build',
+    iterateDataApp: 'Iterating on a data app',
     editDbtProject: 'Editing semantic layer',
     editRepo: 'Editing repository',
     syncDbtProject: 'Syncing dbt project',
@@ -104,7 +112,7 @@ export const TOOL_DISPLAY_MESSAGES = ToolDisplayMessagesSchema.parse({
     getPullRequestDiff: 'Reading pull request diff',
     generateVisualization: 'Generating visualization',
     setupPreviewDeploy: 'Setting up preview deploys',
-    runQuery: 'Generating visualization',
+    runQuery: 'Running query',
     runSavedChart: 'Running saved chart',
     runSql: 'Running SQL query',
     runComposerQueries: 'Running composer queries',
@@ -150,6 +158,8 @@ export const TOOL_DISPLAY_MESSAGES_AFTER_TOOL_CALL =
         loadSkill: 'Loaded built-in skill',
         loadProjectContext: 'Loaded project context',
         loadMcpTools: 'Loaded MCP tools',
+        generateDataApp: 'Started a data app build',
+        iterateDataApp: 'Started a data app build',
         editDbtProject: 'Edited semantic layer',
         editRepo: 'Edited repository',
         syncDbtProject: 'Synced dbt project',
@@ -160,7 +170,7 @@ export const TOOL_DISPLAY_MESSAGES_AFTER_TOOL_CALL =
         getPullRequestDiff: 'Read pull request diff',
         generateVisualization: 'Generated visualization',
         setupPreviewDeploy: 'Opened preview-deploy pull request',
-        runQuery: 'Generated visualization',
+        runQuery: 'Ran query',
         runSavedChart: 'Ran saved chart',
         runSql: 'Ran SQL query',
         runComposerQueries: 'Ran composer queries',

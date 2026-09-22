@@ -1,6 +1,7 @@
 import { DndContext, DragOverlay, type DragEndEvent } from '@dnd-kit/core';
 import { arrayMove } from '@dnd-kit/sortable';
 import {
+    resolveParameterDefault,
     type LightdashProjectParameter,
     type ParameterValue,
 } from '@lightdash/common';
@@ -37,12 +38,12 @@ const PinnedParameter: FC<PinnedParameterProps> = ({
     const parameterValues = useDashboardContext((c) => c.parameterValues);
 
     const displayValue = useMemo(() => {
-        if (!value) return parameter.default || 'No value';
+        if (!value) return resolveParameterDefault(parameter) || 'No value';
         if (Array.isArray(value)) {
             return value.length > 0 ? value.join(', ') : 'No value';
         }
         return value.toString();
-    }, [value, parameter.default]);
+    }, [value, parameter]);
 
     const handleChange = useCallback(
         (key: string, newValue: ParameterValue | null) => {
@@ -56,14 +57,7 @@ const PinnedParameter: FC<PinnedParameterProps> = ({
     }, [onUnpin, parameterKey]);
 
     return (
-        <Popover
-            position="bottom-start"
-            withArrow
-            shadow="md"
-            offset={1}
-            arrowOffset={14}
-            withinPortal
-        >
+        <Popover position="bottom-start" withArrow offset={1} arrowOffset={14}>
             <Popover.Target>
                 <Button
                     size="xs"
@@ -102,7 +96,7 @@ const PinnedParameter: FC<PinnedParameterProps> = ({
                 >
                     <Text truncate>
                         <Text span>{parameter.label || parameterKey}:</Text>{' '}
-                        <Text fw={700} span>
+                        <Text fw={600} span>
                             {displayValue}
                         </Text>
                     </Text>

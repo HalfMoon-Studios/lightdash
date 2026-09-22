@@ -39,6 +39,7 @@ const applyServiceAccountStaticAbilities: Record<
             organizationUuid,
             inheritsFromOrgOrProject: true,
         });
+        can('view', 'Document', { organizationUuid });
         can('view', 'SavedChart', {
             organizationUuid,
             inheritsFromOrgOrProject: true,
@@ -202,6 +203,7 @@ const applyServiceAccountStaticAbilities: Record<
             userUuid,
             builder: { can },
         });
+        can('manage', 'Document', { organizationUuid });
         can('manage', 'Space', {
             organizationUuid,
             inheritsFromOrgOrProject: true,
@@ -251,6 +253,9 @@ const applyServiceAccountStaticAbilities: Record<
             builder: { can },
         });
         can('view', 'Roadmap', {
+            organizationUuid,
+        });
+        can('manage', 'Roadmap', {
             organizationUuid,
         });
         can('manage', 'PreAggregation', {

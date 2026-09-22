@@ -9,14 +9,16 @@ import {
     Box,
     Button,
     Container,
+    Drawer,
     Group,
     Paper,
     ScrollArea,
     Stack,
     Text,
     Title,
+    useMatches,
 } from '@mantine/core';
-import { useForm, zodResolver } from '@mantine/form';
+import { useForm } from '@mantine/form';
 import {
     IconAdjustmentsAlt,
     IconArrowLeft,
@@ -24,6 +26,7 @@ import {
     IconCircleCheck,
     IconMessageCircleShare,
 } from '@tabler/icons-react';
+import { zod4Resolver as zodResolver } from 'mantine-form-zod-resolver';
 import { useCallback, useEffect, useRef, useState, type FC } from 'react';
 import {
     Link,
@@ -40,6 +43,7 @@ import {
     BANNER_HEIGHT,
     NAVBAR_HEIGHT,
 } from '../../../components/common/Page/constants';
+import sidebarDrawerClasses from '../../../components/common/SidebarDrawer.module.css';
 import { useProjects } from '../../../hooks/useProjects';
 import { useProjectUuid } from '../../../hooks/useProjectUuid';
 import useApp from '../../../providers/App/useApp';
@@ -90,12 +94,12 @@ const useObjectUrl = (file: File | null): string | null => {
 };
 
 const formSchema = z.object({
-    name: z.string().min(1),
+    name: z.string().min(1, 'Name is required'),
     description: z.string().nullable(),
     integrations: z.array(
         z.object({
             type: z.literal('slack'),
-            channelId: z.string().min(1),
+            channelId: z.string().min(1, 'Channel is required'),
         }),
     ),
     tags: z.array(z.string()).nullable(),
@@ -126,6 +130,13 @@ type Props = {
 };
 
 const ProjectAiAgentEditPage: FC<Props> = ({ isCreateMode = false }) => {
+    const compact = useMatches(
+        { base: true, sm: false },
+        { getInitialValueInEffect: false },
+    );
+    const [sidebarOpened, setSidebarOpened] = useState(false);
+    useEffect(() => setSidebarOpened(false), [compact]);
+
     const navigate = useNavigate();
     const { agentUuid, evalUuid, runUuid, artifactUuid } = useParams();
     const projectUuid = useProjectUuid();
@@ -345,7 +356,6 @@ const ProjectAiAgentEditPage: FC<Props> = ({ isCreateMode = false }) => {
                     <Paper
                         variant="dotted"
                         p="xl"
-                        shadow="subtle"
                         component={Stack}
                         gap="xxs"
                         align="center"
@@ -360,6 +370,130 @@ const ProjectAiAgentEditPage: FC<Props> = ({ isCreateMode = false }) => {
         );
     }
 
+    const sidebarContent = (
+        <>
+            <AppShell.Section>
+                <Stack gap="md" className={classes.navbarHeader}>
+                    <Button
+                        variant="subtle"
+                        color="ldGray.7"
+                        size="xs"
+                        justify="flex-start"
+                        leftSection={<MantineIcon icon={IconArrowLeft} />}
+                        onClick={() => {
+                            void navigate(returnTo);
+                        }}
+                    >
+                        Back
+                    </Button>
+                    <Stack gap="xs" align="center">
+                        <LightdashUserAvatar
+                            name={isCreateMode ? '+' : form.values.name}
+                            src={
+                                !isCreateMode
+                                    ? (avatarPreviewUrl ??
+                                      form.values.imageUrl ??
+                                      undefined)
+                                    : (avatarPreviewUrl ?? undefined)
+                            }
+                            size={72}
+                        />
+                        <Stack gap={0} align="center">
+                            <Title order={5} ta="center" lineClamp={2}>
+                                {isCreateMode
+                                    ? 'New agent'
+                                    : agent?.name || 'Agent'}
+                            </Title>
+                            {currentProject && (
+                                <Text size="xs" c="dimmed" ta="center">
+                                    {currentProject.name}
+                                </Text>
+                            )}
+                        </Stack>
+                    </Stack>
+                </Stack>
+            </AppShell.Section>
+            <AppShell.Section grow component={ScrollArea} mt="lg">
+                <Stack gap="xs">
+                    <Stack gap={4}>
+                        <Button
+                            variant={activeTab === 'setup' ? 'light' : 'subtle'}
+                            fullWidth
+                            justify="flex-start"
+                            leftSection={
+                                <MantineIcon icon={IconAdjustmentsAlt} />
+                            }
+                            onClick={() => {
+                                if (isCreateMode) {
+                                    // In create mode, we can't navigate to agent-specific routes
+                                    return;
+                                }
+                                navigateWithinSettings(
+                                    `/projects/${projectUuid}/ai-agents/${actualAgentUuid}/edit`,
+                                );
+                            }}
+                        >
+                            Setup
+                        </Button>
+                        {activeTab === 'setup' && (
+                            <AgentSettingsSectionNav
+                                mode={isCreateMode ? 'create' : 'edit'}
+                            />
+                        )}
+                    </Stack>
+                    {!isCreateMode && (
+                        <Button
+                            variant={activeTab === 'evals' ? 'light' : 'subtle'}
+                            fullWidth
+                            justify="flex-start"
+                            leftSection={<MantineIcon icon={IconBook2} />}
+                            onClick={() => {
+                                navigateWithinSettings(
+                                    `/projects/${projectUuid}/ai-agents/${actualAgentUuid}/edit/evals`,
+                                );
+                            }}
+                        >
+                            Evals
+                        </Button>
+                    )}
+                    {!isCreateMode && (
+                        <Button
+                            variant={
+                                activeTab === 'verified-artifacts'
+                                    ? 'light'
+                                    : 'subtle'
+                            }
+                            fullWidth
+                            justify="flex-start"
+                            leftSection={<MantineIcon icon={IconCircleCheck} />}
+                            onClick={() => {
+                                navigateWithinSettings(
+                                    `/projects/${projectUuid}/ai-agents/${actualAgentUuid}/edit/verified-artifacts`,
+                                );
+                            }}
+                        >
+                            Verified Answers
+                        </Button>
+                    )}
+                    {!isCreateMode && (
+                        <Button
+                            fullWidth
+                            variant="subtle"
+                            justify="flex-start"
+                            leftSection={
+                                <MantineIcon icon={IconMessageCircleShare} />
+                            }
+                            component={Link}
+                            to={`/generalSettings/ai/threads?projects=${projectUuid}&agents=${actualAgentUuid}`}
+                        >
+                            Conversations
+                        </Button>
+                    )}
+                </Stack>
+            </AppShell.Section>
+        </>
+    );
+
     return (
         <AppShell
             padding="md"
@@ -369,139 +503,49 @@ const ProjectAiAgentEditPage: FC<Props> = ({ isCreateMode = false }) => {
             navbar={{
                 width: 300,
                 breakpoint: 'sm',
+                collapsed: { mobile: true },
             }}
             bg="ldGray.0"
         >
-            <AppShell.Navbar p="md">
-                <AppShell.Section>
-                    <Stack gap="md" className={classes.navbarHeader}>
-                        <Button
-                            variant="subtle"
-                            color="ldGray.7"
-                            size="xs"
-                            justify="flex-start"
-                            leftSection={<MantineIcon icon={IconArrowLeft} />}
-                            onClick={() => {
-                                void navigate(returnTo);
-                            }}
-                        >
-                            Back
-                        </Button>
-                        <Stack gap="xs" align="center">
-                            <LightdashUserAvatar
-                                name={isCreateMode ? '+' : form.values.name}
-                                src={
-                                    !isCreateMode
-                                        ? (avatarPreviewUrl ??
-                                          form.values.imageUrl ??
-                                          undefined)
-                                        : (avatarPreviewUrl ?? undefined)
-                                }
-                                size={72}
-                            />
-                            <Stack gap={0} align="center">
-                                <Title order={5} ta="center" lineClamp={2}>
-                                    {isCreateMode
-                                        ? 'New agent'
-                                        : agent?.name || 'Agent'}
-                                </Title>
-                                {currentProject && (
-                                    <Text size="xs" c="dimmed" ta="center">
-                                        {currentProject.name}
-                                    </Text>
-                                )}
-                            </Stack>
-                        </Stack>
-                    </Stack>
-                </AppShell.Section>
-                <AppShell.Section grow component={ScrollArea} mt="lg">
-                    <Stack gap="xs">
-                        <Stack gap={4}>
-                            <Button
-                                variant={
-                                    activeTab === 'setup' ? 'light' : 'subtle'
-                                }
-                                fullWidth
-                                justify="flex-start"
-                                leftSection={
-                                    <MantineIcon icon={IconAdjustmentsAlt} />
-                                }
-                                onClick={() => {
-                                    if (isCreateMode) {
-                                        // In create mode, we can't navigate to agent-specific routes
-                                        return;
-                                    }
-                                    navigateWithinSettings(
-                                        `/projects/${projectUuid}/ai-agents/${actualAgentUuid}/edit`,
-                                    );
-                                }}
-                            >
-                                Setup
-                            </Button>
-                            {activeTab === 'setup' && (
-                                <AgentSettingsSectionNav
-                                    mode={isCreateMode ? 'create' : 'edit'}
-                                />
-                            )}
-                        </Stack>
-                        {!isCreateMode && (
-                            <Button
-                                variant={
-                                    activeTab === 'evals' ? 'light' : 'subtle'
-                                }
-                                fullWidth
-                                justify="flex-start"
-                                leftSection={<MantineIcon icon={IconBook2} />}
-                                onClick={() => {
-                                    navigateWithinSettings(
-                                        `/projects/${projectUuid}/ai-agents/${actualAgentUuid}/edit/evals`,
-                                    );
-                                }}
-                            >
-                                Evals
-                            </Button>
-                        )}
-                        {!isCreateMode && (
-                            <Button
-                                variant={
-                                    activeTab === 'verified-artifacts'
-                                        ? 'light'
-                                        : 'subtle'
-                                }
-                                fullWidth
-                                justify="flex-start"
-                                leftSection={
-                                    <MantineIcon icon={IconCircleCheck} />
-                                }
-                                onClick={() => {
-                                    navigateWithinSettings(
-                                        `/projects/${projectUuid}/ai-agents/${actualAgentUuid}/edit/verified-artifacts`,
-                                    );
-                                }}
-                            >
-                                Verified Answers
-                            </Button>
-                        )}
-                        {!isCreateMode && (
-                            <Button
-                                fullWidth
-                                variant="subtle"
-                                justify="flex-start"
-                                leftSection={
-                                    <MantineIcon
-                                        icon={IconMessageCircleShare}
-                                    />
-                                }
-                                component={Link}
-                                to={`/generalSettings/ai/threads?projects=${projectUuid}&agents=${actualAgentUuid}`}
-                            >
-                                Conversations
-                            </Button>
-                        )}
-                    </Stack>
-                </AppShell.Section>
-            </AppShell.Navbar>
+            {compact ? (
+                <Drawer
+                    classNames={sidebarDrawerClasses}
+                    opened={sidebarOpened}
+                    onClose={() => setSidebarOpened(false)}
+                    title="Agent settings"
+                    size="min(360px, 100vw)"
+                    closeButtonProps={{
+                        size: 44,
+                        'aria-label': 'Close agent settings navigation',
+                    }}
+                    onClickCapture={(event) => {
+                        if (
+                            event.target instanceof Element &&
+                            event.target.closest('button, a[href]')
+                        )
+                            setSidebarOpened(false);
+                    }}
+                >
+                    {sidebarContent}
+                </Drawer>
+            ) : (
+                <AppShell.Navbar p="md">{sidebarContent}</AppShell.Navbar>
+            )}
             <AppShell.Main pt={0} pr={0} pb={0}>
+                {compact && (
+                    <Group px="sm" py={6} className={classes.mobileNavigation}>
+                        <Button
+                            variant="default"
+                            onClick={() => setSidebarOpened(true)}
+                            aria-expanded={sidebarOpened}
+                            leftSection={
+                                <MantineIcon icon={IconAdjustmentsAlt} />
+                            }
+                        >
+                            Agent settings
+                        </Button>
+                    </Group>
+                )}
                 <Box
                     className={classes.mainInner}
                     data-with-banner={isCurrentProjectPreview}

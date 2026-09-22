@@ -85,6 +85,7 @@ const AgentsRouterPage = () => {
     const canStartDeepResearch = useDeepResearchAccess(projectUuid);
     const chartUuid = searchParams.get('chartUuid');
     const dashboardUuid = searchParams.get('dashboardUuid');
+    const dataAppUuid = searchParams.get('dataAppUuid');
 
     const {
         contextInput,
@@ -95,6 +96,7 @@ const AgentsRouterPage = () => {
         projectUuid,
         chartUuidOrSlug: chartUuid,
         dashboardUuidOrSlug: dashboardUuid,
+        dataAppUuidOrSlug: dataAppUuid,
     });
 
     const {
@@ -360,7 +362,7 @@ const AgentsRouterPage = () => {
                                 <MantineIcon
                                     icon={IconNotebook}
                                     size="sm"
-                                    color="ldGray.6"
+                                    color="dimmed"
                                 />
                                 <Text size="xs">Memories</Text>
                             </Group>
@@ -408,6 +410,7 @@ const AgentsRouterPage = () => {
                                             key={getPromptContextItemKey(item)}
                                             item={item}
                                             projectUuid={projectUuid!}
+                                            previewScope={null}
                                         />
                                     ))}
                                 </Group>
@@ -477,13 +480,10 @@ const AgentsRouterPage = () => {
                                             width={280}
                                             position="bottom-end"
                                             withArrow
-                                            shadow="md"
                                         >
                                             <Popover.Target>
                                                 <ActionIcon
                                                     size="sm"
-                                                    variant="subtle"
-                                                    color="gray"
                                                     aria-label="Why these agents?"
                                                 >
                                                     <MantineIcon
@@ -549,8 +549,6 @@ const AgentsRouterPage = () => {
                                                                 <Badge
                                                                     size="xs"
                                                                     color="violet"
-                                                                    variant="light"
-                                                                    radius="sm"
                                                                 >
                                                                     Recommended
                                                                 </Badge>

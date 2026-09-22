@@ -15,127 +15,59 @@
     min-height: 0;
 }
 
-/* Keep the thumb visible while scrolling — the theme sets it via inline styles
-   (very faint ldGray-3), so override needs !important to win. */
-.sidebarScroll :global([class*='-ScrollArea-thumb']) {
-    background-color: light-dark(
-        var(--mantine-color-ldGray-5),
-        var(--mantine-color-dark-2)
-    ) !important;
+/* Edge fade: content beyond an edge dissolves into it. Each fade grows with
+   the scroll offset, so nothing is faded while scrolled to that edge. Browsers
+   without scroll-driven animations keep hard edges. */
+@property --settings-nav-fade-top {
+    syntax: '<length>';
+    inherits: false;
+    initial-value: 0px;
 }
 
-/* ------------------------------------------------------------------ *
- * Sidebar nav polish — scoped to .sidebarScroll so other RouterNavLink
- * usages elsewhere in the app are untouched. Substring class matches
- * (`-NavLink-root`) so it survives the Mantine class prefix.
- * ------------------------------------------------------------------ */
+@property --settings-nav-fade-bottom {
+    syntax: '<length>';
+    inherits: false;
+    initial-value: 0px;
+}
 
-/* Section labels ("Your settings", "Organization settings", …) */
-.sidebarScroll :global([class*='-Title-root']) {
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.01em;
-    color: light-dark(
-        var(--mantine-color-ldGray-6),
-        var(--mantine-color-dark-2)
+.sidebarScrollViewport {
+    --settings-nav-fade: var(--mantine-spacing-xl);
+
+    mask-image: linear-gradient(
+        to bottom,
+        transparent,
+        black var(--settings-nav-fade-top),
+        black calc(100% - var(--settings-nav-fade-bottom)),
+        transparent
     );
 }
 
-/* Nav item */
-.sidebarScroll :global([class*='-NavLink-root']) {
-    position: relative;
-    border-radius: var(--mantine-radius-md);
-    padding-block: 7px;
-    margin-bottom: 2px;
-    font-weight: 500;
-    color: light-dark(
-        var(--mantine-color-ldGray-8),
-        var(--mantine-color-dark-1)
-    );
-    transition:
-        background-color 150ms ease,
-        color 150ms ease,
-        transform 150ms ease;
-}
-
-/* Icon */
-.sidebarScroll :global([class*='-NavLink-section']) {
-    color: light-dark(
-        var(--mantine-color-ldGray-6),
-        var(--mantine-color-dark-2)
-    );
-    transition:
-        color 150ms ease,
-        transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-/* Icon micro-pop on hover (settles with a touch of spring) */
-.sidebarScroll
-    :global([class*='-NavLink-root']:hover [class*='-NavLink-section']) {
-    transform: scale(1.12);
-}
-
-/* Hover (non-active): soft neutral fill */
-.sidebarScroll :global([class*='-NavLink-root']:not([data-active]):hover) {
-    background-color: light-dark(
-        var(--mantine-color-ldGray-1),
-        var(--mantine-color-dark-6)
-    );
-    color: light-dark(
-        var(--mantine-color-ldGray-9),
-        var(--mantine-color-dark-0)
-    );
-}
-
-.sidebarScroll
-    :global(
-        [class*='-NavLink-root']:not([data-active]):hover
-            [class*='-NavLink-section']
-    ) {
-    color: light-dark(
-        var(--mantine-color-ldGray-9),
-        var(--mantine-color-dark-0)
-    );
-}
-
-/* Active: neutral grey fill + stronger text */
-.sidebarScroll :global([class*='-NavLink-root'][data-active]) {
-    background-color: light-dark(
-        var(--mantine-color-ldGray-2),
-        var(--mantine-color-dark-5)
-    );
-    color: light-dark(
-        var(--mantine-color-ldGray-9),
-        var(--mantine-color-dark-0)
-    );
-    font-weight: 600;
-}
-
-.sidebarScroll :global([class*='-NavLink-root'][data-active]:hover) {
-    background-color: light-dark(
-        var(--mantine-color-ldGray-3),
-        var(--mantine-color-dark-4)
-    );
-}
-
-.sidebarScroll
-    :global([class*='-NavLink-root'][data-active] [class*='-NavLink-section']) {
-    color: light-dark(
-        var(--mantine-color-ldGray-9),
-        var(--mantine-color-dark-0)
-    );
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .sidebarScroll :global([class*='-NavLink-root']),
-    .sidebarScroll :global([class*='-NavLink-section']) {
-        transition: none;
+@supports (animation-timeline: scroll()) {
+    .sidebarScrollViewport {
+        animation:
+            fadeTop linear both,
+            fadeBottom linear both;
+        animation-timeline: scroll(self);
+        animation-range:
+            0px var(--settings-nav-fade),
+            calc(100% - var(--settings-nav-fade)) 100%;
     }
-    .sidebarScroll :global([class*='-NavLink-root']:hover) {
-        transform: none;
+}
+
+@keyframes fadeTop {
+    from {
+        --settings-nav-fade-top: 0px;
     }
-    .sidebarScroll
-        :global([class*='-NavLink-root']:hover [class*='-NavLink-section']) {
-        transform: none;
+    to {
+        --settings-nav-fade-top: var(--settings-nav-fade);
+    }
+}
+
+@keyframes fadeBottom {
+    from {
+        --settings-nav-fade-bottom: var(--settings-nav-fade);
+    }
+    to {
+        --settings-nav-fade-bottom: 0px;
     }
 }

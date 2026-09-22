@@ -20,6 +20,12 @@ import {
     ApiAiAgentSummaryResponse,
     ApiAiAgentThreadDumpResponse,
     ApiAiOrganizationSettingsResponse,
+    ApiAiReviewJiraBackfillResponse,
+    ApiAiReviewJiraDestinationResponse,
+    ApiAiReviewJiraRoutingResponse,
+    ApiAiReviewLinearBackfillResponse,
+    ApiAiReviewLinearDestinationResponse,
+    ApiAiReviewLinearRoutingResponse,
     ApiAiReviewNotificationSettingsResponse,
     ApiAiThreadRetentionPreviewResponse,
     ApiErrorPayload,
@@ -39,6 +45,10 @@ import {
     UpdateAiAgentReviewItemPriority,
     UpdateAiAgentReviewItemStatus,
     UpdateAiOrganizationSettings,
+    UpdateAiReviewJiraDestination,
+    UpdateAiReviewJiraRouting,
+    UpdateAiReviewLinearDestination,
+    UpdateAiReviewLinearRouting,
     UpdateAiReviewNotificationSettings,
     type ApiAiAgentReviewItemWritebackPreviewResponse,
     type UUID,
@@ -975,6 +985,254 @@ export class AiAgentAdminController extends BaseController {
             results:
                 await this.getAiAgentAdminService().updateReviewNotificationSettings(
                     toSessionUser(req.account),
+                    body,
+                ),
+        };
+    }
+
+    /**
+     * Get Linear routing for AI review issues
+     * @summary Get AI review Linear routing
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @SuccessResponse('200', 'Success')
+    @Get('/review-linear-routing')
+    @OperationId('getAiReviewLinearRouting')
+    async getReviewLinearRouting(
+        @Request() req: express.Request,
+    ): Promise<ApiAiReviewLinearRoutingResponse> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+        return {
+            status: 'ok',
+            results: await this.getAiAgentAdminService().getReviewLinearRouting(
+                toSessionUser(req.account),
+            ),
+        };
+    }
+
+    /**
+     * Update Linear routing for AI review issues
+     * @summary Update AI review Linear routing
+     */
+    @Middlewares([
+        allowApiKeyAuthentication,
+        isAuthenticated,
+        unauthorisedInDemo,
+    ])
+    @SuccessResponse('200', 'Success')
+    @Put('/review-linear-routing')
+    @OperationId('updateAiReviewLinearRouting')
+    async updateReviewLinearRouting(
+        @Request() req: express.Request,
+        @Body() body: UpdateAiReviewLinearRouting,
+    ): Promise<ApiAiReviewLinearRoutingResponse> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+        return {
+            status: 'ok',
+            results:
+                await this.getAiAgentAdminService().updateReviewLinearRouting(
+                    toSessionUser(req.account),
+                    body,
+                ),
+        };
+    }
+
+    /**
+     * Create Linear issues for existing open AI review findings
+     * @summary Backfill AI review Linear issues
+     */
+    @Middlewares([
+        allowApiKeyAuthentication,
+        isAuthenticated,
+        unauthorisedInDemo,
+    ])
+    @SuccessResponse('200', 'Success')
+    @Post('/review-linear-issues/backfill')
+    @OperationId('backfillAiReviewLinearIssues')
+    async backfillReviewLinearIssues(
+        @Request() req: express.Request,
+    ): Promise<ApiAiReviewLinearBackfillResponse> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+        return {
+            status: 'ok',
+            results:
+                await this.getAiAgentAdminService().backfillReviewLinearIssues(
+                    toSessionUser(req.account),
+                ),
+        };
+    }
+
+    /**
+     * Get a project's Linear destination for AI reviews
+     * @summary Get AI review Linear destination
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @SuccessResponse('200', 'Success')
+    @Get('/review-linear-destination/{projectUuid}')
+    @OperationId('getAiReviewLinearDestination')
+    async getReviewLinearDestination(
+        @Request() req: express.Request,
+        @Path() projectUuid: UUID,
+    ): Promise<ApiAiReviewLinearDestinationResponse> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+        return {
+            status: 'ok',
+            results:
+                await this.getAiAgentAdminService().getReviewLinearDestination(
+                    toSessionUser(req.account),
+                    projectUuid,
+                ),
+        };
+    }
+
+    /**
+     * Update a project's Linear destination for AI reviews
+     * @summary Update AI review Linear destination
+     */
+    @Middlewares([
+        allowApiKeyAuthentication,
+        isAuthenticated,
+        unauthorisedInDemo,
+    ])
+    @SuccessResponse('200', 'Success')
+    @Put('/review-linear-destination/{projectUuid}')
+    @OperationId('updateAiReviewLinearDestination')
+    async updateReviewLinearDestination(
+        @Request() req: express.Request,
+        @Path() projectUuid: UUID,
+        @Body() body: UpdateAiReviewLinearDestination,
+    ): Promise<ApiAiReviewLinearDestinationResponse> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+        return {
+            status: 'ok',
+            results:
+                await this.getAiAgentAdminService().updateReviewLinearDestination(
+                    toSessionUser(req.account),
+                    projectUuid,
+                    body,
+                ),
+        };
+    }
+
+    /**
+     * Get Jira routing for AI review issues
+     * @summary Get AI review Jira routing
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @Get('/review-jira-routing')
+    @OperationId('getAiReviewJiraRouting')
+    async getReviewJiraRouting(
+        @Request() req: express.Request,
+    ): Promise<ApiAiReviewJiraRoutingResponse> {
+        assertRegisteredAccount(req.account);
+        return {
+            status: 'ok',
+            results: await this.getAiAgentAdminService().getReviewJiraRouting(
+                toSessionUser(req.account),
+            ),
+        };
+    }
+
+    /**
+     * Update Jira routing for AI review issues
+     * @summary Update AI review Jira routing
+     */
+    @Middlewares([
+        allowApiKeyAuthentication,
+        isAuthenticated,
+        unauthorisedInDemo,
+    ])
+    @Put('/review-jira-routing')
+    @OperationId('updateAiReviewJiraRouting')
+    async updateReviewJiraRouting(
+        @Request() req: express.Request,
+        @Body() body: UpdateAiReviewJiraRouting,
+    ): Promise<ApiAiReviewJiraRoutingResponse> {
+        assertRegisteredAccount(req.account);
+        return {
+            status: 'ok',
+            results:
+                await this.getAiAgentAdminService().updateReviewJiraRouting(
+                    toSessionUser(req.account),
+                    body,
+                ),
+        };
+    }
+
+    /**
+     * Create Jira issues for existing open AI review findings
+     * @summary Backfill AI review Jira issues
+     */
+    @Middlewares([
+        allowApiKeyAuthentication,
+        isAuthenticated,
+        unauthorisedInDemo,
+    ])
+    @Post('/review-jira-issues/backfill')
+    @OperationId('backfillAiReviewJiraIssues')
+    async backfillReviewJiraIssues(
+        @Request() req: express.Request,
+    ): Promise<ApiAiReviewJiraBackfillResponse> {
+        assertRegisteredAccount(req.account);
+        return {
+            status: 'ok',
+            results:
+                await this.getAiAgentAdminService().backfillReviewJiraIssues(
+                    toSessionUser(req.account),
+                ),
+        };
+    }
+
+    /**
+     * Get a project's Jira destination for AI reviews
+     * @summary Get AI review Jira destination
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @Get('/review-jira-destination/{projectUuid}')
+    @OperationId('getAiReviewJiraDestination')
+    async getReviewJiraDestination(
+        @Request() req: express.Request,
+        @Path() projectUuid: UUID,
+    ): Promise<ApiAiReviewJiraDestinationResponse> {
+        assertRegisteredAccount(req.account);
+        return {
+            status: 'ok',
+            results:
+                await this.getAiAgentAdminService().getReviewJiraDestination(
+                    toSessionUser(req.account),
+                    projectUuid,
+                ),
+        };
+    }
+
+    /**
+     * Update a project's Jira destination for AI reviews
+     * @summary Update AI review Jira destination
+     */
+    @Middlewares([
+        allowApiKeyAuthentication,
+        isAuthenticated,
+        unauthorisedInDemo,
+    ])
+    @Put('/review-jira-destination/{projectUuid}')
+    @OperationId('updateAiReviewJiraDestination')
+    async updateReviewJiraDestination(
+        @Request() req: express.Request,
+        @Path() projectUuid: UUID,
+        @Body() body: UpdateAiReviewJiraDestination,
+    ): Promise<ApiAiReviewJiraDestinationResponse> {
+        assertRegisteredAccount(req.account);
+        return {
+            status: 'ok',
+            results:
+                await this.getAiAgentAdminService().updateReviewJiraDestination(
+                    toSessionUser(req.account),
+                    projectUuid,
                     body,
                 ),
         };

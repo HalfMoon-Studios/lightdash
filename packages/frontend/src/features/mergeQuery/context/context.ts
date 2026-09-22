@@ -14,7 +14,10 @@ import { createContext } from 'react';
 import { type InfiniteQueryResults } from '../../../hooks/useQueryResults';
 
 export type MergeEditorSource = {
+    /** Editor handle. The name it runs under comes from getMergeSourceNames. */
     id: string;
+    /** The name a saved chart fixed for it; omitted for a source built here. */
+    name?: string;
     exploreName: string | null;
     dimensions: string[];
     metrics: string[];
@@ -30,6 +33,8 @@ export type MergeFocus =
 
 /** One part of the join key: the field each source contributes. */
 export type MergeJoinPart = {
+    /** The key column's name a saved chart fixed; omitted means the chart's field id. */
+    name?: string;
     fieldIdBySourceId: Record<string, string | null>;
 };
 
@@ -42,6 +47,8 @@ export type MergeJoinPart = {
  */
 export type MergeResults = {
     queryUuid: string;
+    /** The merge that produced these results, so edits since can be told apart. */
+    mergeQuery: MergeQuery;
     fields: ItemsMap;
     metricQuery: MetricQuery;
     /** Field ids in the order the merged statement returns them. */
@@ -61,9 +68,13 @@ export type MergeContextValue = {
     readOnly: boolean;
     /**
      * The merge arrived with the chart or the link rather than being built
-     * here, so it should run without being asked.
+     * here, so it should run without being asked. Cleared once that run is
+     * refused before execution: from then on it is in the user's hands, like
+     * a merge built here.
      */
     wasRestored: boolean;
+    /** The restored merge was refused before it could run, so stop waiting for it. */
+    refuseRestoredRun: () => void;
     /** Runs a merge, replacing any run already on screen. */
     run: (
         mergeQuery: MergeQuery,
@@ -87,11 +98,24 @@ export type MergeContextValue = {
     parameterReferences: string[];
     /** The merged run, or null when none has succeeded yet. */
     mergeResults: MergeResults | null;
+    /**
+     * The merge, not the Explorer's own query, owns what is on screen: a
+     * run was submitted or arrived with the chart, and the merge has not
+     * been removed since. It stays true through a re-run and a refusal, so
+     * the Explorer's query never runs with sorts that name merged fields.
+     */
+    replacesQuery: boolean;
+    /** The merge last submitted, whether it ran or was refused. */
+    lastRunMergeQuery: MergeQuery | null;
     focus: MergeFocus;
     /** Sources owned by the merge; the chart-owned source stays in Explorer. */
     additionalSources: MergeEditorSource[];
+    /** The chart query's saved name, when a chart fixed it; null means its explore. */
+    primarySourceName: string | null;
     joinParts: MergeJoinPart[];
     joinType: MergeJoinType;
+    /** Sources that repeat their values across the others' extra dimensions. */
+    repeatValuesSourceIds: string[];
     addSource: (sourceId: string, initialFocus?: MergeFocus) => void;
     removeSource: (sourceId: string) => void;
     setFocus: (focus: MergeFocus) => void;
@@ -109,6 +133,7 @@ export type MergeContextValue = {
     addJoinPart: () => void;
     removeJoinPart: (index: number) => void;
     setJoinType: (joinType: MergeJoinType) => void;
+    setRepeatValues: (sourceId: string, repeatValues: boolean) => void;
     setSourceFilters: (sourceId: string, filters: Filters) => void;
 };
 

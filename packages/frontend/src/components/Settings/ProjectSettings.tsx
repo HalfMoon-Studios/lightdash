@@ -15,7 +15,10 @@ import {
     type RouteObject,
 } from 'react-router';
 import { useAiOrganizationSettings } from '../../ee/features/aiCopilot/hooks/useAiOrganizationSettings';
+import { ContentReviewSettingsPanel } from '../../ee/features/contentReview';
+import { useContentReviewAvailability } from '../../ee/features/contentReview/hooks/useContentReviewAvailability';
 import SettingsEmbed from '../../ee/features/embed/SettingsEmbed';
+import ContentReviewPage from '../../features/contentAsCode/components/ContentReviewPage';
 import { ExternalSourcesSettingsPanel } from '../../features/externalSources/components/ExternalSourcesSettingsPanel';
 import PullRequestsPage from '../../features/pullRequests/components/PullRequestsPage';
 import RecentlyDeletedPage from '../../features/recentlyDeleted/components/RecentlyDeletedPage';
@@ -126,6 +129,19 @@ const ProjectSettings: FC<{ externalSourcesEnabled: boolean }> = ({
         ) ??
             false);
 
+    const contentReviewAvailability = useContentReviewAvailability();
+    const canViewContentReviewSettings =
+        contentReviewAvailability.isAvailable &&
+        !!project &&
+        (user.data?.ability.can(
+            'manage',
+            subject('Project', {
+                organizationUuid: project.organizationUuid,
+                projectUuid: project.projectUuid,
+            }),
+        ) ??
+            false);
+
     const routes = useMemo<RouteObject[]>(() => {
         if (!projectUuid) {
             return [];
@@ -136,7 +152,7 @@ const ProjectSettings: FC<{ externalSourcesEnabled: boolean }> = ({
                 element: (
                     <ProjectSettingsPage
                         title="Connection settings"
-                        description="Manage this project's warehouse and dbt connections."
+                        description="Manage this project's warehouse and semantic layer connections."
                     >
                         <UpdateProjectConnection projectUuid={projectUuid} />
                     </ProjectSettingsPage>
@@ -229,12 +245,29 @@ const ProjectSettings: FC<{ externalSourcesEnabled: boolean }> = ({
                 element: (
                     <ProjectSettingsPage
                         title="Verified content"
-                        description="Review verified charts and dashboards in this project."
+                        description="Review verified charts, dashboards, and data apps in this project."
                     >
                         <VerifiedContentPanel projectUuid={projectUuid} />
                     </ProjectSettingsPage>
                 ),
             },
+            ...(canViewContentReviewSettings
+                ? [
+                      {
+                          path: `/reviewRequests`,
+                          element: (
+                              <ProjectSettingsPage
+                                  title="Review requests"
+                                  description="Who reviews content submitted from personal spaces, and what happens on approval."
+                              >
+                                  <ContentReviewSettingsPanel
+                                      projectUuid={projectUuid}
+                                  />
+                              </ProjectSettingsPage>
+                          ),
+                      },
+                  ]
+                : []),
             {
                 path: `/dataOps`,
                 element: (
@@ -368,6 +401,23 @@ const ProjectSettings: FC<{ externalSourcesEnabled: boolean }> = ({
                       },
                   ]
                 : []),
+            ...(isGitProject
+                ? [
+                      {
+                          path: `/contentReview`,
+                          element: (
+                              <ProjectSettingsPage
+                                  title="Content review"
+                                  description="Unpublished changes made in this project, awaiting a reviewer to write them back to the repo."
+                              >
+                                  <ContentReviewPage
+                                      projectUuid={projectUuid}
+                                  />
+                              </ProjectSettingsPage>
+                          ),
+                      },
+                  ]
+                : []),
             ...(isResultsCacheEnabled
                 ? [
                       {
@@ -448,7 +498,7 @@ const ProjectSettings: FC<{ externalSourcesEnabled: boolean }> = ({
                                           <Title order={5}>
                                               Allowed origins
                                           </Title>
-                                          <Text c="ldGray.6" fz="xs">
+                                          <Text c="dimmed" fz="xs">
                                               CORS controls which external
                                               browser origins can call the
                                               Lightdash API. Add exact origins
@@ -487,6 +537,7 @@ const ProjectSettings: FC<{ externalSourcesEnabled: boolean }> = ({
         user.data?.ability,
         canManageExternalConnections,
         canManageExternalSources,
+        canViewContentReviewSettings,
         isAiCopilotEnabledOrTrial,
     ]);
     const routesElements = useRoutes(routes);
@@ -511,13 +562,20 @@ const ProjectSettings: FC<{ externalSourcesEnabled: boolean }> = ({
             '/generalSettings/projectManagement/:projectUuid/caching',
             location.pathname,
         );
+    const isAwaitingReviewRequestsRoute =
+        contentReviewAvailability.isLoading &&
+        !!matchPath(
+            '/generalSettings/projectManagement/:projectUuid/reviewRequests',
+            location.pathname,
+        );
 
     if (
         isInitialLoading ||
         !project ||
         !projectUuid ||
         isAwaitingDataAppConnectionsRoute ||
-        isAwaitingCachingRoute
+        isAwaitingCachingRoute ||
+        isAwaitingReviewRequestsRoute
     ) {
         return (
             <div style={{ marginTop: '20px' }}>

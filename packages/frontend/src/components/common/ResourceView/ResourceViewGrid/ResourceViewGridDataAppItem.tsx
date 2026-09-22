@@ -8,7 +8,7 @@ import { IconEye } from '@tabler/icons-react';
 import { type FC, type ReactNode } from 'react';
 import AppThumbnailHoverCard from '../../../../features/apps/components/AppThumbnailHoverCard';
 import MantineIcon from '../../MantineIcon';
-import { ResourceIcon } from '../../ResourceIcon';
+import { VerifiedResourceIcon } from '../../ResourceIcon';
 import { ResourceInfoPopupContent } from '../../ResourceInfoPopup/ResourceInfoPopup';
 import ResourceViewActionMenu, {
     type ResourceViewActionMenuCommonProps,
@@ -69,7 +69,6 @@ const ResourceViewGridDataAppItem: FC<ResourceViewGridDataAppItemProps> = ({
                     ref={ref}
                     pos="relative"
                     p={0}
-                    withBorder
                     className={classes.gridCard}
                     h="100%"
                 >
@@ -81,13 +80,15 @@ const ResourceViewGridDataAppItem: FC<ResourceViewGridDataAppItemProps> = ({
                         className={classes.gridCardTopSection}
                     >
                         {dragIcon}
-                        <ResourceIcon item={item} />
+                        <VerifiedResourceIcon
+                            item={item}
+                            verification={item.data.verification}
+                        />
 
                         <Tooltip
                             label={item.data.description}
                             position="top"
                             maw={400}
-                            multiline
                             disabled={
                                 hasThumbnailPreview || !item.data.description
                             }
@@ -119,7 +120,7 @@ const ResourceViewGridDataAppItem: FC<ResourceViewGridDataAppItemProps> = ({
                                     size={14}
                                 />
 
-                                <Text c="ldGray.6" fz="xs">
+                                <Text c="dimmed" fz="xs">
                                     {item.data.views} views
                                 </Text>
                             </Flex>

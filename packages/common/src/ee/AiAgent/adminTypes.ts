@@ -373,26 +373,19 @@ export type ComputedAiOrganizationSettings = {
 };
 
 // AI Organization Settings Types
-export const BYO_AI_PROVIDERS = ['anthropic', 'openai'] as const;
+export const BYO_AI_PROVIDERS = ['anthropic', 'google', 'openai'] as const;
 export type ByoAiProvider = (typeof BYO_AI_PROVIDERS)[number];
 
 export const isByoAiProvider = (provider: string): provider is ByoAiProvider =>
     (BYO_AI_PROVIDERS as readonly string[]).includes(provider);
 
-export type AiProviderApiKeysSet = {
-    anthropic: boolean;
-    openai: boolean;
-};
+export type AiProviderApiKeysSet = Record<ByoAiProvider, boolean>;
 
-export type AiProviderApiKeyHints = {
-    anthropic: string | null;
-    openai: string | null;
-};
+export type AiProviderApiKeyHints = Record<ByoAiProvider, string | null>;
 
-export type UpdateAiProviderApiKeys = {
-    anthropic?: string | null;
-    openai?: string | null;
-};
+export type UpdateAiProviderApiKeys = Partial<
+    Record<ByoAiProvider, string | null>
+>;
 
 export type AiOrgProviderModelVisibility = {
     enabled: boolean;
@@ -412,6 +405,14 @@ export type AiOrganizationSettings = {
     deepResearchLimits: AiDeepResearchLimits;
     deepResearchRawSqlEnabled: boolean;
     mcpContentWritesEnabled: boolean;
+    mcpAgentsEnabled: boolean;
+    // Customer consent for data apps to call AI at runtime (analysis, insights).
+    // Optional to keep the response schema backwards-compatible for old clients.
+    dataAppRuntimeAiEnabled?: boolean;
+    // Whether viewers may carry a data-app investigation on in Ask AI.
+    dataAppContinueInAskAiEnabled?: boolean;
+    // Org default for running AI analysis when a data app loads.
+    dataAppAutoAnalysisEnabled?: boolean;
     requireExplicitSlackChannelLinking?: boolean;
     defaultAiAgentModelConfig: AiAgentModelConfig | null;
     // Optional to keep the response schema backwards-compatible for old clients.
@@ -434,10 +435,13 @@ export type CreateAiOrganizationSettings = Omit<
 export type UpdateAiOrganizationSettings = {
     aiAgentsVisible?: boolean;
     aiAgentReviewsEnabled?: boolean;
-    aiAgentMemoryEnabled?: boolean;
     deepResearchLimits?: AiDeepResearchLimits;
     deepResearchRawSqlEnabled?: boolean;
     mcpContentWritesEnabled?: boolean;
+    mcpAgentsEnabled?: boolean;
+    dataAppRuntimeAiEnabled?: boolean;
+    dataAppContinueInAskAiEnabled?: boolean;
+    dataAppAutoAnalysisEnabled?: boolean;
     requireExplicitSlackChannelLinking?: boolean;
     defaultAiAgentModelConfig?: AiAgentModelConfig | null;
     modelVisibility?: AiOrgModelVisibility | null;
@@ -461,6 +465,12 @@ export type AiOrganizationRuntimeSettings = {
     defaultAiAgentModelOptions: AiModelOption[];
     dataAppCodingAgent: DataAppCodingAgent;
     visibleDataAppModels: DataAppClaudeModel[];
+    // Whether data apps may call AI at runtime; optional for old clients.
+    dataAppRuntimeAiEnabled?: boolean;
+    // Whether viewers may continue a data-app investigation in Ask AI.
+    dataAppContinueInAskAiEnabled?: boolean;
+    // Org default for running AI analysis when a data app loads.
+    dataAppAutoAnalysisEnabled?: boolean;
     // Org retention ceiling, surfaced so agent editors can see what caps
     // their agent-level window. Optional for backwards compatibility.
     threadRetentionHours?: number | null;

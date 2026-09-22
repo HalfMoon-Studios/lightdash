@@ -1,0 +1,831 @@
+import { subject } from '@casl/ability';
+import {
+    buildMergeQueryFromSaved,
+    ConflictError,
+    DirectAccessResourceType,
+    DOCUMENT_SCHEMA_VERSION,
+    FeatureFlags,
+    ForbiddenError,
+    getContentAsCodePathFromLtreePath,
+    NotFoundError,
+    ParameterError,
+    parseDocumentContent,
+    type CreateDocumentRequest,
+    type Document,
+    type DocumentAsCode,
+    type DocumentContent,
+    type DocumentList,
+    type DuplicateDocumentRequest,
+    type MetricQuery,
+    type ParametersValuesMap,
+    type RegisteredAccount,
+    type UpdateDocumentMetadataRequest,
+    type UUID,
+    type UuidOrSlug,
+} from '@lightdash/common';
+import type { Knex } from 'knex';
+import { isEqual } from 'lodash';
+import pLimit from 'p-limit';
+import { validate as isUuid } from 'uuid';
+import type { LightdashConfig } from '../../config/parseConfig';
+import type {
+    DocumentContentUpdate,
+    DocumentModel,
+} from '../../models/DocumentModel';
+import type { FeatureFlagModel } from '../../models/FeatureFlagModel/FeatureFlagModel';
+import type { ProjectModel } from '../../models/ProjectModel/ProjectModel';
+import type { SpaceModel } from '../../models/SpaceModel';
+import { BaseService } from '../BaseService';
+import { normalizeFilterIds } from '../CoderService/filterIds';
+import type { DirectAccessService } from '../DirectAccess/DirectAccessService';
+import type { ProjectService } from '../ProjectService/ProjectService';
+import type { SpacePermissionService } from '../SpaceService/SpacePermissionService';
+
+type DocumentServiceArguments = {
+    lightdashConfig: LightdashConfig;
+    documentModel: DocumentModel;
+    directAccessService: DirectAccessService;
+    featureFlagModel: FeatureFlagModel;
+    projectModel: ProjectModel;
+    spaceModel: SpaceModel;
+    spacePermissionService: SpacePermissionService;
+    projectService: ProjectService;
+};
+
+const MAX_CONCURRENT_CHART_VALIDATIONS = 4;
+const MAX_CONCURRENT_PROJECT_ACCESS_CHECKS = 4;
+
+export class DocumentService extends BaseService {
+    constructor(private readonly dependencies: DocumentServiceArguments) {
+        super();
+    }
+
+    private async authorizeDelete(
+        account: RegisteredAccount,
+        projectUuid: string,
+        documentUuid: string,
+    ) {
+        await this.assertProjectAccess(account, projectUuid);
+        const document =
+            await this.dependencies.documentModel.getLifecycleState(
+                projectUuid,
+                documentUuid,
+            );
+        if (document.deletedAt || document.spaceDeletedAt) {
+            throw new NotFoundError('Document not found');
+        }
+        const context =
+            await this.dependencies.spacePermissionService.getDocumentDeleteAccessContext(
+                account.user.userUuid,
+                {
+                    type: 'document',
+                    documentUuid,
+                    spaceUuid: document.spaceUuid,
+                },
+            );
+        if (
+            this.createAuditedAbility(account).cannot(
+                'delete',
+                subject('Document', {
+                    ...context,
+                    organizationUuid: document.organizationUuid,
+                    projectUuid: document.projectUuid,
+                }),
+            )
+        ) {
+            throw new ForbiddenError(
+                'You do not have permission to delete this Document',
+            );
+        }
+        return document;
+    }
+
+    async delete(
+        account: RegisteredAccount,
+        projectUuid: string,
+        documentUuid: string,
+    ): Promise<void> {
+        const document = await this.authorizeDelete(
+            account,
+            projectUuid,
+            documentUuid,
+        );
+        if (this.dependencies.lightdashConfig.softDelete.enabled) {
+            await this.dependencies.documentModel.softDelete(
+                projectUuid,
+                documentUuid,
+                account.user.userUuid,
+                document.spaceUuid,
+            );
+        } else {
+            await this.dependencies.documentModel.permanentDelete(
+                projectUuid,
+                documentUuid,
+                {
+                    expectedSpaceUuid: document.spaceUuid,
+                    requireDeleted: false,
+                },
+            );
+        }
+    }
+
+    async softDelete(
+        account: RegisteredAccount,
+        projectUuid: string,
+        documentUuid: string,
+    ): Promise<void> {
+        const document = await this.authorizeDelete(
+            account,
+            projectUuid,
+            documentUuid,
+        );
+        await this.dependencies.documentModel.softDelete(
+            projectUuid,
+            documentUuid,
+            account.user.userUuid,
+            document.spaceUuid,
+        );
+    }
+
+    async restore(
+        account: RegisteredAccount,
+        projectUuid: string,
+        documentUuid: string,
+    ): Promise<void> {
+        await this.assertProjectAccess(account, projectUuid);
+        const document =
+            await this.dependencies.documentModel.getLifecycleState(
+                projectUuid,
+                documentUuid,
+            );
+        if (!document.deletedAt) {
+            throw new NotFoundError('Deleted Document not found');
+        }
+        if (
+            this.createAuditedAbility(account).cannot(
+                'manage',
+                subject('DeletedContent', {
+                    organizationUuid: document.organizationUuid,
+                    projectUuid: document.projectUuid,
+                }),
+            )
+        ) {
+            throw new ForbiddenError(
+                'You do not have permission to restore Documents',
+            );
+        }
+        await this.dependencies.documentModel.restore(
+            projectUuid,
+            documentUuid,
+        );
+    }
+
+    async permanentDelete(
+        account: RegisteredAccount,
+        projectUuid: string,
+        documentUuid: string,
+    ): Promise<void> {
+        await this.assertProjectAccess(account, projectUuid);
+        const document =
+            await this.dependencies.documentModel.getLifecycleState(
+                projectUuid,
+                documentUuid,
+            );
+        if (!document.deletedAt) {
+            throw new NotFoundError('Deleted Document not found');
+        }
+        const ability = this.createAuditedAbility(account);
+        const context = {
+            organizationUuid: document.organizationUuid,
+            projectUuid: document.projectUuid,
+        };
+        if (
+            ability.cannot('manage', subject('DeletedContent', context)) ||
+            ability.cannot('manage', subject('Document', { ...context }))
+        ) {
+            throw new ForbiddenError(
+                'You do not have permission to permanently delete Documents',
+            );
+        }
+        await this.dependencies.documentModel.permanentDelete(
+            projectUuid,
+            documentUuid,
+        );
+    }
+
+    async create(
+        account: RegisteredAccount,
+        projectUuid: string,
+        input: CreateDocumentRequest,
+    ): Promise<Document> {
+        const project = await this.assertProjectAccess(account, projectUuid);
+        const context =
+            await this.dependencies.spacePermissionService.resolveAccess(
+                account.user.userUuid,
+                { type: 'space', spaceUuid: input.spaceUuid },
+            );
+        if (
+            context.projectUuid !== projectUuid ||
+            context.organizationUuid !== project.organizationUuid
+        ) {
+            throw new NotFoundError('Space not found');
+        }
+        if (
+            this.createAuditedAbility(account).cannot(
+                'create',
+                subject('Document', context),
+            )
+        ) {
+            throw new ForbiddenError(
+                'You do not have permission to create Documents in this Space',
+            );
+        }
+        DocumentService.validateMetadata(input);
+        if (input.schemaVersion !== DOCUMENT_SCHEMA_VERSION) {
+            throw new ParameterError(
+                `Document writes require schema version ${DOCUMENT_SCHEMA_VERSION}`,
+            );
+        }
+        const content = parseDocumentContent(
+            input.schemaVersion,
+            input.content,
+        );
+        await this.validateCharts(account, projectUuid, content);
+        const created = await this.dependencies.documentModel.create({
+            ...input,
+            content,
+            projectUuid,
+            createdByUserUuid: account.user.userUuid,
+        });
+        return this.authorizeDocument(account, created);
+    }
+
+    async duplicate(
+        account: RegisteredAccount,
+        projectUuid: UUID,
+        documentUuidOrSlug: UuidOrSlug,
+        input: DuplicateDocumentRequest,
+    ): Promise<Document> {
+        const source = await this.getByIdOrSlug(
+            account,
+            projectUuid,
+            documentUuidOrSlug,
+        );
+        return this.create(account, projectUuid, {
+            name: input.name,
+            description: input.description ?? source.description,
+            spaceUuid: input.spaceUuid,
+            schemaVersion: source.version.schemaVersion,
+            content: source.version.content,
+        });
+    }
+
+    async updateMetadata(
+        account: RegisteredAccount,
+        projectUuid: string,
+        documentUuid: string,
+        input: UpdateDocumentMetadataRequest,
+        { allowedSpaceUuids }: { allowedSpaceUuids?: string[] } = {},
+    ): Promise<Document> {
+        const document = await this.get(account, projectUuid, documentUuid);
+        DocumentService.assertSpaceScope(document, allowedSpaceUuids);
+        await this.assertCanUpdate(account, document);
+        DocumentService.validateMetadata(input);
+        if (Object.values(input).every((value) => value === undefined)) {
+            throw new ParameterError(
+                'At least one Document metadata field is required',
+            );
+        }
+        const updated = await this.dependencies.documentModel.updateMetadata(
+            projectUuid,
+            documentUuid,
+            { ...input, expectedSpaceUuid: document.spaceUuid },
+        );
+        return this.authorizeDocument(account, updated);
+    }
+
+    async updateContent(
+        account: RegisteredAccount,
+        projectUuid: string,
+        documentUuid: string,
+        input: DocumentContentUpdate,
+        { allowedSpaceUuids }: { allowedSpaceUuids?: string[] } = {},
+    ): Promise<Document> {
+        const document = await this.get(account, projectUuid, documentUuid);
+        DocumentService.assertSpaceScope(document, allowedSpaceUuids);
+        await this.assertCanUpdate(account, document);
+        if (document.version.versionUuid !== input.baseVersionUuid) {
+            throw new ConflictError(
+                'Document has changed. Reload it and retry with the latest version UUID',
+            );
+        }
+        const content = parseDocumentContent(
+            DOCUMENT_SCHEMA_VERSION,
+            input.content,
+        );
+        await this.validateCharts(
+            account,
+            projectUuid,
+            content,
+            document.version.content,
+        );
+        const updated = await this.dependencies.documentModel.updateContent(
+            projectUuid,
+            documentUuid,
+            { ...input, expectedSpaceUuid: document.spaceUuid },
+            account.user.userUuid,
+        );
+        return this.authorizeDocument(account, updated);
+    }
+
+    private static assertSpaceScope(
+        document: Document,
+        allowedSpaceUuids: string[] | undefined,
+    ): void {
+        if (
+            allowedSpaceUuids &&
+            allowedSpaceUuids.length > 0 &&
+            !allowedSpaceUuids.includes(document.spaceUuid)
+        ) {
+            throw new NotFoundError('Document not found');
+        }
+    }
+
+    private async assertCanUpdate(
+        account: RegisteredAccount,
+        document: Document,
+    ): Promise<void> {
+        const context =
+            await this.dependencies.spacePermissionService.resolveAccess(
+                account.user.userUuid,
+                {
+                    type: 'document',
+                    documentUuid: document.documentUuid,
+                    spaceUuid: document.spaceUuid,
+                },
+            );
+        if (
+            this.createAuditedAbility(account).cannot(
+                'update',
+                subject('Document', context),
+            )
+        ) {
+            throw new ForbiddenError(
+                'You do not have permission to edit this Document',
+            );
+        }
+    }
+
+    async moveToSpace(
+        account: RegisteredAccount,
+        {
+            projectUuid,
+            itemUuid: documentUuid,
+            targetSpaceUuid,
+        }: {
+            projectUuid: string;
+            itemUuid: string;
+            targetSpaceUuid: string | null;
+        },
+        {
+            tx,
+        }: { tx?: Knex; checkForAccess?: boolean; trackEvent?: boolean } = {},
+    ): Promise<void> {
+        if (!targetSpaceUuid) {
+            throw new ParameterError('Documents must belong to a Space');
+        }
+        const document = await this.get(account, projectUuid, documentUuid);
+        const contexts =
+            await this.dependencies.spacePermissionService.resolveAccessBatch(
+                account.user.userUuid,
+                [document.spaceUuid, targetSpaceUuid].map((spaceUuid) => ({
+                    type: 'space' as const,
+                    spaceUuid,
+                })),
+                tx ? { trx: tx } : {},
+            );
+        const ability = this.createAuditedAbility(account);
+        for (const [index, { context }] of contexts.entries()) {
+            if (
+                !context ||
+                context.projectUuid !== projectUuid ||
+                context.organizationUuid !== document.organizationUuid
+            ) {
+                throw new NotFoundError('Space not found');
+            }
+            if (
+                ability.cannot(
+                    index === 0 ? 'update' : 'create',
+                    subject('Document', context),
+                )
+            ) {
+                throw new ForbiddenError(
+                    'You must have edit access to the source Space and create access to the destination Space to move a Document',
+                );
+            }
+        }
+        await this.dependencies.documentModel.moveToSpace(
+            {
+                projectUuid,
+                documentUuid,
+                sourceSpaceUuid: document.spaceUuid,
+                targetSpaceUuid,
+            },
+            { tx },
+        );
+    }
+
+    private static validateMetadata(
+        input: UpdateDocumentMetadataRequest,
+    ): void {
+        if (
+            input.name !== undefined &&
+            (input.name.trim().length === 0 || input.name.length > 255)
+        ) {
+            throw new ParameterError(
+                'Document name must contain 1–255 characters',
+            );
+        }
+        if (
+            input.slug !== undefined &&
+            (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.slug) ||
+                input.slug.length > 255)
+        ) {
+            throw new ParameterError(
+                'Document slug must contain lowercase letters, numbers and single hyphens, up to 255 characters',
+            );
+        }
+    }
+
+    private async validateCharts(
+        account: RegisteredAccount,
+        projectUuid: string,
+        content: DocumentContent,
+        previous?: DocumentContent,
+    ): Promise<void> {
+        parseDocumentContent(DOCUMENT_SCHEMA_VERSION, content);
+        const limit = pLimit(MAX_CONCURRENT_CHART_VALIDATIONS);
+        // Compile only changed charts: narrative edits must not require chart authoring capabilities.
+        await Promise.all(
+            content.cells.map((cell, cellIndex) =>
+                limit(async () => {
+                    if (cell.type !== 'chart') {
+                        return;
+                    }
+                    if (
+                        previous?.cells.some(
+                            (previousCell) =>
+                                previousCell.type === 'chart' &&
+                                isEqual(previousCell.content, cell.content),
+                        )
+                    ) {
+                        return;
+                    }
+                    const { chart } = cell.content;
+                    if (chart.tableName !== chart.metricQuery.exploreName) {
+                        throw new ParameterError(
+                            `Chart tableName must match its exploreName in cell ${cellIndex}`,
+                        );
+                    }
+                    const metricQuery = {
+                        ...chart.metricQuery,
+                        filters: normalizeFilterIds(chart.metricQuery.filters),
+                    };
+                    if (cell.content.source === 'merge') {
+                        // Merge compilation returns join refusals but not tolerant leg compilation errors.
+                        await Promise.all(
+                            [
+                                metricQuery,
+                                ...cell.content.chart.merge.sources
+                                    .filter((source) => source.kind === 'query')
+                                    .map((source) => source.metricQuery),
+                            ].map((query) =>
+                                this.validateQuery({
+                                    account,
+                                    projectUuid,
+                                    cellIndex,
+                                    metricQuery: query,
+                                    parameters: chart.parameters,
+                                }),
+                            ),
+                        );
+                        const compiled =
+                            await this.dependencies.projectService.compileMergeQuery(
+                                {
+                                    account,
+                                    projectUuid,
+                                    mergeQuery: buildMergeQueryFromSaved(
+                                        metricQuery,
+                                        cell.content.chart.merge,
+                                    ),
+                                    parameters: chart.parameters,
+                                    userAttributeOverrides: {},
+                                },
+                            );
+                        if (compiled.errors.length > 0) {
+                            throw new ParameterError(
+                                `Invalid chart in cell ${cellIndex}: ${compiled.errors.map((error) => error.message).join('; ')}`,
+                            );
+                        }
+                        return;
+                    }
+                    await this.validateQuery({
+                        account,
+                        projectUuid,
+                        cellIndex,
+                        metricQuery,
+                        parameters: chart.parameters,
+                    });
+                }),
+            ),
+        );
+    }
+
+    private async validateQuery({
+        account,
+        projectUuid,
+        cellIndex,
+        metricQuery,
+        parameters,
+    }: {
+        account: RegisteredAccount;
+        projectUuid: string;
+        cellIndex: number;
+        metricQuery: MetricQuery;
+        parameters: ParametersValuesMap | undefined;
+    }): Promise<void> {
+        const compiled = await this.dependencies.projectService.compileQuery({
+            account,
+            projectUuid,
+            exploreName: metricQuery.exploreName,
+            body: { ...metricQuery, parameters },
+            usePreAggregateCache: false,
+        });
+        if (compiled.compilationErrors.length > 0) {
+            throw new ParameterError(
+                `Invalid chart in cell ${cellIndex}: ${compiled.compilationErrors.join('; ')}`,
+            );
+        }
+        if (compiled.missingParameterReferences.size > 0) {
+            throw new ParameterError(
+                `Missing parameters in cell ${cellIndex}: ${[...compiled.missingParameterReferences].join(', ')}`,
+            );
+        }
+    }
+
+    async list(
+        account: RegisteredAccount,
+        projectUuid: string,
+        { limit = 50, offset = 0 }: { limit?: number; offset?: number } = {},
+    ): Promise<DocumentList> {
+        if (
+            !Number.isInteger(limit) ||
+            limit < 1 ||
+            limit > 100 ||
+            !Number.isSafeInteger(offset) ||
+            offset < 0
+        ) {
+            throw new ParameterError(
+                'Document pagination requires limit 1–100 and a non-negative integer offset',
+            );
+        }
+        const project = await this.assertProjectAccess(account, projectUuid);
+        const spaceUuids =
+            await this.dependencies.documentModel.listSpaceUuids(projectUuid);
+        const access =
+            await this.dependencies.spacePermissionService.resolveAccessBatch(
+                account.user.userUuid,
+                spaceUuids.map((spaceUuid) => ({
+                    type: 'space',
+                    spaceUuid,
+                })),
+            );
+        const ability = this.createAuditedAbility(account);
+        const allowedSpaceUuids = spaceUuids.filter((_spaceUuid, index) => {
+            const context = access[index]?.context;
+            return (
+                context !== undefined &&
+                ability.can(
+                    'view',
+                    subject('Document', {
+                        ...context,
+                        organizationUuid: project.organizationUuid,
+                        projectUuid,
+                    }),
+                )
+            );
+        });
+        const shared =
+            await this.dependencies.directAccessService.findSharedWithMeUuids(
+                {
+                    userUuid: account.user.userUuid,
+                    organizationUuid: project.organizationUuid,
+                },
+                [projectUuid],
+            );
+        const allowedDocumentUuids = await this.filterViewableUuids(
+            account,
+            [projectUuid],
+            shared[DirectAccessResourceType.DOCUMENT],
+        );
+        const items = await this.dependencies.documentModel.list(projectUuid, {
+            spaceUuids: allowedSpaceUuids,
+            documentUuids: allowedDocumentUuids,
+            limit: limit + 1,
+            offset,
+        });
+        return {
+            items: items.slice(0, limit),
+            nextOffset: items.length > limit ? offset + limit : null,
+        };
+    }
+
+    async filterViewableUuids(
+        account: RegisteredAccount,
+        projectUuids: string[],
+        documentUuids: string[],
+    ): Promise<string[]> {
+        if (documentUuids.length === 0) {
+            return [];
+        }
+        const ability = this.createAuditedAbility(account);
+        const limit = pLimit(MAX_CONCURRENT_PROJECT_ACCESS_CHECKS);
+        const allowed = await Promise.all(
+            [...new Set(projectUuids)].map((projectUuid) =>
+                limit(async () => {
+                    try {
+                        await this.assertProjectAccess(account, projectUuid);
+                    } catch (error) {
+                        if (
+                            error instanceof NotFoundError ||
+                            error instanceof ForbiddenError
+                        ) {
+                            return [];
+                        }
+                        throw error;
+                    }
+                    const candidates =
+                        await this.dependencies.documentModel.listSummariesByUuid(
+                            projectUuid,
+                            documentUuids,
+                        );
+                    const contexts =
+                        await this.dependencies.spacePermissionService.resolveAccessBatch(
+                            account.user.userUuid,
+                            candidates.map((document) => ({
+                                type: 'document' as const,
+                                documentUuid: document.documentUuid,
+                                spaceUuid: document.spaceUuid,
+                            })),
+                        );
+                    return candidates
+                        .filter((document, index) => {
+                            const context = contexts[index]?.context;
+                            return (
+                                context &&
+                                context.projectUuid === document.projectUuid &&
+                                context.organizationUuid ===
+                                    document.organizationUuid &&
+                                ability.can(
+                                    'view',
+                                    subject('Document', context),
+                                )
+                            );
+                        })
+                        .map(({ documentUuid }) => documentUuid);
+                }),
+            ),
+        );
+        return allowed.flat();
+    }
+
+    async get(
+        account: RegisteredAccount,
+        projectUuid: string,
+        documentUuid: string,
+    ): Promise<Document> {
+        await this.assertProjectAccess(account, projectUuid);
+        const document = await this.dependencies.documentModel.get(
+            projectUuid,
+            documentUuid,
+        );
+        return this.authorizeDocument(account, document);
+    }
+
+    async getByIdOrSlug(
+        account: RegisteredAccount,
+        projectUuid: UUID,
+        documentUuidOrSlug: UuidOrSlug,
+    ): Promise<Document> {
+        return isUuid(documentUuidOrSlug)
+            ? this.get(account, projectUuid, documentUuidOrSlug)
+            : this.getBySlug(account, projectUuid, documentUuidOrSlug);
+    }
+
+    async getAsCode(
+        account: RegisteredAccount,
+        projectUuid: UUID,
+        documentUuidOrSlug: UuidOrSlug,
+    ): Promise<DocumentAsCode> {
+        const document = await this.getByIdOrSlug(
+            account,
+            projectUuid,
+            documentUuidOrSlug,
+        );
+        const [space] = await this.dependencies.spaceModel.find({
+            projectUuid,
+            spaceUuids: [document.spaceUuid],
+        });
+        if (!space) {
+            throw new NotFoundError('Document not found');
+        }
+        return {
+            name: document.name,
+            slug: document.slug,
+            description: document.description,
+            spaceSlug: getContentAsCodePathFromLtreePath(space.path),
+            schemaVersion: document.version.schemaVersion,
+            content: document.version.content,
+        };
+    }
+
+    async getBySlug(
+        account: RegisteredAccount,
+        projectUuid: string,
+        slug: string,
+    ): Promise<Document> {
+        await this.assertProjectAccess(account, projectUuid);
+        const document = await this.dependencies.documentModel.getBySlug(
+            projectUuid,
+            slug,
+        );
+        return this.authorizeDocument(account, document);
+    }
+
+    private async authorizeDocument(
+        account: RegisteredAccount,
+        document: Document,
+    ): Promise<Document> {
+        const context =
+            await this.dependencies.spacePermissionService.resolveAccess(
+                account.user.userUuid,
+                {
+                    type: 'document',
+                    documentUuid: document.documentUuid,
+                    spaceUuid: document.spaceUuid,
+                },
+            );
+        if (
+            this.createAuditedAbility(account).cannot(
+                'view',
+                subject('Document', {
+                    ...context,
+                    organizationUuid: document.organizationUuid,
+                    projectUuid: document.projectUuid,
+                }),
+            )
+        ) {
+            throw new NotFoundError('Document not found');
+        }
+        return {
+            ...document,
+            access: context.access.filter(
+                ({ userUuid }) => userUuid === account.user.userUuid,
+            ),
+            directAccessRoles: context.access
+                .filter(
+                    ({ userUuid, grantedVia }) =>
+                        userUuid === account.user.userUuid &&
+                        grantedVia === 'document',
+                )
+                .map(({ role }) => role),
+        };
+    }
+
+    private async assertProjectAccess(
+        account: RegisteredAccount,
+        projectUuid: string,
+    ) {
+        const project =
+            await this.dependencies.projectModel.getSummary(projectUuid);
+        if (
+            this.createAuditedAbility(account).cannot(
+                'view',
+                subject('Project', project),
+            )
+        ) {
+            throw new NotFoundError('Project not found');
+        }
+        const flag = await this.dependencies.featureFlagModel.get({
+            featureFlagId: FeatureFlags.Documents,
+            user: {
+                userUuid: account.user.userUuid,
+                organizationUuid: project.organizationUuid,
+            },
+        });
+        if (!flag.enabled) {
+            throw new ForbiddenError('Documents are not enabled');
+        }
+        return project;
+    }
+}

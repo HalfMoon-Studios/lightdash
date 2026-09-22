@@ -3,15 +3,20 @@ import {
     type DataAppVizContext,
     type DataAppVizOptionValue,
 } from '@lightdash/common';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type { Transport } from './types';
 import {
     buildVizDrillDown,
     buildVizUnderlyingData,
+    getFieldLabel,
     getFormatted,
     getRaw,
+    resolveSeriesColor,
+    resolveValueColor,
+    resolveVizFixtureUrl,
     toVizContextState,
     type DataAppVizContextMessage,
+    type VizContext,
     type VizContextOptionValue,
     type VizContextPivotDetails,
     type VizContextRow,
@@ -28,7 +33,7 @@ type IsAssignable<From, To> = From extends To ? true : false;
 
 const messageKeysMatchHost: Assert<
     Equal<
-        Exclude<keyof DataAppVizContextMessage, 'type'>,
+        Exclude<keyof DataAppVizContextMessage, 'type' | 'renderId'>,
         keyof DataAppVizContext
     >
 > = true;
@@ -44,14 +49,38 @@ const optionValueTypesMatchHost: Assert<
 const hostPayloadIsAcceptedBySdk: Assert<
     IsAssignable<
         DataAppVizContext,
-        Required<Omit<DataAppVizContextMessage, 'type'>>
+        Omit<DataAppVizContextMessage, 'type' | 'renderId'>
     >
 > = true;
+expectTypeOf<VizContext['fieldMapping']>().toEqualTypeOf<
+    Record<string, string | string[]>
+>();
+expectTypeOf<DataAppVizContextMessage['fieldMapping']>().toEqualTypeOf<
+    Record<string, string | string[]>
+>();
+expectTypeOf<Parameters<typeof getFormatted>[1]>().toEqualTypeOf<
+    string | string[] | undefined
+>();
+expectTypeOf<Parameters<typeof getRaw>[1]>().toEqualTypeOf<
+    string | string[] | undefined
+>();
+expectTypeOf<Parameters<typeof resolveValueColor>[1]>().toEqualTypeOf<
+    string | string[]
+>();
 const inboundOptionsRemainOptional: Assert<
     IsOptional<DataAppVizContextMessage, 'options'>
 > = true;
 const inboundPaletteRemainsOptional: Assert<
     IsOptional<DataAppVizContextMessage, 'colorPalette'>
+> = true;
+const inboundSeriesColorsRemainOptional: Assert<
+    IsOptional<DataAppVizContextMessage, 'seriesColors'>
+> = true;
+const inboundValueColorsRemainOptional: Assert<
+    IsOptional<DataAppVizContextMessage, 'valueColors'>
+> = true;
+const inboundFieldsRemainOptional: Assert<
+    IsOptional<DataAppVizContextMessage, 'fields'>
 > = true;
 void [
     messageKeysMatchHost,
@@ -60,6 +89,9 @@ void [
     hostPayloadIsAcceptedBySdk,
     inboundOptionsRemainOptional,
     inboundPaletteRemainsOptional,
+    inboundSeriesColorsRemainOptional,
+    inboundValueColorsRemainOptional,
+    inboundFieldsRemainOptional,
 ];
 
 const row: VizContextRow = {
@@ -69,6 +101,18 @@ const row: VizContextRow = {
 };
 
 describe('getFormatted', () => {
+    it('requires selecting a field before reading a multi-field binding', () => {
+        expect(getFormatted(row, ['orders_status'])).toBe('');
+        expect(getFormatted(row, ['orders_status', 'orders_count'])).toBe('');
+    });
+
+    it('accepts a scalar field mapping lookup', () => {
+        const fieldMapping: VizContext['fieldMapping'] = {
+            status: 'orders_status',
+        };
+        expect(getFormatted(row, fieldMapping.status)).toBe('Completed');
+    });
+
     it('returns the formatted display string for a bound field', () => {
         expect(getFormatted(row, 'orders_status')).toBe('Completed');
         expect(getFormatted(row, 'orders_count')).toBe('42');
@@ -83,6 +127,11 @@ describe('getFormatted', () => {
 });
 
 describe('getRaw', () => {
+    it('requires selecting a field before reading a multi-field binding', () => {
+        expect(getRaw(row, ['orders_status'])).toBeNull();
+        expect(getRaw(row, ['orders_status', 'orders_count'])).toBeNull();
+    });
+
     it('returns the raw value for a bound field', () => {
         expect(getRaw(row, 'orders_status')).toBe('completed');
         expect(getRaw(row, 'orders_count')).toBe(42);
@@ -96,6 +145,25 @@ describe('getRaw', () => {
     });
 });
 
+describe('getFieldLabel', () => {
+    const context = {
+        fields: { orders_total: { label: 'Total order amount' } },
+    };
+
+    it('returns the host-resolved label for a bound field', () => {
+        expect(getFieldLabel(context, 'orders_total')).toBe(
+            'Total order amount',
+        );
+    });
+
+    it('falls back to the raw field id without metadata', () => {
+        expect(getFieldLabel(context, 'orders_status')).toBe('orders_status');
+        expect(getFieldLabel({ fields: {} }, 'orders_status')).toBe(
+            'orders_status',
+        );
+    });
+});
+
 const message = (
     overrides: Partial<DataAppVizContextMessage>,
 ): DataAppVizContextMessage => ({
@@ -106,6 +174,27 @@ const message = (
 });
 
 describe('toVizContextState', () => {
+    it('preserves ordered multi-field mappings alongside scalar bindings', () => {
+        const state = toVizContextState(
+            message({
+                fieldMapping: {
+                    category: 'orders_status',
+                    values: ['orders_total', 'orders_count', 'orders_average'],
+                },
+            }),
+        );
+        expect(state.fieldMapping).toEqual({
+            category: 'orders_status',
+            values: ['orders_total', 'orders_count', 'orders_average'],
+        });
+    });
+
+    it('preserves scalar mappings delivered by older hosts', () => {
+        expect(toVizContextState(message({})).fieldMapping).toEqual({
+            category: 'orders_status',
+        });
+    });
+
     it('carries every declared option value through, by type', () => {
         expect(
             toVizContextState(
@@ -189,6 +278,38 @@ describe('toVizContextState', () => {
         ).toEqual(['#111', '#222']);
     });
 
+    it('normalizes host-resolved series and value colors', () => {
+        const state = toVizContextState(
+            message({
+                seriesColors: {
+                    count_completed: '#00ff00',
+                    invalid: 42 as never,
+                },
+                valueColors: {
+                    orders_status: {
+                        completed: '#00ff00',
+                        invalid: null as never,
+                    },
+                    invalid: [] as never,
+                },
+            }),
+        );
+
+        expect(state.seriesColors).toEqual({
+            count_completed: '#00ff00',
+        });
+        expect(state.valueColors).toEqual({
+            orders_status: { completed: '#00ff00' },
+        });
+    });
+
+    it('defaults resolved colors to empty maps for older hosts', () => {
+        const state = toVizContextState(message({}));
+
+        expect(state.seriesColors).toEqual({});
+        expect(state.valueColors).toEqual({});
+    });
+
     it('still normalises fieldMapping and rows', () => {
         expect(
             toVizContextState(
@@ -199,13 +320,55 @@ describe('toVizContextState', () => {
             ),
         ).toEqual({
             fieldMapping: {},
+            fields: {},
             rows: [],
             options: {},
             colorPalette: [],
+            seriesColors: {},
+            valueColors: {},
             pivotDetails: null,
             underlyingDataEnabled: false,
+            underlyingDataOpenEnabled: false,
             drillDownEnabled: false,
         });
+    });
+
+    it('keeps well-formed field metadata and drops malformed entries', () => {
+        const state = toVizContextState(
+            message({
+                fields: {
+                    orders_total: {
+                        label: 'Total order amount',
+                        tableLabel: 'Orders',
+                        format: { type: 'currency', currency: 'USD' },
+                    },
+                    orders_status: { label: 'Status' },
+                    no_label: { tableLabel: 'Orders' } as never,
+                    bad_format: {
+                        label: 'Bad format',
+                        format: { round: 2 } as never,
+                    },
+                    not_an_object: 'label' as never,
+                },
+            }),
+        );
+
+        expect(state.fields).toEqual({
+            orders_total: {
+                label: 'Total order amount',
+                tableLabel: 'Orders',
+                format: { type: 'currency', currency: 'USD' },
+            },
+            orders_status: { label: 'Status' },
+            bad_format: { label: 'Bad format' },
+        });
+    });
+
+    it('defaults missing field metadata to an empty map for older hosts', () => {
+        expect(toVizContextState(message({})).fields).toEqual({});
+        expect(
+            toVizContextState(message({ fields: [] as never })).fields,
+        ).toEqual({});
     });
 
     it('normalizes pivot metadata used to resolve generated columns', () => {
@@ -255,16 +418,129 @@ describe('toVizContextState', () => {
     });
 });
 
-describe('toVizContextState — underlyingData', () => {
-    it('reads enabled:true from the host push', () => {
+describe('resolveVizFixtureUrl', () => {
+    const at = (parts: { hash?: string; search?: string }) => ({
+        hash: parts.hash ?? '',
+        search: parts.search ?? '',
+        origin: 'http://127.0.0.1:5173',
+    });
+
+    it('returns null when the param is absent', () => {
+        expect(resolveVizFixtureUrl(at({}))).toBeNull();
+        expect(resolveVizFixtureUrl(at({ search: '?other=1' }))).toBeNull();
+    });
+
+    it('resolves a relative path against the page origin', () => {
         expect(
-            toVizContextState(message({ underlyingData: { enabled: true } }))
-                .underlyingDataEnabled,
-        ).toBe(true);
+            resolveVizFixtureUrl(
+                at({ search: '?vizFixture=/my-fixture.json' }),
+            ),
+        ).toBe('http://127.0.0.1:5173/my-fixture.json');
+    });
+
+    it('defaults a bare param to the conventional fixture path', () => {
+        expect(resolveVizFixtureUrl(at({ search: '?vizFixture=' }))).toBe(
+            'http://127.0.0.1:5173/viz-fixture.json',
+        );
+    });
+
+    it('prefers the hash over the search param (host-forwarded seed wins)', () => {
+        expect(
+            resolveVizFixtureUrl(
+                at({
+                    hash: '#vizFixture=/from-hash.json',
+                    search: '?vizFixture=/from-search.json',
+                }),
+            ),
+        ).toBe('http://127.0.0.1:5173/from-hash.json');
+    });
+
+    it('rejects a cross-origin fixture target', () => {
+        expect(
+            resolveVizFixtureUrl(
+                at({ search: '?vizFixture=https://evil.example/x.json' }),
+            ),
+        ).toBeNull();
+        expect(
+            resolveVizFixtureUrl(
+                at({ search: '?vizFixture=//evil.example/x' }),
+            ),
+        ).toBeNull();
+    });
+});
+
+describe('resolved color helpers', () => {
+    const context = {
+        colorPalette: ['#111111', '#222222'],
+        seriesColors: { count_completed: '#00ff00' },
+        valueColors: { orders_status: { completed: '#00ff00' } },
+    };
+
+    it('uses the host-resolved pivot-column color before the palette', () => {
+        expect(
+            resolveSeriesColor(
+                context,
+                { pivotColumnName: 'count_completed' },
+                1,
+            ),
+        ).toBe('#00ff00');
+        expect(
+            resolveSeriesColor(
+                context,
+                { pivotColumnName: 'count_pending' },
+                1,
+            ),
+        ).toBe('#222222');
+    });
+
+    it('uses the host-resolved raw-value color before the palette', () => {
+        expect(
+            resolveValueColor(context, 'orders_status', 'completed', 1),
+        ).toBe('#00ff00');
+        expect(resolveValueColor(context, 'orders_status', 'pending', 1)).toBe(
+            '#222222',
+        );
+    });
+
+    it('stringifies non-string raw values and tolerates an empty palette', () => {
+        expect(
+            resolveValueColor(
+                {
+                    colorPalette: [],
+                    seriesColors: {},
+                    valueColors: { orders_priority: { '1': '#abcdef' } },
+                },
+                'orders_priority',
+                1,
+                0,
+            ),
+        ).toBe('#abcdef');
+        expect(
+            resolveSeriesColor(
+                { colorPalette: [], seriesColors: {}, valueColors: {} },
+                { pivotColumnName: 'missing' },
+                0,
+            ),
+        ).toBeUndefined();
+    });
+});
+
+describe('toVizContextState — underlyingData', () => {
+    it('reads legacy fetch and host-dialog availability independently', () => {
+        const state = toVizContextState(
+            message({
+                underlyingData: { enabled: true, openEnabled: true },
+            }),
+        );
+        expect(state.underlyingDataEnabled).toBe(true);
+        expect(state.underlyingDataOpenEnabled).toBe(true);
     });
 
     it('defaults to disabled when the host omits underlyingData (old host)', () => {
         expect(toVizContextState(message({})).underlyingDataEnabled).toBe(
+            false,
+        );
+        expect(toVizContextState(message({})).underlyingDataOpenEnabled).toBe(
             false,
         );
     });
@@ -284,6 +560,7 @@ describe('toVizContextState — underlyingData', () => {
 
 describe('buildVizUnderlyingData', () => {
     const supportedTransport = {
+        openVizUnderlyingData: vi.fn(async () => undefined),
         getVizUnderlyingData: vi.fn(async () => ({
             rows: [],
             columns: [],
@@ -307,23 +584,27 @@ describe('buildVizUnderlyingData', () => {
     } as unknown as Transport;
 
     it('enabled only when the host pushed enabled AND the transport supports it', () => {
-        expect(buildVizUnderlyingData(true, supportedTransport).enabled).toBe(
-            true,
-        );
-        expect(buildVizUnderlyingData(false, supportedTransport).enabled).toBe(
-            false,
-        );
-        expect(buildVizUnderlyingData(true, legacyTransport).enabled).toBe(
-            false,
-        );
-        expect(buildVizUnderlyingData(true, partialTransport).enabled).toBe(
-            false,
-        );
-        expect(buildVizUnderlyingData(true, null).enabled).toBe(false);
+        expect(
+            buildVizUnderlyingData(true, true, supportedTransport).enabled,
+        ).toBe(true);
+        expect(
+            buildVizUnderlyingData(true, false, supportedTransport).enabled,
+        ).toBe(false);
+        expect(
+            buildVizUnderlyingData(true, true, legacyTransport).enabled,
+        ).toBe(false);
+        expect(
+            buildVizUnderlyingData(true, true, partialTransport).enabled,
+        ).toBe(false);
+        expect(buildVizUnderlyingData(true, true, null).enabled).toBe(false);
     });
 
     it('get() delegates to the transport with { row, metric, limit }', async () => {
-        const underlyingData = buildVizUnderlyingData(true, supportedTransport);
+        const underlyingData = buildVizUnderlyingData(
+            true,
+            true,
+            supportedTransport,
+        );
         await underlyingData.get({ row, metric: 'value', limit: 100 });
         expect(supportedTransport.getVizUnderlyingData).toHaveBeenCalledWith({
             row,
@@ -332,8 +613,29 @@ describe('buildVizUnderlyingData', () => {
         });
     });
 
+    it('keeps legacy get() available when the host cannot open its dialog', async () => {
+        const underlyingData = buildVizUnderlyingData(
+            true,
+            false,
+            supportedTransport,
+        );
+        expect(underlyingData.enabled).toBe(false);
+
+        await underlyingData.get({ row, metric: 'value' });
+
+        expect(supportedTransport.getVizUnderlyingData).toHaveBeenCalledWith({
+            row,
+            metric: 'value',
+            limit: undefined,
+        });
+    });
+
     it('download() splits the intent from the download options', async () => {
-        const underlyingData = buildVizUnderlyingData(true, supportedTransport);
+        const underlyingData = buildVizUnderlyingData(
+            true,
+            true,
+            supportedTransport,
+        );
         await underlyingData.download({
             row,
             metric: 'value',
@@ -348,9 +650,40 @@ describe('buildVizUnderlyingData', () => {
         );
     });
 
+    it('open() delegates the semantic click intent to the host', async () => {
+        const underlyingData = buildVizUnderlyingData(
+            true,
+            true,
+            supportedTransport,
+        );
+        await underlyingData.open({ row, metric: 'value' });
+        expect(supportedTransport.openVizUnderlyingData).toHaveBeenCalledWith({
+            row,
+            metric: 'value',
+        });
+    });
+
+    it('forwards the selected field id for a multi-metric slot', async () => {
+        const underlyingData = buildVizUnderlyingData(
+            true,
+            true,
+            supportedTransport,
+        );
+        await underlyingData.open({
+            row,
+            metric: 'values',
+            fieldId: 'orders_count',
+        });
+        expect(supportedTransport.openVizUnderlyingData).toHaveBeenCalledWith({
+            row,
+            metric: 'values',
+            fieldId: 'orders_count',
+        });
+    });
+
     it('get() rejects with an actionable message when the host disabled it', async () => {
         await expect(
-            buildVizUnderlyingData(false, supportedTransport).get({
+            buildVizUnderlyingData(false, true, supportedTransport).get({
                 row,
                 metric: 'value',
             }),
@@ -359,11 +692,20 @@ describe('buildVizUnderlyingData', () => {
 
     it('get() rejects with an upgrade hint on a legacy transport', async () => {
         await expect(
-            buildVizUnderlyingData(true, legacyTransport).get({
+            buildVizUnderlyingData(true, true, legacyTransport).get({
                 row,
                 metric: 'value',
             }),
         ).rejects.toThrow(/rebuild the app/i);
+    });
+
+    it('open() rejects when the host cannot own the dialog', async () => {
+        await expect(
+            buildVizUnderlyingData(true, false, supportedTransport).open({
+                row,
+                metric: 'value',
+            }),
+        ).rejects.toThrow(/not enabled/i);
     });
 });
 
@@ -416,15 +758,28 @@ describe('buildVizDrillDown', () => {
         expect(open).toHaveBeenCalledWith({ row, metric: 'value' });
     });
 
+    it('forwards a selected field id for a multi-metric slot', async () => {
+        const open = vi.fn().mockResolvedValue(undefined);
+        const row = { m: { value: { raw: 1, formatted: '1' } } };
+        await buildVizDrillDown(true, transportWith(open)).open({
+            row,
+            metric: 'values',
+            fieldId: 'orders_count',
+        });
+        expect(open).toHaveBeenCalledWith({
+            row,
+            metric: 'values',
+            fieldId: 'orders_count',
+        });
+    });
+
     it('open() rejects with clear messages when disabled or unsupported', async () => {
         await expect(
             buildVizDrillDown(false, transportWith(vi.fn())).open({
                 row: {},
                 metric: 'value',
             }),
-        ).rejects.toThrow(
-            'Drill-down is not enabled for this visualization.',
-        );
+        ).rejects.toThrow('Drill-down is not enabled for this visualization.');
         await expect(
             buildVizDrillDown(true, transportWith(undefined)).open({
                 row: {},
@@ -433,5 +788,22 @@ describe('buildVizDrillDown', () => {
         ).rejects.toThrow(
             'This SDK build predates drill-down. Rebuild the app on the current template.',
         );
+    });
+});
+
+describe('resolveValueColor multi-field bindings', () => {
+    it('requires selecting a field before resolving its value color', () => {
+        expect(
+            resolveValueColor(
+                {
+                    colorPalette: ['#123456'],
+                    seriesColors: {},
+                    valueColors: {},
+                },
+                ['orders_status'],
+                'completed',
+                0,
+            ),
+        ).toBeUndefined();
     });
 });

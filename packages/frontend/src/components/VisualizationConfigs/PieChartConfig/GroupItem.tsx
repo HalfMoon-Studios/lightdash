@@ -2,6 +2,7 @@
 
 import { type DraggableProvidedDragHandleProps } from '@hello-pangea/dnd';
 import {
+    getReadableTextColor,
     type PieChartValueLabel,
     type PieChartValueOptions,
 } from '@lightdash/common';
@@ -39,6 +40,8 @@ type GroupItemProps = {
     valueLabel: PieChartValueLabel;
     showValue: boolean;
     showPercentage: boolean;
+    valueLabelColor?: string;
+    defaultValueLabelColor?: string;
 
     granularityFields?: string[];
 
@@ -71,6 +74,8 @@ export const GroupItem = forwardRef<
             valueLabel,
             showValue,
             showPercentage,
+            valueLabelColor,
+            defaultValueLabelColor,
 
             granularityFields,
 
@@ -99,7 +104,7 @@ export const GroupItem = forwardRef<
                             onColorChange(defaultLabel, newColor)
                         }
                     />
-                    <Box style={{ flexGrow: 1 }}>
+                    <Box flex={1}>
                         <EditableText
                             placeholder={defaultLabel}
                             value={label}
@@ -113,12 +118,8 @@ export const GroupItem = forwardRef<
                         />
                     </Box>
 
-                    <Tooltip label="Override value label options" withinPortal>
-                        <ActionIcon
-                            variant="subtle"
-                            color="gray"
-                            onClick={toggle}
-                        >
+                    <Tooltip label="Override value label options">
+                        <ActionIcon onClick={toggle}>
                             <MantineIcon
                                 icon={opened ? IconChevronUp : IconChevronDown}
                             />
@@ -126,7 +127,7 @@ export const GroupItem = forwardRef<
                     </Tooltip>
                 </Group>
 
-                <Collapse in={opened}>
+                <Collapse expanded={opened}>
                     <Stack ml="xl" gap="xs" pb="xs">
                         <ValueOptions
                             valueLabel={valueLabel}
@@ -145,6 +146,19 @@ export const GroupItem = forwardRef<
                             onToggleShowPercentage={(newValue) =>
                                 onValueOptionsChange(defaultLabel, {
                                     showPercentage: newValue,
+                                })
+                            }
+                            valueLabelColor={valueLabelColor}
+                            defaultValueLabelColor={
+                                defaultValueLabelColor ??
+                                (valueLabel === 'inside' && color
+                                    ? getReadableTextColor(color)
+                                    : color)
+                            }
+                            swatches={swatches}
+                            onValueLabelColorChange={(newColor) =>
+                                onValueOptionsChange(defaultLabel, {
+                                    valueLabelColor: newColor,
                                 })
                             }
                         />

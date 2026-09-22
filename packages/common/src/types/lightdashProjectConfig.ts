@@ -30,7 +30,7 @@ export type LightdashProjectParameter = {
     label: string;
     description?: string;
     type?: 'string' | 'number' | 'date'; // defaults to 'string' for backwards compatibility
-    default?: ParameterValue;
+    default?: ParameterValue; // for `type: date`, the sentinel `today` resolves to the current date at query time
     multiple?: boolean; // the parameter input will be a multi select
     allow_custom_values?: boolean; // allows users to input custom values beyond predefined options
     options?: string[] | number[] | LightdashParameterOption[]; // hardcoded options - string/number arrays or label+value pairs
@@ -101,8 +101,16 @@ export type CustomGranularity = {
     type?: DimensionType.DATE | DimensionType.TIMESTAMP | DimensionType.STRING;
 };
 
+export type ContentAsCodeConfig = {
+    /** Track uploaded content as Git-backed for review/write-back workflows. */
+    sync?: boolean;
+    /** Directory holding charts/ and dashboards/, relative to the project dir. Defaults to `lightdash`. */
+    path?: string;
+};
+
 export type LightdashProjectConfig = {
     spotlight: SpotlightConfig;
+    content_as_code?: ContentAsCodeConfig;
     parameters?: Record<string, LightdashProjectParameter>; // keys must be ^[a-zA-Z0-9_-]+$
     warehouse?: WarehouseConfig; // Required for Lightdash-only projects (no dbt)
     defaults?: ProjectDefaults; // Project-wide defaults for various settings

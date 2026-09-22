@@ -1,7 +1,7 @@
 import type { Account } from '@lightdash/common';
 import type { NextFunction, Request, Response } from 'express';
 import express from 'express';
-import { request as httpRequest, type Server } from 'http';
+import { request as httpRequest, type Server, type ServerResponse } from 'http';
 import type { AddressInfo } from 'net';
 import { McpService } from '../ee/services/McpService/McpService';
 import mcpRouter, { extractMcpProjectUuid } from './mcpRouter';
@@ -53,7 +53,7 @@ const createAccount = (authentication: TestAuthentication) =>
         isServiceAccount: () => authentication.type === 'service-account',
     }) as unknown as Account;
 
-const createMcpService = () =>
+const createMcpService = (documentsEnabled: boolean) =>
     Object.assign(Object.create(McpService.prototype), {
         createServer: vi.fn().mockResolvedValue({ connect: vi.fn() }),
         getLegacyToolScope: vi.fn().mockResolvedValue({
@@ -63,8 +63,12 @@ const createMcpService = () =>
         isContentToolsEnabled: vi.fn().mockResolvedValue(false),
         isCreateScheduledDeliveryEnabled: vi.fn().mockResolvedValue(false),
         isEnabled: vi.fn().mockResolvedValue(true),
+        isDocumentsEnabled: vi.fn().mockResolvedValue(documentsEnabled),
+        isFilterExpressionsEnabled: vi.fn().mockResolvedValue(true),
         isRunMetricQueryEnabled: vi.fn().mockResolvedValue(false),
+        isDataAppBuildsEnabled: vi.fn().mockResolvedValue(false),
         isRunSqlEnabled: vi.fn().mockResolvedValue(false),
+        recordToolList: vi.fn(),
     }) as McpService;
 
 const servers: Server[] = [];
@@ -109,17 +113,19 @@ const sendHttpRequest = ({
 
 const requestMcp = async ({
     account,
+    documentsEnabled = false,
     method,
     path,
     requestBody,
 }: {
     account: Account;
+    documentsEnabled?: boolean;
     method: 'DELETE' | 'GET' | 'POST';
     path?: string;
     requestBody?: Record<string, unknown>;
 }) => {
     const app = express();
-    const mcpService = createMcpService();
+    const mcpService = createMcpService(documentsEnabled);
     app.use(express.json());
     app.use((request, _response, next) => {
         request.account = account;
@@ -205,6 +211,71 @@ describe('MCP router OAuth scope authorization', () => {
             expect(mcpService.isEnabled).toHaveBeenCalledOnce();
         },
     );
+});
+
+describe('MCP tool catalogue activity', () => {
+    beforeEach(() => {
+        transport.handleRequest.mockImplementation(
+            async (_request: unknown, response: ServerResponse) => {
+                response.end();
+            },
+        );
+    });
+
+    it.each([false, true])(
+        'records the catalogue served by tools/list with documents=%s',
+        async (documentsEnabled) => {
+            const { response, mcpService } = await requestMcp({
+                account: createAccount({ type: 'pat' }),
+                documentsEnabled,
+                method: 'POST',
+                requestBody: { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+            });
+
+            expect(response.status).toBe(200);
+            expect(mcpService.isDocumentsEnabled).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    userUuid: 'user-uuid',
+                    organizationUuid: 'organization-uuid',
+                }),
+            );
+            expect(mcpService.createServer).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    featureAvailability: expect.objectContaining({
+                        documentsEnabled,
+                    }),
+                }),
+            );
+            expect(mcpService.recordToolList).toHaveBeenCalledWith({
+                catalogue: {
+                    req: { pinnedProjectUuid: undefined },
+                    featureAvailability: expect.objectContaining({
+                        runSqlEnabled: false,
+                        runMetricQueryEnabled: false,
+                        filterExpressionsEnabled: true,
+                        documentsEnabled,
+                    }),
+                },
+                authInfo: expect.objectContaining({ clientId: 'API key' }),
+                durationMs: expect.any(Number),
+            });
+        },
+    );
+
+    it('does not record tool calls as a served catalogue', async () => {
+        const { mcpService } = await requestMcp({
+            account: createAccount({ type: 'pat' }),
+            method: 'POST',
+            requestBody: {
+                jsonrpc: '2.0',
+                id: 1,
+                method: 'tools/call',
+                params: { name: 'get_context', arguments: {} },
+            },
+        });
+
+        expect(mcpService.recordToolList).not.toHaveBeenCalled();
+    });
 });
 
 describe('project-scoped MCP route', () => {
@@ -301,9 +372,15 @@ describe('project-scoped MCP route', () => {
             expect.objectContaining({ userUuid: 'user-uuid' }),
             PROJECT_UUID,
         );
-        expect(mcpService.createServer).toHaveBeenCalledWith(
-            expect.objectContaining({ projectPinned: true }),
+        expect(mcpService.isFilterExpressionsEnabled).toHaveBeenCalledWith(
+            expect.objectContaining({ userUuid: 'user-uuid' }),
         );
+        expect(mcpService.createServer).toHaveBeenCalledWith({
+            req: { pinnedProjectUuid: PROJECT_UUID },
+            featureAvailability: expect.objectContaining({
+                filterExpressionsEnabled: true,
+            }),
+        });
         expect(transport.handleRequest).toHaveBeenCalledOnce();
     });
 });

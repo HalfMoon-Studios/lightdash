@@ -88,10 +88,8 @@ const GithubLoginForm: FC<{ disabled: boolean }> = ({ disabled }) => {
                             }))}
                             footer={
                                 <Tooltip
-                                    withinPortal
                                     position="left"
                                     w={300}
-                                    multiline
                                     label="Click here to open your Github installation page to add more repositories."
                                 >
                                     <Text
@@ -128,9 +126,7 @@ const GithubLoginForm: FC<{ disabled: boolean }> = ({ disabled }) => {
 
                         <Tooltip label="Refresh repositories after updating access on Github">
                             <ActionIcon
-                                variant="subtle"
-                                color="gray"
-                                mt="20px"
+                                mt="lg"
                                 onClick={() => refetchRepos()}
                                 disabled={!isValidGithubInstallation}
                             >
@@ -246,13 +242,15 @@ const GithubPersonalAccessTokenForm: FC<{ disabled: boolean }> = ({
 };
 
 const GithubForm: FC<{ disabled: boolean }> = ({ disabled }) => {
-    const { savedProject } = useProjectFormContext();
+    const { savedProject, isDbtSource } = useProjectFormContext();
     const form = useFormContext();
     const { data: githubConfig } = useGithubConfig();
 
     if (form.values.dbt.type !== DbtProjectType.GITHUB) {
         throw new Error('GithubForm can only be used for Github projects');
     }
+
+    const isNative = form.values.dbt.semanticLayer === 'lightdash';
 
     const formAuthorizationMethod = form.values.dbt?.authorization_method;
     const authorizationMethod: DbtGithubProjectConfig['authorization_method'] =
@@ -273,7 +271,40 @@ const GithubForm: FC<{ disabled: boolean }> = ({ disabled }) => {
 
     return (
         <>
-            <Stack style={{ marginTop: '8px' }}>
+            <Stack mt="xs">
+                {!isDbtSource && (
+                    <Select
+                        label="Semantic layer format"
+                        name="dbt.semanticLayer"
+                        value={form.values.dbt.semanticLayer ?? 'dbt'}
+                        allowDeselect={false}
+                        disabled={disabled}
+                        data={[
+                            { value: 'dbt', label: 'dbt' },
+                            {
+                                value: 'lightdash',
+                                label: 'Native Lightdash YAML',
+                            },
+                        ]}
+                        onChange={(value) => {
+                            if (value !== 'dbt' && value !== 'lightdash')
+                                return;
+                            if (form.values.dbt.type !== DbtProjectType.GITHUB)
+                                return;
+                            form.setFieldValue('dbt', {
+                                ...form.values.dbt,
+                                semanticLayer: value,
+                                ...(value === 'lightdash'
+                                    ? {
+                                          target: undefined,
+                                          selector: undefined,
+                                          environment: undefined,
+                                      }
+                                    : {}),
+                            });
+                        }}
+                    />
+                )}
                 <Group gap="sm">
                     <Select
                         allowDeselect={false}
@@ -328,7 +359,7 @@ const GithubForm: FC<{ disabled: boolean }> = ({ disabled }) => {
                     <GithubPersonalAccessTokenForm disabled={disabled} />
                 )}
 
-                <DbtVersionSelect disabled={disabled} />
+                {!isNative && <DbtVersionSelect disabled={disabled} />}
                 <TextInput
                     name="dbt.branch"
                     {...form.getInputProps('dbt.branch')}
@@ -355,21 +386,30 @@ const GithubForm: FC<{ disabled: boolean }> = ({ disabled }) => {
                     {...form.getInputProps('dbt.project_sub_path')}
                     label="Project directory path"
                     description={
-                        <>
-                            <p>
-                                Put <b>/</b> if your <b>dbt_project.yml</b> file
-                                is in the main folder of your repo (e.g.
-                                lightdash/lightdash-analytics/dbt_project.yml).
-                            </p>
-                            <p>
-                                Include the path to the sub-folder where your
-                                dbt project is if your dbt project is in a
-                                sub-folder in your repo. For example, if my
-                                project was in
-                                lightdash/lightdash-analytics/dbt/dbt_project.yml,
-                                I'd write <b>/dbt</b> in this field.
-                            </p>
-                        </>
+                        isNative ? (
+                            <Text size="sm">
+                                Use / for the repository root, or the
+                                subdirectory containing lightdash.config.yml and
+                                models/ (or lightdash/models/).
+                            </Text>
+                        ) : (
+                            <>
+                                <p>
+                                    Put <b>/</b> if your <b>dbt_project.yml</b>{' '}
+                                    file is in the main folder of your repo
+                                    (e.g.
+                                    lightdash/lightdash-analytics/dbt_project.yml).
+                                </p>
+                                <p>
+                                    Include the path to the sub-folder where
+                                    your dbt project is if your dbt project is
+                                    in a sub-folder in your repo. For example,
+                                    if my project was in
+                                    lightdash/lightdash-analytics/dbt/dbt_project.yml,
+                                    I'd write <b>/dbt</b> in this field.
+                                </p>
+                            </>
+                        )
                     }
                     required
                     disabled={disabled}

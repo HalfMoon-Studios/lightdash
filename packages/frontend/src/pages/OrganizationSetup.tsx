@@ -1,8 +1,11 @@
 import {
     CompleteUserSchema,
+    describeInvalidOrganizationName,
     FeatureFlags,
     getEmailDomain,
     LightdashMode,
+    sanitizeOrganizationName,
+    suggestOrganizationName,
     validateOrganizationEmailDomains,
     type HealthState,
     type OrganizationBrandColor,
@@ -16,15 +19,24 @@ import {
     Group,
     Select,
     Stack,
+    Collapse,
     Text,
     TextInput,
     Title,
 } from '@mantine/core';
-import { useForm } from '@mantine/form';
-import { zodResolver } from 'mantine-form-zod-resolver';
-import { type FC, type FormEvent, useEffect, useRef, useState } from 'react';
+import { useForm, type FormErrors } from '@mantine/form';
+import { zod4Resolver as zodResolver } from 'mantine-form-zod-resolver';
+import {
+    type ChangeEventHandler,
+    type FC,
+    type FormEvent,
+    useEffect,
+    useRef,
+    useState,
+} from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router';
 import AboutFooter from '../components/AboutFooter';
+import Callout from '../components/common/Callout';
 import { DocumentTitle } from '../components/common/DocumentTitle';
 import PageSpinner from '../components/PageSpinner';
 import { jobTitles } from '../components/UserCompletionModal/jobTitles';
@@ -39,6 +51,7 @@ import { useServerFeatureFlag } from '../hooks/useServerOrClientFeatureFlag';
 import useApp from '../providers/App/useApp';
 import useTracking from '../providers/Tracking/useTracking';
 import { EventName } from '../types/Events';
+import { inferOrganizationName } from '../utils/organizationName';
 import classes from './OrganizationSetup.module.css';
 import { OrganizationSetupPreview } from './OrganizationSetupPreview';
 
@@ -80,13 +93,6 @@ const pickTileLogo = (logos: OrganizationBrandLogo[]): string | null => {
     return dark?.url ?? neutral?.url ?? logos[0]?.url ?? null;
 };
 
-const inferOrganizationName = (domain: string): string =>
-    (domain.split('.')[0] ?? '')
-        .split(/[-_]/)
-        .filter(Boolean)
-        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(' ');
-
 const buildBrandColors = (
     selectedColor: string,
     brandColors: OrganizationBrandColor[],
@@ -102,6 +108,19 @@ const buildBrandColors = (
         ...brandColors.filter((color) => !matchesSelected(color.hex)),
     ];
 };
+
+const withOrganizationNameMessage =
+    (resolve: (values: OrganizationSetupFormValues) => FormErrors) =>
+    (values: OrganizationSetupFormValues): FormErrors => {
+        const errors = resolve(values);
+        if (!errors.organizationName) return errors;
+        return {
+            ...errors,
+            organizationName: describeInvalidOrganizationName(
+                values.organizationName,
+            ).title,
+        };
+    };
 
 type OrganizationSetupFormValues = {
     organizationName: string;
@@ -147,11 +166,20 @@ const OrganizationSetupContent: FC<OrganizationSetupContentProps> = ({
             isTrackingAnonymized: false,
             selectedColor: DEFAULT_COLOR,
         },
-        validate: zodResolver(
-            canEnterOrganizationName
-                ? CompleteUserSchema
-                : CompleteUserSchema.omit({ organizationName: true }),
+        validate: withOrganizationNameMessage(
+            zodResolver(
+                canEnterOrganizationName
+                    ? CompleteUserSchema
+                    : // Invited members join an existing org: no org name to set,
+                      // and we only ask the org creator how they heard about us.
+                      CompleteUserSchema.omit({
+                          organizationName: true,
+                          howDidYouHearAboutUs: true,
+                      }),
+            ),
         ),
+        validateInputOnBlur: ['organizationName'],
+        clearInputErrorOnChange: false,
     });
 
     const { track } = useTracking();
@@ -173,13 +201,18 @@ const OrganizationSetupContent: FC<OrganizationSetupContentProps> = ({
         const detected = brandColorsSorted(brand.colors);
         setValues((current) => ({
             ...(brand.name && !isDirty('organizationName')
-                ? { organizationName: brand.name }
+                ? {
+                      organizationName: sanitizeOrganizationName(
+                          brand.name,
+                          inferOrganizationName(emailDomain),
+                      ),
+                  }
                 : {}),
             ...(current.selectedColor === DEFAULT_COLOR && detected[0]
                 ? { selectedColor: detected[0] }
                 : {}),
         }));
-    }, [brandDetection.data, isDirty, setValues]);
+    }, [brandDetection.data, emailDomain, isDirty, setValues]);
 
     const hasTrackedBrandDetection = useRef(false);
     useEffect(() => {
@@ -236,7 +269,7 @@ const OrganizationSetupContent: FC<OrganizationSetupContentProps> = ({
         event.preventDefault();
 
         if (isWorkspaceStep) {
-            if (!form.values.organizationName.trim()) return;
+            if (form.validateField('organizationName').hasError) return;
 
             track({
                 name: EventName.ORGANIZATION_SETUP_STEP_COMPLETED,
@@ -247,7 +280,12 @@ const OrganizationSetupContent: FC<OrganizationSetupContentProps> = ({
         }
 
         const result = form.validate();
-        if (result.hasErrors) return;
+        if (result.hasErrors) {
+            if (showWorkspaceStep && 'organizationName' in result.errors) {
+                setStep(1);
+            }
+            return;
+        }
 
         const values = form.values;
 
@@ -262,7 +300,6 @@ const OrganizationSetupContent: FC<OrganizationSetupContentProps> = ({
             // rights to change), so don't attempt to save it.
             completeMutation.mutate({
                 jobTitle: values.jobTitle,
-                howDidYouHearAboutUs: values.howDidYouHearAboutUs.trim(),
                 enableEmailDomainAccess: values.enableEmailDomainAccess,
                 isMarketingOptedIn: values.isMarketingOptedIn,
                 isTrackingAnonymized: values.isTrackingAnonymized,
@@ -296,6 +333,29 @@ const OrganizationSetupContent: FC<OrganizationSetupContentProps> = ({
                 ),
                 fonts: detectedBrand?.fonts ?? [],
             });
+        }
+    };
+
+    const hasNameError = Boolean(form.errors.organizationName);
+    const nameMessage = hasNameError
+        ? describeInvalidOrganizationName(form.values.organizationName)
+        : null;
+    const nameSuggestion = hasNameError
+        ? suggestOrganizationName(form.values.organizationName)
+        : null;
+    const applyNameSuggestion = () => {
+        if (!nameSuggestion) return;
+        form.setFieldValue('organizationName', nameSuggestion);
+        form.clearFieldError('organizationName');
+    };
+
+    const organizationNameInputProps = form.getInputProps('organizationName');
+    const handleOrganizationNameChange: ChangeEventHandler<HTMLInputElement> = (
+        event,
+    ) => {
+        organizationNameInputProps.onChange?.(event);
+        if (form.errors.organizationName) {
+            form.validateField('organizationName');
         }
     };
 
@@ -335,8 +395,40 @@ const OrganizationSetupContent: FC<OrganizationSetupContentProps> = ({
                                     placeholder="Acme Analytics"
                                     size="md"
                                     required
-                                    {...form.getInputProps('organizationName')}
+                                    {...organizationNameInputProps}
+                                    onChange={handleOrganizationNameChange}
+                                    error={hasNameError}
                                 />
+
+                                <Collapse
+                                    expanded={hasNameError}
+                                    transitionDuration={200}
+                                >
+                                    {hasNameError && nameMessage && (
+                                        <Callout
+                                            variant="danger"
+                                            title={nameMessage.title}
+                                        >
+                                            <Text size="sm">
+                                                {nameMessage.body}
+                                            </Text>
+                                            {nameSuggestion && (
+                                                <Group mt="xs">
+                                                    <Button
+                                                        variant="default"
+                                                        size="compact-sm"
+                                                        type="button"
+                                                        onClick={
+                                                            applyNameSuggestion
+                                                        }
+                                                    >
+                                                        {`Use "${nameSuggestion}"`}
+                                                    </Button>
+                                                </Group>
+                                            )}
+                                        </Callout>
+                                    )}
+                                </Collapse>
 
                                 <Divider />
 
@@ -375,8 +467,8 @@ const OrganizationSetupContent: FC<OrganizationSetupContentProps> = ({
                                                     />
                                                 ) : (
                                                     <Text
-                                                        fw={700}
-                                                        fz={20}
+                                                        fw={600}
+                                                        fz="xl"
                                                         c="white"
                                                     >
                                                         {logoTileInitial}
@@ -414,7 +506,6 @@ const OrganizationSetupContent: FC<OrganizationSetupContentProps> = ({
                                 <Group>
                                     <Button
                                         type="submit"
-                                        color="dark"
                                         size="md"
                                         disabled={
                                             !form.values.organizationName.trim()
@@ -452,15 +543,17 @@ const OrganizationSetupContent: FC<OrganizationSetupContentProps> = ({
                                     {...form.getInputProps('jobTitle')}
                                 />
 
-                                <TextInput
-                                    label="How did you hear about us?"
-                                    placeholder="Google, a colleague, a podcast..."
-                                    size="md"
-                                    required
-                                    {...form.getInputProps(
-                                        'howDidYouHearAboutUs',
-                                    )}
-                                />
+                                {canEnterOrganizationName && (
+                                    <TextInput
+                                        label="How did you hear about us?"
+                                        placeholder="Google, a colleague, a podcast..."
+                                        size="md"
+                                        required
+                                        {...form.getInputProps(
+                                            'howDidYouHearAboutUs',
+                                        )}
+                                    />
+                                )}
 
                                 <Stack gap="xs">
                                     {canEnableEmailDomainAccess && (
@@ -506,7 +599,6 @@ const OrganizationSetupContent: FC<OrganizationSetupContentProps> = ({
                                     )}
                                     <Button
                                         type="submit"
-                                        color="dark"
                                         size="md"
                                         loading={completeMutation.isLoading}
                                         disabled={!form.values.jobTitle}

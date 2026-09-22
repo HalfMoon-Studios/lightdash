@@ -3,6 +3,7 @@ import {
     FeatureFlags,
     type ApiAppVersionSummary,
     type ApiGetAppResponse,
+    type SdkFeature,
 } from '@lightdash/common';
 import { fireEvent, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
@@ -15,7 +16,10 @@ import { useCanCreateDataApp } from '../features/apps/hooks/useCanCreateDataApp'
 import { useCanEditDataApp } from '../features/apps/hooks/useCanEditDataApp';
 import { useClarificationRound } from '../features/apps/hooks/useClarificationRound';
 import { useGetApp } from '../features/apps/hooks/useGetApp';
-import { useSdkUpgradeStatus } from '../features/apps/hooks/useSdkUpgradeStatus';
+import {
+    useSdkUpgradeStatus,
+    type SdkUpgradeOffer,
+} from '../features/apps/hooks/useSdkUpgradeStatus';
 import { useUpgradeApp } from '../features/apps/hooks/useUpgradeApp';
 import { appVersion } from '../features/apps/testing/appVersionHistory';
 import { useDataAppVisualization } from '../features/chartTypes/hooks/useDataAppVisualization';
@@ -23,12 +27,20 @@ import { useDataAppVizBuild } from '../features/chartTypes/hooks/useDataAppVizBu
 import { type VizBuildRequest } from '../features/chartTypes/hooks/useDataAppVizBuild';
 import { clarificationStub } from '../features/chartTypes/testing/clarificationRoundStub';
 import { buildStub } from '../features/chartTypes/testing/dataAppVizBuildStub';
+import { useExplores } from '../hooks/useExplores';
 import { useServerFeatureFlag } from '../hooks/useServerOrClientFeatureFlag';
 import { renderWithProviders } from '../testing/testUtils';
 import ChartTypeBuilder from './ChartTypeBuilder';
 
 vi.mock('../hooks/useServerOrClientFeatureFlag', () => ({
     useServerFeatureFlag: vi.fn(),
+}));
+vi.mock('../hooks/useExplores', () => ({ useExplores: vi.fn() }));
+vi.mock('../hooks/useProjectRoute', () => ({
+    useOptionalProjectRoute: () => ({ projectUrlIdentifier: 'jaffle-shop' }),
+}));
+vi.mock('../hooks/useProjectUuid', () => ({
+    useProjectUuid: () => 'p1',
 }));
 vi.mock('../features/apps/hooks/useCanCreateDataApp', () => ({
     useCanCreateDataApp: vi.fn(),
@@ -169,6 +181,9 @@ const appMeta = (overrides: Partial<AppMeta> = {}): AppMeta =>
         versions: [],
         hasMore: false,
         latestReadyVersion: 1,
+        registrySlug: null,
+        icon: null,
+        verification: null,
         ...overrides,
     }) as AppMeta;
 
@@ -181,6 +196,7 @@ const historyStub = (
     latest: versions.length ? versions[0] : null,
     latestReadyVersion,
     hasOrigin: versions.some((v) => v.version === 1),
+    currentThreadNumber: null,
     hasEarlier: false,
     isLoading: false,
     isError: false,
@@ -213,7 +229,7 @@ const builderRoutes = (path: string) => (
                 element={<ChartTypeBuilder />}
             />
             <Route
-                path="/projects/:projectUuid/gallery"
+                path="/projects/:projectUuid/chart-types"
                 element={<div>gallery</div>}
             />
             <Route
@@ -245,31 +261,29 @@ const mockedClarificationRound = vi.mocked(
     useClarificationRound<VizBuildRequest>,
 );
 
-const staleUpgradeOffer = {
-    status: 'stale' as const,
-    newFeatures: [
-        {
-            key: 'metric-filters',
-            label: 'Metric filters',
-            description: 'Filter grouped results by metric values.',
-            wiring: 'Pass metric filters to the query builder.',
-        },
-    ],
-    candidateFeatures: [
-        {
-            key: 'metric-filters',
-            label: 'Metric filters',
-            description: 'Filter grouped results by metric values.',
-            wiring: 'Pass metric filters to the query builder.',
-        },
-    ],
+const underlyingDataFeature: SdkFeature = {
+    key: 'viz-underlying-data',
+    label: 'View underlying data',
+    description: 'Open the raw result rows behind a clicked data point.',
+    appliesTo: ['chart_type'],
+    wiring: 'Show the action menu when underlyingData.enabled.',
+};
+
+const staleUpgradeOffer: SdkUpgradeOffer = {
+    status: 'stale',
+    newFeatures: [underlyingDataFeature],
+    candidateFeatures: [underlyingDataFeature],
     reportedSdkVersion: '1.68.0',
-    reportedFeatures: ['query'],
+    reportedFeatures: ['viz-context'],
 };
 
 describe('ChartTypeBuilder', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        vi.mocked(useExplores).mockReturnValue({
+            data: [{ name: 'orders', label: 'Orders' }],
+            isInitialLoading: false,
+        } as unknown as ReturnType<typeof useExplores>);
         setFlag(true);
         vi.mocked(useCanCreateDataApp).mockReturnValue(true);
         vi.mocked(useCanEditDataApp).mockReturnValue(true);
@@ -314,6 +328,34 @@ describe('ChartTypeBuilder', () => {
         expect(screen.getByText('Chart type not found')).toBeInTheDocument();
     });
 
+    it('resolves an edit route by slug', () => {
+        setApp(appMeta());
+
+        renderBuilder('/projects/p1/chart-types/stream-graph');
+
+        expect(useGetApp).toHaveBeenCalledWith('p1', 'stream-graph');
+        expect(screen.getByText('Stream graph')).toBeInTheDocument();
+        expect(
+            screen.getByText('Chart Studio', { exact: true }),
+        ).toBeInTheDocument();
+    });
+
+    it.each(['', '   '])(
+        'omits an unnamed chart type from the header (%j)',
+        (name) => {
+            setApp(appMeta({ name }));
+            renderBuilder('/projects/p1/chart-types/stream-graph');
+
+            expect(screen.queryByText(/Untitled/)).not.toBeInTheDocument();
+            expect(
+                screen.queryByRole('heading', { level: 6 }),
+            ).not.toBeInTheDocument();
+            expect(
+                screen.getByRole('button', { name: 'Edit chart type details' }),
+            ).toBeInTheDocument();
+        },
+    );
+
     it('hands non-viz apps to the app builder', () => {
         setApp(appMeta({ template: 'dashboard' as AppMeta['template'] }));
         renderBuilder(
@@ -333,10 +375,40 @@ describe('ChartTypeBuilder', () => {
         expect(screen.getByText('gallery')).toBeInTheDocument();
     });
 
+    it('sends an official (registry-installed) chart type back to the gallery', () => {
+        setApp(appMeta({ registrySlug: 'radial-gauge' }));
+        renderBuilder(
+            '/projects/p1/chart-types/1e9a3b2c-0000-4000-8000-000000000001',
+        );
+
+        expect(screen.getByText('gallery')).toBeInTheDocument();
+    });
+
     it('starts the create flow with a prompt and nothing else', () => {
         renderBuilder('/projects/p1/chart-types/new');
 
-        expect(screen.getByText('Start with a prompt')).toBeInTheDocument();
+        expect(
+            screen.queryByText('Chart Studio', { exact: true }),
+        ).not.toBeInTheDocument();
+        expect(
+            screen.getByText(
+                'Describe the chart you’ve always wanted, or start from an example.',
+            ),
+        ).toBeInTheDocument();
+
+        expect(
+            screen.queryByText('Untitled chart type'),
+        ).not.toBeInTheDocument();
+
+        expect(
+            screen.getByRole('heading', {
+                name: 'Create with Chart Studio',
+                level: 1,
+            }),
+        ).toBeInTheDocument();
+        expect(
+            screen.queryByText('Start with a prompt'),
+        ).not.toBeInTheDocument();
         expect(
             screen.getByPlaceholderText('Describe a new chart type…'),
         ).toBeInTheDocument();
@@ -450,7 +522,7 @@ describe('ChartTypeBuilder', () => {
         renderBuilder(`/projects/p1/chart-types/new${search}`);
 
         expect(screen.getByTestId('location')).toHaveTextContent(
-            `/projects/p1/chart-types/1e9a3b2c-0000-4000-8000-000000000009${search}`,
+            `/projects/jaffle-shop/chart-types/1e9a3b2c-0000-4000-8000-000000000009${search}`,
         );
     });
 
@@ -536,24 +608,29 @@ describe('ChartTypeBuilder', () => {
         );
         renderBuilder(`/projects/p1/chart-types/${dataAppVizUuid}`);
 
-        expect(screen.getByRole('link', { name: 'Gallery' })).toHaveAttribute(
-            'href',
-            '/projects/p1/gallery',
+        expect(
+            screen.getByRole('link', { name: 'Chart types' }),
+        ).toHaveAttribute('href', '/projects/jaffle-shop/chart-types');
+        fireEvent.click(
+            screen.getByRole('button', { name: 'Preview in explorer' }),
         );
-        const previewLink = screen.getByRole('link', {
-            name: 'Preview in explorer',
-        });
-        expect(previewLink).toHaveAttribute(
-            'href',
-            `/projects/p1/tables?dataAppVizUuid=${dataAppVizUuid}`,
-        );
-
-        fireEvent.click(previewLink);
-
+        expect(
+            screen.getByRole('dialog', { name: 'Preview in explorer' }),
+        ).toBeInTheDocument();
         expect(screen.getByTestId('location')).toHaveTextContent(
-            `/projects/p1/tables?dataAppVizUuid=${dataAppVizUuid}`,
+            `/projects/p1/chart-types/${dataAppVizUuid}`,
         );
-        expect(screen.getByText('table-picker')).toBeInTheDocument();
+        expect(
+            screen.getByRole('button', { name: 'Open in explorer' }),
+        ).toBeDisabled();
+        fireEvent.click(screen.getByPlaceholderText('Select a table'));
+        fireEvent.click(screen.getByText('Orders'));
+        fireEvent.click(
+            screen.getByRole('button', { name: 'Open in explorer' }),
+        );
+        expect(screen.getByTestId('location')).toHaveTextContent(
+            `/projects/p1/tables/orders?dataAppVizUuid=${dataAppVizUuid}&chartSidebar=configure`,
+        );
     });
 
     it('treats malformed Explorer state as a standalone builder session', () => {
@@ -563,10 +640,9 @@ describe('ChartTypeBuilder', () => {
             '/projects/p1/chart-types/1e9a3b2c-0000-4000-8000-000000000001?create_saved_chart_version=not-json',
         );
 
-        expect(screen.getByRole('link', { name: 'Gallery' })).toHaveAttribute(
-            'href',
-            '/projects/p1/gallery',
-        );
+        expect(
+            screen.getByRole('link', { name: 'Chart types' }),
+        ).toHaveAttribute('href', '/projects/jaffle-shop/chart-types');
     });
 
     it('keeps a drafted follow-up when the create route adopts the app', () => {
@@ -714,7 +790,9 @@ describe('ChartTypeBuilder', () => {
                 name: 'Resize version history',
             }),
         ).toBeInTheDocument();
-        expect(screen.getByLabelText('View v1')).toBeInTheDocument();
+        expect(
+            screen.getByRole('button', { name: 'Preview' }),
+        ).toBeInTheDocument();
     });
 
     it('offers the preview SDK upgrade and opens history after starting it', () => {
@@ -773,17 +851,19 @@ describe('ChartTypeBuilder', () => {
             vi.mocked(useSdkUpgradeStatus).mock.lastCall?.[0];
 
         expect(keyedToLatestReady()).toEqual({
+            target: 'chart_type',
             bundleKey: 'viz-1:2',
             renderedKey: 'viz-1:2',
             isRendering: true,
         });
 
         fireEvent.click(screen.getByText('History'));
-        fireEvent.click(screen.getByLabelText('View v1'));
+        fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
 
         // An upgrade always rebuilds from v2, so the offer keeps describing
         // it; the v1 bundle on screen must not be classified in its place.
         expect(keyedToLatestReady()).toEqual({
+            target: 'chart_type',
             bundleKey: 'viz-1:2',
             renderedKey: 'viz-1:1',
             isRendering: false,
@@ -825,12 +905,12 @@ describe('ChartTypeBuilder', () => {
         );
 
         fireEvent.click(screen.getByText('History'));
-        fireEvent.click(screen.getByLabelText('View v1'));
+        fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
         expect(screen.getByTestId('app-preview')).toHaveTextContent(
             'preview-v1',
         );
 
-        fireEvent.click(screen.getByLabelText('Close history'));
+        fireEvent.click(screen.getByLabelText('Collapse version history'));
         expect(screen.queryByLabelText('Version history')).toBeNull();
         expect(screen.getByTestId('app-preview')).toHaveTextContent(
             'preview-v2',
@@ -883,7 +963,7 @@ describe('ChartTypeBuilder', () => {
         expect(screen.getByLabelText('Show markers')).toBeInTheDocument();
 
         fireEvent.click(screen.getByText('History'));
-        fireEvent.click(screen.getByLabelText('View v1'));
+        fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
 
         // The uuid comes from the loaded app row, the version from the pin.
         expect(vi.mocked(useDataAppVisualization)).toHaveBeenLastCalledWith(
@@ -894,7 +974,7 @@ describe('ChartTypeBuilder', () => {
         expect(screen.getByLabelText('Show grid')).toBeInTheDocument();
         expect(screen.queryByLabelText('Show markers')).toBeNull();
 
-        fireEvent.click(screen.getByLabelText('Close history'));
+        fireEvent.click(screen.getByLabelText('Collapse version history'));
         expect(screen.getByLabelText('Show markers')).toBeInTheDocument();
         expect(screen.queryByLabelText('Show grid')).toBeNull();
     });
@@ -916,8 +996,8 @@ describe('ChartTypeBuilder', () => {
         expect(screen.getByLabelText('Show markers')).not.toBeChecked();
 
         fireEvent.click(screen.getByText('History'));
-        fireEvent.click(screen.getByLabelText('View v1'));
-        fireEvent.click(screen.getByLabelText('Close history'));
+        fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+        fireEvent.click(screen.getByLabelText('Collapse version history'));
 
         expect(screen.getByLabelText('Show markers')).not.toBeChecked();
     });

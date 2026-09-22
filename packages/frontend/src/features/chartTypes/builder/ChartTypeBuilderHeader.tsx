@@ -20,12 +20,15 @@ import { Link, type To } from 'react-router';
 import MantineIcon from '../../../components/common/MantineIcon';
 import AppUpdateModal from '../../../components/common/modal/AppUpdateModal';
 import AppUpgradeModal from '../../apps/components/AppUpgradeModal';
+import ClearAgentContextAction from '../../apps/components/ClearAgentContextAction';
 import { type SdkUpgradeOffer } from '../../apps/hooks/useSdkUpgradeStatus';
+import { getChartTypeIcon } from '../utils/chartTypeIcons';
 import { type ChartTypeAppMeta } from './appMeta';
 import classes from './ChartTypeBuilderHeader.module.css';
 
 type Props = {
     projectUuid: string;
+    appUuidOrSlug?: string;
     backLink: {
         label: string;
         to: To;
@@ -36,28 +39,35 @@ type Props = {
     /** False while the visualization has no versions to look back through. */
     hasHistory: boolean;
     isHistoryOpen: boolean;
+    /** Clearing agent context is refused while a build runs. */
+    isBuilding: boolean;
     upgrade: (SdkUpgradeOffer & { disabled: boolean }) | null;
     onUpgradeStarted: () => void;
     onToggleHistory: () => void;
     previewInExplorerLink: To | null;
+    onPreviewInExplorer: (() => void) | null;
 };
 
 const ChartTypeBuilderHeader: FC<Props> = ({
     projectUuid,
+    appUuidOrSlug,
     backLink,
     app,
     latestReadyVersion,
     hasHistory,
     isHistoryOpen,
+    isBuilding,
     upgrade,
     onUpgradeStarted,
     onToggleHistory,
     previewInExplorerLink,
+    onPreviewInExplorer,
 }) => {
     const [isEditingDetails, setIsEditingDetails] = useState(false);
     const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
     const upgradeAvailable =
         upgrade?.status === 'stale' || upgrade?.status === 'legacy';
+    const hasName = !!app?.name.trim();
 
     return (
         <Box className={classes.header} component="header">
@@ -73,29 +83,39 @@ const ChartTypeBuilderHeader: FC<Props> = ({
                 >
                     {backLink.label}
                 </Button>
-                <Box className={classes.divider} />
-                <Box className={classes.nameCluster}>
-                    {app ? (
-                        <>
-                            <Title
-                                className={classes.name}
-                                order={6}
-                                c="ldDark.9"
-                                fw={600}
-                                lineClamp={1}
-                            >
-                                {getAppDisplayName(app.name, app.appUuid)}
-                            </Title>
+                {app && (
+                    <>
+                        <Text
+                            className={classes.studioLabel}
+                            fz="sm"
+                            fw={600}
+                            c="ldGray.8"
+                        >
+                            Chart Studio
+                        </Text>
+                        {hasName && <Box className={classes.divider} />}
+                        <Box className={classes.nameCluster}>
+                            {hasName && (
+                                <>
+                                    <MantineIcon
+                                        icon={getChartTypeIcon(app.icon)}
+                                        color="dimmed"
+                                    />
+                                    <Title
+                                        className={classes.name}
+                                        order={6}
+                                        lineClamp={1}
+                                    >
+                                        {getAppDisplayName(
+                                            app.name,
+                                            app.appUuid,
+                                        )}
+                                    </Title>
+                                </>
+                            )}
                             {app.description && (
-                                <Tooltip
-                                    withArrow
-                                    multiline
-                                    w={280}
-                                    label={app.description}
-                                >
+                                <Tooltip w={280} label={app.description}>
                                     <ActionIcon
-                                        variant="subtle"
-                                        color="gray"
                                         size="sm"
                                         aria-label="Chart type description"
                                     >
@@ -103,10 +123,8 @@ const ChartTypeBuilderHeader: FC<Props> = ({
                                     </ActionIcon>
                                 </Tooltip>
                             )}
-                            <Tooltip withArrow label="Edit details">
+                            <Tooltip label="Edit details">
                                 <ActionIcon
-                                    variant="subtle"
-                                    color="gray"
                                     size="sm"
                                     aria-label="Edit chart type details"
                                     onClick={() => setIsEditingDetails(true)}
@@ -114,18 +132,9 @@ const ChartTypeBuilderHeader: FC<Props> = ({
                                     <MantineIcon icon={IconPencil} />
                                 </ActionIcon>
                             </Tooltip>
-                        </>
-                    ) : (
-                        <Text
-                            className={classes.name}
-                            fz="sm"
-                            fw={600}
-                            c="dimmed"
-                        >
-                            Untitled chart type
-                        </Text>
-                    )}
-                </Box>
+                        </Box>
+                    </>
+                )}
             </Box>
             <Group gap="xs" wrap="nowrap">
                 {upgradeAvailable && (
@@ -142,6 +151,13 @@ const ChartTypeBuilderHeader: FC<Props> = ({
                         Upgrade available
                     </Button>
                 )}
+                {app && (
+                    <ClearAgentContextAction
+                        projectUuid={projectUuid}
+                        appUuid={app.appUuid}
+                        disabled={isBuilding}
+                    />
+                )}
                 {hasHistory && (
                     <Button
                         size="xs"
@@ -155,15 +171,20 @@ const ChartTypeBuilderHeader: FC<Props> = ({
                         History
                     </Button>
                 )}
-                {latestReadyVersion !== null && previewInExplorerLink && (
-                    <Button
-                        size="xs"
-                        component={Link}
-                        to={previewInExplorerLink}
-                    >
-                        Preview in explorer
-                    </Button>
-                )}
+                {latestReadyVersion !== null &&
+                    (previewInExplorerLink ? (
+                        <Button
+                            size="xs"
+                            component={Link}
+                            to={previewInExplorerLink}
+                        >
+                            Preview in explorer
+                        </Button>
+                    ) : onPreviewInExplorer ? (
+                        <Button size="xs" onClick={onPreviewInExplorer}>
+                            Preview in explorer
+                        </Button>
+                    ) : null)}
             </Group>
             {app && isEditingDetails && (
                 <AppUpdateModal
@@ -172,10 +193,12 @@ const ChartTypeBuilderHeader: FC<Props> = ({
                     onConfirm={() => setIsEditingDetails(false)}
                     projectUuid={projectUuid}
                     uuid={app.appUuid}
+                    appUuidOrSlug={appUuidOrSlug}
                     initialName={getAppDisplayName(app.name, app.appUuid)}
                     initialDescription={app.description}
                     resourceLabel="Chart Type"
                     icon={IconPencil}
+                    iconPicker={{ initialIcon: app.icon }}
                 />
             )}
             {app && upgrade && isUpgradeModalOpen && (

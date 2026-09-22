@@ -69,6 +69,7 @@ function buildService() {
         analytics: { track: vi.fn() } as never,
         analyticsModel: {} as never,
         catalogModel: { getCatalogItemsSummary } as never,
+        userModel: {} as never,
         appModel: {} as never,
         featureFlagModel: {
             get: vi.fn().mockResolvedValue({ enabled: true }),
@@ -102,6 +103,14 @@ function buildService() {
                 .fn()
                 .mockResolvedValue({ defaultProvider: 'openai' }),
             resolveFastModel,
+        } as never,
+        sandboxManager: null,
+        appRuntimeS3: null,
+        chartRegistryClient: {} as never,
+        contentVerificationModel: {
+            getByContent: async () => null,
+            verify: async () => undefined,
+            unverify: async () => undefined,
         } as never,
     });
     // Bypass real CASL — the prompt/context selection is what these tests cover.

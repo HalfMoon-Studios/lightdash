@@ -9,16 +9,6 @@ export interface ArtifactData {
     agentUuid: string;
 }
 
-export interface AiArtifactState {
-    artifact: ArtifactData | null;
-    savedChart: SavedChartPreviewData | null;
-}
-
-const initialState: AiArtifactState = {
-    artifact: null,
-    savedChart: null,
-};
-
 export interface SavedChartPreviewData {
     savedChartUuid: string;
     messageUuid: string;
@@ -27,63 +17,110 @@ export interface SavedChartPreviewData {
     agentUuid: string;
 }
 
+export interface DataAppPreviewData {
+    appUuid: string;
+    messageUuid: string;
+    threadUuid: string;
+    projectUuid: string;
+    agentUuid: string;
+    /** null means the app's latest ready version. */
+    version: number | null;
+    /** Latest ready version at open; a newer one landing moves to latest. */
+    latestReadyVersionAtOpen: number | null;
+}
+
+export type DataAppPreviewVersion = Pick<
+    DataAppPreviewData,
+    'version' | 'latestReadyVersionAtOpen'
+>;
+
+export type AiPreview =
+    | ({ type: 'artifact' } & ArtifactData)
+    | ({ type: 'savedChart' } & SavedChartPreviewData)
+    | ({ type: 'dataApp' } & DataAppPreviewData);
+
+export interface AiArtifactState {
+    preview: AiPreview | null;
+    elementPickerThreadUuid: string | null;
+}
+
+const initialState: AiArtifactState = {
+    preview: null,
+    elementPickerThreadUuid: null,
+};
+
 export const aiArtifactSlice = createSlice({
     name: 'aiArtifact',
     initialState,
     reducers: {
-        setArtifact: (
-            state,
-            action: PayloadAction<{
-                artifactUuid: string;
-                versionUuid: string;
-                messageUuid: string;
-                threadUuid: string;
-                projectUuid: string;
-                agentUuid: string;
-            }>,
-        ) => {
-            const {
-                artifactUuid,
-                versionUuid,
-                messageUuid,
-                threadUuid,
-                projectUuid,
-                agentUuid,
-            } = action.payload;
-            state.artifact = {
-                artifactUuid,
-                versionUuid,
-                messageUuid,
-                threadUuid,
-                projectUuid,
-                agentUuid,
-            };
-            state.savedChart = null;
-        },
-        setSavedChartPreview: (
-            state,
-            action: PayloadAction<SavedChartPreviewData>,
-        ) => {
-            state.savedChart = action.payload;
-            state.artifact = null;
-        },
-        clearArtifact: (state) => {
-            state.artifact = null;
-        },
-        clearSavedChartPreview: (state) => {
-            state.savedChart = null;
+        setPreview: (state, action: PayloadAction<AiPreview>) => {
+            state.preview = action.payload;
+            state.elementPickerThreadUuid = null;
         },
         clearPreview: (state) => {
-            state.artifact = null;
-            state.savedChart = null;
+            state.preview = null;
+            state.elementPickerThreadUuid = null;
+        },
+        setElementPickerEnabled: (
+            state,
+            action: PayloadAction<{ threadUuid: string; enabled: boolean }>,
+        ) => {
+            const { threadUuid, enabled } = action.payload;
+            if (enabled) {
+                state.elementPickerThreadUuid = threadUuid;
+            } else if (state.elementPickerThreadUuid === threadUuid) {
+                state.elementPickerThreadUuid = null;
+            }
+        },
+        setDataAppPreviewVersion: (
+            state,
+            action: PayloadAction<DataAppPreviewVersion>,
+        ) => {
+            if (state.preview?.type !== 'dataApp') return;
+            state.preview.version = action.payload.version;
+            state.preview.latestReadyVersionAtOpen =
+                action.payload.latestReadyVersionAtOpen;
         },
     },
 });
 
 export const {
-    setArtifact,
-    setSavedChartPreview,
-    clearArtifact,
-    clearSavedChartPreview,
+    setPreview,
     clearPreview,
+    setDataAppPreviewVersion,
+    setElementPickerEnabled,
 } = aiArtifactSlice.actions;
+
+type StateWithAiArtifact = { aiArtifact: AiArtifactState };
+
+export const selectPreview = (state: StateWithAiArtifact) =>
+    state.aiArtifact.preview;
+
+// A preview belongs to one thread; pages that show none pass [].
+export const selectPreviewForThreads =
+    (threadUuids: readonly string[]) =>
+    (state: StateWithAiArtifact): AiPreview | null => {
+        const { preview } = state.aiArtifact;
+        return preview !== null && threadUuids.includes(preview.threadUuid)
+            ? preview
+            : null;
+    };
+
+export const selectArtifactPreview = (state: StateWithAiArtifact) =>
+    state.aiArtifact.preview?.type === 'artifact'
+        ? state.aiArtifact.preview
+        : null;
+
+export const selectSavedChartPreview = (state: StateWithAiArtifact) =>
+    state.aiArtifact.preview?.type === 'savedChart'
+        ? state.aiArtifact.preview
+        : null;
+
+export const selectDataAppPreview = (state: StateWithAiArtifact) =>
+    state.aiArtifact.preview?.type === 'dataApp'
+        ? state.aiArtifact.preview
+        : null;
+
+export const selectElementPickerEnabled =
+    (threadUuid: string) => (state: StateWithAiArtifact) =>
+        state.aiArtifact.elementPickerThreadUuid === threadUuid;

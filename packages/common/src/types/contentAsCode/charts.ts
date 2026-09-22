@@ -1,6 +1,7 @@
 import type { PartialDeep } from 'type-fest';
 import type { ChartAsCodeLanguageMap } from '../../utils/i18n/chartAsCode';
 import type { ContentVerificationInfo } from '../contentVerification';
+import type { SavedMergeDefinition, SavedMergeQuery } from '../mergeQuery';
 import type { MetricQuery } from '../metricQuery';
 import type { PromotionChanges } from '../promotion';
 import type {
@@ -20,6 +21,7 @@ import type {
 } from '../savedCharts';
 import type { SqlChart } from '../sqlRunner';
 import type { ContentAsCodeType, FiltersInput } from './core';
+import type { ContentAsCodeDirectAccess } from './directAccess';
 import type { SpaceAsCode } from './spaces';
 
 /**
@@ -30,9 +32,18 @@ import type { SpaceAsCode } from './spaces';
  * only in legacy files that predate slugs (accepted on upload, never
  * emitted).
  */
-export type DataAppVizChartAsCode = Omit<DataAppVizChart, 'dataAppVizUuid'> & {
+export type DataAppVizChartAsCode = Omit<
+    DataAppVizChart,
+    'dataAppVizUuid' | 'dataAppVizVersion'
+> & {
     dataAppVizSlug?: string;
     dataAppVizUuid?: string;
+    /**
+     * The version of the custom chart type this saved chart renders.
+     * @isInt
+     * @minimum 1
+     */
+    dataAppVizVersion?: number;
 };
 
 export type DataAppVizChartConfigAsCode = {
@@ -46,7 +57,7 @@ export type DataAppVizChartConfigAsCode = {
  * TSOA cannot resolve Exclude over object unions, which corrupts the
  * generated chart-as-code JSON schema. Keep in sync with ChartConfig.
  */
-export type ChartAsCodeConfig =
+export type ChartAsCodeConfig<CustomChartConfig = DataAppVizChartConfigAsCode> =
     | BigNumberConfig
     | CartesianChartConfig
     | CustomVisConfig
@@ -57,7 +68,7 @@ export type ChartAsCodeConfig =
     | GaugeChartConfig
     | MapChartConfig
     | SankeyChartConfig
-    | DataAppVizChartConfigAsCode;
+    | CustomChartConfig;
 
 // We want to only use properties that can be modified by the user
 // We'll be using slug to access these charts, so uuids are not included
@@ -76,6 +87,7 @@ export type ChartAsCode = Omit<
     >,
     'metricQuery' | 'chartConfig'
 > & {
+    merge?: SavedMergeDefinition | SavedMergeQuery | null;
     metricQuery: Omit<MetricQuery, 'filters'> & { filters: FiltersInput };
     chartConfig: ChartAsCodeConfig;
     /** Not modifiable by user, but useful to know if it has been updated. Defaults to now if omitted. */
@@ -100,6 +112,12 @@ export type ChartAsCode = Omit<
     verified?: boolean;
     /** Detailed verification info (who/when). Read-only; ignored on upload. */
     verification?: ContentVerificationInfo | null;
+    /**
+     * Direct user/group grants on this chart. Only independently saved charts
+     * carry one — dashboard-owned chart definitions are not grantable.
+     * Omission leaves the existing policy unchanged on upload.
+     */
+    access?: ContentAsCodeDirectAccess;
 };
 
 // SQL Charts are stored separately from regular saved charts
@@ -113,6 +131,8 @@ export type SqlChartAsCode = Pick<
     spaceSlug: string;
     updatedAt?: Date;
     downloadedAt?: Date;
+    /** Direct user/group grants. Omission leaves the existing policy unchanged on upload. */
+    access?: ContentAsCodeDirectAccess;
 };
 
 export type ApiChartAsCodeListResponse = {

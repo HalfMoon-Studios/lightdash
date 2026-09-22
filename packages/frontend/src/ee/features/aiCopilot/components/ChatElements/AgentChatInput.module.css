@@ -2,6 +2,16 @@
     position: relative;
 }
 
+.agentComposer.agentComposer {
+    @mixin dark {
+        background-color: color-mix(
+            in srgb,
+            var(--mantine-color-dark-6) 65%,
+            var(--mantine-color-dark-7)
+        );
+    }
+}
+
 .modelGroup {
     display: inline-flex;
     align-items: stretch;
@@ -26,6 +36,21 @@
 
 .modelGroupDivider {
     display: none;
+}
+
+/* Everything to the left of the send button. It shrinks so the send button
+   stays in view when the toolbar runs out of room on narrow viewports. */
+.toolbarSelectors {
+    display: flex;
+    align-items: center;
+    gap: var(--mantine-spacing-xs);
+    min-width: 0;
+}
+
+@media (max-width: 48em) {
+    .toolbarSelectors {
+        overflow: hidden;
+    }
 }
 
 .controlsReveal {
@@ -146,27 +171,31 @@
     margin-bottom: rem(8px);
 }
 
-.belowComposerControls {
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    min-height: rem(30px);
-    padding: rem(4px) rem(8px) 0;
-}
-
 @media (prefers-reduced-motion: reduce) {
     .chipReveal {
         transition: none;
     }
 }
 
-.sqlModeButton {
-    flex-shrink: 0;
+.deepResearchNudge {
     border-radius: var(--mantine-radius-xl);
+    animation: deepResearchPulse 2s ease-out infinite;
 }
 
-.sqlModeControl {
-    flex-shrink: 0;
+@keyframes deepResearchPulse {
+    from {
+        box-shadow: 0 0 0 0 var(--mantine-color-indigo-4);
+    }
+    to {
+        box-shadow: 0 0 0 8px transparent;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .deepResearchNudge {
+        animation: none;
+        box-shadow: 0 0 0 2px var(--mantine-color-indigo-4);
+    }
 }
 
 .chipMention {
@@ -267,6 +296,13 @@
         linear-gradient(currentColor 0 0) 7px 1px / 4px 3px no-repeat,
         linear-gradient(currentColor 0 0) 1px 7px / 4px 4px no-repeat,
         linear-gradient(currentColor 0 0) 7px 6px / 4px 5px no-repeat;
+}
+
+.contentMentionIcon[data-icon-type='data_app']::before {
+    background:
+        linear-gradient(currentColor 0 0) 1px 1px / 10px 10px no-repeat,
+        linear-gradient(var(--mantine-color-body) 0 0) 2px 4px / 8px 6px
+            no-repeat;
 }
 
 .contentMentionIcon[data-rendered-icon='true']::before {

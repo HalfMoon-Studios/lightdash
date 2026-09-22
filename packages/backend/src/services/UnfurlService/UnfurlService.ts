@@ -39,6 +39,7 @@ import {
     type DashboardFilterRule,
     type DashboardFilters,
     type DeliveryCaptureManifest,
+    type Filters,
     type ParametersValuesMap,
     type UUID,
 } from '@lightdash/common';
@@ -679,6 +680,7 @@ export class UnfurlService extends BaseService {
         selectedTabs,
         sendNowSchedulerDashboardFilters,
         sendNowSchedulerFilters,
+        sendNowSchedulerChartFilters,
         sendNowSchedulerParameters,
     }: {
         url: string;
@@ -694,6 +696,7 @@ export class UnfurlService extends BaseService {
         selectedTabs: string[] | null;
         sendNowSchedulerDashboardFilters?: DashboardFilters | undefined;
         sendNowSchedulerFilters?: DashboardFilterRule[] | undefined;
+        sendNowSchedulerChartFilters?: Filters | undefined;
         sendNowSchedulerParameters?: ParametersValuesMap | undefined;
     }): Promise<{
         imageUrl?: string;
@@ -722,6 +725,7 @@ export class UnfurlService extends BaseService {
             selectedTabs,
             sendNowSchedulerDashboardFilters,
             sendNowSchedulerFilters,
+            sendNowSchedulerChartFilters,
             sendNowSchedulerParameters,
         };
 
@@ -970,10 +974,11 @@ export class UnfurlService extends BaseService {
         const dashboard =
             await this.dashboardModel.getByIdOrSlug(dashboardUuid);
         const { inheritsFromOrgOrProject, access } =
-            await this.spacePermissionService.getSpaceAccessContext(
-                user.userUuid,
-                dashboard.spaceUuid,
-            );
+            await this.spacePermissionService.resolveAccess(user.userUuid, {
+                type: 'dashboard',
+                dashboardUuid: dashboard.uuid,
+                spaceUuid: dashboard.spaceUuid,
+            });
 
         validateSelectedTabs(selectedTabs, dashboard.tiles);
 
@@ -1069,10 +1074,12 @@ export class UnfurlService extends BaseService {
             projectUuid ? { projectUuid } : undefined,
         );
         const { inheritsFromOrgOrProject, access } =
-            await this.spacePermissionService.getSpaceAccessContext(
-                user.userUuid,
-                chart.spaceUuid,
-            );
+            await this.spacePermissionService.resolveAccess(user.userUuid, {
+                type: 'chart',
+                chartUuid: chart.uuid,
+                dashboardUuid: chart.dashboardUuid,
+                spaceUuid: chart.spaceUuid,
+            });
 
         const auditedAbility = this.createAuditedAbility(user);
         if (
@@ -1132,10 +1139,14 @@ export class UnfurlService extends BaseService {
             projectUuid,
             agentUuid,
             artifact,
+            cachedQueryUuid,
+            signal,
         }: {
             projectUuid: UUID;
             agentUuid: UUID;
             artifact: AiArtifact;
+            cachedQueryUuid?: string;
+            signal?: AbortSignal;
         },
     ): Promise<{ imageBuffer: Buffer; imageUrl: string }> {
         const { artifactUuid, versionUuid } = artifact;
@@ -1145,10 +1156,14 @@ export class UnfurlService extends BaseService {
             );
         }
 
-        const minimalUrl = new URL(
+        const minimalPage = new URL(
             `/minimal/projects/${projectUuid}/ai-agents/${agentUuid}/artifacts/${artifactUuid}/versions/${versionUuid}`,
             this.lightdashConfig.headlessBrowser.internalLightdashHost,
-        ).href;
+        );
+        if (cachedQueryUuid)
+            minimalPage.searchParams.set('cachedQueryUuid', cachedQueryUuid);
+        const minimalUrl = minimalPage.href;
+        signal?.throwIfAborted();
 
         this.logger.info(`Exporting AI artifact to hosted image`, {
             userUuid: user.userUuid,
@@ -1176,12 +1191,17 @@ export class UnfurlService extends BaseService {
             resourceName: artifact.title ?? undefined,
             context: ScreenshotContext.EXPORT_AI_ARTIFACT,
             selectedTabs: null,
+            signal,
+            requireSuccessfulRender: cachedQueryUuid !== undefined,
+            ...(cachedQueryUuid ? { retries: 1 } : {}),
         });
         if (!result?.imageBuffer) {
             throw new UnexpectedServerError(
                 'Unable to export AI artifact image',
             );
         }
+
+        signal?.throwIfAborted();
 
         const imageUrl = await this.hostImage(
             result.imageBuffer,
@@ -1192,6 +1212,75 @@ export class UnfurlService extends BaseService {
             userUuid: user.userUuid,
             artifactUuid,
             versionUuid,
+        });
+        return { imageBuffer: result.imageBuffer, imageUrl };
+    }
+
+    /**
+     * Renders a data app's minimal page to a hosted PNG under the acting
+     * user's identity (one-time login grant). The caller is responsible for
+     * verifying the user may see the app. Returns the buffer beside the
+     * hosted URL so callers with their own delivery path (e.g. Slack file
+     * upload) don't need to fetch the image back.
+     */
+    async exportDataApp({
+        projectUuid,
+        appUuid,
+        appName,
+        authUserUuid,
+        organizationUuid,
+        context,
+        contextId,
+    }: {
+        projectUuid: UUID;
+        appUuid: UUID;
+        appName: string;
+        authUserUuid: UUID;
+        organizationUuid: UUID;
+        context: ScreenshotContext;
+        contextId?: unknown;
+    }): Promise<{ imageBuffer: Buffer; imageUrl: string }> {
+        const minimalUrl = new URL(
+            `/minimal/projects/${projectUuid}/apps/${appUuid}`,
+            this.lightdashConfig.headlessBrowser.internalLightdashHost,
+        ).href;
+
+        this.logger.info(`Exporting data app to hosted image`, {
+            userUuid: authUserUuid,
+            organizationUuid,
+            projectUuid,
+            appUuid,
+            minimalUrl,
+        });
+
+        const cookie = await this.getUserCookie(authUserUuid);
+        const imageId = `app-image_${snakeCaseName(appName)}_${useNanoid()}`;
+
+        const result = await this.saveScreenshot({
+            authUserUuid,
+            imageId,
+            cookie,
+            url: minimalUrl,
+            lightdashPage: LightdashPage.APP,
+            organizationUuid,
+            resourceUuid: appUuid,
+            resourceName: appName,
+            context,
+            contextId,
+            selectedTabs: null,
+        });
+        if (!result?.imageBuffer) {
+            throw new UnexpectedServerError('Unable to export data app image');
+        }
+
+        const imageUrl = await this.hostImage(
+            result.imageBuffer,
+            imageId,
+            organizationUuid,
+        );
+        this.logger.info(`Data app exported successfully`, {
+            userUuid: authUserUuid,
+            appUuid,
         });
         return { imageBuffer: result.imageBuffer, imageUrl };
     }
@@ -1385,10 +1474,13 @@ export class UnfurlService extends BaseService {
         selectedTabs,
         sendNowSchedulerDashboardFilters,
         sendNowSchedulerFilters,
+        sendNowSchedulerChartFilters,
         sendNowSchedulerParameters,
         outputFormat = 'image',
         withPdf = false,
         pdfPagination = 'crop',
+        signal,
+        requireSuccessfulRender = false,
     }: {
         imageId: string;
         cookie: string;
@@ -1410,6 +1502,7 @@ export class UnfurlService extends BaseService {
         selectedTabs: string[] | null;
         sendNowSchedulerDashboardFilters?: DashboardFilters | undefined;
         sendNowSchedulerFilters?: DashboardFilterRule[] | undefined;
+        sendNowSchedulerChartFilters?: Filters | undefined;
         sendNowSchedulerParameters?: ParametersValuesMap | undefined;
         outputFormat?: 'image' | 'pdf';
         withPdf?: boolean;
@@ -1417,6 +1510,8 @@ export class UnfurlService extends BaseService {
         // 'cssPaged': multi-page PDF, uniform page height, print page breaks
         // between EXPORT_TAB_PAGE_CLASS containers (one per tab).
         pdfPagination?: 'crop' | 'cssPaged';
+        signal?: AbortSignal;
+        requireSuccessfulRender?: boolean;
     }): Promise<{ imageBuffer?: Buffer; pdfBuffer?: Buffer } | undefined> {
         this.logger.info(
             `with tiles ${JSON.stringify(chartTileUuids)} and ${JSON.stringify(
@@ -1457,8 +1552,14 @@ export class UnfurlService extends BaseService {
                 let browser: playwright.Browser | undefined;
                 let page: playwright.Page | undefined;
                 let appContentHeight: number | undefined;
+                const abortCapture = () => {
+                    void page?.close().catch(() => {});
+                    void browser?.close().catch(() => {});
+                };
+                signal?.addEventListener('abort', abortCapture, { once: true });
 
                 try {
+                    signal?.throwIfAborted();
                     const { browserEndpoint } =
                         this.lightdashConfig.headlessBrowser;
 
@@ -1532,6 +1633,7 @@ export class UnfurlService extends BaseService {
                         },
                     );
 
+                    signal?.throwIfAborted();
                     page = await browser.newPage({
                         viewport: initialViewport,
                         ...(lightdashPage === LightdashPage.AI_ARTIFACT
@@ -1550,6 +1652,7 @@ export class UnfurlService extends BaseService {
                             this.lightdashConfig.headlessBrowser
                                 .internalLightdashHostIgnoreHttpsErrors,
                     });
+                    signal?.throwIfAborted();
 
                     if (lightdashPage === LightdashPage.APP) {
                         await this.overrideCdpViewport(
@@ -1613,6 +1716,8 @@ export class UnfurlService extends BaseService {
                         {
                             [SessionStorageKeys.SEND_NOW_SCHEDULER_FILTERS]:
                                 sendNowSchedulerFilters,
+                            [SessionStorageKeys.SEND_NOW_SCHEDULER_CHART_FILTERS]:
+                                sendNowSchedulerChartFilters,
                             [SessionStorageKeys.SEND_NOW_SCHEDULER_DASHBOARD_FILTERS]:
                                 sendNowSchedulerDashboardFilters,
                             [SessionStorageKeys.SEND_NOW_SCHEDULER_PARAMETERS]:
@@ -2036,6 +2141,19 @@ export class UnfurlService extends BaseService {
                         }
                     }
 
+                    if (
+                        requireSuccessfulRender &&
+                        (await page.getAttribute(
+                            SCREENSHOT_SELECTORS.READY_INDICATOR,
+                            'data-status',
+                        )) !== 'ready'
+                    ) {
+                        throw new UnexpectedServerError(
+                            'Artifact visualization did not render successfully',
+                        );
+                    }
+                    signal?.throwIfAborted();
+
                     if (lightdashPage === LightdashPage.APP) {
                         // The app is rendered inside a sandboxed iframe sized
                         // to 100vh on the parent. The initial app viewport is
@@ -2439,7 +2557,7 @@ export class UnfurlService extends BaseService {
                         errorMessage.includes('not attached to the DOM') ||
                         isQueueFullError;
 
-                    if (isRetryableError && retries) {
+                    if (isRetryableError && retries && !signal?.aborted) {
                         const maxRetries =
                             this.lightdashConfig.headlessBrowser
                                 .maxScreenshotRetries ??
@@ -2490,10 +2608,13 @@ export class UnfurlService extends BaseService {
                             selectedTabs,
                             sendNowSchedulerDashboardFilters,
                             sendNowSchedulerFilters,
+                            sendNowSchedulerChartFilters,
                             sendNowSchedulerParameters,
                             outputFormat,
                             withPdf,
                             pdfPagination,
+                            signal,
+                            requireSuccessfulRender,
                         });
                     }
 
@@ -2536,6 +2657,7 @@ export class UnfurlService extends BaseService {
                         },
                     );
                 } finally {
+                    signal?.removeEventListener('abort', abortCapture);
                     if (page) await page.close();
                     if (browser) await browser.close(); // clears all created contexts belonging to this browser and disconnects from the browser server.
 

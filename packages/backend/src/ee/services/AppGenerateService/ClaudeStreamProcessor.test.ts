@@ -25,6 +25,10 @@ const resultLine = (overrides: Record<string, unknown> = {}) =>
             output_tokens: 5_000,
             cache_creation_input_tokens: 2_000,
             cache_read_input_tokens: 40_000,
+            cache_creation: {
+                ephemeral_1h_input_tokens: 1_800,
+                ephemeral_5m_input_tokens: 200,
+            },
         },
         ...overrides,
     });
@@ -45,11 +49,70 @@ describe('ClaudeStreamProcessor result parsing', () => {
             inputTokens: 1_000,
             outputTokens: 5_000,
             cacheCreationInputTokens: 2_000,
+            cacheCreation1hInputTokens: 1_800,
+            cacheCreation5mInputTokens: 200,
             cacheReadInputTokens: 40_000,
             numTurns: 42,
             durationApiMs: 350_000,
             costUsd: 1.23,
         });
+    });
+
+    test('captures the per-model split from modelUsage under the concrete model ids', () => {
+        const processor = new ClaudeStreamProcessor();
+        processor.feedChunk(
+            resultLine({
+                modelUsage: {
+                    'claude-opus-4-8': {
+                        inputTokens: 900,
+                        outputTokens: 4_500,
+                        cacheReadInputTokens: 39_000,
+                        cacheCreationInputTokens: 1_800,
+                        webSearchRequests: 0,
+                        costUSD: 1.2,
+                        contextWindow: 1_000_000,
+                    },
+                    'claude-haiku-4-5-20251001': {
+                        inputTokens: 100,
+                        outputTokens: 500,
+                        cacheReadInputTokens: 1_000,
+                        cacheCreationInputTokens: 200,
+                    },
+                },
+            }),
+        );
+
+        expect(processor.lastUsage?.modelUsage).toEqual({
+            'claude-opus-4-8': {
+                inputTokens: 900,
+                outputTokens: 4_500,
+                cacheReadInputTokens: 39_000,
+                cacheCreationInputTokens: 1_800,
+            },
+            'claude-haiku-4-5-20251001': {
+                inputTokens: 100,
+                outputTokens: 500,
+                cacheReadInputTokens: 1_000,
+                cacheCreationInputTokens: 200,
+            },
+        });
+        // The run-level totals are unchanged by the split.
+        expect(processor.lastUsage?.inputTokens).toBe(1_000);
+        expect(processor.lastUsage?.outputTokens).toBe(5_000);
+    });
+
+    test('leaves modelUsage absent when the CLI does not report it', () => {
+        const processor = new ClaudeStreamProcessor();
+        processor.feedChunk(resultLine());
+
+        expect(processor.lastUsage).not.toHaveProperty('modelUsage');
+    });
+
+    test('leaves modelUsage absent when it is reported but empty', () => {
+        const processor = new ClaudeStreamProcessor();
+        processor.feedChunk(resultLine({ modelUsage: {} }));
+
+        expect(processor.lastUsage).not.toHaveProperty('modelUsage');
     });
 
     test('defaults missing numeric fields to 0 and absent text to empty string', () => {
@@ -155,11 +218,66 @@ describe('ClaudeStreamProcessor turn timeline', () => {
 });
 
 describe('addClaudeUsage', () => {
+    test('sums the per-model split across runs and keeps models only one side saw', () => {
+        const a: ClaudeGenerationUsage = {
+            ...ZERO_CLAUDE_USAGE,
+            inputTokens: 10,
+            modelUsage: {
+                'claude-opus-4-8': {
+                    inputTokens: 10,
+                    outputTokens: 20,
+                    cacheReadInputTokens: 30,
+                    cacheCreationInputTokens: 40,
+                },
+            },
+        };
+        const b: ClaudeGenerationUsage = {
+            ...ZERO_CLAUDE_USAGE,
+            inputTokens: 1,
+            modelUsage: {
+                'claude-opus-4-8': {
+                    inputTokens: 1,
+                    outputTokens: 2,
+                    cacheReadInputTokens: 3,
+                    cacheCreationInputTokens: 4,
+                },
+                'claude-haiku-4-5-20251001': {
+                    inputTokens: 5,
+                    outputTokens: 6,
+                    cacheReadInputTokens: 7,
+                    cacheCreationInputTokens: 8,
+                },
+            },
+        };
+
+        expect(addClaudeUsage(a, b).modelUsage).toEqual({
+            'claude-opus-4-8': {
+                inputTokens: 11,
+                outputTokens: 22,
+                cacheReadInputTokens: 33,
+                cacheCreationInputTokens: 44,
+            },
+            'claude-haiku-4-5-20251001': {
+                inputTokens: 5,
+                outputTokens: 6,
+                cacheReadInputTokens: 7,
+                cacheCreationInputTokens: 8,
+            },
+        });
+        // A side without a split contributes nothing and does not add the key.
+        expect(
+            addClaudeUsage(ZERO_CLAUDE_USAGE, ZERO_CLAUDE_USAGE),
+        ).not.toHaveProperty('modelUsage');
+        expect(addClaudeUsage(a, null).modelUsage).toEqual(a.modelUsage);
+    });
+
     const usage = (n: number): ClaudeGenerationUsage => ({
         inputTokens: n,
         outputTokens: n,
         cacheReadInputTokens: n,
         cacheCreationInputTokens: n,
+        cacheCreation1hInputTokens: n,
+        cacheCreation5mInputTokens: n,
         numTurns: n,
         durationApiMs: n,
         costUsd: n,
@@ -183,6 +301,8 @@ describe('addClaudeGenerationAttempt', () => {
         outputTokens: n,
         cacheReadInputTokens: n,
         cacheCreationInputTokens: n,
+        cacheCreation1hInputTokens: n,
+        cacheCreation5mInputTokens: n,
         numTurns: n,
         durationApiMs: n,
         costUsd: n,
@@ -242,5 +362,38 @@ describe('addClaudeGenerationAttempt', () => {
         );
 
         expect(second.timeToFirstTokenMs).toBe(75);
+    });
+});
+
+describe('ClaudeStreamProcessor session start', () => {
+    test('surfaces the session id from the init event and from nothing else', () => {
+        const processor = new ClaudeStreamProcessor();
+        const events = processor.feedChunk(
+            line({
+                type: 'system',
+                subtype: 'hook_started',
+                hook_name: 'SessionStart:startup',
+                session_id: 'f228a01a-fef5-4872-a344-1d875e934fcf',
+            }) +
+                line({
+                    type: 'system',
+                    subtype: 'init',
+                    cwd: '/app',
+                    session_id: 'f228a01a-fef5-4872-a344-1d875e934fcf',
+                    tools: ['Read', 'Write'],
+                }) +
+                resultLine({
+                    session_id: 'f228a01a-fef5-4872-a344-1d875e934fcf',
+                }),
+        );
+
+        expect(events.map((event) => event.kind)).toEqual([
+            'session_started',
+            'result',
+        ]);
+        expect(events[0]).toEqual({
+            kind: 'session_started',
+            sessionId: 'f228a01a-fef5-4872-a344-1d875e934fcf',
+        });
     });
 });

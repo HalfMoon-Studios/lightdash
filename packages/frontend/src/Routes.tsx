@@ -1,16 +1,19 @@
 import { Stack } from '@mantine/core';
 import { type FC } from 'react';
 import { Navigate, Outlet, type RouteObject } from 'react-router';
+import AUTH_ROUTES from './AuthRoutes';
 import AppRoute from './components/AppRoute';
 import ProjectLayout from './components/common/ProjectLayout';
 import ForbiddenPanel from './components/ForbiddenPanel';
 import JobDetailsDrawer from './components/JobDetailsDrawer';
 import NavBar from './components/NavBar';
+import { NavBarLayout } from './components/NavBarLayout';
 import PrivateRoute from './components/PrivateRoute';
 import ProjectRoute from './components/ProjectRoute';
 import CreateProjectSettings from './components/Settings/CreateProjectSettings';
 import UserCompletionModal from './components/UserCompletionModal';
 import LegacyAppPreviewRedirect from './features/apps/LegacyAppPreviewRedirect';
+import LegacyChartTypeGalleryRedirect from './features/chartTypes/LegacyChartTypeGalleryRedirect';
 import { loadLazyRouteDefault } from './features/chunkErrorHandler';
 import { MetricCatalogView } from './features/metricsCatalog/types';
 import { TrackPage } from './providers/Tracking/TrackingProvider';
@@ -21,24 +24,8 @@ const FALLBACK_ROUTE: RouteObject = {
     element: <Navigate to="/projects" />,
 };
 
-const NavBarLayout: FC = () => (
-    <>
-        <NavBar />
-        <Outlet />
-    </>
-);
-
 const PUBLIC_ROUTES: RouteObject[] = [
-    {
-        path: '/auth/popup/:status',
-        lazy: async () => {
-            const AuthPopupResult = await loadLazyRouteDefault(
-                './pages/AuthPopupResult',
-                () => import('./pages/AuthPopupResult'),
-            );
-            return { Component: AuthPopupResult };
-        },
-    },
+    ...AUTH_ROUTES,
     {
         path: '/register',
         lazy: async () => {
@@ -66,86 +53,6 @@ const PUBLIC_ROUTES: RouteObject[] = [
                 Component: () => (
                     <TrackPage name={PageName.LOGIN}>
                         <Login />
-                    </TrackPage>
-                ),
-            };
-        },
-    },
-    {
-        path: '/recover-password',
-        lazy: async () => {
-            const PasswordRecovery = await loadLazyRouteDefault(
-                './pages/PasswordRecovery',
-                () => import('./pages/PasswordRecovery'),
-            );
-            return {
-                Component: () => (
-                    <TrackPage name={PageName.PASSWORD_RECOVERY}>
-                        <PasswordRecovery />
-                    </TrackPage>
-                ),
-            };
-        },
-    },
-    {
-        path: '/reset-password/:code',
-        lazy: async () => {
-            const PasswordReset = await loadLazyRouteDefault(
-                './pages/PasswordReset',
-                () => import('./pages/PasswordReset'),
-            );
-            return {
-                Component: () => (
-                    <TrackPage name={PageName.PASSWORD_RESET}>
-                        <PasswordReset />
-                    </TrackPage>
-                ),
-            };
-        },
-    },
-    {
-        path: '/invite/:inviteCode',
-        lazy: async () => {
-            const Invite = await loadLazyRouteDefault(
-                './pages/Invite',
-                () => import('./pages/Invite'),
-            );
-            return {
-                Component: () => (
-                    <TrackPage name={PageName.SIGNUP}>
-                        <Invite />
-                    </TrackPage>
-                ),
-            };
-        },
-    },
-    {
-        path: '/verify-email',
-        lazy: async () => {
-            const VerifyEmailPage = await loadLazyRouteDefault(
-                './pages/VerifyEmail',
-                () => import('./pages/VerifyEmail'),
-            );
-            return {
-                Component: () => (
-                    <TrackPage name={PageName.VERIFY_EMAIL}>
-                        <VerifyEmailPage />
-                    </TrackPage>
-                ),
-            };
-        },
-    },
-    {
-        path: '/join-organization',
-        lazy: async () => {
-            const JoinOrganization = await loadLazyRouteDefault(
-                './pages/JoinOrganization',
-                () => import('./pages/JoinOrganization'),
-            );
-            return {
-                Component: () => (
-                    <TrackPage name={PageName.JOIN_ORGANIZATION}>
-                        <JoinOrganization />
                     </TrackPage>
                 ),
             };
@@ -498,6 +405,22 @@ const SPACES_ROUTES: RouteObject[] = [
         },
     },
     {
+        path: 'shared-with-me',
+        lazy: async () => {
+            const SharedWithMe = await loadLazyRouteDefault(
+                './pages/SharedWithMe',
+                () => import('./pages/SharedWithMe'),
+            );
+            return {
+                Component: () => (
+                    <TrackPage name={PageName.SHARED_WITH_ME}>
+                        <SharedWithMe />
+                    </TrackPage>
+                ),
+            };
+        },
+    },
+    {
         path: 'spaces/:spaceUuid',
         lazy: async () => {
             const Space = await loadLazyRouteDefault(
@@ -593,8 +516,36 @@ const PROJECT_LAYOUT_ROUTES: RouteObject[] = [
     ...SOURCE_CODE_ROUTES,
     ...CHART_ROUTES,
     ...DASHBOARD_LIST_ROUTES,
+    {
+        path: 'documents',
+        lazy: async () => ({
+            Component: await loadLazyRouteDefault(
+                './pages/Documents',
+                () => import('./pages/Documents'),
+            ),
+        }),
+    },
+    {
+        path: 'documents/:documentUuidOrSlug',
+        lazy: async () => ({
+            Component: await loadLazyRouteDefault(
+                './pages/Document',
+                () => import('./pages/Document'),
+            ),
+        }),
+    },
     ...SPACES_ROUTES,
     ...METRICS_ROUTES,
+    {
+        path: 'learn',
+        lazy: async () => {
+            const Learn = await loadLazyRouteDefault(
+                './pages/Learn',
+                () => import('./pages/Learn'),
+            );
+            return { Component: Learn };
+        },
+    },
     {
         path: 'home',
         lazy: async () => {
@@ -606,6 +557,40 @@ const PROJECT_LAYOUT_ROUTES: RouteObject[] = [
                 Component: () => (
                     <TrackPage name={PageName.HOME}>
                         <Home />
+                    </TrackPage>
+                ),
+            };
+        },
+    },
+    {
+        path: 'review-requests',
+        lazy: async () => {
+            const ContentReviewRequestsPage = await loadLazyRouteDefault(
+                './ee/features/contentReview/pages/ContentReviewRequestsPage',
+                () =>
+                    import('./ee/features/contentReview/pages/ContentReviewRequestsPage'),
+            );
+            return {
+                Component: () => (
+                    <TrackPage name={PageName.CONTENT_REVIEW_REQUESTS}>
+                        <ContentReviewRequestsPage />
+                    </TrackPage>
+                ),
+            };
+        },
+    },
+    {
+        path: 'review-requests/:requestUuid',
+        lazy: async () => {
+            const ContentReviewRequestPage = await loadLazyRouteDefault(
+                './ee/features/contentReview/pages/ContentReviewRequestPage',
+                () =>
+                    import('./ee/features/contentReview/pages/ContentReviewRequestPage'),
+            );
+            return {
+                Component: () => (
+                    <TrackPage name={PageName.CONTENT_REVIEW_REQUEST}>
+                        <ContentReviewRequestPage />
                     </TrackPage>
                 ),
             };
@@ -646,6 +631,10 @@ const PROJECT_LAYOUT_ROUTES: RouteObject[] = [
     },
     {
         path: 'gallery',
+        element: <LegacyChartTypeGalleryRedirect />,
+    },
+    {
+        path: 'chart-types',
         lazy: async () => {
             const ChartTypeGallery = await loadLazyRouteDefault(
                 './pages/ChartTypeGallery',
@@ -700,7 +689,6 @@ const PROJECT_LAYOUT_ROUTES: RouteObject[] = [
     },
     {
         path: 'apps/:appUuid/versions/:version/view',
-        handle: { hideAILauncher: true },
         lazy: async () => {
             const AppPreviewTest = await loadLazyRouteDefault(
                 './pages/AppPreviewTest',
@@ -711,7 +699,6 @@ const PROJECT_LAYOUT_ROUTES: RouteObject[] = [
     },
     {
         path: 'apps/:appUuid/view',
-        handle: { hideAILauncher: true },
         lazy: async () => {
             const AppPreviewTest = await loadLazyRouteDefault(
                 './pages/AppPreviewTest',

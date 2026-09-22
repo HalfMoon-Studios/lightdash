@@ -2,6 +2,7 @@ import {
     type ApiError,
     type CreateInviteLink,
     type InviteLink,
+    type InviteLinkWithAuthenticationOptions,
     type LightdashUser,
 } from '@lightdash/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -9,7 +10,7 @@ import { lightdashApi } from '../api';
 import useToaster from './toaster/useToaster';
 
 const createInviteQuery = async (
-    data: CreateInviteLink,
+    data: Omit<CreateInviteLink, 'expiresAt'>,
 ): Promise<InviteLink> => {
     const response = await lightdashApi<InviteLink>({
         url: `/invite-links`,
@@ -22,26 +23,15 @@ const createInviteQuery = async (
     };
 };
 
-const createInviteWith3DayExpiryQuery = async (
-    createInvite: Omit<CreateInviteLink, 'expiresAt'>,
-): Promise<InviteLink> => {
-    const dateIn3Days = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
-    const response = await createInviteQuery({
-        ...createInvite,
-        expiresAt: dateIn3Days,
-    });
-    return response;
-};
-
 const inviteLinkQuery = async (inviteCode: string) =>
-    lightdashApi<InviteLink>({
+    lightdashApi<InviteLinkWithAuthenticationOptions>({
         url: `/invite-links/${inviteCode}`,
         method: 'GET',
         body: undefined,
     });
 
 export const useInviteLink = (inviteCode: string | undefined) =>
-    useQuery<InviteLink, ApiError>({
+    useQuery<InviteLinkWithAuthenticationOptions, ApiError>({
         queryKey: ['invite_link', inviteCode],
         queryFn: () => inviteLinkQuery(inviteCode!),
         enabled: inviteCode !== undefined,
@@ -85,7 +75,7 @@ export const useCreateInviteLinkMutation = ({
         InviteLink,
         ApiError,
         Omit<CreateInviteLink, 'expiresAt'>
-    >(createInviteWith3DayExpiryQuery, {
+    >(createInviteQuery, {
         mutationKey: ['invite_link'],
         onError: ({ error }) => {
             showToastApiError({

@@ -1,5 +1,5 @@
 import {
-    buildRunSqlDescription,
+    buildAgentRunSqlDescription,
     createToolRunSqlArgsSchema,
     isSlackPrompt,
     runSqlToolDefinition,
@@ -8,6 +8,7 @@ import {
 } from '@lightdash/common';
 import { tool } from 'ai';
 import { stringify } from 'csv-stringify/sync';
+import { type QueryReviewer } from '../decisions/queryReview';
 import type {
     CreateOrUpdateArtifactFn,
     GetPromptFn,
@@ -30,6 +31,7 @@ import { toolErrorHandler } from '../utils/toolErrorHandler';
 import { renderBlocks, type SectionState } from './slackSqlAggregate';
 
 type Dependencies = {
+    reviewQuery?: QueryReviewer;
     updateProgress: UpdateProgressFn;
     runSqlJob: RunSqlJobFn;
     getPrompt: GetPromptFn;
@@ -43,6 +45,7 @@ type Dependencies = {
     createOrUpdateArtifact: CreateOrUpdateArtifactFn;
     maxQueryLimit: number;
     enableDataAccess: boolean;
+    slackLinksOnly: boolean;
     sqlScope?: SqlScope | null;
     autoApproveSql?: boolean;
     autoApproveSqlUserUuid?: string | null;
@@ -92,6 +95,7 @@ export const validateSelectOnly = (sql: string) => {
 };
 
 export const getRunSql = ({
+    reviewQuery,
     updateProgress,
     runSqlJob,
     getPrompt,
@@ -105,6 +109,7 @@ export const getRunSql = ({
     createOrUpdateArtifact,
     maxQueryLimit,
     enableDataAccess,
+    slackLinksOnly,
     sqlScope = null,
     autoApproveSql = false,
     autoApproveSqlUserUuid = null,
@@ -130,7 +135,7 @@ export const getRunSql = ({
     };
 
     return tool({
-        description: buildRunSqlDescription(500, maxQueryLimit),
+        description: buildAgentRunSqlDescription(500, maxQueryLimit),
         inputSchema,
         outputSchema: toolDefinition.outputSchema,
         toModelOutput: toolDefinition.toModelOutput,
@@ -279,10 +284,18 @@ export const getRunSql = ({
                 }
 
                 const effectiveLimit = Math.min(limit, maxQueryLimit);
-                const { rows, columns, rowCount } = await runSqlJob({
-                    sql,
-                    limit: effectiveLimit,
-                });
+                const [{ rows, columns, rowCount }, review] = await Promise.all(
+                    [
+                        runSqlJob({ sql, limit: effectiveLimit }),
+                        enableDataAccess
+                            ? (reviewQuery?.({
+                                  kind: 'sql',
+                                  sql,
+                                  limit: effectiveLimit,
+                              }) ?? '')
+                            : '',
+                    ],
+                );
 
                 if (!isSlack) {
                     await createOrUpdateArtifact({
@@ -311,7 +324,7 @@ export const getRunSql = ({
                             columns.length > 0
                                 ? ` Columns: ${columns.join(', ')}`
                                 : ''
-                        }`,
+                        }${enableDataAccess && reviewQuery ? ` ${await reviewQuery({ kind: 'sql', sql, limit: effectiveLimit }, { emptyResult: true, review })}` : ''}`,
                         metadata: { status: 'success', rowCount: 0 },
                     });
                 }
@@ -351,7 +364,7 @@ export const getRunSql = ({
 
                     // chat.update can't attach files, so a full CSV for large
                     // results still goes as a separate message.
-                    if (rowCount > LARGE_RESULT_THRESHOLD) {
+                    if (rowCount > LARGE_RESULT_THRESHOLD && !slackLinksOnly) {
                         await sendFile({
                             channelId: prompt.slackChannelId,
                             threadTs: prompt.slackThreadTs,
@@ -395,7 +408,7 @@ export const getRunSql = ({
                     result: `${resultSummary}${truncatedNote}\n${serializeData(
                         previewCsv,
                         'csv',
-                    )}`,
+                    )}${review}`,
                     metadata: { status: 'success', rowCount },
                 });
             } catch (e) {

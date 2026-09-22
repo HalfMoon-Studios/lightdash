@@ -98,16 +98,19 @@ export const ParameterSelection: FC<ParameterSelectionProps> = ({
                         );
                     }
                     return (
-                        <Box key={paramKey}>
+                        <Box key={paramKey} miw={0}>
                             <Group align="center" gap="xs" mb="xxs">
                                 <Group align="center" gap="xs">
-                                    <Text size={size} fw={500}>
+                                    <Text
+                                        size={size}
+                                        fw={500}
+                                        style={{ overflowWrap: 'anywhere' }}
+                                    >
                                         {parameters?.[paramKey]?.label ||
                                             paramKey}
                                     </Text>
                                     {parameters?.[paramKey]?.description && (
                                         <Tooltip
-                                            withinPortal
                                             position="top"
                                             maw={350}
                                             label={
@@ -117,7 +120,7 @@ export const ParameterSelection: FC<ParameterSelectionProps> = ({
                                         >
                                             <MantineIcon
                                                 icon={IconInfoCircle}
-                                                color="ldGray.6"
+                                                color="dimmed"
                                                 size="sm"
                                             />
                                         </Tooltip>

@@ -4,7 +4,7 @@ import {
     type QueryResultsPerformance,
     type QueryResultsPreAggregate,
 } from '@lightdash/common';
-import { ActionIcon, Divider, Stack, HoverCard } from '@mantine/core';
+import { ActionIcon, Divider, Menu, Stack, Popover } from '@mantine/core';
 import {
     IconClock,
     IconClockBolt,
@@ -16,6 +16,7 @@ import {
     IconServer,
 } from '@tabler/icons-react';
 import { type FC } from 'react';
+import { useUiStrings } from '../../ee/providers/Embed/useUiStrings';
 import { useServerFeatureFlag } from '../../hooks/useServerOrClientFeatureFlag';
 import MantineIcon from '../common/MantineIcon';
 import InfoRow from '../common/PageHeader/InfoRow';
@@ -26,6 +27,7 @@ type TileExecutionInfoProps = {
     performance: QueryResultsPerformance | undefined;
     totalClientFetchTimeMs: number | undefined;
     totalResults: number | undefined;
+    targetVariant?: 'actionIcon' | 'menuItem';
 };
 
 // `cacheMetadata.preAggregate.hit` is the plan-time match; `preAggregate` from
@@ -60,7 +62,9 @@ const TileExecutionInfo: FC<TileExecutionInfoProps> = ({
     performance,
     totalClientFetchTimeMs,
     totalResults,
+    targetVariant = 'actionIcon',
 }) => {
+    const getUiString = useUiStrings();
     const { data: showExecutionTimeFlag } = useServerFeatureFlag(
         FeatureFlags.ShowExecutionTime,
     );
@@ -78,17 +82,17 @@ const TileExecutionInfo: FC<TileExecutionInfoProps> = ({
         totalClientFetchTimeMs -
         (performance.initialQueryExecutionMs ?? 0) -
         (performance.queueTimeMs ?? 0);
+    const icon = isServedFromPreAggregate(cacheMetadata, preAggregate)
+        ? IconClockBolt
+        : IconClock;
 
     return (
-        <HoverCard
-            withArrow
-            withinPortal
-            shadow="md"
-            position="bottom-end"
-            offset={4}
-            arrowOffset={10}
-        >
-            <HoverCard.Dropdown>
+        <Popover withArrow position="bottom-end" offset={4} arrowOffset={10}>
+            <Popover.Dropdown
+                maw="calc(100vw - 24px)"
+                mah="calc(100dvh - 24px)"
+                style={{ overflowY: 'auto' }}
+            >
                 <Stack gap={10} w={240} p={4}>
                     <InfoRow icon={IconLayoutRows} label="Rows">
                         {(totalResults ?? 0).toLocaleString()}
@@ -124,22 +128,25 @@ const TileExecutionInfo: FC<TileExecutionInfoProps> = ({
                         {totalClientFetchTimeMs}ms
                     </InfoRow>
                 </Stack>
-            </HoverCard.Dropdown>
-            <HoverCard.Target>
-                <ActionIcon size="sm" variant="subtle" color="gray">
-                    <MantineIcon
-                        icon={
-                            isServedFromPreAggregate(
-                                cacheMetadata,
-                                preAggregate,
-                            )
-                                ? IconClockBolt
-                                : IconClock
-                        }
-                    />
-                </ActionIcon>
-            </HoverCard.Target>
-        </HoverCard>
+            </Popover.Dropdown>
+            <Popover.Target>
+                {targetVariant === 'menuItem' ? (
+                    <Menu.Item
+                        closeMenuOnClick={false}
+                        leftSection={<MantineIcon icon={icon} />}
+                    >
+                        {getUiString('tileMenu.execution')}
+                    </Menu.Item>
+                ) : (
+                    <ActionIcon
+                        aria-label={getUiString('tileMenu.execution')}
+                        size="sm"
+                    >
+                        <MantineIcon icon={icon} />
+                    </ActionIcon>
+                )}
+            </Popover.Target>
+        </Popover>
     );
 };
 

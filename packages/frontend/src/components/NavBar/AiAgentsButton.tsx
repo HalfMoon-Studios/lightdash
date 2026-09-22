@@ -12,6 +12,7 @@ import { useAiAgentOrgPermission } from '../../ee/features/aiCopilot/hooks/useAi
 import { useAiAgentButtonVisibility } from '../../ee/features/aiCopilot/hooks/useAiAgentsButtonVisibility';
 import { useAiOrganizationSettings } from '../../ee/features/aiCopilot/hooks/useAiOrganizationSettings';
 import MantineIcon from '../common/MantineIcon';
+import { useNavBarPortalTarget } from './NavBarPortalContext';
 
 const PREVIEW_LIMIT = 3;
 const PROMPT_TREND_DAYS = 30;
@@ -21,6 +22,7 @@ type Props = {
 };
 
 export const AiAgentsButton = ({ projectUuid }: Props) => {
+    const portalTarget = useNavBarPortalTarget();
     const navigate = useNavigate();
     const [isPreviewOpen, setIsPreviewOpen] = useState(false);
     const isVisible = useAiAgentButtonVisibility();
@@ -70,11 +72,14 @@ export const AiAgentsButton = ({ projectUuid }: Props) => {
     if (!showReviews) {
         return (
             <Button
+                aria-label="Ask AI"
                 size="xs"
                 variant="default"
                 fz="sm"
-                leftSection={<AiAgentIcon size={14} />}
+                leftSection={<AiAgentIcon size={16} />}
                 onClick={goToAskAi}
+                data-tour-nav="ask-ai"
+                data-tour-hint="Click Ask AI"
             >
                 <Text span truncate="end" maw={150} size="sm">
                     Ask AI
@@ -89,21 +94,22 @@ export const AiAgentsButton = ({ projectUuid }: Props) => {
         return (
             <HoverCard
                 width={240}
-                shadow="lg"
                 position="bottom-start"
                 offset={6}
                 openDelay={120}
                 closeDelay={80}
-                withinPortal
-                portalProps={{ target: '#navbar-header' }}
+                portalProps={{ target: portalTarget }}
             >
                 <HoverCard.Target>
                     <Button
+                        aria-label="Ask AI"
                         size="xs"
                         variant="default"
                         fz="sm"
-                        leftSection={<AiAgentIcon size={14} />}
+                        leftSection={<AiAgentIcon size={16} />}
                         onClick={goToAskAi}
+                        data-tour-nav="ask-ai"
+                        data-tour-hint="Click Ask AI"
                     >
                         <Text span truncate="end" maw={150} size="sm">
                             Ask AI
@@ -140,23 +146,24 @@ export const AiAgentsButton = ({ projectUuid }: Props) => {
     return (
         <HoverCard
             width={290}
-            shadow="lg"
             position="bottom-start"
             offset={6}
             openDelay={120}
             closeDelay={80}
-            withinPortal
-            portalProps={{ target: '#navbar-header' }}
+            portalProps={{ target: portalTarget }}
             onOpen={() => setIsPreviewOpen(true)}
             onClose={() => setIsPreviewOpen(false)}
         >
             <HoverCard.Target>
                 <Button
+                    aria-label="Ask AI"
                     size="xs"
                     variant="default"
                     fz="sm"
-                    leftSection={<AiAgentIcon size={15} animated calm />}
+                    leftSection={<AiAgentIcon size={16} animated calm />}
                     onClick={goToAskAi}
+                    data-tour-nav="ask-ai"
+                    data-tour-hint="Click Ask AI"
                 >
                     <Text span truncate="end" maw={150} size="sm">
                         Ask AI

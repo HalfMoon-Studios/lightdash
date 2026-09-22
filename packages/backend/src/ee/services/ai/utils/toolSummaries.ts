@@ -25,6 +25,8 @@ const readString = (input: AnyType, keys: string[]) => {
 export const summarizeToolCall = (toolName: string, input: AnyType) => {
     const quoted = (text?: string) => (text ? `“${oneLine(text)}”` : undefined);
     switch (toolName) {
+        case 'loadAgentTools':
+            return 'Preparing the next step';
         case 'runSql':
             return 'Checking query';
         case 'repoShell':
@@ -76,6 +78,12 @@ export const summarizeToolCall = (toolName: string, input: AnyType) => {
             return 'Reading project details';
         case 'editDbtProject':
             return 'Preparing change proposal';
+        case 'generateDataApp':
+            return 'Starting a data app build';
+        case 'iterateDataApp':
+            return 'Iterating on a data app';
+        case 'listDataAppThemes':
+            return 'Checking data app themes';
         case 'editRepo':
             return 'Editing repository';
         default:
@@ -85,12 +93,19 @@ export const summarizeToolCall = (toolName: string, input: AnyType) => {
     }
 };
 
-export const isPendingToolResult = (output: AnyType) =>
-    Boolean(output) &&
+const toolResultStatus = (output: AnyType): unknown =>
+    output &&
     typeof output === 'object' &&
-    typeof output.metadata === 'object' &&
-    Boolean(output.metadata) &&
-    output.metadata.status === 'pending';
+    output.metadata &&
+    typeof output.metadata === 'object'
+        ? output.metadata.status
+        : undefined;
+
+export const isPendingToolResult = (output: AnyType) =>
+    toolResultStatus(output) === 'pending';
+
+export const isErrorToolResult = (output: AnyType) =>
+    toolResultStatus(output) === 'error';
 
 export const summarizeToolResult = (toolName: string, output: AnyType) => {
     if (!output || typeof output !== 'object') return `Finished ${toolName}`;

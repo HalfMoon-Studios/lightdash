@@ -1,15 +1,20 @@
 import {
+    interpolateUiString,
     isDimension,
     isFilterAutocompleteManualOnly,
     type FilterableItem,
+    type UiStringKey,
 } from '@lightdash/common';
 import {
     ActionIcon,
     Box,
+    Button,
     Group,
     Highlight,
+    HoverCard,
     Loader,
     Pill,
+    Stack,
     Text,
     TextInput,
     Tooltip,
@@ -32,6 +37,11 @@ import {
     useState,
     type FC,
 } from 'react';
+import { useUiStrings } from '../../../../ee/providers/Embed/useUiStrings';
+import {
+    classifyFieldValueSearchError,
+    type FieldValueSearchErrorKind,
+} from '../../../../hooks/fieldValueSearchError';
 import useHealth from '../../../../hooks/health/useHealth';
 import {
     MAX_AUTOCOMPLETE_RESULTS,
@@ -55,7 +65,7 @@ import { ManageFilterValuesModal } from './ManageFilterValuesModal';
 import MultiValuePastePopover from './MultiValuePastePopover';
 import { formatDisplayValue } from './utils';
 
-type Props = Omit<PillsInputProps, 'onChange'> & {
+type Props = Omit<PillsInputProps, 'onChange' | 'ref'> & {
     filterId: string;
     field: FilterableItem;
     values: string[];
@@ -76,6 +86,7 @@ const RefreshIndicator: FC<{
     refreshedAtRef: React.RefObject<Date>;
     onRefresh: () => void;
 }> = ({ refreshedAtRef, onRefresh }) => {
+    const getUiString = useUiStrings();
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [displayTime, setDisplayTime] = useState(
         refreshedAtRef.current.toLocaleString(),
@@ -83,9 +94,8 @@ const RefreshIndicator: FC<{
 
     return (
         <Tooltip
-            withinPortal
             position="left"
-            label="Click to refresh filter values"
+            label={getUiString('filters.autocomplete.refreshTooltip')}
         >
             <Text
                 size="xs"
@@ -97,7 +107,10 @@ const RefreshIndicator: FC<{
                     setIsRefreshing(true);
                 }}
             >
-                Results loaded at {displayTime}{' '}
+                {interpolateUiString(
+                    getUiString('filters.autocomplete.resultsLoadedAt'),
+                    { time: displayTime },
+                )}{' '}
                 <MantineIcon
                     icon={IconRefresh}
                     display="inline"
@@ -112,6 +125,92 @@ const RefreshIndicator: FC<{
                 />
             </Text>
         </Tooltip>
+    );
+};
+
+const ERROR_HEADLINE_KEY: Record<FieldValueSearchErrorKind, UiStringKey> = {
+    configuration: 'filters.autocomplete.error.configuration',
+    forbidden: 'filters.autocomplete.error.forbidden',
+    warehouse: 'filters.autocomplete.error.warehouse',
+    unknown: 'filters.autocomplete.error.unknown',
+};
+
+const RETRYABLE_ERROR_KINDS: FieldValueSearchErrorKind[] = [
+    'warehouse',
+    'unknown',
+];
+
+const SearchErrorIndicator: FC<{
+    error: unknown;
+    isRetrying: boolean;
+    onRetry: () => void;
+}> = ({ error, isRetrying, onRetry }) => {
+    const getUiString = useUiStrings();
+    const { kind, detail } = useMemo(
+        () => classifyFieldValueSearchError(error),
+        [error],
+    );
+    const canRetry = RETRYABLE_ERROR_KINDS.includes(kind);
+
+    if (isRetrying) return <Loader size={14} color="gray" />;
+
+    return (
+        <HoverCard
+            width={300}
+            position="bottom-end"
+            withArrow
+            shadow="md"
+            openDelay={150}
+        >
+            <HoverCard.Target>
+                <ActionIcon
+                    size="sm"
+                    aria-label={
+                        canRetry
+                            ? getUiString(
+                                  'filters.autocomplete.error.retryAriaLabel',
+                              )
+                            : getUiString(ERROR_HEADLINE_KEY[kind])
+                    }
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={canRetry ? onRetry : undefined}
+                    style={{ cursor: canRetry ? 'pointer' : 'default' }}
+                >
+                    <MantineIcon icon={IconAlertCircle} color="red" />
+                </ActionIcon>
+            </HoverCard.Target>
+            <HoverCard.Dropdown p="sm">
+                <Stack gap="xs">
+                    <Text fz="sm" fw={500}>
+                        {getUiString(ERROR_HEADLINE_KEY[kind])}
+                    </Text>
+                    {detail ? (
+                        <Text fz="xs" c="dimmed" lineClamp={4}>
+                            {detail}
+                        </Text>
+                    ) : null}
+                    <Text fz="xs">
+                        {getUiString(
+                            'filters.autocomplete.error.filterStillApplies',
+                        )}
+                    </Text>
+                    {canRetry ? (
+                        <Group justify="flex-end">
+                            <Button
+                                size="compact-xs"
+                                variant="default"
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={onRetry}
+                            >
+                                {getUiString(
+                                    'filters.autocomplete.error.tryAgain',
+                                )}
+                            </Button>
+                        </Group>
+                    ) : null}
+                </Stack>
+            </HoverCard.Dropdown>
+        </HoverCard>
     );
 };
 
@@ -134,6 +233,7 @@ const FilterStringAutoComplete: FC<Props> = ({
     comboboxProps,
     ...rest
 }) => {
+    const getUiString = useUiStrings();
     // The "(null)" option is only meaningful for multi-value filters.
     const showNull = !!showNullOption && !singleValue;
     const multiSelectRef = useRef<HTMLInputElement>(null);
@@ -184,6 +284,7 @@ const FilterStringAutoComplete: FC<Props> = ({
         reset,
         error,
         isError,
+        isFetching,
     } = useFieldValues(
         search,
         initialSuggestionData,
@@ -339,7 +440,7 @@ const FilterStringAutoComplete: FC<Props> = ({
                 onClose={closeManageValues}
                 values={values}
                 onChange={handleChange}
-                title="Manage filter values"
+                title={getUiString('filters.manageValues.filterValuesTitle')}
             />
 
             <MultiValuePastePopover
@@ -378,17 +479,12 @@ const FilterStringAutoComplete: FC<Props> = ({
                         rightSectionPointerEvents="all"
                         rightSection={
                             disabled ? null : (
-                                <Tooltip
-                                    withinPortal
-                                    label="Edit filter values"
-                                >
+                                <Tooltip label="Edit filter values">
                                     <ActionIcon
                                         aria-label="Edit filter values"
                                         onMouseDown={(event) =>
                                             event.preventDefault()
                                         }
-                                        variant="subtle"
-                                        color="gray"
                                         size="sm"
                                         onClick={() => openManageValues()}
                                     >
@@ -428,7 +524,12 @@ const FilterStringAutoComplete: FC<Props> = ({
                                         size="sm"
                                     />
                                     <Text c="blue.7" fz="sm" fw={500}>
-                                        Add "{search.trim()}"
+                                        {interpolateUiString(
+                                            getUiString(
+                                                'filters.autocomplete.addValue',
+                                            ),
+                                            { value: search.trim() },
+                                        )}
                                     </Text>
                                 </Group>
                             }
@@ -443,8 +544,12 @@ const FilterStringAutoComplete: FC<Props> = ({
                             withDropdown={!manualEntryOnly}
                             nothingFoundMessage={
                                 isInitialLoading
-                                    ? 'Loading...'
-                                    : 'No results found'
+                                    ? getUiString(
+                                          'filters.autocomplete.loading',
+                                      )
+                                    : getUiString(
+                                          'filters.autocomplete.noResults',
+                                      )
                             }
                             rightSectionWidth={30}
                             rightSectionPointerEvents="all"
@@ -459,29 +564,21 @@ const FilterStringAutoComplete: FC<Props> = ({
                                     }}
                                 >
                                     {isInitialLoading ? (
-                                        <Loader size="xs" color="gray" />
+                                        <Loader size={14} color="gray" />
                                     ) : isError ? (
-                                        <Tooltip
-                                            label={
-                                                error?.error?.message ||
-                                                'Filter not available'
-                                            }
-                                            withinPortal
-                                        >
-                                            <MantineIcon
-                                                icon={IconAlertCircle}
-                                                color="red"
-                                            />
-                                        </Tooltip>
+                                        <SearchErrorIndicator
+                                            error={error}
+                                            isRetrying={isFetching}
+                                            onRetry={() => void refetch()}
+                                        />
                                     ) : null}
 
                                     <Tooltip
-                                        withinPortal
-                                        label="Edit filter values"
+                                        label={getUiString(
+                                            'filters.autocomplete.editValuesTooltip',
+                                        )}
                                     >
                                         <ActionIcon
-                                            variant="subtle"
-                                            color="gray"
                                             size="sm"
                                             onClick={openManageValues}
                                             style={{
@@ -506,9 +603,14 @@ const FilterStringAutoComplete: FC<Props> = ({
                                         pt="xs"
                                         pb="xxs"
                                     >
-                                        Showing first {MAX_AUTOCOMPLETE_RESULTS}{' '}
-                                        results. {search ? 'Continue' : 'Start'}{' '}
-                                        typing...
+                                        {interpolateUiString(
+                                            getUiString(
+                                                search
+                                                    ? 'filters.autocomplete.maxResultsContinue'
+                                                    : 'filters.autocomplete.maxResultsStart',
+                                            ),
+                                            { n: MAX_AUTOCOMPLETE_RESULTS },
+                                        )}
                                     </Text>
                                 ) : null
                             }

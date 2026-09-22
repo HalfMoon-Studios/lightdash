@@ -1,5 +1,6 @@
 import {
     AgentAsCode,
+    aiAgentSuggestionContextSchema,
     AiAgentThreadFilters,
     AiArtifactTSOACompat,
     AiClonedThreadCreatedFrom,
@@ -26,8 +27,11 @@ import {
     ApiAiAgentSummaryResponse,
     ApiAiAgentThreadCreateRequest,
     ApiAiAgentThreadCreateResponse,
+    ApiAiAgentThreadDataAppRestoreRequest,
+    ApiAiAgentThreadDataAppRestoreResponse,
     ApiAiAgentThreadGenerateResponse,
     ApiAiAgentThreadGenerateTitleResponse,
+    ApiAiAgentThreadLiveStatusesResponse,
     ApiAiAgentThreadMessageCreateRequest,
     ApiAiAgentThreadMessageCreateResponse,
     ApiAiAgentThreadMessageInterruptResponse,
@@ -38,6 +42,7 @@ import {
     ApiAiAgentThreadShareResponse,
     ApiAiAgentThreadStreamRequest,
     ApiAiAgentThreadSummaryListResponse,
+    ApiAiAgentThreadUpdateRequest,
     ApiAiAgentThreadWorkstreamsResponse,
     ApiAiAgentVerifiedArtifactsResponse,
     ApiAiAgentVerifiedQuestionsResponse,
@@ -70,6 +75,7 @@ import {
     ApiUpdateUserAgentPreferencesResponse,
     assertEmbeddedAuth,
     assertRegisteredAccount,
+    ForbiddenError,
     KnexPaginateArgs,
     ParameterError,
     type UUID,
@@ -102,6 +108,15 @@ import Logger from '../../logging/logger';
 import { type AiAgentCoderService } from '../services/AiAgentCoderService/AiAgentCoderService';
 import { type AiAgentMemoryService } from '../services/AiAgentMemoryService/AiAgentMemoryService';
 import { type AiAgentService } from '../services/AiAgentService/AiAgentService';
+
+const parseSuggestionContext = (context: string | undefined) => {
+    if (!context) return undefined;
+    try {
+        return aiAgentSuggestionContextSchema.parse(JSON.parse(context));
+    } catch {
+        throw new ParameterError('Invalid agent suggestion context');
+    }
+};
 
 @Route('/api/v1/projects/{projectUuid}/aiAgents')
 @Response<ApiErrorPayload>('default', 'Error')
@@ -484,6 +499,32 @@ export class AiAgentController extends BaseController {
 
     @Middlewares([allowApiKeyAuthentication, isAuthenticated])
     @SuccessResponse('200', 'Success')
+    @Get('/threads/live-statuses')
+    @OperationId('getAgentThreadLiveStatuses')
+    async getAgentThreadLiveStatuses(
+        @Request() req: express.Request,
+        @Path() projectUuid: string,
+        @Query() threadUuids: UUID[],
+    ): Promise<ApiAiAgentThreadLiveStatusesResponse> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+
+        return {
+            status: 'ok',
+            results: {
+                statuses:
+                    await this.getAiAgentService().getAgentThreadLiveStatuses(
+                        toSessionUser(req.account),
+                        projectUuid,
+                        threadUuids,
+                    ),
+                generatedAt: new Date().toISOString(),
+            },
+        };
+    }
+
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @SuccessResponse('200', 'Success')
     @Get('/{agentUuid}')
     @OperationId('getAgent')
     async getAgent(
@@ -661,6 +702,7 @@ export class AiAgentController extends BaseController {
         @Query() threadUuid?: string,
         @Query() afterMessageUuid?: string,
         @Query() enableSqlMode?: boolean,
+        @Query() context?: string,
     ): Promise<ApiAgentSuggestionsResponse> {
         this.setStatus(200);
 
@@ -686,6 +728,7 @@ export class AiAgentController extends BaseController {
                 threadUuid,
                 afterMessageUuid,
                 enableSqlMode,
+                context: parseSuggestionContext(context),
             },
         );
         return {
@@ -1022,6 +1065,88 @@ export class AiAgentController extends BaseController {
     }
 
     /**
+     * Rename a thread. Only the thread owner or a project admin may do this.
+     * @summary Update AI agent thread
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @SuccessResponse('200', 'Success')
+    @Patch('/{agentUuid}/threads/{threadUuid}')
+    @OperationId('updateAgentThread')
+    async updateAgentThread(
+        @Request() req: express.Request,
+        @Path() projectUuid: string,
+        @Path() agentUuid: UUID,
+        @Path() threadUuid: UUID,
+        @Body() body: ApiAiAgentThreadUpdateRequest,
+    ): Promise<ApiSuccessEmpty> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+        await this.getAiAgentService().updateAgentThreadTitle(
+            toSessionUser(req.account),
+            { agentUuid, threadUuid, title: body.title },
+        );
+
+        return {
+            status: 'ok',
+            results: undefined,
+        };
+    }
+
+    /**
+     * Pin a thread to the top of the sidebar.
+     * @summary Pin AI agent thread
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @SuccessResponse('200', 'Success')
+    @Post('/{agentUuid}/threads/{threadUuid}/pin')
+    @OperationId('pinAgentThread')
+    async pinAgentThread(
+        @Request() req: express.Request,
+        @Path() projectUuid: string,
+        @Path() agentUuid: UUID,
+        @Path() threadUuid: UUID,
+    ): Promise<ApiSuccessEmpty> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+        await this.getAiAgentService().setAgentThreadPinned(
+            toSessionUser(req.account),
+            { agentUuid, threadUuid, pinned: true },
+        );
+
+        return {
+            status: 'ok',
+            results: undefined,
+        };
+    }
+
+    /**
+     * Unpin a thread.
+     * @summary Unpin AI agent thread
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @SuccessResponse('200', 'Success')
+    @Delete('/{agentUuid}/threads/{threadUuid}/pin')
+    @OperationId('unpinAgentThread')
+    async unpinAgentThread(
+        @Request() req: express.Request,
+        @Path() projectUuid: string,
+        @Path() agentUuid: UUID,
+        @Path() threadUuid: UUID,
+    ): Promise<ApiSuccessEmpty> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+        await this.getAiAgentService().setAgentThreadPinned(
+            toSessionUser(req.account),
+            { agentUuid, threadUuid, pinned: false },
+        );
+
+        return {
+            status: 'ok',
+            results: undefined,
+        };
+    }
+
+    /**
      * Get the writeback pull request associated with a thread — the PR the
      * agent opened in this thread, or the PR a verification thread verifies.
      * @summary Get AI agent thread pull request
@@ -1149,6 +1274,36 @@ export class AiAgentController extends BaseController {
                 threadUuid,
                 body,
             ),
+        };
+    }
+
+    /**
+     * Restores a ready data app version as a new latest version on behalf of
+     * the thread and records the restore as a hidden thread turn
+     * @summary Restore data app version
+     */
+    @Middlewares([allowApiKeyAuthentication, isAuthenticated])
+    @SuccessResponse('200', 'Success')
+    @Post('/{agentUuid}/threads/{threadUuid}/data-app-restores')
+    @OperationId('restoreAgentThreadDataAppVersion')
+    async restoreAgentThreadDataAppVersion(
+        @Request() req: express.Request,
+        @Path() projectUuid: UUID,
+        @Path() agentUuid: UUID,
+        @Path() threadUuid: UUID,
+        @Body() body: ApiAiAgentThreadDataAppRestoreRequest,
+    ): Promise<ApiAiAgentThreadDataAppRestoreResponse> {
+        assertRegisteredAccount(req.account);
+        this.setStatus(200);
+        return {
+            status: 'ok',
+            results:
+                await this.getAiAgentService().restoreDataAppVersionForThread(
+                    toSessionUser(req.account),
+                    agentUuid,
+                    threadUuid,
+                    body,
+                ),
         };
     }
 
@@ -1479,17 +1634,34 @@ export class AiAgentController extends BaseController {
         @Path() messageUuid: string,
         @Body() body: { humanScore: number; humanFeedback?: string | null },
     ): Promise<ApiSuccessEmpty> {
-        assertRegisteredAccount(req.account);
         this.setStatus(200);
-        await this.getAiAgentService().updateHumanScoreForMessage(
-            toSessionUser(req.account),
-            projectUuid,
-            agentUuid,
-            threadUuid,
-            messageUuid,
-            body.humanScore,
-            body.humanFeedback,
-        );
+
+        if (req.account?.authentication.type === 'jwt') {
+            assertEmbeddedAuth(req.account);
+            await this.getAiAgentService().updateEmbedHumanScoreForMessage(
+                req.account,
+                projectUuid,
+                {
+                    agentUuid,
+                    threadUuid,
+                    messageUuid,
+                    humanScore: body.humanScore,
+                    humanFeedback: body.humanFeedback,
+                },
+            );
+        } else {
+            assertRegisteredAccount(req.account);
+            await this.getAiAgentService().updateHumanScoreForMessage(
+                toSessionUser(req.account),
+                projectUuid,
+                agentUuid,
+                threadUuid,
+                messageUuid,
+                body.humanScore,
+                body.humanFeedback,
+            );
+        }
+
         return {
             status: 'ok',
             results: undefined,
@@ -1609,10 +1781,15 @@ export class AiAgentController extends BaseController {
         @Path() agentUuid: string,
         @Path() artifactUuid: string,
         @Path() versionUuid: string,
+        @Query() cachedQueryUuid?: string,
     ): Promise<ApiAiAgentArtifactVizQueryResponse> {
         this.setStatus(200);
 
         if (req.account?.authentication.type === 'jwt') {
+            if (cachedQueryUuid !== undefined)
+                throw new ForbiddenError(
+                    'Cached artifact execution is unavailable',
+                );
             assertEmbeddedAuth(req.account);
             return {
                 status: 'ok',
@@ -1637,6 +1814,7 @@ export class AiAgentController extends BaseController {
                     agentUuid,
                     artifactUuid,
                     versionUuid,
+                    cachedQueryUuid,
                 },
             ),
         };

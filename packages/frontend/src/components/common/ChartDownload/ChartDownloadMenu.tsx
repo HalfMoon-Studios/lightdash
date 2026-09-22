@@ -9,6 +9,7 @@ import {
 import { ActionIcon, Popover } from '@mantine/core';
 import { IconShare2 } from '@tabler/icons-react';
 import { memo, useCallback } from 'react';
+import DataAppVizDownloadMenu from '../../../features/apps/DataAppVizDownloadMenu';
 import useEchartsCartesianConfig from '../../../hooks/echarts/useEchartsCartesianConfig';
 import { useAccount } from '../../../hooks/user/useAccount';
 import { useAbilityContext } from '../../../providers/Ability/useAbilityContext';
@@ -31,6 +32,7 @@ export type ChartDownloadMenuProps = {
     getDownloadQueryUuid: (
         limit: number | null,
         exportPivotedResults?: boolean,
+        limitType?: Limit,
     ) => Promise<string>;
     projectUuid: string;
     chartName?: string;
@@ -96,7 +98,6 @@ const ChartDownloadMenu: React.FC<ChartDownloadMenuProps> = memo(
                   }),
               )
             : canManageExplore;
-
         const getChartInstance = useCallback(
             () => chartRef.current?.getEchartsInstance(),
             [chartRef],
@@ -130,13 +131,23 @@ const ChartDownloadMenu: React.FC<ChartDownloadMenuProps> = memo(
         const getChartDownloadQueryUuid = useCallback(
             (
                 limit: number | null,
-                _limitType: Limit,
+                limitType: Limit,
                 exportPivotedData: boolean = true,
             ) => {
-                return getDownloadQueryUuid(limit, exportPivotedData);
+                return getDownloadQueryUuid(
+                    limit,
+                    exportPivotedData,
+                    limitType,
+                );
             },
             [getDownloadQueryUuid],
         );
+
+        if (visualizationConfig.chartType === ChartType.DATA_APP_VIZ) {
+            return canExportImages && !isEmbedded ? (
+                <DataAppVizDownloadMenu projectUuid={projectUuid} />
+            ) : null;
+        }
 
         if (
             CHART_TYPES_WITHOUT_IMAGE_EXPORT.includes(

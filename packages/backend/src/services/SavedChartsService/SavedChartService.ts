@@ -4,19 +4,22 @@ import {
     Account,
     assertUnreachable,
     BulkActionable,
-    canMutateVerifiedContent,
     ChartHistory,
     ChartSummary,
     ChartType,
     ChartVersion,
+    computeContentDraftStaleness,
+    ContentAsCodeType,
     ContentType,
     countCustomDimensionsInMetricQuery,
     countTotalFilterRules,
     CreateSavedChart,
     CreateSavedChartVersion,
+    CreateSchedulerAndTargets,
     CreateSchedulerAndTargetsWithoutIds,
     DeletedContentFilters,
     DeletedDbtChartContentSummary,
+    DetailedViewStatistics,
     ExploreSplitError,
     ExploreType,
     ForbiddenError,
@@ -24,6 +27,7 @@ import {
     getSchedulerResourceTypeAndId,
     getTimezoneLabel,
     GoogleSheetsTransientError,
+    isChartCreateScheduler,
     isConditionalFormattingConfigWithColorRange,
     isConditionalFormattingConfigWithSingleColor,
     isCustomSqlDimension,
@@ -39,6 +43,7 @@ import {
     KnexPaginatedData,
     MetricType,
     MissingConfigError,
+    normalizeSavedMergeDefinition,
     NotFoundError,
     ParameterError,
     SavedChart,
@@ -53,8 +58,8 @@ import {
     UpdatedByUser,
     UpdateMultipleSavedChart,
     UpdateSavedChart,
-    ViewStatistics,
     type ChartFieldUpdates,
+    type ContentDraftStaleness,
     type ContentVerificationInfo,
     type Explore,
     type ExploreError,
@@ -78,6 +83,14 @@ import { getSchedulerTargetType } from '../../database/entities/scheduler';
 import { AnalyticsModel } from '../../models/AnalyticsModel';
 import type { CatalogModel } from '../../models/CatalogModel/CatalogModel';
 import { getChartFieldUsageChanges } from '../../models/CatalogModel/utils';
+import { ContentAsCodeProjectSettingsModel } from '../../models/ContentAsCodeProjectSettingsModel';
+import { ContentAsCodeSnapshotModel } from '../../models/ContentAsCodeSnapshotModel';
+import {
+    ContentDraftModel,
+    pruneUnchangedDraftFields,
+    type ContentDraft,
+    type ContentDraftBase,
+} from '../../models/ContentDraftModel';
 import { ContentVerificationModel } from '../../models/ContentVerificationModel';
 import { DashboardModel } from '../../models/DashboardModel/DashboardModel';
 import { OrganizationModel } from '../../models/OrganizationModel';
@@ -89,6 +102,7 @@ import { SpaceModel } from '../../models/SpaceModel';
 import { SchedulerClient } from '../../scheduler/SchedulerClient';
 import { BaseService } from '../BaseService';
 import { PermissionsService } from '../PermissionsService/PermissionsService';
+import { assertCanReplaceChartFilters } from '../SchedulerService/chartFilterOverridesAccess';
 import type { SchedulerService } from '../SchedulerService/SchedulerService';
 import type {
     SoftDeletableService,
@@ -96,6 +110,15 @@ import type {
 } from '../SoftDeletableService';
 import { SpacePermissionService } from '../SpaceService/SpacePermissionService';
 import { UserService } from '../UserService';
+import {
+    assertCanMutateVerifiedContent,
+    getVerificationAfterUpdate,
+} from '../verifiedContentGuards';
+import {
+    assertChartDraftOverlay,
+    mergeDraftIntoChart,
+    type ChartDraftOverlay,
+} from './chartDraftOverlay';
 
 type SavedChartServiceArguments = {
     analytics: LightdashAnalytics;
@@ -117,6 +140,13 @@ type SavedChartServiceArguments = {
     spacePermissionService: SpacePermissionService;
     contentVerificationModel: ContentVerificationModel;
     organizationModel: OrganizationModel;
+    contentAsCodeProjectSettingsModel: ContentAsCodeProjectSettingsModel;
+    contentAsCodeSnapshotModel: ContentAsCodeSnapshotModel;
+    contentDraftModel: ContentDraftModel;
+};
+
+type ContentAsCodeDeleteOptions = SoftDeleteOptions & {
+    contentAsCodePolicyChecked?: boolean;
 };
 
 type GoogleSheetValidationOptions = {
@@ -176,6 +206,12 @@ export class SavedChartService
 
     private readonly organizationModel: OrganizationModel;
 
+    private readonly contentAsCodeProjectSettingsModel: ContentAsCodeProjectSettingsModel;
+
+    private readonly contentAsCodeSnapshotModel: ContentAsCodeSnapshotModel;
+
+    private readonly contentDraftModel: ContentDraftModel;
+
     constructor(args: SavedChartServiceArguments) {
         super();
         this.analytics = args.analytics;
@@ -197,19 +233,28 @@ export class SavedChartService
         this.spacePermissionService = args.spacePermissionService;
         this.contentVerificationModel = args.contentVerificationModel;
         this.organizationModel = args.organizationModel;
+        this.contentAsCodeProjectSettingsModel =
+            args.contentAsCodeProjectSettingsModel;
+        this.contentAsCodeSnapshotModel = args.contentAsCodeSnapshotModel;
+        this.contentDraftModel = args.contentDraftModel;
     }
 
     private async checkUpdateAccess(
         user: SessionUser,
         chartUuid: string,
-    ): Promise<ChartSummary> {
+    ): Promise<{
+        savedChart: ChartSummary;
+        grantAudit: { viaDashboardGrant: boolean; grantOnly: boolean };
+    }> {
         const savedChart = await this.savedChartModel.getSummary(chartUuid);
         const { organizationUuid, projectUuid } = savedChart;
-        const { access, inheritsFromOrgOrProject } =
-            await this.spacePermissionService.getSpaceAccessContext(
-                user.userUuid,
-                savedChart.spaceUuid,
-            );
+        const { access, inheritsFromOrgOrProject, directOnly } =
+            await this.spacePermissionService.resolveAccess(user.userUuid, {
+                type: 'chart',
+                chartUuid: savedChart.uuid,
+                dashboardUuid: savedChart.dashboardUuid,
+                spaceUuid: savedChart.spaceUuid,
+            });
         const auditedAbility = this.createAuditedAbility(user);
         if (
             auditedAbility.cannot(
@@ -230,7 +275,14 @@ export class SavedChartService
                 "You don't have access to the space this chart belongs to",
             );
         }
-        return savedChart;
+        return {
+            savedChart,
+            grantAudit: {
+                viaDashboardGrant:
+                    SavedChartService.hasDashboardGrantRow(access),
+                grantOnly: directOnly,
+            },
+        };
     }
 
     private async checkCreateScheduledDeliveryAccess(
@@ -263,6 +315,9 @@ export class SavedChartService
         return savedChart;
     }
 
+    // Deliberately space-only: used by pinning and standalone-chart
+    // scheduled-delivery creation, neither of which applies to
+    // dashboard-owned charts, so direct grants must never count here.
     async hasChartSpaceAccess(
         user: SessionUser,
         spaceUuid: string,
@@ -278,8 +333,13 @@ export class SavedChartService
         }
     }
 
+    private static hasDashboardGrantRow(access: SpaceAccess[]): boolean {
+        return access.some((row) => row.grantedVia === 'dashboard');
+    }
+
     static getCreateEventProperties(
         savedChart: SavedChartDAO,
+        grantAudit: { viaDashboardGrant: boolean; grantOnly: boolean },
     ): CreateSavedChartVersionEvent['properties'] {
         const echartsConfig =
             savedChart.chartConfig.type === ChartType.CARTESIAN
@@ -291,6 +351,7 @@ export class SavedChartService
                 : undefined;
 
         return {
+            ...grantAudit,
             title: savedChart.name,
             description: savedChart.description,
             projectId: savedChart.projectUuid,
@@ -314,6 +375,25 @@ export class SavedChartService
                 savedChart.chartConfig.type === ChartType.FUNNEL
                     ? {
                           dataInput: savedChart.chartConfig?.config?.dataInput,
+                      }
+                    : undefined,
+            map:
+                savedChart.chartConfig.type === ChartType.MAP
+                    ? {
+                          mapType: savedChart.chartConfig.config?.mapType,
+                          locationType:
+                              savedChart.chartConfig.config?.locationType,
+                          hasCustomGeoJson:
+                              !!savedChart.chartConfig.config?.customGeoJsonUrl,
+                          tileBackground:
+                              savedChart.chartConfig.config?.tileBackground ??
+                              null,
+                          darkModeTileBackground:
+                              savedChart.chartConfig.config
+                                  ?.darkModeTileBackground ?? null,
+                          savesMapExtent:
+                              savedChart.chartConfig.config?.saveMapExtent ??
+                              false,
                       }
                     : undefined,
             table:
@@ -408,9 +488,9 @@ export class SavedChartService
                     ? {
                           dataAppVizUuid:
                               savedChart.chartConfig.config.dataAppVizUuid,
-                          mappedFieldCount: Object.keys(
+                          mappedFieldCount: Object.values(
                               savedChart.chartConfig.config.fieldMapping || {},
-                          ).length,
+                          ).filter((binding) => binding.length > 0).length,
                           changedOptionCount: Object.keys(
                               savedChart.chartConfig.config.optionValues || {},
                           ).length,
@@ -612,6 +692,239 @@ export class SavedChartService
         );
     }
 
+    private async canManageContentAsCode(
+        user: SessionUser,
+        projectUuid: string,
+    ): Promise<boolean> {
+        const project = await this.projectModel.get(projectUuid);
+        return this.createAuditedAbility(user).can(
+            'manage',
+            subject('ContentAsCode', {
+                projectUuid: project.projectUuid,
+                organizationUuid: project.organizationUuid,
+                upstreamProjectUuid: project.upstreamProjectUuid,
+                type: project.type,
+                createdByUserUuid: project.createdByUserUuid,
+                metadata: { slug: '' },
+            }),
+        );
+    }
+
+    private async assertCanDeleteGitBackedChart(
+        user: SessionUser,
+        chart: Pick<SavedChartDAO, 'projectUuid' | 'slug'>,
+    ): Promise<void> {
+        const settings = await this.contentAsCodeProjectSettingsModel.get(
+            chart.projectUuid,
+        );
+        if (!settings?.syncEnabled) return;
+
+        const snapshot = await this.contentAsCodeSnapshotModel.get(
+            chart.projectUuid,
+            ContentAsCodeType.CHART,
+            chart.slug,
+        );
+        if (snapshot === undefined) return;
+        if (await this.canManageContentAsCode(user, chart.projectUuid)) return;
+
+        throw new ForbiddenError(
+            'This chart is managed by Content as Code and can only be deleted by a Content as Code manager.',
+            { contentAsCodeManaged: true },
+        );
+    }
+
+    private async maybeStoreDraft(
+        user: SessionUser,
+        existingChart: SavedChartDAO | ChartSummary,
+        draftFields: ChartDraftOverlay,
+        verificationAfterUpdate: ContentVerificationInfo | null,
+        spaceContext: {
+            inheritsFromOrgOrProject: boolean;
+            access: SpaceAccess[];
+        },
+    ): Promise<SavedChart | undefined> {
+        if (Object.keys(draftFields).length === 0) return undefined;
+        const base = await this.resolveDraftBase(existingChart);
+        if (base === null) return undefined;
+        return this.storeDraft(
+            user,
+            existingChart,
+            draftFields,
+            verificationAfterUpdate,
+            spaceContext,
+            base,
+        );
+    }
+
+    // Every role drafts git-backed content; the repo is the only publisher.
+    // Null means the save publishes normally
+    private async resolveDraftBase(
+        existingChart: Pick<SavedChartDAO, 'projectUuid' | 'slug'>,
+    ): Promise<ContentDraftBase | null> {
+        const settings = await this.contentAsCodeProjectSettingsModel.get(
+            existingChart.projectUuid,
+        );
+        if (!settings?.syncEnabled) return null;
+        const snapshot = await this.contentAsCodeSnapshotModel.get(
+            existingChart.projectUuid,
+            ContentAsCodeType.CHART,
+            existingChart.slug,
+        );
+        if (snapshot === undefined) return null;
+        return { snapshot: snapshot.snapshot, hash: snapshot.snapshotHash };
+    }
+
+    private async storeDraft(
+        user: SessionUser,
+        existingChart: SavedChartDAO | ChartSummary,
+        draftFields: ChartDraftOverlay,
+        verificationAfterUpdate: ContentVerificationInfo | null,
+        spaceContext: {
+            inheritsFromOrgOrProject: boolean;
+            access: SpaceAccess[];
+        },
+        base: ContentDraftBase,
+    ): Promise<SavedChart> {
+        assertChartDraftOverlay(draftFields);
+        const stored = await this.contentDraftModel.upsertOpenDraft({
+            projectUuid: existingChart.projectUuid,
+            contentType: 'chart',
+            contentUuid: existingChart.uuid,
+            slug: existingChart.slug,
+            authorUserUuid: user.userUuid,
+            draft: pruneUnchangedDraftFields(existingChart, draftFields),
+            base,
+        });
+        this.analytics.track({
+            event: 'content_draft.saved',
+            userId: user.userUuid,
+            properties: {
+                projectId: existingChart.projectUuid,
+                draftId: stored.uuid,
+                contentType: 'chart',
+                contentId: existingChart.uuid,
+                draftedFieldCount: Object.keys(stored.draft).length,
+            },
+        });
+        const chartForOverlay =
+            'metricQuery' in existingChart
+                ? existingChart
+                : await this.savedChartModel.get(existingChart.uuid);
+        return {
+            ...mergeDraftIntoChart(chartForOverlay, stored.draft),
+            verification: verificationAfterUpdate,
+            ...spaceContext,
+            hasUnpublishedChanges: true,
+        };
+    }
+
+    private async applyOpenDraftOverlay(
+        user: SessionUser,
+        chart: SavedChart,
+    ): Promise<SavedChart> {
+        try {
+            const settings = await this.contentAsCodeProjectSettingsModel.get(
+                chart.projectUuid,
+            );
+            if (!settings?.syncEnabled) return chart;
+            const draft = await this.contentDraftModel.findOpenDraft(
+                chart.projectUuid,
+                'chart',
+                chart.uuid,
+                user.userUuid,
+            );
+            if (draft) {
+                try {
+                    assertChartDraftOverlay(draft.draft);
+                    const draftStaleness = await this.getDraftStaleness(
+                        chart,
+                        draft,
+                    );
+                    return {
+                        ...mergeDraftIntoChart(chart, draft.draft),
+                        verification:
+                            draft.draft.verified === false
+                                ? null
+                                : chart.verification,
+                        hasUnpublishedChanges: true,
+                        ...(draftStaleness && { draftStaleness }),
+                    };
+                } catch (error) {
+                    this.logger.warn(
+                        'Chart draft overlay failed; serving published chart',
+                        {
+                            projectUuid: chart.projectUuid,
+                            chartUuid: chart.uuid,
+                            draftUuid: draft.uuid,
+                            error:
+                                error instanceof Error
+                                    ? error.message
+                                    : String(error),
+                        },
+                    );
+                    return {
+                        ...chart,
+                        draftOverlayError: {
+                            code: 'invalid_chart_draft',
+                            draftUuid: draft.uuid,
+                        },
+                    };
+                }
+            }
+            const dismissedDraft =
+                await this.contentDraftModel.findLatestDismissedDraft(
+                    chart.projectUuid,
+                    'chart',
+                    chart.uuid,
+                    user.userUuid,
+                );
+            const chartForViewer = dismissedDraft
+                ? { ...chart, dismissedDraftUuid: dismissedDraft.uuid }
+                : chart;
+            if (await this.canManageContentAsCode(user, chart.projectUuid)) {
+                const awaiting =
+                    await this.contentDraftModel.countOpenForContent(
+                        chart.projectUuid,
+                        'chart',
+                        chart.uuid,
+                        user.userUuid,
+                    );
+                if (awaiting > 0) {
+                    return {
+                        ...chartForViewer,
+                        draftsAwaitingReview: awaiting,
+                    };
+                }
+            }
+            return chartForViewer;
+        } catch (error) {
+            this.logger.warn('Chart draft overlay failed', error);
+            return chart;
+        }
+    }
+
+    private async getDraftStaleness(
+        chart: Pick<SavedChartDAO, 'projectUuid' | 'slug'>,
+        draft: ContentDraft,
+    ): Promise<ContentDraftStaleness | null> {
+        if (!draft.baseSnapshotHash) return null;
+        const current = await this.contentAsCodeSnapshotModel.get(
+            chart.projectUuid,
+            ContentAsCodeType.CHART,
+            chart.slug,
+        );
+        if (!current || current.snapshotHash === draft.baseSnapshotHash) {
+            return null;
+        }
+        return computeContentDraftStaleness({
+            draftUuid: draft.uuid,
+            contentType: 'chart',
+            base: draft.baseSnapshot,
+            current: current.snapshot,
+            overlay: draft.draft,
+        });
+    }
+
     async createVersion(
         account: Account,
         savedChartUuid: string,
@@ -620,17 +933,19 @@ export class SavedChartService
         // Embed writes run as the write actor and only inside the write space
         const { user, embedWriteActions } = getAccountWriteContext(account);
         const { preserveVerification, ...chartVersion } = data;
+        const existingChart = await this.savedChartModel.get(savedChartUuid);
         const {
             organizationUuid,
             projectUuid,
             spaceUuid,
+            dashboardUuid,
             metricQuery: {
                 metrics: oldChartMetrics,
                 dimensions: oldChartDimensions,
                 customDimensions: oldCustomDimensions,
                 tableCalculations: oldTableCalculations,
             },
-        } = await this.savedChartModel.get(savedChartUuid);
+        } = existingChart;
 
         if (embedWriteActions && spaceUuid !== embedWriteActions.spaceUuid) {
             throw new ForbiddenError(
@@ -638,11 +953,23 @@ export class SavedChartService
             );
         }
 
-        const { inheritsFromOrgOrProject, access } =
-            await this.spacePermissionService.getSpaceAccessContext(
-                user.userUuid,
-                spaceUuid,
-            );
+        // Embed write actors stay space-only: grant parity for embed
+        // identities is a separate decision.
+        const { inheritsFromOrgOrProject, access, directOnly } =
+            embedWriteActions
+                ? await this.spacePermissionService.resolveAccess(
+                      user.userUuid,
+                      { type: 'space', spaceUuid },
+                  )
+                : await this.spacePermissionService.resolveAccess(
+                      user.userUuid,
+                      {
+                          type: 'chart',
+                          chartUuid: savedChartUuid,
+                          dashboardUuid,
+                          spaceUuid,
+                      },
+                  );
 
         const auditedAbility = this.createAuditedAbility(user);
         if (
@@ -727,6 +1054,16 @@ export class SavedChartService
             );
         }
 
+        const merge = chartVersion.merge
+            ? normalizeSavedMergeDefinition(
+                  chartVersion.merge,
+                  chartVersion.metricQuery,
+              )
+            : chartVersion.merge;
+        if (chartVersion.merge && !merge) {
+            throw new ParameterError('Invalid saved merge definition.');
+        }
+
         const verificationAfterUpdate =
             await this.getVerificationAfterChartUpdate({
                 user,
@@ -736,10 +1073,32 @@ export class SavedChartService
                 preserveVerification,
             });
 
+        if (!embedWriteActions) {
+            const draftResult = await this.maybeStoreDraft(
+                user,
+                existingChart,
+                {
+                    tableName: chartVersion.tableName,
+                    metricQuery: chartVersion.metricQuery,
+                    chartConfig: chartVersion.chartConfig,
+                    tableConfig: chartVersion.tableConfig,
+                    pivotConfig: chartVersion.pivotConfig,
+                    parameters: chartVersion.parameters,
+                    merge,
+                    verified: verificationAfterUpdate !== null,
+                },
+                verificationAfterUpdate,
+                { inheritsFromOrgOrProject, access },
+            );
+            if (draftResult) return draftResult;
+        }
+
         const savedChart = await this.savedChartModel.createVersion(
             savedChartUuid,
             chartVersion,
             user,
+            undefined,
+            { projectUuid, dashboardUuid: dashboardUuid ?? null, spaceUuid },
         );
 
         if (!verificationAfterUpdate) {
@@ -752,7 +1111,11 @@ export class SavedChartService
         this.analytics.track({
             event: 'saved_chart_version.created',
             userId: user.userUuid,
-            properties: SavedChartService.getCreateEventProperties(savedChart),
+            properties: SavedChartService.getCreateEventProperties(savedChart, {
+                viaDashboardGrant:
+                    SavedChartService.hasDashboardGrantRow(access),
+                grantOnly: directOnly,
+            }),
         });
 
         const formulaProperties =
@@ -841,19 +1204,23 @@ export class SavedChartService
         data: UpdateSavedChart,
     ): Promise<SavedChart> {
         const { preserveVerification, ...chartUpdate } = data;
+        const existingChart =
+            await this.savedChartModel.getSummary(savedChartUuid);
         const {
             organizationUuid,
             projectUuid,
             spaceUuid,
             dashboardUuid,
             name,
-        } = await this.savedChartModel.getSummary(savedChartUuid);
+        } = existingChart;
 
-        const { inheritsFromOrgOrProject, access } =
-            await this.spacePermissionService.getSpaceAccessContext(
-                user.userUuid,
+        const { inheritsFromOrgOrProject, access, directOnly } =
+            await this.spacePermissionService.resolveAccess(user.userUuid, {
+                type: 'chart',
+                chartUuid: savedChartUuid,
+                dashboardUuid,
                 spaceUuid,
-            );
+            });
 
         const auditedAbility = this.createAuditedAbility(user);
         if (
@@ -871,6 +1238,36 @@ export class SavedChartService
             throw new ForbiddenError(
                 "You don't have access to the space this chart belongs to",
             );
+        }
+
+        // A truthy spaceUuid detaches the chart from its dashboard and
+        // relocates it (SavedChartModel.update) — a boundary-crossing move that
+        // a dashboard grant must never authorize. Require real space access to
+        // the chart's current space; grant-only editors have none. See the
+        // boundary rule on resolveAccess.
+        if (chartUpdate.spaceUuid) {
+            const currentSpaceCtx =
+                await this.spacePermissionService.resolveAccess(user.userUuid, {
+                    type: 'space',
+                    spaceUuid,
+                });
+            if (
+                auditedAbility.cannot(
+                    'update',
+                    subject('SavedChart', {
+                        organizationUuid,
+                        projectUuid,
+                        inheritsFromOrgOrProject:
+                            currentSpaceCtx.inheritsFromOrgOrProject,
+                        access: currentSpaceCtx.access,
+                        metadata: { savedChartUuid, savedChartName: name },
+                    }),
+                )
+            ) {
+                throw new ForbiddenError(
+                    "You don't have access to move this chart out of its space",
+                );
+            }
         }
 
         await this.assertCanMutateVerifiedChart({
@@ -901,9 +1298,32 @@ export class SavedChartService
                 preserveVerification,
             });
 
+        const chartDraftFields: ChartDraftOverlay = {
+            ...(chartUpdate.name !== undefined && { name: chartUpdate.name }),
+            ...(chartUpdate.description !== undefined && {
+                description: chartUpdate.description,
+            }),
+            ...(chartUpdate.spaceUuid !== undefined && {
+                spaceUuid: chartUpdate.spaceUuid,
+            }),
+            ...(chartUpdate.name !== undefined ||
+            chartUpdate.description !== undefined
+                ? { verified: verificationAfterUpdate !== null }
+                : {}),
+        };
+        const draftResult = await this.maybeStoreDraft(
+            user,
+            existingChart,
+            chartDraftFields,
+            verificationAfterUpdate,
+            { inheritsFromOrgOrProject, access },
+        );
+        if (draftResult) return draftResult;
+
         const savedChart = await this.savedChartModel.update(
             savedChartUuid,
             chartUpdate,
+            { projectUuid, dashboardUuid: dashboardUuid ?? null, spaceUuid },
         );
 
         if (!verificationAfterUpdate) {
@@ -929,6 +1349,9 @@ export class SavedChartService
                         ? cachedExplore.name
                         : undefined,
                 ...SavedChartService.getChartConfigEventProperties(savedChart),
+                viaDashboardGrant:
+                    SavedChartService.hasDashboardGrantRow(access),
+                grantOnly: directOnly,
             },
         });
         if (dashboardUuid && !savedChart.dashboardUuid) {
@@ -964,32 +1387,20 @@ export class SavedChartService
         organizationUuid: string;
         preserveVerification?: boolean;
     }): Promise<ContentVerificationInfo | null> {
-        const verification = await this.contentVerificationModel.getByContent(
-            ContentType.CHART,
-            chartUuid,
-        );
-        if (!verification || preserveVerification === false) return null;
-
-        const auditedAbility = this.createAuditedAbility(user);
-        const canManageVerification = auditedAbility.can(
-            'manage',
-            subject('ContentVerification', {
-                organizationUuid,
+        return getVerificationAfterUpdate(
+            {
+                contentVerificationModel: this.contentVerificationModel,
+                ability: this.createAuditedAbility(user),
+                user,
+            },
+            {
+                contentType: ContentType.CHART,
+                contentUuid: chartUuid,
                 projectUuid,
-                metadata: { chartUuid },
-            }),
+                organizationUuid,
+                preserveVerification,
+            },
         );
-        const isVerifier = verification.verifiedBy.userUuid === user.userUuid;
-
-        if (canManageVerification || isVerifier) return verification;
-
-        if (preserveVerification === true) {
-            throw new ForbiddenError(
-                'Only admins or the verifier can preserve chart verification',
-            );
-        }
-
-        return null;
     }
 
     private async assertCanMutateVerifiedChart({
@@ -1003,22 +1414,19 @@ export class SavedChartService
         projectUuid: string;
         organizationUuid: string;
     }): Promise<void> {
-        const verification = await this.contentVerificationModel.getByContent(
-            ContentType.CHART,
-            chartUuid,
+        await assertCanMutateVerifiedContent(
+            {
+                contentVerificationModel: this.contentVerificationModel,
+                ability: this.createAuditedAbility(user),
+                user,
+            },
+            {
+                contentType: ContentType.CHART,
+                contentUuid: chartUuid,
+                projectUuid,
+                organizationUuid,
+            },
         );
-        if (
-            !canMutateVerifiedContent(
-                this.createAuditedAbility(user),
-                { organizationUuid, projectUuid },
-                verification,
-                user.userUuid,
-            )
-        ) {
-            throw new ForbiddenError(
-                'This chart is verified. You need permission to edit verified content, or ask an admin to unverify it first.',
-            );
-        }
     }
 
     async togglePinning(
@@ -1087,19 +1495,36 @@ export class SavedChartService
         projectUuid: string,
         data: UpdateMultipleSavedChart[],
     ): Promise<SavedChart[]> {
+        // Space-only by design: SavedChartModel.updateMultiple filters
+        // `space_id IS NOT NULL`, so it never touches dashboard-owned charts —
+        // there is nothing for a dashboard grant to authorize here. Both the
+        // current and target space are checked with space access.
         const chartSpaceContexts = await Promise.all(
             data.map(async (chart) => {
-                const { spaceUuid: currentSpaceUuid } =
-                    await this.savedChartModel.getSummary(chart.uuid);
-                const spaceContexts = await Promise.all(
-                    [currentSpaceUuid, chart.spaceUuid].map((spaceUuid) =>
-                        this.spacePermissionService.getSpaceAccessContext(
-                            user.userUuid,
-                            spaceUuid,
+                const existingChart = await this.savedChartModel.getSummary(
+                    chart.uuid,
+                );
+                const { spaceUuid: currentSpaceUuid } = existingChart;
+                const [spaceContexts, verification] = await Promise.all([
+                    Promise.all(
+                        [currentSpaceUuid, chart.spaceUuid].map((spaceUuid) =>
+                            this.spacePermissionService.resolveAccess(
+                                user.userUuid,
+                                { type: 'space', spaceUuid },
+                            ),
                         ),
                     ),
-                );
-                return { chart, spaceContexts };
+                    this.contentVerificationModel.getByContent(
+                        ContentType.CHART,
+                        chart.uuid,
+                    ),
+                ]);
+                return {
+                    chart,
+                    existingChart,
+                    spaceContexts,
+                    verification,
+                };
             }),
         );
         const auditedAbility = this.createAuditedAbility(user);
@@ -1124,29 +1549,64 @@ export class SavedChartService
         }
 
         await Promise.all(
-            data.map(async (chart) => {
-                const summary = await this.savedChartModel.getSummary(
-                    chart.uuid,
-                );
+            chartSpaceContexts.map(async ({ existingChart }) => {
                 await this.assertCanMutateVerifiedChart({
                     user,
-                    chartUuid: chart.uuid,
-                    projectUuid: summary.projectUuid,
-                    organizationUuid: summary.organizationUuid,
+                    chartUuid: existingChart.uuid,
+                    projectUuid: existingChart.projectUuid,
+                    organizationUuid: existingChart.organizationUuid,
                 });
             }),
         );
 
-        const savedChartsDaos = await this.savedChartModel.updateMultiple(
-            projectUuid,
-            data,
+        const draftBases = await Promise.all(
+            chartSpaceContexts.map(({ existingChart }) =>
+                this.resolveDraftBase(existingChart),
+            ),
         );
+        // Draft upserts are idempotent and happen before the transactional
+        // published update, so a retry cannot duplicate or partially publish.
+        const draftResults = await Promise.all(
+            chartSpaceContexts.map(
+                async (
+                    { chart, existingChart, spaceContexts, verification },
+                    index,
+                ) => {
+                    const base = draftBases[index];
+                    return base === null
+                        ? undefined
+                        : this.storeDraft(
+                              user,
+                              existingChart,
+                              {
+                                  name: chart.name,
+                                  description: chart.description,
+                                  spaceUuid: chart.spaceUuid,
+                              },
+                              verification,
+                              spaceContexts[1],
+                              base,
+                          );
+                },
+            ),
+        );
+
+        const directUpdates = data.filter(
+            (_chart, index) => draftBases[index] === null,
+        );
+        const savedChartsDaos =
+            directUpdates.length > 0
+                ? await this.savedChartModel.updateMultiple(
+                      projectUuid,
+                      directUpdates,
+                  )
+                : [];
         const savedCharts = await Promise.all(
             savedChartsDaos.map(async (savedChart) => {
                 const { inheritsFromOrgOrProject, access } =
-                    await this.spacePermissionService.getSpaceAccessContext(
+                    await this.spacePermissionService.resolveAccess(
                         user.userUuid,
-                        savedChart.spaceUuid,
+                        { type: 'space', spaceUuid: savedChart.spaceUuid },
                     );
                 return {
                     ...savedChart,
@@ -1154,6 +1614,9 @@ export class SavedChartService
                     access,
                 };
             }),
+        );
+        const savedChartsByUuid = new Map(
+            savedCharts.map((savedChart) => [savedChart.uuid, savedChart]),
         );
         this.analytics.track({
             event: 'saved_chart.updated_multiple',
@@ -1163,25 +1626,33 @@ export class SavedChartService
                 projectId: projectUuid,
             },
         });
-        return savedCharts;
+        return data.map((chart, index) => {
+            const result =
+                draftResults[index] ?? savedChartsByUuid.get(chart.uuid);
+            if (!result) throw new NotFoundError('Saved query not found');
+            return result;
+        });
     }
 
     async delete(
         user: SessionUser,
         savedChartUuid: string,
-        options?: SoftDeleteOptions & { projectUuid?: string },
+        options?: ContentAsCodeDeleteOptions,
     ): Promise<void> {
         const {
             uuid: resolvedUuid,
             organizationUuid,
             projectUuid,
             spaceUuid,
+            dashboardUuid,
+            slug,
             metricQuery: { metrics, dimensions },
             tableName,
         } = await this.savedChartModel.get(savedChartUuid, undefined, {
             projectUuid: options?.projectUuid,
         });
 
+        let deleteAuditContext = { viaDashboardGrant: false, grantOnly: false };
         if (options?.bypassPermissions) {
             this.logBypassEvent(user, 'delete', {
                 type: 'SavedChart',
@@ -1190,11 +1661,18 @@ export class SavedChartService
                 projectUuid,
             });
         } else {
-            const { inheritsFromOrgOrProject, access } =
-                await this.spacePermissionService.getSpaceAccessContext(
-                    user.userUuid,
+            const { inheritsFromOrgOrProject, access, directOnly } =
+                await this.spacePermissionService.resolveAccess(user.userUuid, {
+                    type: 'chart',
+                    chartUuid: resolvedUuid,
+                    dashboardUuid,
                     spaceUuid,
-                );
+                });
+            deleteAuditContext = {
+                viaDashboardGrant:
+                    SavedChartService.hasDashboardGrantRow(access),
+                grantOnly: directOnly,
+            };
             const auditedAbility = this.createAuditedAbility(user);
             if (
                 auditedAbility.cannot(
@@ -1219,13 +1697,20 @@ export class SavedChartService
             });
         }
 
+        await this.assertCanDeleteGitBackedChart(user, {
+            projectUuid,
+            slug,
+        });
+
         if (this.lightdashConfig.softDelete.enabled) {
             await this.softDelete(user, resolvedUuid, {
                 bypassPermissions: true, // perms checked above
+                contentAsCodePolicyChecked: true,
             });
         } else {
             await this.permanentDelete(user, resolvedUuid, {
                 bypassPermissions: true, // perms checked above
+                contentAsCodePolicyChecked: true,
             });
         }
 
@@ -1259,6 +1744,7 @@ export class SavedChartService
                 savedQueryId: savedChartUuid,
                 projectId: projectUuid,
                 softDelete: this.lightdashConfig.softDelete.enabled,
+                ...deleteAuditContext,
             },
         });
     }
@@ -1266,8 +1752,14 @@ export class SavedChartService
     async softDelete(
         user: SessionUser,
         savedChartUuid: string,
-        options?: SoftDeleteOptions,
+        options?: ContentAsCodeDeleteOptions,
     ): Promise<void> {
+        const chart =
+            !options?.contentAsCodePolicyChecked || !options?.bypassPermissions
+                ? await this.savedChartModel.get(savedChartUuid, undefined, {
+                      projectUuid: options?.projectUuid,
+                  })
+                : undefined;
         if (options?.bypassPermissions) {
             this.logBypassEvent(user, 'delete', {
                 type: 'SavedChart',
@@ -1275,12 +1767,14 @@ export class SavedChartService
                 organizationUuid: user.organizationUuid ?? 'unknown',
             });
         } else {
-            const chart = await this.savedChartModel.get(savedChartUuid);
+            if (!chart) throw new NotFoundError('Chart not found');
             const { inheritsFromOrgOrProject, access } =
-                await this.spacePermissionService.getSpaceAccessContext(
-                    user.userUuid,
-                    chart.spaceUuid,
-                );
+                await this.spacePermissionService.resolveAccess(user.userUuid, {
+                    type: 'chart',
+                    chartUuid: chart.uuid,
+                    dashboardUuid: chart.dashboardUuid,
+                    spaceUuid: chart.spaceUuid,
+                });
             const auditedAbility = this.createAuditedAbility(user);
             if (
                 auditedAbility.cannot(
@@ -1308,6 +1802,10 @@ export class SavedChartService
             });
         }
 
+        if (!options?.contentAsCodePolicyChecked && chart) {
+            await this.assertCanDeleteGitBackedChart(user, chart);
+        }
+
         const deletedChart = await this.savedChartModel.softDelete(
             savedChartUuid,
             user.userUuid,
@@ -1327,14 +1825,16 @@ export class SavedChartService
     async getViewStats(
         user: SessionUser,
         savedChartUuid: string,
-    ): Promise<ViewStatistics> {
+    ): Promise<DetailedViewStatistics> {
         const savedChart =
             await this.savedChartModel.getSummary(savedChartUuid);
         const { inheritsFromOrgOrProject, access } =
-            await this.spacePermissionService.getSpaceAccessContext(
-                user.userUuid,
-                savedChart.spaceUuid,
-            );
+            await this.spacePermissionService.resolveAccess(user.userUuid, {
+                type: 'chart',
+                chartUuid: savedChart.uuid,
+                dashboardUuid: savedChart.dashboardUuid,
+                spaceUuid: savedChart.spaceUuid,
+            });
         const auditedAbility = this.createAuditedAbility(user);
         if (
             auditedAbility.cannot(
@@ -1361,7 +1861,10 @@ export class SavedChartService
         account: Account,
         space: SpaceSummaryBase,
         savedChart: SavedChartDAO,
-    ): Promise<{ access: SpaceAccess[]; inheritsFromOrgOrProject: boolean }> {
+    ): Promise<{
+        access: SpaceAccess[];
+        inheritsFromOrgOrProject: boolean;
+    }> {
         let access;
         let inheritsFromOrgOrProject: boolean;
         let permissionActor: Account | SessionUser = account;
@@ -1372,9 +1875,9 @@ export class SavedChartService
             if (embedWriteUser && writeSpaceUuid === space.uuid) {
                 permissionActor = embedWriteUser;
                 const spaceCtx =
-                    await this.spacePermissionService.getSpaceAccessContext(
+                    await this.spacePermissionService.resolveAccess(
                         embedWriteUser.userUuid,
-                        space.uuid,
+                        { type: 'space', spaceUuid: space.uuid },
                     );
 
                 access = spaceCtx.access;
@@ -1398,9 +1901,14 @@ export class SavedChartService
                 inheritsFromOrgOrProject = spaceCtx.inheritsFromOrgOrProject;
             }
         } else {
-            const ctx = await this.spacePermissionService.getSpaceAccessContext(
+            const ctx = await this.spacePermissionService.resolveAccess(
                 account.user.userUuid,
-                savedChart.spaceUuid,
+                {
+                    type: 'chart',
+                    chartUuid: savedChart.uuid,
+                    dashboardUuid: savedChart.dashboardUuid,
+                    spaceUuid: savedChart.spaceUuid,
+                },
             );
             access = ctx.access;
             inheritsFromOrgOrProject = ctx.inheritsFromOrgOrProject;
@@ -1485,6 +1993,7 @@ export class SavedChartService
                 projectId: savedChart.projectUuid,
                 parametersCount: Object.keys(savedChart.parameters || {})
                     .length,
+                chartType: savedChart.chartConfig.type,
             },
         });
 
@@ -1493,6 +2002,18 @@ export class SavedChartService
             inheritsFromOrgOrProject,
             access,
         };
+    }
+
+    // Interactive chart pages opt into the caller's unpublished overlay.
+    // Other consumers keep using `get`, which is always published-only.
+    async getForViewer(
+        user: SessionUser,
+        savedChartUuidOrSlug: string,
+        account: Account,
+        options?: { projectUuid?: string },
+    ): Promise<SavedChart> {
+        const chart = await this.get(savedChartUuidOrSlug, account, options);
+        return this.applyOpenDraftOverlay(user, chart);
     }
 
     async verifyChart(
@@ -1628,12 +2149,13 @@ export class SavedChartService
 
         let inheritsFromOrgOrProject = true;
         let access: SpaceAccess[] = [];
+        let createGrantOnly = false;
         if (resolvedSpaceUuid) {
             const spaceAccessContext =
-                await this.spacePermissionService.getSpaceAccessContext(
-                    user.userUuid,
-                    resolvedSpaceUuid,
-                );
+                await this.spacePermissionService.resolveAccess(user.userUuid, {
+                    type: 'space',
+                    spaceUuid: resolvedSpaceUuid,
+                });
             inheritsFromOrgOrProject =
                 spaceAccessContext.inheritsFromOrgOrProject;
             access = spaceAccessContext.access;
@@ -1641,14 +2163,27 @@ export class SavedChartService
             const dashboard = await this.dashboardModel.getByIdOrSlug(
                 chartToSave.dashboardUuid,
             );
-            const dashboardSpaceAccessContext =
-                await this.spacePermissionService.getSpaceAccessContext(
+            // Creating inside the dashboard stays in bounds, so grants count;
+            // embed write actors stay space-only (see createVersion).
+            const { embedWriteActions } = getAccountWriteContext(account);
+            const dashboardAccessContext =
+                await this.spacePermissionService.resolveAccess(
                     user.userUuid,
-                    dashboard.spaceUuid,
+                    embedWriteActions
+                        ? {
+                              type: 'space',
+                              spaceUuid: dashboard.spaceUuid,
+                          }
+                        : {
+                              type: 'dashboard',
+                              dashboardUuid: dashboard.uuid,
+                              spaceUuid: dashboard.spaceUuid,
+                          },
                 );
             inheritsFromOrgOrProject =
-                dashboardSpaceAccessContext.inheritsFromOrgOrProject;
-            access = dashboardSpaceAccessContext.access;
+                dashboardAccessContext.inheritsFromOrgOrProject;
+            access = dashboardAccessContext.access;
+            createGrantOnly = dashboardAccessContext.directOnly;
         }
 
         const auditedAbility = this.createAuditedAbility(user);
@@ -1738,7 +2273,11 @@ export class SavedChartService
             event: 'saved_chart.created',
             userId: user.userUuid,
             properties: {
-                ...SavedChartService.getCreateEventProperties(newSavedChart),
+                ...SavedChartService.getCreateEventProperties(newSavedChart, {
+                    viaDashboardGrant:
+                        SavedChartService.hasDashboardGrantRow(access),
+                    grantOnly: createGrantOnly,
+                }),
                 dashboardId: newSavedChart.dashboardUuid ?? undefined,
                 virtualViewId:
                     cachedExplore?.type === ExploreType.VIRTUAL
@@ -1828,10 +2367,19 @@ export class SavedChartService
         data: { chartName: string; chartDesc: string },
     ): Promise<SavedChart> {
         const chart = await this.savedChartModel.get(chartUuid);
-        const { inheritsFromOrgOrProject, access } =
-            await this.spacePermissionService.getSpaceAccessContext(
+        // Duplicating a dashboard-owned chart re-creates it inside the same
+        // owning dashboard, so its grants count; space charts resolve through
+        // their space target.
+        const { inheritsFromOrgOrProject, access, directOnly } =
+            await this.spacePermissionService.resolveAccess(
                 user.userUuid,
-                chart.spaceUuid,
+                chart.dashboardUuid
+                    ? {
+                          type: 'dashboard',
+                          dashboardUuid: chart.dashboardUuid,
+                          spaceUuid: chart.spaceUuid,
+                      }
+                    : { type: 'space', spaceUuid: chart.spaceUuid },
             );
         const auditedAbility = this.createAuditedAbility(user);
         if (
@@ -1883,7 +2431,11 @@ export class SavedChartService
             duplicatedChart,
         );
         const newSavedChartProperties =
-            SavedChartService.getCreateEventProperties(newSavedChart);
+            SavedChartService.getCreateEventProperties(newSavedChart, {
+                viaDashboardGrant:
+                    SavedChartService.hasDashboardGrantRow(access),
+                grantOnly: directOnly,
+            });
 
         const cachedExplore = await this.projectModel.getExploreFromCache(
             projectUuid,
@@ -2146,13 +2698,23 @@ export class SavedChartService
             }
         }
 
-        const scheduler = await this.schedulerModel.createScheduler({
+        const chartScheduler: CreateSchedulerAndTargets = {
             ...newScheduler,
             createdBy: user.userUuid,
             dashboardUuid: null,
             savedChartUuid: chartUuid,
             savedSqlUuid: null,
-        });
+        };
+        if (isChartCreateScheduler(chartScheduler) && chartScheduler.filters) {
+            assertCanReplaceChartFilters({
+                ability: this.createAuditedAbility(user),
+                chart: await this.savedChartModel.get(chartUuid),
+                schedulerFilters: chartScheduler.filters,
+            });
+        }
+
+        const scheduler =
+            await this.schedulerModel.createScheduler(chartScheduler);
 
         const createSchedulerEventData: SchedulerUpsertEvent = {
             userId: user.userUuid,
@@ -2206,10 +2768,12 @@ export class SavedChartService
     ): Promise<ChartHistory> {
         const chart = await this.savedChartModel.getSummary(chartUuid);
         const { inheritsFromOrgOrProject, access } =
-            await this.spacePermissionService.getSpaceAccessContext(
-                user.userUuid,
-                chart.spaceUuid,
-            );
+            await this.spacePermissionService.resolveAccess(user.userUuid, {
+                type: 'chart',
+                chartUuid: chart.uuid,
+                dashboardUuid: chart.dashboardUuid,
+                spaceUuid: chart.spaceUuid,
+            });
 
         const auditedAbility = this.createAuditedAbility(user);
         if (
@@ -2253,10 +2817,12 @@ export class SavedChartService
     ): Promise<ChartVersion> {
         const chart = await this.savedChartModel.getSummary(chartUuid);
         const { inheritsFromOrgOrProject, access } =
-            await this.spacePermissionService.getSpaceAccessContext(
-                user.userUuid,
-                chart.spaceUuid,
-            );
+            await this.spacePermissionService.resolveAccess(user.userUuid, {
+                type: 'chart',
+                chartUuid: chart.uuid,
+                dashboardUuid: chart.dashboardUuid,
+                spaceUuid: chart.spaceUuid,
+            });
         const auditedAbility = this.createAuditedAbility(user);
         if (
             auditedAbility.cannot(
@@ -2307,7 +2873,10 @@ export class SavedChartService
         chartUuid: string,
         versionUuid: string,
     ): Promise<void> {
-        await this.checkUpdateAccess(user, chartUuid);
+        const { grantAudit, savedChart } = await this.checkUpdateAccess(
+            user,
+            chartUuid,
+        );
         const currentChartVersion = await this.savedChartModel.get(chartUuid);
         const chartVersion = await this.savedChartModel.get(
             chartUuid,
@@ -2317,6 +2886,12 @@ export class SavedChartService
             chartUuid,
             chartVersion,
             user,
+            undefined,
+            {
+                projectUuid: savedChart.projectUuid,
+                dashboardUuid: savedChart.dashboardUuid ?? null,
+                spaceUuid: savedChart.spaceUuid,
+            },
         );
         this.analytics.track({
             event: 'saved_chart_version.rollback',
@@ -2330,8 +2905,10 @@ export class SavedChartService
         this.analytics.track({
             event: 'saved_chart_version.created',
             userId: user.userUuid,
-            properties:
-                SavedChartService.getCreateEventProperties(newChartVersion),
+            properties: SavedChartService.getCreateEventProperties(
+                newChartVersion,
+                grantAudit,
+            ),
         });
 
         try {
@@ -2362,6 +2939,10 @@ export class SavedChartService
         }
     }
 
+    // Deliberately space-only: shared gate for mixed callers including
+    // moveToSpace (boundary-crossing — grants must never count) and
+    // cross-service flows whose boundary semantics need per-caller review
+    // before honoring dashboard grants here.
     async hasAccess(
         action: AbilityAction,
         actor: {
@@ -2410,9 +2991,9 @@ export class SavedChartService
             access: spaceAccess,
             inheritsFromOrgOrProject,
             organizationUuid,
-        } = await this.spacePermissionService.getSpaceAccessContext(
+        } = await this.spacePermissionService.resolveAccess(
             actor.user.userUuid,
-            spaceUuid,
+            { type: 'space', spaceUuid },
         );
 
         const auditedAbility = this.createAuditedAbility(actor.user);
@@ -2441,9 +3022,9 @@ export class SavedChartService
                 inheritsFromOrgOrProject: newSpaceInheritsFromOrgOrProject,
                 access: newSpaceAccess,
                 organizationUuid: newSpaceOrganizationUuid,
-            } = await this.spacePermissionService.getSpaceAccessContext(
+            } = await this.spacePermissionService.resolveAccess(
                 actor.user.userUuid,
-                resource.spaceUuid,
+                { type: 'space', spaceUuid: resource.spaceUuid },
             );
 
             const hasPermissionInNewSpace = auditedAbility.can(
@@ -2668,8 +3249,15 @@ export class SavedChartService
     async permanentDelete(
         user: SessionUser,
         chartUuid: string,
-        options?: SoftDeleteOptions,
+        options?: ContentAsCodeDeleteOptions,
     ): Promise<void> {
+        const deletedChart =
+            !options?.contentAsCodePolicyChecked || !options?.bypassPermissions
+                ? await this.savedChartModel.get(chartUuid, undefined, {
+                      deleted: true,
+                      projectUuid: options?.projectUuid,
+                  })
+                : undefined;
         if (options?.bypassPermissions) {
             this.logBypassEvent(user, 'manage', {
                 type: 'DeletedContent',
@@ -2677,11 +3265,7 @@ export class SavedChartService
                 organizationUuid: user.organizationUuid ?? 'unknown',
             });
         } else {
-            const deletedChart = await this.savedChartModel.get(
-                chartUuid,
-                undefined,
-                { deleted: true, projectUuid: options?.projectUuid },
-            );
+            if (!deletedChart) throw new NotFoundError('Chart not found');
             const { organizationUuid, projectUuid } = deletedChart;
 
             const auditedAbility = this.createAuditedAbility(user);
@@ -2715,6 +3299,10 @@ export class SavedChartService
                     'You can only permanently delete content you deleted',
                 );
             }
+        }
+
+        if (!options?.contentAsCodePolicyChecked && deletedChart) {
+            await this.assertCanDeleteGitBackedChart(user, deletedChart);
         }
 
         await this.savedChartModel.permanentDelete(chartUuid);

@@ -1,6 +1,7 @@
 import { subject } from '@casl/ability';
 import {
     AI_DEEP_RESEARCH_DEFAULT_LIMITS,
+    AI_DEEP_RESEARCH_MAX_WORKERS,
     AiOrganizationRuntimeSettings,
     AiOrganizationSettings,
     BYO_AI_PROVIDERS,
@@ -36,14 +37,14 @@ import {
 import {
     matchesPreset,
     type ModelPreset,
-    type ModelPresetProvider,
+    type SelectableModelProvider,
 } from './ai/models/presets';
 import {
     OrgAiCopilotConfigResolver,
     type ReviewJudgeAvailability,
 } from './ai/OrgAiCopilotConfigResolver';
 
-type AvailableModelPreset = ModelPreset<ModelPresetProvider>;
+type AvailableModelPreset = ModelPreset<SelectableModelProvider>;
 
 /**
  * Whether a stored model config still resolves to one of the models left
@@ -109,6 +110,17 @@ export const findUnconfiguredProviderKeyWrites = (
             !configuredProviders[provider],
     );
 
+const DEEP_RESEARCH_LIMIT_BOUNDS: Record<
+    keyof AiDeepResearchLimits,
+    { min: number; max: number }
+> = {
+    maxTokens: { min: 1, max: 10_000_000 },
+    maxSteps: { min: 1, max: 1_000 },
+    maxToolCalls: { min: AI_DEEP_RESEARCH_MAX_WORKERS + 1, max: 1_000 },
+    maxWarehouseQueries: { min: 1, max: 1_000 },
+    deadlineMs: { min: 1_000, max: 3_600_000 },
+};
+
 export const validateDeepResearchLimits = (
     limits: AiDeepResearchLimits,
 ): void => {
@@ -117,6 +129,12 @@ export const validateDeepResearchLimits = (
     ).forEach(([key, value]) => {
         if (!Number.isInteger(value) || value <= 0) {
             throw new ParameterError(`${key} must be a positive integer`);
+        }
+        const bounds = DEEP_RESEARCH_LIMIT_BOUNDS[key];
+        if (bounds && (value < bounds.min || value > bounds.max)) {
+            throw new ParameterError(
+                `${key} must be between ${bounds.min} and ${bounds.max}`,
+            );
         }
     });
 };
@@ -364,12 +382,24 @@ export class AiOrganizationSettingsService extends BaseService {
                 deepResearchLimits: AI_DEEP_RESEARCH_DEFAULT_LIMITS,
                 deepResearchRawSqlEnabled: false,
                 mcpContentWritesEnabled: true,
+                mcpAgentsEnabled: true,
+                dataAppRuntimeAiEnabled: false,
+                dataAppContinueInAskAiEnabled: true,
+                dataAppAutoAnalysisEnabled: false,
                 requireExplicitSlackChannelLinking: false,
                 defaultAiAgentModelConfig: null,
                 modelVisibility: effectiveModelVisibility,
                 dataAppModelVisibility: null,
-                providerApiKeysSet: { anthropic: false, openai: false },
-                providerApiKeyHints: { anthropic: null, openai: null },
+                providerApiKeysSet: {
+                    anthropic: false,
+                    google: false,
+                    openai: false,
+                },
+                providerApiKeyHints: {
+                    anthropic: null,
+                    google: null,
+                    openai: null,
+                },
                 threadRetentionHours: null,
                 defaultAiAgentModelOptions: effectiveOptions,
                 configurableModelOptions: configurableOptions,
@@ -438,6 +468,9 @@ export class AiOrganizationSettingsService extends BaseService {
                 visibleDataAppModels: getVisibleDataAppClaudeModels(
                     dataAppModelVisibility,
                 ),
+                dataAppRuntimeAiEnabled: false,
+                dataAppContinueInAskAiEnabled: true,
+                dataAppAutoAnalysisEnabled: false,
                 threadRetentionHours: null,
             };
         }
@@ -458,16 +491,54 @@ export class AiOrganizationSettingsService extends BaseService {
             visibleDataAppModels: getVisibleDataAppClaudeModels(
                 settings.dataAppModelVisibility,
             ),
+            dataAppRuntimeAiEnabled: settings.dataAppRuntimeAiEnabled ?? false,
+            dataAppContinueInAskAiEnabled:
+                settings.dataAppContinueInAskAiEnabled ?? true,
+            dataAppAutoAnalysisEnabled:
+                settings.dataAppAutoAnalysisEnabled ?? false,
             threadRetentionHours: settings.threadRetentionHours ?? null,
         };
     }
 
-    async isAiAgentsVisible(organizationUuid: string): Promise<boolean> {
+    async isMcpAgentsEnabled(organizationUuid: string): Promise<boolean> {
         const settings =
             await this.aiOrganizationSettingsModel.findByOrganizationUuid(
                 organizationUuid,
             );
-        return settings?.aiAgentsVisible ?? true;
+        return settings?.mcpAgentsEnabled ?? true;
+    }
+
+    /** Customer consent gate for any AI call made on behalf of a running data app. */
+    async isDataAppRuntimeAiEnabled(
+        organizationUuid: string,
+    ): Promise<boolean> {
+        const settings =
+            await this.aiOrganizationSettingsModel.findByOrganizationUuid(
+                organizationUuid,
+            );
+        return settings?.dataAppRuntimeAiEnabled ?? false;
+    }
+
+    /** Whether viewers may carry a data-app investigation on in Ask AI. */
+    async isDataAppContinueInAskAiEnabled(
+        organizationUuid: string,
+    ): Promise<boolean> {
+        const settings =
+            await this.aiOrganizationSettingsModel.findByOrganizationUuid(
+                organizationUuid,
+            );
+        return settings?.dataAppContinueInAskAiEnabled ?? true;
+    }
+
+    /** Org default for running AI analysis when a data app loads. */
+    async isDataAppAutoAnalysisEnabled(
+        organizationUuid: string,
+    ): Promise<boolean> {
+        const settings =
+            await this.aiOrganizationSettingsModel.findByOrganizationUuid(
+                organizationUuid,
+            );
+        return settings?.dataAppAutoAnalysisEnabled ?? false;
     }
 
     async isDeepResearchRawSqlEnabled({
@@ -518,7 +589,7 @@ export class AiOrganizationSettingsService extends BaseService {
 
     async upsertSettings(
         user: SessionUser,
-        data: UpdateAiOrganizationSettings,
+        aiSettingsUpdate: UpdateAiOrganizationSettings,
     ): Promise<AiOrganizationSettings> {
         const { organizationUuid } = user;
         if (!organizationUuid) {
@@ -526,19 +597,6 @@ export class AiOrganizationSettingsService extends BaseService {
         }
 
         await this.checkAiSettingsAccess(user, organizationUuid);
-
-        const { aiAgentMemoryEnabled, ...aiSettingsUpdate } = data;
-        const isMemoryOnlyUpdate =
-            aiAgentMemoryEnabled !== undefined &&
-            Object.keys(aiSettingsUpdate).length === 0;
-
-        if (isMemoryOnlyUpdate) {
-            await this.organizationModel.updateAiAgentMemoryEnabled(
-                organizationUuid,
-                aiAgentMemoryEnabled,
-            );
-            return this.getSettings(user);
-        }
 
         if (aiSettingsUpdate.deepResearchLimits !== undefined) {
             validateDeepResearchLimits(aiSettingsUpdate.deepResearchLimits);
@@ -579,15 +637,12 @@ export class AiOrganizationSettingsService extends BaseService {
             aiSettingsUpdate.providerApiKeys !== undefined ||
             aiSettingsUpdate.modelVisibility !== undefined
         ) {
-            // BYO keys and model visibility require both AI copilot (env/ai-copilot
-            // flag) and the org-ai-provider-api-keys flag to be enabled for this org.
-            const [copilotEnabled, byoKeysEnabled] = await Promise.all([
-                this.getIsCopilotEnabled(user),
-                this.orgAiCopilotConfigResolver.isEnabled(organizationUuid),
-            ]);
-            if (!copilotEnabled || !byoKeysEnabled) {
+            // BYO keys and model visibility require AI copilot (env/ai-copilot
+            // flag) to be enabled for this org.
+            const copilotEnabled = await this.getIsCopilotEnabled(user);
+            if (!copilotEnabled) {
                 throw new ForbiddenError(
-                    'Organization AI provider API keys are not enabled',
+                    'AI copilot is not enabled for this organization',
                 );
             }
         }
@@ -705,34 +760,14 @@ export class AiOrganizationSettingsService extends BaseService {
                       ...aiSettingsUpdate,
                       defaultAiAgentModelConfig: reconciledDefaultModelConfig,
                   };
-        const settings =
-            aiAgentMemoryEnabled === undefined
-                ? await this.aiOrganizationSettingsModel.upsert(
-                      organizationUuid,
-                      update,
-                  )
-                : await this.aiOrganizationSettingsModel.transaction(
-                      async (trx) => {
-                          const updatedSettings =
-                              await this.aiOrganizationSettingsModel.upsert(
-                                  organizationUuid,
-                                  update,
-                                  trx,
-                              );
-                          await this.organizationModel.updateAiAgentMemoryEnabled(
-                              organizationUuid,
-                              aiAgentMemoryEnabled,
-                              trx,
-                          );
-                          return updatedSettings;
-                      },
-                  );
+        const settings = await this.aiOrganizationSettingsModel.upsert(
+            organizationUuid,
+            update,
+        );
 
         return {
             ...settings,
-            aiAgentMemoryEnabled:
-                aiAgentMemoryEnabled ??
-                (await this.isAiAgentMemoryEnabled(user)),
+            aiAgentMemoryEnabled: await this.isAiAgentMemoryEnabled(user),
         };
     }
 

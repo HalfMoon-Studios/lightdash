@@ -16,11 +16,21 @@ import {
 import { escapeXmlText, xmlBuilder } from '../xmlBuilder';
 import { renderAvailableCustomChartTypes } from './availableCustomChartTypes';
 import { renderAvailableExplores } from './availableExplores';
+import {
+    EXPRESSION_SEARCH_FIELD_VALUES_FILTER_GUIDANCE,
+    FILTER_EXPRESSION_GUIDANCE_SECTION,
+    STRUCTURED_FILTER_GUIDANCE_SECTION,
+    STRUCTURED_SEARCH_FIELD_VALUES_FILTER_GUIDANCE,
+} from './filterGuidance';
 import { getAiWritebackSection } from './systemV2AiWriteback';
 import { getCodingAgentSection } from './systemV2CodingAgent';
-import { CONTENT_TOOLS_SECTION } from './systemV2ContentTools';
+import {
+    CONTENT_TOOLS_SECTION,
+    DOCUMENT_TOOLS_SECTION,
+} from './systemV2ContentTools';
 import { DATA_ACCESS_DISABLED_SECTION } from './systemV2DataAccessDisabled';
 import { DATA_ACCESS_ENABLED_SECTION } from './systemV2DataAccessEnabled';
+import { GENERATE_DATA_APP_SECTION } from './systemV2DataApps';
 import { MEMORIES_SECTION } from './systemV2Memories';
 import {
     REPO_FS_SECTION,
@@ -32,7 +42,18 @@ import { getRunSqlSection } from './systemV2RunSql';
 import { getSchedulingToolsSection } from './systemV2SchedulingTools';
 import { SEARCH_SEMANTIC_LAYER_SECTION } from './systemV2SearchSemanticLayer';
 import { renderAvailableSkills } from './systemV2Skills';
+import { getSlackLinksOnlySection } from './systemV2SlackLinksOnly';
 import { SYSTEM_PROMPT_TEMPLATE } from './systemV2Template';
+
+const getDataAccessSection = (
+    enableDataAccess: boolean,
+    slackLinksOnly: boolean,
+): string => {
+    if (slackLinksOnly) return getSlackLinksOnlySection(enableDataAccess);
+    return enableDataAccess
+        ? DATA_ACCESS_ENABLED_SECTION
+        : DATA_ACCESS_DISABLED_SECTION;
+};
 
 export const getSystemPromptV2 = (args: {
     availableExplores: Explore[];
@@ -41,11 +62,15 @@ export const getSystemPromptV2 = (args: {
     knowledgeDocuments?: AiAgentDocumentContext[];
     deepResearchRuns?: AiAgentDeepResearchRunContext[];
     hasProjectContext?: boolean;
+    projectContextPreloaded?: boolean;
+    enableFastMetadata?: boolean;
+    enableChartExport?: boolean;
     instructions?: string;
     agentName?: string;
     requestingUser?: AiAgentRequestingUser | null;
     date?: string;
     enableDataAccess?: boolean;
+    enableFilterExpressions?: boolean;
     enableAiWriteback?: boolean;
     writebackAttribution?: AiWritebackAttribution | null;
     enableCodingAgent?: boolean;
@@ -56,10 +81,14 @@ export const getSystemPromptV2 = (args: {
     // GitLab no). Defaults true; when false the prompt steers off `search`.
     repoFsSupportsCodeSearch?: boolean;
     enableContentTools?: boolean;
+    enableDocuments?: boolean;
+    enableGenerateDataApp?: boolean;
     enableAiAgentMemory?: boolean;
     // Originating Slack channel for "this channel" scheduling targets; null on
     // web and MCP prompts.
     slackChannelId?: string | null;
+    // Org Slack setting: the answer may not carry query results into Slack.
+    slackLinksOnly?: boolean;
     canRunSql?: boolean;
     // When composer queries are on, the standalone runSql tool is withheld
     // and raw SQL runs as `sql` nodes inside runComposerQueries instead.
@@ -79,6 +108,7 @@ export const getSystemPromptV2 = (args: {
         requestingUser = null,
         date = moment().utc().format('YYYY-MM-DD'),
         enableDataAccess = false,
+        enableFilterExpressions = false,
         enableAiWriteback = false,
         writebackAttribution = null,
         enableCodingAgent = false,
@@ -87,8 +117,11 @@ export const getSystemPromptV2 = (args: {
         repoFsRoot = null,
         repoFsSupportsCodeSearch = true,
         enableContentTools = false,
+        enableDocuments = false,
+        enableGenerateDataApp = false,
         enableAiAgentMemory = false,
         slackChannelId = null,
+        slackLinksOnly = false,
         canRunSql = false,
         enableComposerQueries = false,
         enableMergeQueries = false,
@@ -213,9 +246,13 @@ export const getSystemPromptV2 = (args: {
                   ),
               ].join('\n');
 
-    const projectContextContent = args.hasProjectContext
-        ? 'This project has curated business context (acronyms, definitions, rules). Call the `loadProjectContext` tool BEFORE grepFields — it can change which explore, field, or filter value you should use. Treat it as authoritative over your own assumptions.'
-        : 'No project context has been configured for this project.';
+    let projectContextContent =
+        'No project context has been configured for this project.';
+    if (args.hasProjectContext) {
+        projectContextContent = args.projectContextPreloaded
+            ? 'Relevant project business context is already preloaded for this request. Apply it BEFORE field discovery; treat it as authoritative over your own assumptions. This is a partial selection: use `loadProjectContext` for missing definitions, additional scope or conflicting rules. Do not reload the same entries merely to begin discovery.'
+            : 'This project has curated business context (acronyms, definitions, rules). Call the `loadProjectContext` tool BEFORE grepFields — it can change which explore, field, or filter value you should use. Treat it as authoritative over your own assumptions.';
+    }
 
     const AVAILABLE_EXPLORES_INLINE_LIMIT = 15;
     let availableExploresContent: string;
@@ -237,10 +274,36 @@ export const getSystemPromptV2 = (args: {
         availableExploresContent = `This agent has access to ${args.availableExplores.length} explores. Use grepFields to discover the relevant one for each request.`;
     }
 
+    const allowMarkdownTables =
+        args.enableFastMetadata && !slackChannelId && !slackLinksOnly;
     const content = SYSTEM_PROMPT_TEMPLATE.replace(
         '{{self_improvement_section}}',
         '',
     )
+        .replace(
+            '{{table_request_guidance}}',
+            allowMarkdownTables
+                ? '- For a small tabular answer, use runQuery and present its results as a Markdown table. Use generateVisualization with defaultVizType: "table" when the user requests a table visualization or a saved, interactive or downloadable table.'
+                : '- When a user asks for a "table", generate a table visualization with generateVisualization (defaultVizType: \'table\'). Never produce markdown tables.',
+        )
+        .replace(
+            '{{response_format_guidance}}',
+            allowMarkdownTables
+                ? '- Use simple Markdown: bold, italics, lists, and Markdown tables with a header, separator and data rows. Use blank lines around tables. Never emit an empty table header followed by the same data as a list. Use ### headings only when needed to organize a longer answer. No # or ## headers, code blocks, images or horizontal rules.'
+                : '- Use simple Markdown: `###`, bold, italics, lists. No `#` or `##` headers, no code blocks, no markdown tables, no images, no horizontal rules.',
+        )
+        .replace(
+            '{{search_field_values_filter_guidance}}',
+            enableFilterExpressions
+                ? EXPRESSION_SEARCH_FIELD_VALUES_FILTER_GUIDANCE
+                : STRUCTURED_SEARCH_FIELD_VALUES_FILTER_GUIDANCE,
+        )
+        .replace(
+            '{{filter_guidance_section}}',
+            enableFilterExpressions
+                ? FILTER_EXPRESSION_GUIDANCE_SECTION
+                : STRUCTURED_FILTER_GUIDANCE_SECTION,
+        )
         .replace(
             '{{ai_writeback_section}}',
             enableAiWriteback
@@ -269,9 +332,7 @@ export const getSystemPromptV2 = (args: {
         )
         .replace(
             '{{data_access_section}}',
-            enableDataAccess
-                ? DATA_ACCESS_ENABLED_SECTION
-                : DATA_ACCESS_DISABLED_SECTION,
+            getDataAccessSection(enableDataAccess, slackLinksOnly),
         )
         .replace(
             '{{run_sql_section}}',
@@ -287,7 +348,18 @@ export const getSystemPromptV2 = (args: {
         )
         .replace(
             '{{content_tools_section}}',
-            enableContentTools ? CONTENT_TOOLS_SECTION : '',
+            enableContentTools
+                ? [
+                      CONTENT_TOOLS_SECTION,
+                      enableDocuments ? DOCUMENT_TOOLS_SECTION : '',
+                  ]
+                      .filter(Boolean)
+                      .join('\n\n')
+                : '',
+        )
+        .replace(
+            '{{generate_data_app_section}}',
+            enableGenerateDataApp ? GENERATE_DATA_APP_SECTION : '',
         )
         .replace(
             '{{scheduling_tools_section}}',
@@ -315,6 +387,12 @@ export const getSystemPromptV2 = (args: {
             renderAvailableCustomChartTypes(
                 args.availableCustomChartTypes ?? { types: [], totalCount: 0 },
             ),
+        )
+        .replace(
+            '{{unloaded_knowledge_documents}}',
+            args.enableFastMetadata
+                ? 'other documents whose complete content has not already been preloaded for this request'
+                : 'other documents',
         )
         .replace('{{knowledge_documents}}', knowledgeDocumentsContent)
         .replace('{{project_context}}', projectContextContent);
@@ -357,7 +435,7 @@ export const getSystemPromptV2 = (args: {
         "- Once you have narrowed down to the explore(s) and field(s) you intend to use, call `getMetadata` (batching all of them in one call) to get the detail you need to build a correct query — an explore's joined tables and table filters, and a field's filter type, case-sensitivity, default time dimension and hints. grepFields tells you what exists; getMetadata tells you how to use it.",
         '- A description or hint ending in "...(truncated)" is incomplete — call getMetadata to read the full text before using that field.',
         "- Respect a metric's default time dimension, if it has one, unless the user explicitly requests a different time dimension.",
-        '- Table filters marked `required` are hard constraints: they are always applied to queries on that table. You may provide a compatible filter on the same field when the user asks for a specific range, e.g. if `created_at inThePast [4 weeks]` is required, `created_at inThePast [10 months]` or `created_at inThePast [2 days]` is compatible.',
+        "- Table filters marked `required` require every query to filter that field, but their configured operator and values are replaceable defaults, not fixed constraints on the data. When the user's requested scope differs, you MUST query the explore with a compatible filter on the same field or a derived time dimension of that field; it replaces the configured default. For example, if `created_at inThePast [4 weeks]` is required, use `created_at inThePast [10 months]` when the user asks for ten months. Never treat a required filter's default as a modelling limitation or switch to saved chart results because of it.",
         '- Table filters marked `suggested` are soft suggestions: apply them unless the user asks for a different range or scope.',
         '- If your literal patterns miss, grepFields automatically returns the closest catalog matches (fuzzy search, verified fields first) under "No exact grep matches" — use those rather than re-grepping a long list of synonyms.',
         '- Once you have the fieldIds you need, build the query. Do NOT re-grep for fields you already found, and do not call grepFields again between generateVisualization attempts — if a query fails, fix the query itself (filters, metric, grain), not the discovery. If you need a filter value you are unsure of (e.g. which status string exists), use searchFieldValues rather than guessing.',
@@ -365,8 +443,41 @@ export const getSystemPromptV2 = (args: {
 
     const finalContent = [
         content,
+        args.enableFastMetadata
+            ? 'All assistant text is user-visible, including text before and between tool calls. Do not write context-preservation notes, scratchpads, field-ID inventories or summaries for yourself into the response when warned about context being cleared. Context housekeeping is handled by the application. Do not save temporary query results as durable user memories. Continue the user task using available evidence; if necessary, retrieve missing evidence with an authorized tool. Prior assistant notes are not evidence.'
+            : '',
+        args.enableFastMetadata
+            ? 'Separate observed results from explanations. Correlation, timing and subgroup differences do not establish causation: a coverage drop does not prove an automation failed, a policy changed or someone followed a different process. Support causal claims with direct evidence about the mechanism, such as documented changes or an appropriate causal analysis. Label untested explanations as hypotheses, state what evidence would test them, and do not say alternatives are ruled out by descriptive counts alone. Do not invent statistical baselines, sampling limits or query constraints from the shape of the results; use the executed query and field definitions. Compare like-for-like periods; label partial periods and mutable current-state attributes rather than treating them as historical snapshots.'
+            : '',
+        args.enableFastMetadata
+            ? 'Lead short answers with the result, not a generated title or a restatement of the request. Do not repeat the artifact title as a heading: the UI already labels the artifact. Summarize the key finding without duplicating the entire chart as both a table and a list. Include material scope and uncertainty, but avoid speculative diagnoses and unsolicited offers at the end of every answer.'
+            : '',
         deepResearchContent,
         grepFieldsSection,
+        args.enableFastMetadata
+            ? 'For straightforward entity trends or breakdowns, use a single matching count definition and its configured default time granularity when available. A nearby revenue or amount field alone is not a reason to ask count versus amount. Apply explicit business rules and prior scope first; ask when count definitions genuinely compete. Do not invent a date restriction; state the measure, grain and scope used. When the current request or a field-search result includes preloaded catalog metadata, use those definitions, joins, filters and defaults directly. Only call getMetadata for missing or truncated details; do not repeat a metadata lookup to confirm the same details.'
+            : '',
+        args.enableFastMetadata
+            ? 'Use runQuery when the user wants an answer from data without a chart; it returns rows without creating a chart artifact in web chat. Slack result cards are attached automatically. Use generateVisualization only when the user asks for a chart or visualization. Do not create a chart merely because the answer could be visualized.'
+            : '',
+        args.enableFastMetadata
+            ? 'For a follow-up that changes only presentation, such as "as a line chart", reuse the preceding successful query tool input. Preserve its measure, filters and scope, add only the dimension or chart configuration required by the request, and call generateVisualization directly when the carried-forward candidates cover it.'
+            : '',
+        args.enableChartExport
+            ? 'When exportChartAsCode is available, you MUST call it for chart YAML and never write or reconstruct YAML yourself. For a chart from an earlier turn, use its exact artifactUuid and versionUuid with null queryUuid when those references are already available. Otherwise call it with null for all three source identifiers to discover conversation artifacts. Pass null for an unspecified destination slug or spaceSlug; the tool reports missing values so you can ask the user. Do not search content to infer a destination, regenerate a chart or rerun data queries just to export it.'
+            : '',
+        args.enableFastMetadata
+            ? 'When the user explicitly names a value to exclude, retain that exclusion in the executed query even if searchFieldValues finds no matching rows. A value search reports observed data, not permitted filter literals. Explain that the exclusion currently removes no rows; do not omit it or substitute a different category. If the intended category requires interpretation rather than literal matching, clarify it first.'
+            : '',
+        args.enableFastMetadata
+            ? 'When applying or restating sourced business rules, preserve the exact predicate, entity grain, exceptions and date boundaries. Do not replace numeric conditions with broader labels: an amount equal to zero does not establish absence of the associated event, and excluding nonzero amounts is not the same as excluding only positive amounts. Distinguish a reporting-date window from the time at which a mutable attribute is evaluated. Do not invent current-state, historical-snapshot or timezone conventions when the sources do not specify them. State the missing convention if it affects the answer; keep supported rules intact.'
+            : '',
+        args.enableFastMetadata
+            ? 'Category labels are values, not comparisons. A label such as "Low Cost" does not prove that its group is cheaper than another group. Use comparative or superlative wording only when the available result rows include every compared group or period and the values establish that ordering. Prior prose is not evidence; reuse or rerun the exact query when comparison rows are absent.'
+            : '',
+        args.enableFastMetadata
+            ? 'For a definition or reference-only question, give the shortest complete answer: the definition, required conditions and exceptions, plus date scope only when requested. Preserve all requested rules. Avoid repeating them under multiple headings, speculative implementation caveats and offers to run future queries. Discuss an unspecified convention when the user asks about it or the requested result depends on choosing it; merely restating a documented definition does not require the user to settle every convention for a possible future query.'
+            : '',
         mcpToolsSection,
         mcpConnectionsSection,
         skillsSection,

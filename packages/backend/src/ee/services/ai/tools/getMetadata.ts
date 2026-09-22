@@ -28,6 +28,7 @@ const toolDefinition = getMetadataToolDefinition.for('agent');
 
 type Dependencies = {
     availableExplores: Explore[];
+    includeSourceDetails?: boolean;
     // Project-level parameter definitions (from the project_parameters table).
     // Model-level definitions come from the explores themselves.
     projectParameterDefinitions: ParameterDefinitions;
@@ -123,6 +124,8 @@ const renderParameter = (parameter: GetMetadataParameter): string => {
 const renderExplore = (
     explore: Explore,
     parameters: GetMetadataParameter[],
+    includeFieldLists: boolean,
+    includeSourceDetails: boolean,
 ): string => {
     const baseTable = explore.tables[explore.baseTable];
     const lines = [`Explore: ${explore.name} (${explore.label})`];
@@ -140,6 +143,25 @@ const renderExplore = (
             )}`,
         );
     }
+    if (includeSourceDetails) {
+        // Preserve whole predicates: a missing condition can change attribution.
+        for (const join of explore.joinedTables.filter(
+            (item) => !item.hidden || item.always,
+        )) {
+            lines.push(
+                `  join ${join.table}: ${JSON.stringify({
+                    type: join.type ?? null,
+                    relationship: join.relationship ?? null,
+                    always: join.always ?? false,
+                    sqlOn: join.sqlOn,
+                })}`,
+            );
+        }
+        for (const table of Object.values(explore.tables)) {
+            if (table.sqlWhere)
+                lines.push(`  table filter ${table.name}: ${table.sqlWhere}`);
+        }
+    }
     const required = summarizeRequiredFilters(explore);
     if (required) lines.push(`  ${required}`);
     if (parameters.length > 0) {
@@ -148,13 +170,15 @@ const renderExplore = (
             ...parameters.map(renderParameter),
         );
     }
-    lines.push(
-        renderFieldList(
-            'dimensions',
-            Object.values(baseTable?.dimensions ?? {}),
-        ),
-        renderFieldList('metrics', Object.values(baseTable?.metrics ?? {})),
-    );
+    if (includeFieldLists) {
+        lines.push(
+            renderFieldList(
+                'dimensions',
+                Object.values(baseTable?.dimensions ?? {}),
+            ),
+            renderFieldList('metrics', Object.values(baseTable?.metrics ?? {})),
+        );
+    }
     return lines.join('\n');
 };
 
@@ -356,7 +380,13 @@ const buildFieldNotFoundError = (
 
 export const executeGetMetadata = (
     { requests }: ToolGetMetadataArgs,
-    { availableExplores, projectParameterDefinitions }: Dependencies,
+    {
+        availableExplores,
+        projectParameterDefinitions,
+        includeSourceDetails = false,
+    }: Dependencies,
+    // Internal preload option; the model-facing tool retains its full inventory.
+    { includeFieldLists = true }: { includeFieldLists?: boolean } = {},
 ): ExecuteStructuredToolResult<GetMetadataResult> => {
     const byName = new Map(
         availableExplores.map((explore) => [explore.name, explore]),
@@ -382,7 +412,14 @@ export const executeGetMetadata = (
                         explore,
                         projectParameterDefinitions,
                     );
-                    textBlocks.push(renderExplore(explore, parameters));
+                    textBlocks.push(
+                        renderExplore(
+                            explore,
+                            parameters,
+                            includeFieldLists,
+                            includeSourceDetails,
+                        ),
+                    );
                     explores.push(
                         buildExploreStructuredResult(explore, parameters),
                     );

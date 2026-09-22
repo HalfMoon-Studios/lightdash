@@ -14,9 +14,12 @@ export enum ContentTypePriority {
     DASHBOARD = 2,
     CHART = 3,
     DATA_APP = 4,
+    DOCUMENT = 5,
 }
 
 export type ContentFilters = {
+    /** Server-resolved visibility; absent means Documents are disabled. */
+    documents?: { allowedSpaceUuids: string[]; grantedUuids?: string[] };
     projectUuids?: string[];
     spaceUuids?: string[];
     /** Restrict to specific content uuids (e.g. resolving curated collections) */
@@ -37,6 +40,18 @@ export type ContentFilters = {
     };
     deleted?: boolean;
     deletedByUserUuids?: string[];
+    /**
+     * Shared-with-me hydration: `uuids` holds resources the caller was
+     * directly granted, so per-space and personal-app visibility scoping is
+     * relaxed — authorization was already decided from the grant tables.
+     */
+    sharedWithMe?: boolean;
+    /**
+     * Only dashboards have owners, so this filter restricts results to
+     * dashboards owned by one of these users (other content types are
+     * excluded entirely while it is set).
+     */
+    ownerUserUuids?: string[];
     includeDescendantCounts?: boolean;
     // Client opt-in (set by the "All data apps" browse) to surface personal
     // (space-less) apps. The service resolves it into `dataApps` below.
@@ -86,6 +101,7 @@ export type SummaryContentRow<
     last_updated_by_user_last_name: string | null;
     views: number;
     first_viewed_at: Date | null;
+    last_viewed_at: Date | null;
     deleted_at: Date | null;
     deleted_by_user_uuid: string | null;
     deleted_by_user_first_name: string | null;
@@ -94,6 +110,10 @@ export type SummaryContentRow<
     verified_by_user_uuid: string | null;
     verified_by_user_first_name: string | null;
     verified_by_user_last_name: string | null;
+    owner_user_uuid: string | null;
+    owner_user_first_name: string | null;
+    owner_user_last_name: string | null;
+    owner_user_email: string | null;
     metadata: T;
 };
 

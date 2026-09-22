@@ -38,6 +38,7 @@ const TOOLS_WITHOUT_DESCRIPTION = new Set<ToolName>([
     'generateHashes',
     'generateUuids',
     'getProjectInfo',
+    'listDataAppThemes',
     'listKnowledgeDocuments',
     'listProjects',
     'loadSkill',
@@ -244,7 +245,7 @@ export const ToolCallRow: FC<Props> = ({
                 {head}
             </UnstyledButton>
             <Collapse
-                in={expanded}
+                expanded={expanded}
                 transitionDuration={240}
                 transitionTimingFunction="cubic-bezier(0.16, 1, 0.3, 1)"
             >

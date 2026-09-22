@@ -1,5 +1,5 @@
 import { FeatureFlags } from '@lightdash/common';
-import { getDefaultZIndex, Menu } from '@mantine/core';
+import { Button, getDefaultZIndex, Menu } from '@mantine/core';
 import {
     IconHistory,
     IconLogout,
@@ -14,9 +14,11 @@ import { useServerFeatureFlag } from '../../hooks/useServerOrClientFeatureFlag';
 import useApp from '../../providers/App/useApp';
 import MantineIcon from '../common/MantineIcon';
 import { UserAvatar } from '../UserAvatar';
+import { useNavBarMenuProps } from './NavBarPortalContext';
 import { ThemeSwitcherMenuItem } from './ThemeSwitcher';
 
-const UserMenu: FC = () => {
+const UserMenu: FC<{ withLabel?: boolean }> = ({ withLabel = false }) => {
+    const menuProps = useNavBarMenuProps();
     const { user } = useApp();
     const { activeProjectUuid } = useActiveProjectUuid();
     const queryHistoryFlag = useServerFeatureFlag(FeatureFlags.QueryHistory);
@@ -28,16 +30,20 @@ const UserMenu: FC = () => {
 
     return (
         <Menu
-            withArrow
-            shadow="lg"
             position="bottom-end"
             arrowOffset={16}
             offset={-2}
             zIndex={getDefaultZIndex('max')}
-            portalProps={{ target: '#navbar-header' }}
+            {...menuProps}
         >
             <Menu.Target>
-                <UserAvatar />
+                {withLabel ? (
+                    <Button variant="default" leftSection={<UserAvatar />}>
+                        Account
+                    </Button>
+                ) : (
+                    <UserAvatar />
+                )}
             </Menu.Target>
 
             <Menu.Dropdown>

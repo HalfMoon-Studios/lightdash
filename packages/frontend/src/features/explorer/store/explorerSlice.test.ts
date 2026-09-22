@@ -259,6 +259,28 @@ describe('explorerSlice chart type authoring', () => {
         expect(cancelled.chartSidebarStep).toBe('choose');
     });
 
+    it.each(['choose', 'configure'] as const)(
+        'returns to %s after editing an existing type',
+        (step) => {
+            const entered = explorerReducer(
+                explorerReducer(
+                    fromChoose,
+                    explorerActions.setChartSidebarStep(step),
+                ),
+                explorerActions.startChartTypeAuthoring({
+                    dataAppVizUuid: 'viz-1',
+                }),
+            );
+            const finished = explorerReducer(
+                entered,
+                explorerActions.finishChartTypeAuthoring(),
+            );
+            expect(finished.chartSidebarStep).toBe(step);
+            expect(finished.chartTypeAuthoring).toBeNull();
+            expect(finished.isVisualizationConfigOpen).toBe(true);
+        },
+    );
+
     it('finishes on the configuration of the authored type', () => {
         const finished = explorerReducer(
             authoringNew,
@@ -322,5 +344,60 @@ describe('explorerSlice chart type authoring', () => {
         );
         expect(cleared.chartSidebarStep).toBe('configure');
         expect(cleared.unsavedChartVersion.tableName).toBe('orders');
+    });
+});
+
+describe('explorerSlice saved chart metadata', () => {
+    const savedChart = {
+        uuid: 'chart-uuid',
+        name: 'Old name',
+        description: 'Old description',
+        pinnedListUuid: null,
+        verification: null,
+        colorPaletteUuid: 'saved-palette',
+        metricQuery: { metrics: ['orders_count'] },
+    } as unknown as Parameters<typeof explorerActions.setSavedChartMetadata>[0];
+
+    it('merges server metadata without touching the version or the staged palette', () => {
+        const withChart = explorerReducer(
+            undefined,
+            explorerActions.setSavedChart(savedChart),
+        );
+        const withStagedPalette = explorerReducer(
+            withChart,
+            explorerActions.setColorPaletteUuid('staged-palette'),
+        );
+
+        const result = explorerReducer(
+            withStagedPalette,
+            explorerActions.setSavedChartMetadata({
+                ...savedChart,
+                name: 'New name',
+                description: 'New description',
+                pinnedListUuid: 'pinned-list',
+                colorPaletteUuid: 'server-palette',
+                metricQuery: { metrics: ['orders_total'] },
+            } as unknown as Parameters<
+                typeof explorerActions.setSavedChartMetadata
+            >[0]),
+        );
+
+        expect(result.savedChart?.name).toBe('New name');
+        expect(result.savedChart?.description).toBe('New description');
+        expect(result.savedChart?.pinnedListUuid).toBe('pinned-list');
+        expect(result.savedChart?.metricQuery).toEqual({
+            metrics: ['orders_count'],
+        });
+        expect(result.savedChart?.colorPaletteUuid).toBe('saved-palette');
+        expect(result.unsavedColorPaletteUuid).toBe('staged-palette');
+    });
+
+    it('ignores metadata for a session with no saved chart', () => {
+        const result = explorerReducer(
+            undefined,
+            explorerActions.setSavedChartMetadata(savedChart),
+        );
+
+        expect(result.savedChart).toBeUndefined();
     });
 });

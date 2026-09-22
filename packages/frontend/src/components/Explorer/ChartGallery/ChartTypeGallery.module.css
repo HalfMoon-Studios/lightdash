@@ -28,36 +28,40 @@
     min-width: 0;
 }
 
-/* Edit fades in on hover/focus so resting cards stay clean; the configure
-   step's persistent "Edit chart type" action covers discovery and touch. */
-.cardEdit {
-    position: absolute;
-    top: 4px;
-    right: 4px;
+/* Keep secondary actions quiet until hover or keyboard focus reveals them. */
+.cardMoreActions {
     opacity: 0;
     pointer-events: none;
     transition: opacity 100ms ease-out;
 }
 
-.cardWrapper:hover .cardEdit,
-.cardWrapper:focus-within .cardEdit {
+.cardWrapper:hover .cardMoreActions:not(:disabled),
+.cardWrapper:has(:focus-visible) .cardMoreActions,
+.cardWrapper[data-menu-open='true'] .cardMoreActions {
     opacity: 1;
     pointer-events: auto;
+}
+
+.cardWrapper .cardMoreActions {
+    color: var(--mantine-color-text);
+}
+
+.cardMoreActions {
+    position: absolute;
+    top: calc(var(--mantine-spacing-xs) / 2);
+    right: calc(var(--mantine-spacing-xs) / 2);
+    z-index: 2;
 }
 
 .card {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
     gap: var(--mantine-spacing-xs);
     padding: var(--mantine-spacing-sm) var(--mantine-spacing-xs);
-    border: 1px solid
-        light-dark(var(--mantine-color-ldGray-3), var(--mantine-color-ldDark-5));
-    background: light-dark(
-        var(--mantine-color-ldGray-0),
-        var(--mantine-color-ldDark-3)
-    );
+    border: 1px solid var(--mantine-color-default-border);
+    background: var(--mantine-color-body);
     text-align: center;
     border-radius: var(--mantine-radius-md);
     /* User-defined names can be one long unbroken word; break rather than
@@ -70,15 +74,10 @@
         box-shadow 120ms ease;
 }
 
-.card:hover:not(:disabled):not([data-selected='true']) {
-    border-color: light-dark(
-        var(--mantine-color-ldGray-4),
-        var(--mantine-color-ldDark-6)
-    );
-    background: light-dark(
-        var(--mantine-color-ldGray-1),
-        var(--mantine-color-ldDark-4)
-    );
+.card:hover:not(:disabled):not([data-selected='true']),
+.cardWrapper:hover .card:not(:disabled):not([data-selected='true']) {
+    border-color: var(--mantine-color-ldGray-3);
+    background: var(--mantine-color-default-hover);
 }
 
 /* Selection owns the blue at full strength: accent border over a tint of the
@@ -87,18 +86,33 @@
    where the scroll viewport cannot clip it. */
 .card[data-selected='true'] {
     border-color: light-dark(
-        var(--mantine-color-blue-5),
-        var(--mantine-color-blue-7)
+        var(--mantine-color-blue-6),
+        var(--mantine-color-blue-5)
     );
     background: light-dark(
         var(--mantine-color-blue-0),
         color-mix(
             in srgb,
             var(--mantine-color-blue-9) 30%,
-            var(--mantine-color-ldDark-3)
+            var(--mantine-color-body)
         )
     );
     box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+
+/* Library installs share the built-ins' shelf and keep its neutral card; the
+   violet corner badge alone marks their provenance. */
+.installedBadge {
+    position: absolute;
+    top: calc(var(--mantine-spacing-xs) / 2);
+    right: calc(var(--mantine-spacing-xs) / 2);
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    color: light-dark(
+        var(--mantine-color-violet-6),
+        var(--mantine-color-violet-4)
+    );
 }
 
 /* An action tile among content tiles: outlined, not filled. */
@@ -118,8 +132,42 @@
     transform: scale(0.98);
 }
 
+.cardIcon {
+    display: grid;
+    place-items: center;
+    height: 32px;
+    flex: 0 0 32px;
+    transition: opacity 100ms ease-out;
+}
+
+.cardLabel {
+    min-height: 2lh;
+}
+
+.cardLabelSlot {
+    width: 100%;
+    min-height: calc(var(--mantine-font-size-xs) * 1.2 * 2);
+}
+
+/* Sits in the label slot's second line, inside the card. */
+.cardWrapper .cardConfigureAction {
+    position: absolute;
+    left: 50%;
+    bottom: 5px;
+    z-index: 1;
+    height: 18px;
+    transform: translateX(-50%);
+}
+
+.cardWrapper .cardConfigureAction:active:not(:disabled) {
+    transform: translateX(-50%) scale(0.98);
+}
+
 @media (prefers-reduced-motion: reduce) {
-    .card {
+    .card,
+    .cardConfigureAction,
+    .cardMoreActions,
+    .cardIcon {
         transition: none;
     }
 
@@ -130,6 +178,14 @@
 
 .card:disabled {
     opacity: 0.5;
+}
+
+/* Keep editing available on devices without hover. */
+@media (hover: none) {
+    .cardMoreActions:not(:disabled) {
+        opacity: 1;
+        pointer-events: auto;
+    }
 }
 
 /* Resting glyphs stay gray; only selection earns the blue fill. */

@@ -23,12 +23,15 @@ import {
     Textarea,
     TextInput,
 } from '@mantine/core';
-import { useForm, zodResolver } from '@mantine/form';
+import { useForm } from '@mantine/form';
 import { IconPlus } from '@tabler/icons-react';
+import { zod4Resolver as zodResolver } from 'mantine-form-zod-resolver';
 import { useCallback, useEffect, useMemo, useState, type FC } from 'react';
 import { useNavigate } from 'react-router';
 import { v4 as uuid4 } from 'uuid';
 import { z } from 'zod';
+import { useMergeSafe } from '../../../../features/mergeQuery/context/useMerge';
+import { getChartQueryDimensions } from '../../../../features/mergeQuery/utils/getChartQueryDimensions';
 import {
     appendNewTilesToBottom,
     useCreateMutation as useCreateDashboardMutation,
@@ -63,7 +66,7 @@ import {
 
 const saveToSpaceOrDashboardSchema = z
     .object({
-        name: z.string().min(1),
+        name: z.string().min(1, 'Name is required'),
         description: z.string().nullable(),
     })
     // for saving to the dashboard
@@ -161,17 +164,23 @@ export const SaveToSpaceOrDashboard: FC<Props> = ({
         validate: saveToSpaceOrDashboardResolver,
     });
 
-    // Check if the chart has unused dimensions that may cause incorrect results
+    // Check if the chart has unused dimensions that may cause incorrect
+    // results. A merged chart's layout names merged fields, so it is checked
+    // against the merged result, as the visualization card does.
+    const mergeResults = useMergeSafe()?.mergeResults ?? null;
     const showUnusedDimensionsWarning = useMemo(() => {
         const pivotDimensions = savedData.pivotConfig?.columns ?? [];
-        const queryDimensions = savedData.metricQuery?.dimensions ?? [];
+        const queryDimensions = getChartQueryDimensions(
+            savedData.metricQuery,
+            mergeResults,
+        );
         return hasUnusedDimensions({
             chartType: savedData.chartConfig?.type,
             chartConfig: savedData.chartConfig?.config,
             pivotDimensions,
             queryDimensions,
         });
-    }, [savedData]);
+    }, [savedData, mergeResults]);
 
     const {
         data: dashboards,
@@ -665,6 +674,9 @@ export const SaveToSpaceOrDashboard: FC<Props> = ({
                                         <Radio
                                             value={SaveDestination.Space}
                                             label="Space"
+                                            // Anchor for scope walkthroughs
+                                            data-tour-anchor="chart-save-to-space"
+                                            data-tour-hint="Choose to save it in a space"
                                             disabled={
                                                 !spaces || isLoadingSpaces
                                             }
@@ -829,6 +841,8 @@ export const SaveToSpaceOrDashboard: FC<Props> = ({
                                     }}
                                     disabled={!form.values.name}
                                     type="button"
+                                    data-tour-anchor="chart-save-next"
+                                    data-tour-hint="Click Next to accept the suggested name"
                                 >
                                     Next
                                 </Button>
@@ -840,6 +854,8 @@ export const SaveToSpaceOrDashboard: FC<Props> = ({
                                 Back
                             </Button>
                             <Button
+                                data-tour-anchor="chart-save-submit"
+                                data-tour-hint="Save the chart"
                                 type="submit"
                                 loading={
                                     isSavingChart ||

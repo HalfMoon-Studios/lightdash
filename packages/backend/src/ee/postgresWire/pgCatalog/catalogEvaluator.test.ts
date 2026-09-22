@@ -1,3 +1,4 @@
+import { SupportedDbtAdapter } from '@lightdash/common';
 import { parse, type SelectStatement } from 'pgsql-ast-parser';
 import { describe, expect, it, vi } from 'vitest';
 import { type PgWireTable } from '../types';
@@ -9,36 +10,50 @@ const catalog: PgWireTable[] = [
     {
         name: 'orders',
         description: 'Orders',
+        targetDatabase: SupportedDbtAdapter.POSTGRES,
         fields: [
             {
                 fieldId: 'orders_status',
+                table: 'orders',
+                name: 'status',
                 kind: 'dimension',
                 type: 'string',
                 description: 'Status',
+                timeInterval: null,
             },
             {
                 fieldId: 'orders_amount',
+                table: 'orders',
+                name: 'amount',
                 kind: 'dimension',
                 type: 'number',
                 description: null,
+                timeInterval: null,
             },
             {
                 fieldId: 'orders_count',
+                table: 'orders',
+                name: 'count',
                 kind: 'metric',
                 type: 'count',
                 description: null,
+                timeInterval: null,
             },
         ],
     },
     {
         name: 'customers',
         description: null,
+        targetDatabase: SupportedDbtAdapter.POSTGRES,
         fields: [
             {
                 fieldId: 'customers_id',
+                table: 'customers',
+                name: 'id',
                 kind: 'dimension',
                 type: 'number',
                 description: null,
+                timeInterval: null,
             },
         ],
     },

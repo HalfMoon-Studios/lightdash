@@ -1,8 +1,11 @@
 import { subject } from '@casl/ability';
-import { DashboardTileTypes } from '@lightdash/common';
+import {
+    ContentReviewContentType,
+    DashboardTileTypes,
+    DirectAccessResourceType,
+} from '@lightdash/common';
 import {
     Group,
-    Paper,
     Stack,
     Title,
     Button,
@@ -16,17 +19,31 @@ import {
     IconDatabaseExport,
     IconDots,
     IconLayoutGridAdd,
+    IconSend,
     IconTrash,
+    IconUsers,
 } from '@tabler/icons-react';
 import { useCallback, useEffect, useRef, type FC } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import MantineIcon from '../../../../components/common/MantineIcon';
+import PageHeader from '../../../../components/common/Page/PageHeader';
 import { UpdatedInfo } from '../../../../components/common/PageHeader/UpdatedInfo';
 import { ResourceInfoPopup } from '../../../../components/common/ResourceInfoPopup/ResourceInfoPopup';
 import { TitleBreadCrumbs } from '../../../../components/Explorer/SavedChartsHeader/TitleBreadcrumbs';
 import AddTilesToDashboardModal from '../../../../components/SavedDashboards/AddTilesToDashboardModal';
+import {
+    PendingReviewBadge,
+    RequestReviewModal,
+    useContentReviewEligibility,
+} from '../../../../ee/features/contentReview';
+import { useContentAuthoringEnabled } from '../../../../hooks/useContentAuthoringEnabled';
 import { useProject } from '../../../../hooks/useProject';
 import useApp from '../../../../providers/App/useApp';
+import {
+    DirectAccessModal,
+    useCanManageDirectAccess,
+    useDirectAccessAvailability,
+} from '../../../directAccess';
 import { PromotionConfirmDialog } from '../../../promotion/components/PromotionConfirmDialog';
 import {
     getSchedulerUuidFromUrlParams,
@@ -40,9 +57,24 @@ import {
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { toggleModal } from '../../store/sqlRunnerSlice';
 import { DeleteSqlChartModal } from '../DeleteSqlChartModal';
-import headerStyles from './HeaderPaper.module.css';
+
+/**
+ * Walkthrough result for manage:SqlRunner: the saved SQL chart's own page,
+ * which saving opens.
+ */
+const savedChartTourProps = {
+    'data-tour-scope': 'manage:SqlRunner',
+    'data-tour-step': '1',
+    'data-tour-route': '/projects/:projectUuid/sql-runner/:slug',
+    'data-tour-label': 'The chart is saved in its space',
+    'data-tour-docs': 'explore/sql-runner.mdx#intro:p2:1',
+    'data-tour-return': 'none',
+    'data-tour-resultdocs':
+        'explore/sql-runner.mdx#saved-charts-in-the-sql-runner:1',
+};
 
 export const HeaderView: FC = () => {
+    const authoringEnabled = useContentAuthoringEnabled();
     const navigate = useNavigate();
     const { search, pathname } = useLocation();
     const dispatch = useAppDispatch();
@@ -55,6 +87,18 @@ export const HeaderView: FC = () => {
     const savedSqlChart = useAppSelector(
         (state) => state.sqlRunner.savedSqlChart,
     );
+    const [isDirectAccessModalOpen, directAccessModalHandlers] =
+        useDisclosure(false);
+    const directAccessAvailability = useDirectAccessAvailability();
+    const canManageSqlChartAccess = useCanManageDirectAccess({
+        projectUuid,
+        spaceUuid: savedSqlChart?.space.uuid ?? null,
+        createdByUserUuid: null,
+        access: savedSqlChart?.space.userAccess
+            ? [savedSqlChart.space.userAccess]
+            : [],
+        grantRoles: [],
+    });
     const isAddToDashboardModalOpen = useAppSelector(
         (state) => state.sqlRunner.modals.addToDashboard.isOpen,
     );
@@ -69,6 +113,14 @@ export const HeaderView: FC = () => {
     }, [dispatch]);
 
     const [isSyncModalOpen, syncModalHandlers] = useDisclosure();
+    const [isRequestReviewModalOpen, requestReviewModalHandlers] =
+        useDisclosure(false);
+    const contentReview = useContentReviewEligibility({
+        projectUuid,
+        contentType: ContentReviewContentType.SQL_CHART,
+        contentUuid: savedSqlChart?.savedSqlUuid,
+        spaceUuid: savedSqlChart?.space.uuid ?? null,
+    });
 
     // Open sync modal when navigating from schedulers settings page
     const hasProcessedUrlParams = useRef(false);
@@ -163,17 +215,10 @@ export const HeaderView: FC = () => {
 
     return (
         <>
-            <Paper
-                shadow="none"
-                radius={0}
-                withBorder={false}
-                px="md"
-                py="xs"
-                className={headerStyles.paper}
-            >
-                <Group justify="space-between">
-                    <Stack gap="none">
-                        <Group gap="two">
+            <PageHeader variant="query">
+                <Group justify="space-between" flex={1} wrap="nowrap">
+                    <Stack gap={0} miw={0}>
+                        <Group gap={4} wrap="nowrap">
                             {space && (
                                 <TitleBreadCrumbs
                                     projectUuid={projectUuid}
@@ -181,9 +226,19 @@ export const HeaderView: FC = () => {
                                     spaceName={space.name}
                                 />
                             )}
-                            <Title c="ldDark.6" order={5} fw={600}>
+                            <Title
+                                order={5}
+                                maw={500}
+                                lineClamp={1}
+                                {...savedChartTourProps}
+                            >
                                 {savedSqlChart.name}
                             </Title>
+                            {contentReview.pendingRequest && (
+                                <PendingReviewBadge
+                                    request={contentReview.pendingRequest}
+                                />
+                            )}
                         </Group>
                         <Group gap="xs">
                             <UpdatedInfo
@@ -207,6 +262,7 @@ export const HeaderView: FC = () => {
                     <Group gap="xs">
                         {canManageSqlRunner && canManageChart && (
                             <Button
+                                display={authoringEnabled ? undefined : 'none'}
                                 size="xs"
                                 variant="default"
                                 onClick={() =>
@@ -219,16 +275,17 @@ export const HeaderView: FC = () => {
                             </Button>
                         )}
 
-                        {(canManageChart || canSyncWithGoogleSheets) && (
+                        {(canManageChart ||
+                            canSyncWithGoogleSheets ||
+                            contentReview.canRequest) && (
                             <Menu
                                 position="bottom"
+                                returnFocus={!isDirectAccessModalOpen}
                                 withArrow
-                                withinPortal
-                                shadow="md"
                                 width={200}
                             >
                                 <Menu.Target>
-                                    <ActionIcon color="gray" variant="subtle">
+                                    <ActionIcon>
                                         <MantineIcon icon={IconDots} />
                                     </ActionIcon>
                                 </Menu.Target>
@@ -254,6 +311,18 @@ export const HeaderView: FC = () => {
                                             </Menu.Item>
                                         </>
                                     )}
+                                    {contentReview.canRequest && (
+                                        <Menu.Item
+                                            leftSection={
+                                                <MantineIcon icon={IconSend} />
+                                            }
+                                            onClick={
+                                                requestReviewModalHandlers.open
+                                            }
+                                        >
+                                            Request review
+                                        </Menu.Item>
+                                    )}
                                     {canSyncWithGoogleSheets && (
                                         <Menu.Item
                                             leftSection={
@@ -273,7 +342,6 @@ export const HeaderView: FC = () => {
                                                 project?.upstreamProjectUuid !==
                                                 undefined
                                             }
-                                            withinPortal
                                         >
                                             <div>
                                                 <Menu.Item
@@ -299,6 +367,21 @@ export const HeaderView: FC = () => {
                                             </div>
                                         </Tooltip>
                                     )}
+                                    {directAccessAvailability.isAvailable &&
+                                        canManageSqlChartAccess && (
+                                            <Menu.Item
+                                                leftSection={
+                                                    <MantineIcon
+                                                        icon={IconUsers}
+                                                    />
+                                                }
+                                                onClick={
+                                                    directAccessModalHandlers.open
+                                                }
+                                            >
+                                                Share
+                                            </Menu.Item>
+                                        )}
                                     {canManageChart && (
                                         <Menu.Item
                                             leftSection={
@@ -325,7 +408,20 @@ export const HeaderView: FC = () => {
                         )}
                     </Group>
                 </Group>
-            </Paper>
+            </PageHeader>
+
+            {isDirectAccessModalOpen && savedSqlChart && (
+                <DirectAccessModal
+                    opened={isDirectAccessModalOpen}
+                    onClose={directAccessModalHandlers.close}
+                    projectUuid={projectUuid}
+                    resource={{
+                        resourceType: DirectAccessResourceType.SQL_CHART,
+                        resourceUuid: savedSqlChart.savedSqlUuid,
+                        name: savedSqlChart.name,
+                    }}
+                />
+            )}
 
             <DeleteSqlChartModal
                 projectUuid={projectUuid}
@@ -335,6 +431,16 @@ export const HeaderView: FC = () => {
                 onClose={onCloseDeleteModal}
                 onSuccess={() => navigate(`/projects/${projectUuid}/home`)}
             />
+            {isRequestReviewModalOpen && (
+                <RequestReviewModal
+                    projectUuid={projectUuid}
+                    contentType={ContentReviewContentType.SQL_CHART}
+                    contentUuid={savedSqlChart.savedSqlUuid}
+                    contentName={savedSqlChart.name}
+                    opened={isRequestReviewModalOpen}
+                    onClose={requestReviewModalHandlers.close}
+                />
+            )}
             {isAddToDashboardModalOpen && (
                 <AddTilesToDashboardModal
                     isOpen={true}

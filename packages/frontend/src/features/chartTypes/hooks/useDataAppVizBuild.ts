@@ -4,9 +4,12 @@ import {
     getErrorMessage,
     type ApiAppVersionSummary,
     type AppClarification,
+    type AppChartReference,
+    type AppVersionExternalConnectionResource,
     type DataAppClaudeModel,
     type DataAppCodexModel,
     type DataAppVizFieldMapping,
+    type AppVizBuildContext,
     type ItemsMap,
 } from '@lightdash/common';
 import { useCallback, useState } from 'react';
@@ -17,6 +20,7 @@ import { useDeleteApp } from '../../apps/hooks/useDeleteApp';
 import { useGenerateApp } from '../../apps/hooks/useGenerateApp';
 import { useIterateApp } from '../../apps/hooks/useIterateApp';
 import { autoMapDataAppVizFields } from '../utils/autoMapDataAppVizFields';
+import { normalizeVizBuildContext } from '../utils/vizBuildContext';
 
 type Args = {
     projectUuid: string | undefined;
@@ -25,6 +29,8 @@ type Args = {
     dataAppVizUuid: string | null;
     /** The surface the build is reported from in analytics. */
     creationExperience: DataAppCreationExperience;
+    /** The saved chart whose field types and formatting seed this build. */
+    chartReference?: AppChartReference;
     /** Called once a new visualization lands ready with the chart still
      *  pointing at nothing, with its contract bound. */
     onCreated: (
@@ -40,6 +46,18 @@ export type VizBuildRequest = {
     /** Answers to the pre-build clarifying round; empty when it was skipped,
      *  fell through, or never ran. Only a first build can carry them. */
     clarifications: AppClarification[];
+    /** Connections to link before this generate/iterate. Empty when none. */
+    externalConnections: AppVersionExternalConnectionResource[];
+    /** Sends a bounded sample only when the builder user opts in. */
+    includeSampleData?: boolean;
+    /** Contract from the currently rendered chart. Kept separate from the
+     * user-facing description, then supplied to the coding agent at build. */
+    context?: AppVizBuildContext;
+    /**
+     * The selected theme for this build. Undefined preserves the server's
+     * default selection, while null explicitly removes the theme.
+     */
+    designUuid?: string | null;
 } & (
     | { claudeModel: DataAppClaudeModel; codexModel?: never }
     | { codexModel: DataAppCodexModel; claudeModel?: never }
@@ -107,6 +125,7 @@ export const useDataAppVizBuild = ({
     itemsMap,
     dataAppVizUuid,
     creationExperience,
+    chartReference,
     onCreated,
 }: Args): DataAppVizBuildState => {
     // The request in flight, and the app it is building — both null when idle.
@@ -133,13 +152,11 @@ export const useDataAppVizBuild = ({
             if (version.status === 'ready') {
                 // Only new visualizations need selecting; later picker choices win.
                 if (target?.isNew && dataAppVizUuid === null) {
-                    onCreated(
-                        target.appUuid,
-                        autoMapDataAppVizFields(
-                            version.resources?.vizSchema?.fields ?? [],
-                            itemsMap,
-                        ),
+                    const fieldMapping = autoMapDataAppVizFields(
+                        version.resources?.vizSchema?.fields ?? [],
+                        itemsMap,
                     );
+                    onCreated(target.appUuid, fieldMapping);
                 }
                 return;
             }
@@ -168,9 +185,32 @@ export const useDataAppVizBuild = ({
             setFailed(null);
             setCancelError(null);
             setInFlight(request);
+            const vizContext = normalizeVizBuildContext(
+                request.context,
+                request.includeSampleData === true,
+            );
             const prompt = request.description;
             const files =
                 request.fileIds.length > 0 ? request.fileIds : undefined;
+            const externalConnections =
+                request.externalConnections.length > 0
+                    ? request.externalConnections.map(
+                          ({ externalConnectionUuid, alias }) => ({
+                              externalConnectionUuid,
+                              alias,
+                          }),
+                      )
+                    : undefined;
+            const charts = chartReference
+                ? [
+                      {
+                          ...chartReference,
+                          includeSampleData:
+                              request.includeSampleData === true &&
+                              !request.context?.sampleRows?.length,
+                      },
+                  ]
+                : undefined;
             const onError = (err: unknown) => {
                 setInFlight(null);
                 setFailed({ message: getErrorMessage(err), request });
@@ -181,10 +221,16 @@ export const useDataAppVizBuild = ({
                     {
                         projectUuid,
                         prompt,
+                        vizContext,
                         template: DATA_APP_VIZ_TEMPLATE,
                         creationExperience,
                         appUuid: draftAppUuid,
                         fileIds: files,
+                        charts,
+                        externalConnections,
+                        ...(request.designUuid !== undefined
+                            ? { designUuid: request.designUuid }
+                            : {}),
                         ...(request.codexModel
                             ? { codexModel: request.codexModel }
                             : { claudeModel: request.claudeModel }),
@@ -213,8 +259,14 @@ export const useDataAppVizBuild = ({
                     projectUuid,
                     appUuid: dataAppVizUuid,
                     prompt,
+                    vizContext,
                     creationExperience,
                     fileIds: files,
+                    charts,
+                    externalConnections,
+                    ...(request.designUuid !== undefined
+                        ? { designUuid: request.designUuid }
+                        : {}),
                     ...(request.codexModel
                         ? { codexModel: request.codexModel }
                         : { claudeModel: request.claudeModel }),
@@ -235,6 +287,7 @@ export const useDataAppVizBuild = ({
             projectUuid,
             dataAppVizUuid,
             creationExperience,
+            chartReference,
             building,
             draftAppUuid,
             generateApp,

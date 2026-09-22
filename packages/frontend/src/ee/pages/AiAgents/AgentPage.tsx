@@ -25,6 +25,8 @@ import { launcherSession } from '../../features/aiCopilot/components/Launcher/la
 import { useLauncherDock } from '../../features/aiCopilot/components/Launcher/useLauncherDock';
 import { MyMemoriesModal } from '../../features/aiCopilot/components/MyMemories/MyMemoriesModal';
 import { MEMORY_TOUR_STEPS } from '../../features/aiCopilot/components/MyMemories/onboarding';
+import AiThreadChartEditorModal from '../../features/aiCopilot/components/ThreadChartEditor/AiThreadChartEditorModal';
+import { AiThreadChartEditContext } from '../../features/aiCopilot/components/ThreadChartEditor/useAiThreadChartEdit';
 import {
     getAiAgentPageBase,
     isEmbedAiAgentRoute,
@@ -134,11 +136,13 @@ const AgentPage = () => {
             } else {
                 const chartUuid = searchParams.get('chartUuid');
                 const dashboardUuid = searchParams.get('dashboardUuid');
+                const dataAppUuid = searchParams.get('dataAppUuid');
                 const pendingContext =
-                    chartUuid || dashboardUuid
+                    chartUuid || dashboardUuid || dataAppUuid
                         ? {
                               chartUuid: chartUuid ?? undefined,
                               dashboardUuid: dashboardUuid ?? undefined,
+                              dataAppUuid: dataAppUuid ?? undefined,
                           }
                         : null;
                 aiAgentStore.dispatch(
@@ -174,6 +178,13 @@ const AgentPage = () => {
         setIsShareModalOpen(false);
         setShareUrl(null);
     }, []);
+
+    // Chart references edit in place; embed viewers keep plain navigation.
+    const [editChartUuid, setEditChartUuid] = useState<string | null>(null);
+    const openChartEditor = useCallback(
+        (chartUuid: string) => setEditChartUuid(chartUuid),
+        [],
+    );
 
     const handleShare = useCallback(async () => {
         if (!projectUuid || !agentUuid || !threadUuid) return;
@@ -224,6 +235,10 @@ const AgentPage = () => {
         );
     }
 
+    const agentSettingsHref = canManageAgents
+        ? `/projects/${projectUuid}/ai-agents/${agent.uuid}/edit`
+        : undefined;
+
     return (
         <AiAgentPageLayout
             isEmbed={isEmbed}
@@ -248,6 +263,7 @@ const AgentPage = () => {
                                 agents={agentsList}
                                 selectedAgent={agent}
                                 variant="header"
+                                settingsHref={agentSettingsHref}
                             />
                         }
                         onShare={
@@ -262,11 +278,18 @@ const AgentPage = () => {
                                 : undefined
                         }
                         onMinimize={() => handleMinimize()}
-                        settingsHref={
-                            canManageAgents
-                                ? `/projects/${projectUuid}/ai-agents/${agent.uuid}/edit`
-                                : undefined
-                        }
+                        settingsHref={agentSettingsHref}
+                    />
+                ) : undefined
+            }
+            MobileSidebarHeader={
+                !isEmbed && agentsList && agentsList.length > 0 ? (
+                    <AgentSelector
+                        projectUuid={projectUuid!}
+                        agents={agentsList}
+                        selectedAgent={agent}
+                        variant="drawer"
+                        settingsHref={agentSettingsHref}
                     />
                 ) : undefined
             }
@@ -325,13 +348,22 @@ const AgentPage = () => {
                     setIsMemoriesModalOpen(stepIndex === 1)
                 }
             />
-            <Outlet
-                context={{
-                    agent,
-                    agents: agentsList ?? [],
-                    navigateFromAgentChat: handleMinimize,
-                }}
+            <AiThreadChartEditorModal
+                chartUuid={editChartUuid}
+                projectUuid={projectUuid}
+                onClose={() => setEditChartUuid(null)}
             />
+            <AiThreadChartEditContext.Provider
+                value={isEmbed ? undefined : openChartEditor}
+            >
+                <Outlet
+                    context={{
+                        agent,
+                        agents: agentsList ?? [],
+                        navigateFromAgentChat: handleMinimize,
+                    }}
+                />
+            </AiThreadChartEditContext.Provider>
         </AiAgentPageLayout>
     );
 };

@@ -165,6 +165,11 @@ export type QueryResult = {
     /** Async query UUID for the source query. Useful for debugging and advanced flows. */
     queryUuid?: string;
     /**
+     * Row key for each qualified Lightdash field id (`orders_status` →
+     * `status`). Lets host features that speak field ids find the row.
+     */
+    rowKeys?: Record<string, string>;
+    /**
      * Fetch raw rows behind an aggregated metric value from this query result.
      * Available when the transport supports Lightdash underlying-data queries.
      */
@@ -248,6 +253,14 @@ export type UnderlyingDataResult = {
 export const VIZ_UNDERLYING_DATA_PATH = '/__sdk/viz/underlying-data';
 
 /**
+ * Bridge-only virtual route for opening the host's underlying-data dialog.
+ * Separate from `VIZ_UNDERLYING_DATA_PATH` so deployed bundles can keep using
+ * the legacy fetch/download contract while current bundles delegate the UI to
+ * Lightdash.
+ */
+export const VIZ_UNDERLYING_DATA_OPEN_PATH = '/__sdk/viz/underlying-data/open';
+
+/**
  * Semantic click intent a viz sends to the host: the untransformed source row
  * (as received from `useVizContext().rows`) and the declared field NAME bound
  * to the clicked metric slot. The host resolves everything else.
@@ -258,6 +271,8 @@ export type VizUnderlyingDataIntent = {
         { value?: { raw?: unknown; formatted?: string } } | undefined
     >;
     metric: string;
+    /** The clicked query field id when `metric` is a multi-field slot. */
+    fieldId?: string;
     limit?: number | null;
 };
 
@@ -282,6 +297,8 @@ export type VizDrillDownIntent = {
         { value?: { raw?: unknown; formatted?: string } } | undefined
     >;
     metric: string;
+    /** The clicked query field id when `metric` is a multi-field slot. */
+    fieldId?: string;
 };
 
 // --- Client config ---
@@ -321,6 +338,8 @@ export type ExternalFetchResult = {
     status: number;
     /** Upstream `Content-Type` (e.g. `application/json`). */
     contentType: string;
+    /** Safe upstream response headers, with lowercase names. */
+    headers: Record<string, string>;
     /** Parsed JSON body when JSON, otherwise the raw text. */
     body: unknown;
     /** True when Lightdash truncated an oversized response body. */
@@ -346,6 +365,16 @@ export type ExternalFetchOptions = {
 };
 
 // --- Transport ---
+
+/** Wire shape of a `useAiPrompt` request, proxied by the host. */
+export type AiPromptRequest = {
+    appUuid: string;
+    prompt: string;
+    sources: { queryUuid: string; label: string | null }[];
+    focus: Record<string, string> | null;
+};
+
+export type AiPromptResult = { text: string };
 
 export type Transport = {
     executeQuery: (query: QueryDefinition) => Promise<QueryResult>;
@@ -375,10 +404,23 @@ export type Transport = {
         options?: DownloadResultsOptions,
     ) => Promise<DownloadResultsResult>;
     /**
+     * Fire an underlying-data intent for a viz data point. One-way: the host
+     * opens its standard dialog and the resolved promise is only an ack.
+     */
+    openVizUnderlyingData?: (
+        intent: Omit<VizUnderlyingDataIntent, 'limit'>,
+    ) => Promise<void>;
+    /**
      * Fire the drill-down intent for a viz data point via the host bridge.
      * One-way: the host opens its drill dialog; the resolved promise is only
      * an ack. Optional so custom transports predating the capability stay
      * valid — `useVizContext().drillDown.enabled` is false when absent.
      */
     openVizDrillDown?: (intent: VizDrillDownIntent) => Promise<void>;
+    /**
+     * Ask the host's AI a question about the viewer's own query results.
+     * Optional so custom transports predating the capability stay valid —
+     * `useAiPrompt().available` is false when absent.
+     */
+    aiPrompt?: (request: AiPromptRequest) => Promise<AiPromptResult>;
 };

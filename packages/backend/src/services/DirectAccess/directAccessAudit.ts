@@ -6,6 +6,7 @@ import {
 } from '../../logging/auditLog';
 import Logger from '../../logging/logger';
 import { logAuditEvent } from '../../logging/winston';
+import { type DirectAccessReplaceResult } from '../../models/DirectAccessModel';
 import {
     type DirectAccessMutationResult,
     type DirectAccessResetResult,
@@ -34,6 +35,11 @@ export const auditDirectAccessMutation = ({
     result: DirectAccessMutationResult;
     auditLogger?: DirectAccessAuditLogger;
 }): void => {
+    // An idempotent revoke of a grant that never existed mutated nothing;
+    // auditing it would pollute the stream with phantom revokes.
+    if (result.beforeRole === null && result.afterRole === null) {
+        return;
+    }
     let action = 'direct_access.role_change';
     if (result.afterRole === null) {
         action = 'direct_access.revoke';
@@ -102,6 +108,49 @@ export const auditDirectAccessReset = ({
         );
     } catch (error) {
         Logger.warn('Failed to write direct access reset audit event', {
+            error,
+        });
+    }
+};
+
+export const auditDirectAccessReplace = ({
+    actor,
+    context,
+    resourceType,
+    resourceUuid,
+    result,
+    auditLogger = logAuditEvent,
+}: {
+    actor: AuditActor;
+    context: AuditContext;
+    resourceType: string;
+    resourceUuid: string;
+    result: DirectAccessReplaceResult;
+    auditLogger?: DirectAccessAuditLogger;
+}): void => {
+    try {
+        auditLogger(
+            createAuditLogEvent(
+                actor,
+                'direct_access.replace',
+                {
+                    type: resourceType,
+                    organizationUuid: result.organizationUuid,
+                    projectUuid: result.projectUuid,
+                    metadata: {
+                        resourceUuid,
+                        revokedUsers: result.revokedUsers,
+                        revokedGroups: result.revokedGroups,
+                        appliedUsers: result.appliedUsers,
+                        appliedGroups: result.appliedGroups,
+                    },
+                },
+                context,
+                'allowed',
+            ),
+        );
+    } catch (error) {
+        Logger.warn('Failed to write direct access replace audit event', {
             error,
         });
     }

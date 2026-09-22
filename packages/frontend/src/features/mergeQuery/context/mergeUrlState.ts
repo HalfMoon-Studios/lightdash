@@ -15,13 +15,18 @@ export const MERGE_URL_PARAM = 'merge';
 
 export type MergeUrlState = {
     focus: MergeFocus;
+    /** The chart query's saved name, when a chart fixed it. */
+    primarySourceName: string | null;
     additionalSources: MergeEditorSource[];
     joinParts: MergeJoinPart[];
     joinType: MergeJoinType;
+    repeatValuesSourceIds: string[];
 };
 
 type SerializedSource = {
     i: string;
+    /** Saved name, when fixed. */
+    n?: string;
     e: string | null;
     d: string[];
     m: string[];
@@ -32,10 +37,16 @@ type SerializedSource = {
 
 /** Short keys because this rides beside the already-large chart URL state. */
 type SerializedMerge = {
+    /** The chart query's saved name, when fixed. */
+    p?: string;
     s: SerializedSource[];
     k: Array<Record<string, string | null>>;
+    /** Saved key column names by part index; null where not fixed. */
+    kn?: Array<string | null>;
     j: MergeJoinType;
     f: string;
+    /** Sources repeating their values; omitted when none do. */
+    r?: string[];
 };
 
 /** URL shape emitted before editor state became source-addressed. */
@@ -75,8 +86,10 @@ const focusFor = (value: unknown): MergeFocus =>
 
 export const serializeMergeState = (state: MergeUrlState): string =>
     JSON.stringify({
+        ...(state.primarySourceName ? { p: state.primarySourceName } : {}),
         s: state.additionalSources.map((source) => ({
             i: source.id,
+            ...(source.name ? { n: source.name } : {}),
             e: source.exploreName,
             d: source.dimensions,
             m: source.metrics,
@@ -85,8 +98,14 @@ export const serializeMergeState = (state: MergeUrlState): string =>
             c: source.customDimensions,
         })),
         k: state.joinParts.map((part) => part.fieldIdBySourceId),
+        ...(state.joinParts.some((part) => part.name)
+            ? { kn: state.joinParts.map((part) => part.name ?? null) }
+            : {}),
         j: state.joinType,
         f: state.focus.kind === 'join' ? 'join' : state.focus.sourceId,
+        ...(state.repeatValuesSourceIds.length > 0
+            ? { r: state.repeatValuesSourceIds }
+            : {}),
     } satisfies SerializedMerge);
 
 const parseSource = (value: unknown): MergeEditorSource | null => {
@@ -95,6 +114,9 @@ const parseSource = (value: unknown): MergeEditorSource | null => {
     if (typeof source.i !== 'string' || source.i.length === 0) return null;
     return {
         id: source.i,
+        ...(typeof source.n === 'string' && source.n.length > 0
+            ? { name: source.n }
+            : {}),
         exploreName: typeof source.e === 'string' ? source.e : null,
         dimensions: asStringArray(source.d),
         metrics: asStringArray(source.m),
@@ -107,13 +129,18 @@ const parseSource = (value: unknown): MergeEditorSource | null => {
 const parseJoinParts = (
     value: unknown,
     sourceIds: string[],
+    names: unknown,
 ): MergeJoinPart[] => {
     if (!Array.isArray(value)) return [];
-    return value.flatMap((entry) => {
+    return value.flatMap((entry, index) => {
         if (entry === null || typeof entry !== 'object') return [];
         const fields = entry as Record<string, unknown>;
+        const name = Array.isArray(names) ? names[index] : null;
         return [
             {
+                ...(typeof name === 'string' && name.length > 0
+                    ? { name }
+                    : {}),
                 fieldIdBySourceId: Object.fromEntries(
                     sourceIds.map((sourceId) => [
                         sourceId,
@@ -144,9 +171,11 @@ const parseCurrent = (value: Record<string, unknown>): MergeUrlState | null => {
         return null;
     }
     const sourceIds = [PRIMARY_SOURCE_ID, ...additionalSourceIds];
-    const joinParts = parseJoinParts(value.k, sourceIds);
+    const joinParts = parseJoinParts(value.k, sourceIds, value.kn);
     return {
         focus: focusFor(value.f),
+        primarySourceName:
+            typeof value.p === 'string' && value.p.length > 0 ? value.p : null,
         additionalSources,
         joinParts:
             joinParts.length > 0
@@ -159,6 +188,9 @@ const parseCurrent = (value: Record<string, unknown>): MergeUrlState | null => {
                       },
                   ],
         joinType: isJoinType(value.j) ? value.j : MergeJoinType.FULL,
+        repeatValuesSourceIds: asStringArray(value.r).filter((id) =>
+            sourceIds.includes(id),
+        ),
     };
 };
 
@@ -189,6 +221,7 @@ const parseLegacy = (value: LegacySerializedMerge): MergeUrlState => {
     );
     return {
         focus: focusFor(value.f),
+        primarySourceName: null,
         additionalSources: [source],
         joinParts:
             joinParts.length > 0
@@ -202,6 +235,7 @@ const parseLegacy = (value: LegacySerializedMerge): MergeUrlState => {
                       },
                   ],
         joinType: isJoinType(value.j) ? value.j : MergeJoinType.FULL,
+        repeatValuesSourceIds: [],
     };
 };
 

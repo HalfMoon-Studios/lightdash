@@ -34,6 +34,7 @@ import { type LightdashProjectConfig } from './lightdashProjectConfig';
 import { type PreAggregateSort } from './preAggregate';
 import { type OrderFieldsByStrategy, type TableBase } from './table';
 import { type DefaultTimeDimension, type TimeFrames } from './timeFrames';
+import { type WarehouseNestedColumnShape } from './warehouse';
 
 export enum SupportedDbtAdapter {
     BIGQUERY = 'bigquery',
@@ -57,6 +58,7 @@ export type DbtNode = {
     resource_type: string;
     config?: DbtNodeConfig;
     lightdash_source_name?: string;
+    lightdash_source_uuid?: string;
 };
 export type DbtRawModelNode = Omit<
     CompiledModelNode,
@@ -69,9 +71,12 @@ export type DbtRawModelNode = Omit<
     config?: CompiledModelNode['config'] & { meta?: DbtModelMetadata };
     meta: DbtModelMetadata;
     lightdash_source_name?: string;
+    lightdash_source_uuid?: string;
 };
 export type DbtModelNode = DbtRawModelNode & {
     database: string;
+    /** Why the warehouse would not report nested column shapes for this model's table; set only when the model documents dotted columns. */
+    nested_columns_unavailable?: string;
     unrendered_config?: {
         meta?: {
             joins?: Array<{ join: string }>;
@@ -84,6 +89,10 @@ export type DbtModelColumn = ColumnInfo & {
     /** Catalog-derived timestamp domain; sibling of data_type because
      *  attachTypesToModels overwrites data_type wholesale. */
     timestamp_domain?: TimestampDomain;
+    /** Catalog-derived shape when the column is a struct or an array. */
+    nested_shape?: WarehouseNestedColumnShape;
+    /** Dotted prefixes of the column path that are arrays, outermost first. */
+    repeated_ancestors?: string[];
     config?: {
         meta?: DbtColumnMetadata;
     };
@@ -208,6 +217,38 @@ export type DbtModelLightdashConfig = ExploreConfig &
         owner?: string; // model owner email
         pre_aggregates?: DbtPreAggregateDef[];
     };
+
+// Recognised config keys are excluded from explore customMeta.
+export const RESERVED_MODEL_META_KEYS = [
+    'label',
+    'description',
+    'group_label',
+    'groups',
+    'joins',
+    'case_sensitive',
+    'sql_filter',
+    'sql_where',
+    'additional_dimensions',
+    'default_filters',
+    'required_filters',
+    'metrics',
+    'sets',
+    'order_fields_by',
+    'sql_from',
+    'required_attributes',
+    'any_attributes',
+    'group_details',
+    'default_time_dimension',
+    'default_show_underlying_values',
+    'spotlight',
+    'explores',
+    'hidden',
+    'ai_hint',
+    'parameters',
+    'primary_key',
+    'owner',
+    'pre_aggregates',
+] as const satisfies readonly (keyof DbtModelLightdashConfig)[];
 
 export type DbtModelGroup = {
     label: string;

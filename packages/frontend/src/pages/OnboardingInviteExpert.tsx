@@ -10,6 +10,7 @@ import {
     Alert,
     Box,
     Button,
+    Flex,
     Group,
     Loader,
     Paper,
@@ -18,13 +19,14 @@ import {
     TextInput,
     Title,
 } from '@mantine/core';
-import { useForm, zodResolver, type UseFormReturnType } from '@mantine/form';
+import { useForm, type UseFormReturnType } from '@mantine/form';
 import { captureException } from '@sentry/react';
 import {
     IconArrowLeft,
     IconInfoCircle,
     IconUserPlus,
 } from '@tabler/icons-react';
+import { zod4Resolver as zodResolver } from 'mantine-form-zod-resolver';
 import {
     useCallback,
     useEffect,
@@ -111,9 +113,11 @@ const InviteExpertForm: FC<{
         <Stack gap="sm">
             {needsName && (
                 <>
-                    <Group grow gap="sm">
+                    <Flex direction={{ base: 'column', sm: 'row' }} gap="sm">
                         <TextInput
                             name="firstName"
+                            autoComplete="given-name"
+                            flex={1}
                             label="Your first name"
                             required
                             disabled={isSubmitting}
@@ -121,12 +125,14 @@ const InviteExpertForm: FC<{
                         />
                         <TextInput
                             name="lastName"
+                            autoComplete="family-name"
+                            flex={1}
                             label="Your last name"
                             required
                             disabled={isSubmitting}
                             {...form.getInputProps('lastName')}
                         />
-                    </Group>
+                    </Flex>
                     <Text size="sm" c="dimmed">
                         We'll include your name in the invite so they know who's
                         asking.
@@ -135,6 +141,7 @@ const InviteExpertForm: FC<{
             )}
             <TextInput
                 name="email"
+                type="email"
                 label="Their email address"
                 placeholder="example@company.com"
                 required
@@ -363,7 +370,6 @@ const OnboardingInviteExpert: FC = () => {
                         <Title
                             order={1}
                             ta="center"
-                            fw={700}
                             ref={titleRef}
                             tabIndex={-1}
                             className={classes.title}
@@ -393,15 +399,10 @@ const OnboardingInviteExpert: FC = () => {
             <DocumentTitle title="Invite an expert" />
             <Box className={classes.column}>
                 <Stack align="center" gap="xs">
-                    <MantineIcon
-                        icon={IconUserPlus}
-                        size="xl"
-                        color="ldGray.6"
-                    />
+                    <MantineIcon icon={IconUserPlus} size="xl" color="dimmed" />
                     <Title
                         order={1}
                         ta="center"
-                        fw={700}
                         ref={titleRef}
                         tabIndex={-1}
                         className={classes.title}
@@ -414,12 +415,7 @@ const OnboardingInviteExpert: FC = () => {
                     </Text>
                 </Stack>
 
-                <Paper
-                    withBorder
-                    shadow="subtle"
-                    radius="md"
-                    className={classes.card}
-                >
+                <Paper radius="md" className={classes.card}>
                     {isPreparingPlayground || isEnteringPlayground ? (
                         <PreparingPlaygroundCard />
                     ) : playgroundFailure ? (

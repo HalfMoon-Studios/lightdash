@@ -196,9 +196,14 @@ export class AiRouterService extends BaseService {
             await this.orgAiCopilotConfigResolver.getCopilotConfig(
                 organizationUuid,
             );
-        const { model } = getModel(copilotConfig);
+        const { model, keyManagement } = getModel(copilotConfig);
+        const decisions = await this.aiAgentService.getDecisionClient({
+            userUuid: account.user.userUuid,
+            organizationUuid,
+        });
         const brain = await selectAgent({
             model,
+            decisions,
             candidates,
             prompt,
             instructions: instruction?.instruction ?? null,
@@ -206,13 +211,14 @@ export class AiRouterService extends BaseService {
                 organizationUuid,
                 projectUuid,
                 userUuid: account.user.userUuid,
+                keyManagement,
             },
         });
 
-        const suggestedAgent =
-            candidates.find(
-                (candidate) => candidate.uuid === brain.selectedAgentUuid,
-            ) ?? candidates[0];
+        const matchedAgent = candidates.find(
+            (candidate) => candidate.uuid === brain.selectedAgentUuid,
+        );
+        const suggestedAgent = matchedAgent ?? candidates[0];
 
         return {
             candidates,
@@ -222,9 +228,10 @@ export class AiRouterService extends BaseService {
             reasoning: brain.reasoning,
             shouldSkipForwardingQuery: brain.shouldSkipForwardingQuery,
             nextAction:
-                mode === 'mcp' ||
-                (brain.confidence === 'high' &&
-                    !brain.shouldSkipForwardingQuery)
+                matchedAgent &&
+                ((!decisions && mode === 'mcp') ||
+                    (brain.confidence === 'high' &&
+                        !brain.shouldSkipForwardingQuery))
                     ? 'create_thread'
                     : 'show_picker',
         };

@@ -94,6 +94,7 @@ const TOOLS_WITHOUT_PREVIEW = new Set<string>(['runSql', 'runSavedChart']);
 // in ToolCallDescription.tsx — discoverFields is intentionally excluded
 // because it has no description string but does render a subagent trace.
 const TOOLS_WITHOUT_LATEST_DESCRIPTION = new Set<string>([
+    'listDataAppThemes',
     'listKnowledgeDocuments',
     'listProjects',
     'getProjectInfo',
@@ -191,7 +192,7 @@ export const ReasoningHistoryRow: FC<{
     const hasOverflow = previewClean.length > REASONING_PREVIEW_LENGTH;
 
     return (
-        <Box className={styles.reasoningRow}>
+        <Box className={styles.reasoningRow} data-live={isLive}>
             <UnstyledButton
                 w="100%"
                 onClick={() => setOpen((prev) => !prev)}
@@ -221,6 +222,7 @@ export const ReasoningHistoryRow: FC<{
                         size="xs"
                         className={styles.reasoningLabel}
                         data-live={isLive ? 'true' : 'false'}
+                        data-tour-status={isLive ? 'true' : undefined}
                     >
                         {label}
                     </Text>
@@ -243,7 +245,7 @@ export const ReasoningHistoryRow: FC<{
                 </Group>
             </UnstyledButton>
             <Collapse
-                in={open}
+                expanded={open}
                 transitionDuration={240}
                 transitionTimingFunction="cubic-bezier(0.16, 1, 0.3, 1)"
             >
@@ -326,6 +328,9 @@ const LatestRow: FC<{
                     size="xs"
                     className={styles.latestLabel}
                     key={`label-${group.toolName}-${isLive ? 'live' : 'done'}`}
+                    // Walkthrough: the product's own words for what the
+                    // agent is doing right now.
+                    data-tour-status={isLive ? 'true' : undefined}
                 >
                     {label}
                 </Text>
@@ -536,6 +541,7 @@ const renderInlineLiveStepProgress = (params: {
                     size="xs"
                     className={styles.liveStepProgressLabel}
                     data-active="true"
+                    data-tour-status="true"
                 >
                     {currentMessage}
                 </Text>
@@ -771,6 +777,7 @@ export const LiveActivityCard: FC<Props> = ({
                                     size="xs"
                                     className={styles.latestLabel}
                                     data-live="true"
+                                    data-tour-status="true"
                                 >
                                     Running SQL query
                                 </Text>
@@ -827,7 +834,7 @@ export const LiveActivityCard: FC<Props> = ({
                     );
                 })()}
             <Collapse
-                in={showBody}
+                expanded={showBody}
                 transitionDuration={260}
                 transitionTimingFunction="cubic-bezier(0.16, 1, 0.3, 1)"
             >

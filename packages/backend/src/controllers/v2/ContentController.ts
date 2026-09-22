@@ -62,6 +62,8 @@ export class ContentController extends BaseController {
         @Query() sortDirection?: ContentArgs['sortDirection'],
         @Query() includePersonalDataApps?: boolean,
         @Query() dataAppVizsFilter?: 'exclude' | 'only',
+        @Query() ownerUserUuids?: string[],
+        @Query() sharedWithMe?: boolean,
     ): Promise<ApiContentResponse> {
         const { user } = getAccountApiAccessContext(req.account!);
         this.setStatus(200);
@@ -77,6 +79,8 @@ export class ContentController extends BaseController {
                     search,
                     includePersonalDataApps,
                     dataAppVizsFilter,
+                    ownerUserUuids,
+                    sharedWithMe,
                 },
                 {
                     sortBy,

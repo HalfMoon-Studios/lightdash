@@ -65,6 +65,13 @@ import type {
     DbMetricsTreeNodeIn,
 } from '../../database/entities/catalog';
 import {
+    newExploreCacheReadContext,
+    safeGetCachedExploreStorageBytes,
+    summarizeExploreCacheRead,
+    type ExploreCacheReadContext,
+} from '../../logging/exploreCacheReadMetrics';
+import { measureTime } from '../../logging/measureTime';
+import {
     CatalogModel,
     type CatalogSearchContext,
 } from '../../models/CatalogModel/CatalogModel';
@@ -82,6 +89,8 @@ import {
     doesExploreMatchRequiredAttributes,
     getFilteredExplore,
 } from '../UserAttributesService/UserAttributeUtils';
+
+type CatalogBrowseTrigger = 'browse' | 'index';
 
 export type CatalogArguments<T extends CatalogModel = CatalogModel> = {
     lightdashConfig: LightdashConfig;
@@ -354,63 +363,127 @@ export class CatalogService<
         user: SessionUser,
         organizationUuid: string,
         projectUuid: string,
+        requestKind: Extract<CatalogBrowseTrigger, 'browse'>,
     ) {
-        const cachedExplores = await this.projectModel.findExploresFromCache(
-            projectUuid,
-            'name',
-        );
+        const browseReadContext: ExploreCacheReadContext & {
+            trigger: CatalogBrowseTrigger;
+        } = {
+            ...newExploreCacheReadContext('catalog-browse', undefined),
+            trigger: requestKind,
+        };
+        const { result: filteredExplores } = await measureTime(
+            async () => {
+                const dbReadStart = performance.now();
+                const explorePromise = this.projectModel
+                    .findExploresFromCache(projectUuid, 'name')
+                    .then((result) => {
+                        browseReadContext.dbReadMs =
+                            performance.now() - dbReadStart;
+                        return result;
+                    });
+                const [cachedExplores, storedExploreBytes] = await Promise.all([
+                    explorePromise,
+                    safeGetCachedExploreStorageBytes(() =>
+                        this.projectModel.getCachedExploreStorageBytes(
+                            projectUuid,
+                        ),
+                    ),
+                ]);
 
-        if (!cachedExplores) return [];
+                if (!cachedExplores) return [];
 
-        const explores = Object.values(cachedExplores);
+                Object.assign(browseReadContext, {
+                    ...summarizeExploreCacheRead(cachedExplores),
+                    storedExploreBytes,
+                });
 
-        const userAttributes =
-            await this.userAttributesModel.getAttributeValuesForOrgMember({
-                organizationUuid,
-                userUuid: user.userUuid,
-            });
+                const explores = Object.values(cachedExplores);
 
-        // We keep errors in the list of explores
-        const filteredExplores = explores.reduce<(Explore | ExploreError)[]>(
-            (acc, explore) => {
-                if (isExploreError(explore)) {
-                    // If no dimensions found, we don't show the explore error
-                    if (
-                        explore.errors.every(
-                            (error) =>
-                                error.type ===
-                                InlineErrorType.NO_DIMENSIONS_FOUND,
-                        )
-                    )
-                        return acc;
+                const userAttributes =
+                    await this.userAttributesModel.getAttributeValuesForOrgMember(
+                        {
+                            organizationUuid,
+                            userUuid: user.userUuid,
+                        },
+                    );
 
-                    return [...acc, explore];
-                }
-                if (
-                    !doesExploreMatchRequiredAttributes(
-                        explore.tables[explore.baseTable].requiredAttributes,
-                        explore.tables[explore.baseTable].anyAttributes,
-                        userAttributes,
-                    )
-                ) {
-                    return acc;
-                }
-                const filteredExplore = getFilteredExplore(
-                    explore,
-                    userAttributes,
+                const attributeFilterStart = performance.now();
+                // We keep errors in the list of explores
+                const filtered = explores.reduce<(Explore | ExploreError)[]>(
+                    (acc, explore) => {
+                        if (isExploreError(explore)) {
+                            // If no dimensions found, we don't show the explore error
+                            if (
+                                explore.errors.every(
+                                    (error) =>
+                                        error.type ===
+                                        InlineErrorType.NO_DIMENSIONS_FOUND,
+                                )
+                            )
+                                return acc;
+
+                            return [...acc, explore];
+                        }
+                        if (
+                            !doesExploreMatchRequiredAttributes(
+                                explore.tables[explore.baseTable]
+                                    .requiredAttributes,
+                                explore.tables[explore.baseTable].anyAttributes,
+                                userAttributes,
+                            )
+                        ) {
+                            return acc;
+                        }
+                        const filteredExplore = getFilteredExplore(
+                            explore,
+                            userAttributes,
+                        );
+                        return [...acc, filteredExplore];
+                    },
+                    [],
                 );
-                return [...acc, filteredExplore];
+                browseReadContext.attributeFilterMs =
+                    performance.now() - attributeFilterStart;
+
+                return filtered;
             },
-            [],
+            'CatalogService.getFilteredExplores.cachedExploreRead',
+            this.logger,
+            browseReadContext,
         );
 
         return filteredExplores;
     }
 
     async indexCatalog(projectUuid: string, userUuid: string | undefined) {
-        const cachedExploresMap = await this.projectModel.findExploresFromCache(
-            projectUuid,
-            'uuid',
+        const indexReadContext: ExploreCacheReadContext & {
+            trigger: CatalogBrowseTrigger;
+        } = {
+            ...newExploreCacheReadContext('catalog-browse', undefined),
+            trigger: 'index',
+        };
+        const { result: cachedExploresMap } = await measureTime(
+            async () => {
+                const [explores, storedExploreBytes] = await Promise.all([
+                    this.projectModel.findExploresFromCache(
+                        projectUuid,
+                        'uuid',
+                    ),
+                    safeGetCachedExploreStorageBytes(() =>
+                        this.projectModel.getCachedExploreStorageBytes(
+                            projectUuid,
+                        ),
+                    ),
+                ]);
+                Object.assign(indexReadContext, {
+                    ...summarizeExploreCacheRead(explores),
+                    storedExploreBytes,
+                });
+                return explores;
+            },
+            'CatalogService.indexCatalog.cachedExploreRead',
+            this.logger,
+            indexReadContext,
         );
 
         const { organizationUuid } =
@@ -703,12 +776,6 @@ export class CatalogService<
             throw new ForbiddenError();
         }
 
-        const filteredExplores = await this.getFilteredExplores(
-            user,
-            organizationUuid,
-            projectUuid,
-        );
-
         const userAttributes =
             await this.userAttributesModel.getAttributeValuesForOrgMember({
                 organizationUuid,
@@ -727,6 +794,13 @@ export class CatalogService<
                 paginateArgs: { page: 1, pageSize: 50 },
             });
         }
+
+        const filteredExplores = await this.getFilteredExplores(
+            user,
+            organizationUuid,
+            projectUuid,
+            'browse',
+        );
 
         if (catalogSearch.type === CatalogType.Field) {
             return {

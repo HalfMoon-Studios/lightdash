@@ -689,7 +689,11 @@ const [period, setPeriod] = useUrlState('period', 'last_month');
 
 ### External APIs
 
-For any external HTTP API call, read `/app/references/external-apis.md` and use `externalFetch` with a configured connection alias — never raw `fetch`/`axios` (blocked by the sandbox) and never hardcoded credentials.
+For any external HTTP API call, read `/app/references/external-apis.md` and use `externalFetch` with a configured connection alias — never raw `fetch`/`axios` (blocked by the sandbox) and never hardcoded credentials. For AI summaries, explanations or anomaly callouts, do not wire an external connection to a model provider — use the native hook below.
+
+### AI analysis — executive summary and anomalies
+
+When the user asks for AI analysis, an executive summary, "what changed and why", anomaly callouts, or any AI-generated insight about the data on the page, read `/app/references/ai-analysis.md` and build its **Default build** with the shipped components in `src/components/insights/` (`InsightsSummary`, `InsightMarker` / `insightCellProps`, `InvestigateMenuItem`, `InvestigationCard`): summary block at the top, markers on every query-bound chart, Investigate in every point menu, the investigation card under the chart. A short ask gets the whole set; only a narrower ask ("just a summary") gets a subset. Never rewrite those components. Lightdash runs the analysis over the queries the app already loaded and pushes the result in; the app renders it and never sends rows or keys. The components render nothing when the host has no analysis to offer. For an author-written question over loaded results (a takeaway under a chart, "explain this row"), use `useAiPrompt` from the same reference.
 
 ## Visual Design
 
@@ -1218,6 +1222,15 @@ function tableToCsv(columns: Column[], data: Row[], format: FormatFn): string {
 </ScrollArea>
 ```
 
+### Table and query performance
+
+Treat Safari/WebKit as the constrained target for layout-heavy apps. Test dense tables and filter interactions in Safari: an app that is smooth there will generally be smooth in Chrome, but the reverse is not guaranteed.
+
+- **Bound data-derived columns.** Pivot-style tables that derive columns from dates, categories, or other result values must cap the rendered window. Paginate the column range or virtualize it horizontally; never render an unbounded `dates.map(...)` or equivalent column set.
+- **Keep sticky positioning to headers.** Never apply `position: sticky` to body cells. If a pinned first column is essential, render it as a separate fixed pane synchronized with the scrollable data pane.
+- **Virtualize individual rows, not multi-row groups.** For large tables, avoid mounting virtualized rows inside one shared `<table>` layout where scroll-driven row changes can relayout the whole table. Prefer block or grid rows with fixed column widths, and make each virtual item one row rather than a group containing many rows and cells.
+- **Batch filter-driven queries.** When a control change would refetch multiple queries, debounce the committed filter value or require an Apply action. Do not fire the full query fan-out on every date, granularity, or filter input change.
+
 ### Resizable panels
 
 Only when the user asks for adjustable panel sizing (or two sibling areas genuinely benefit from rebalancing), read `/app/references/resizable-panels.md` and use the pre-installed shadcn `Resizable`. Otherwise use fixed flex/grid proportions — don't reach for it by default.
@@ -1265,6 +1278,8 @@ The action-menu example above shows typical `drillDown()` usage. For the full AP
 | Metric action menu missing "View underlying data" | Users cannot inspect the rows behind a value unless they explicitly ask for it | Add `getUnderlyingData({ row, metric })` to default metric-value menus when the source row and metric are unambiguous |
 | Underlying-data table has no Download button | Users can inspect rows but cannot export them through the backend pipeline | Add a button in the underlying-data table/dialog header that calls `downloadUnderlyingData({ row, metric, fileType, values, limit, filename })` and shows an exporting state |
 | Using a formatted display value in `addFilter` | Filter never matches raw rows (e.g. `"$1,234"` vs `1234`) | Pass the raw row value into `addFilter`; only use `format()` for the menu label |
+| Wiring an LLM external connection for summaries or explanations | Sends the viewer's data to a third party with the author's key, bypasses org consent and permissions, and duplicates a native feature | Use `useInsights()` from the SDK (see `/app/references/ai-analysis.md`); Lightdash runs the analysis |
+| Calling `useInsights().analyse()` on mount or on a timer | Every viewer pays for a model call on every load | Only call `analyse()` from a viewer's click |
 | `<XAxis dataKey="order_date_month" />` with no `tickFormatter` | Recharts renders the raw ISO timestamp (e.g. `2025-03-01T00:00:00Z`) as labels | `tickFormatter={(v) => formatDate(v, getColumn(columns, 'order_date_month'), 'axis')}` from `@/lib/format` |
 | Skipping `tickFormatter` on a year axis because "year is just a number" | Year dimensions (`*_year`) are still full ISO timestamps at the data layer, so the axis renders `2025-01-01T00:00:00Z` | Apply the same `formatDate(...)` `tickFormatter` to year axes — `formatDate` will collapse to `2025` for year-grain columns |
 | Using `format(row, 'order_date')` for a date column in a table cell | Renders `2025-03-17` (zero-padded tabular) — readable but ugly in dashboards | `formatField(row, col, format, 'cell')` from `@/lib/format` — renders `Mar 17, 2025` while still routing currency/% metrics through the server format |

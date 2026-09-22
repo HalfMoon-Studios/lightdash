@@ -8,6 +8,7 @@ import {
     getItemId,
     ItemsMap,
     MetricType,
+    NumberSeparator,
     SortByDirection,
     TimeFrames,
     VizAggregationOptions,
@@ -879,6 +880,100 @@ describe('ExcelService', () => {
     // converted, even if values match ISO 8601 (e.g. "202811").
 
     describe('downloadPivotTableXlsx', () => {
+        it.each([false, true])(
+            'writes formatted pivoted metrics as numeric cells with Excel formats when improved dates is %s',
+            async (enableImprovedExcelDates) => {
+                const pivotDimension = 'orders_status';
+                const indexDimension = 'string_column';
+                const metric = 'number_with_usd_format';
+                const completedColumn = `${metric}_any_completed`;
+                const placedColumn = `${metric}_any_placed`;
+
+                const itemMap: ItemsMap = {
+                    ...mockItemMapWithFormats,
+                    [pivotDimension]: {
+                        ...mockItemMapWithFormats.string_column,
+                        name: 'orders_status',
+                        label: 'Status',
+                    },
+                    [metric]: {
+                        ...mockItemMapWithFormats.number_with_usd_format,
+                        round: 1,
+                        separator: NumberSeparator.PERIOD_COMMA,
+                    },
+                };
+                const valuesColumns = [
+                    ['completed', completedColumn],
+                    ['placed', placedColumn],
+                ].map(([value, pivotColumnName]) => ({
+                    aggregation: VizAggregationOptions.ANY,
+                    pivotValues: [
+                        {
+                            value,
+                            referenceField: pivotDimension,
+                        },
+                    ],
+                    referenceField: metric,
+                    pivotColumnName,
+                }));
+                const pivotDetails = {
+                    totalColumnCount: 2,
+                    valuesColumns,
+                    indexColumn: [
+                        {
+                            type: VizIndexType.CATEGORY,
+                            reference: indexDimension,
+                        },
+                    ],
+                    groupByColumns: [{ reference: pivotDimension }],
+                    sortBy: [
+                        {
+                            direction: SortByDirection.ASC,
+                            reference: indexDimension,
+                        },
+                    ],
+                    originalColumns: {},
+                };
+
+                const buffer = await ExcelService.downloadPivotTableXlsx({
+                    rows: [
+                        {
+                            [indexDimension]: '00123',
+                            [completedColumn]: 1234.56,
+                            [placedColumn]: 9876.54,
+                        },
+                    ],
+                    itemMap,
+                    pivotConfig: {
+                        pivotDimensions: [pivotDimension],
+                        metricsAsRows: false,
+                    },
+                    onlyRaw: false,
+                    customLabels: undefined,
+                    pivotDetails,
+                    enableImprovedExcelDates,
+                });
+
+                const workbook = new (await import('exceljs')).Workbook();
+                // @ts-ignore - Buffer type mismatch between exceljs and Node 20
+                await workbook.xlsx.load(buffer);
+                const worksheet = workbook.getWorksheet('Pivot Table');
+                expect(worksheet).toBeDefined();
+
+                const expectedFormat = getExcelFormatExpression(
+                    itemMap[metric],
+                );
+                const completedCell = worksheet!.getRow(3).getCell(2);
+                const placedCell = worksheet!.getRow(3).getCell(3);
+
+                expect(worksheet!.getRow(3).getCell(1).value).toBe('00123');
+                expect(completedCell.value).toBe(1234.56);
+                expect(placedCell.value).toBe(9876.54);
+                expect(completedCell.numFmt).toBe(expectedFormat);
+                expect(placedCell.numFmt).toBe(expectedFormat);
+            },
+        );
+
         it('should not convert metric values that look like YYYYMM to dates (PROD-6683)', async () => {
             const pivotDimension = 'payments_payment_method';
             const indexDimension = 'customers_created_month';
@@ -1022,23 +1117,13 @@ describe('ExcelService', () => {
             );
             expect(metricDateValues).toHaveLength(0);
 
-            // YYYYMM-like metric values should be preserved as strings
-            const stringValues = dataValues
-                .filter((v) => typeof v.value === 'string')
-                .map((v) => v.value as string);
-            const numericStrings = stringValues.filter((v) =>
-                [
-                    '202,811',
-                    '202811',
-                    '2,028',
-                    '2028',
-                    '20,281,101',
-                    '20281101',
-                    '141,312',
-                    '141312',
-                ].includes(v),
+            // YYYYMM-like metric values should be preserved as native numbers
+            const numericMetricValues = dataValues
+                .filter((v) => v.col > 1 && typeof v.value === 'number')
+                .map((v) => v.value);
+            expect(numericMetricValues).toEqual(
+                expect.arrayContaining([202811, 2028, 20281101, 141312]),
             );
-            expect(numericStrings.length).toBeGreaterThanOrEqual(4);
         });
 
         it('TC1: should convert both DATE and TIMESTAMP index dimensions to Date objects', async () => {
@@ -2212,5 +2297,169 @@ describe('ExcelService column totals row in xlsx export (PROD-9169)', () => {
         });
 
         expect(worksheet!.rowCount).toBe(2);
+    });
+});
+
+describe('flat export of stored pivot results', () => {
+    const fields: ItemsMap = {
+        category: {
+            ...mockItemMapWithFormats.string_column,
+            name: 'category',
+            table: '',
+            label: 'Category',
+        },
+        period: {
+            ...mockItemMapWithFormats.string_column,
+            name: 'period',
+            table: '',
+            label: 'Period',
+        },
+        revenue: {
+            ...mockItemMapWithFormats.number_without_format,
+            name: 'revenue',
+            table: '',
+            label: 'Revenue',
+        },
+    };
+
+    const readWorkbook = async (
+        rows: Record<string, unknown>[],
+        pivotValuesColumns: Array<{
+            referenceField: string;
+            pivotColumnName: string;
+            aggregation: VizAggregationOptions;
+            pivotValues: Array<{
+                referenceField: string;
+                value: unknown;
+            }>;
+            columnIndex: number;
+        }>,
+        columnTotals?: Record<string, number>,
+    ) => {
+        const workbook = new (await import('exceljs')).Workbook();
+        await ExcelService.downloadAsyncExcelDirectly(
+            'pivot-results',
+            fields,
+            {
+                resultsStorageClient: {
+                    getDownloadStream: async () =>
+                        Readable.from([
+                            rows.map((row) => JSON.stringify(row)).join('\n'),
+                        ]),
+                } as unknown as import('../../clients/ResultsFileStorageClients/S3ResultsFileStorageClient').S3ResultsFileStorageClient,
+                exportsStorageClient: {
+                    uploadExcel: async (stream: Readable) => {
+                        await workbook.xlsx.read(stream);
+                        return 'export-url';
+                    },
+                } as unknown as import('../../clients/FileStorage/FileStorageClient').FileStorageClient,
+            },
+            {
+                columnOrder: ['category', 'period', 'revenue'],
+                pivotValuesColumns,
+                columnTotals,
+            },
+        );
+        return workbook.getWorksheet('Sheet1')!.getSheetValues();
+    };
+
+    it('expands sparse periods while preserving nulls and zeroes', async () => {
+        const sheetValues = await readWorkbook(
+            [
+                { category: 'A', revenue_sum_jan: 10, revenue_sum_feb: 20 },
+                { category: 'B', revenue_sum_feb: 0 },
+                { category: 'C', revenue_sum_jan: null },
+            ],
+            [
+                {
+                    referenceField: 'revenue',
+                    pivotColumnName: 'revenue_sum_jan',
+                    aggregation: VizAggregationOptions.SUM,
+                    pivotValues: [
+                        { referenceField: 'period', value: 'January' },
+                    ],
+                    columnIndex: 1,
+                },
+                {
+                    referenceField: 'revenue',
+                    pivotColumnName: 'revenue_sum_feb',
+                    aggregation: VizAggregationOptions.SUM,
+                    pivotValues: [
+                        { referenceField: 'period', value: 'February' },
+                    ],
+                    columnIndex: 2,
+                },
+            ],
+            { revenue: 30 },
+        );
+
+        expect(sheetValues).toEqual([
+            undefined,
+            [undefined, 'Category', 'Period', 'Revenue'],
+            [undefined, 'A', 'January', 10],
+            [undefined, 'A', 'February', 20],
+            [undefined, 'B', 'February', 0],
+            [undefined, 'C', 'January'],
+            [undefined, 'Total', undefined, 30],
+        ]);
+    });
+
+    it('keeps multiple aggregations of one SQL field distinct', async () => {
+        const sheetValues = await readWorkbook(
+            [
+                {
+                    category: 'A',
+                    revenue_sum_jan: 10,
+                    revenue_avg_jan: 5,
+                    revenue_sum_feb: 20,
+                    revenue_avg_feb: 8,
+                },
+            ],
+            [
+                {
+                    referenceField: 'revenue',
+                    pivotColumnName: 'revenue_sum_jan',
+                    aggregation: VizAggregationOptions.SUM,
+                    pivotValues: [
+                        { referenceField: 'period', value: 'January' },
+                    ],
+                    columnIndex: 1,
+                },
+                {
+                    referenceField: 'revenue',
+                    pivotColumnName: 'revenue_avg_jan',
+                    aggregation: VizAggregationOptions.AVERAGE,
+                    pivotValues: [
+                        { referenceField: 'period', value: 'January' },
+                    ],
+                    columnIndex: 1,
+                },
+                {
+                    referenceField: 'revenue',
+                    pivotColumnName: 'revenue_sum_feb',
+                    aggregation: VizAggregationOptions.SUM,
+                    pivotValues: [
+                        { referenceField: 'period', value: 'February' },
+                    ],
+                    columnIndex: 2,
+                },
+                {
+                    referenceField: 'revenue',
+                    pivotColumnName: 'revenue_avg_feb',
+                    aggregation: VizAggregationOptions.AVERAGE,
+                    pivotValues: [
+                        { referenceField: 'period', value: 'February' },
+                    ],
+                    columnIndex: 2,
+                },
+            ],
+        );
+
+        expect(sheetValues).toEqual([
+            undefined,
+            [undefined, 'Category', 'Period', 'Revenue (SUM)', 'Revenue (AVG)'],
+            [undefined, 'A', 'January', 10, 5],
+            [undefined, 'A', 'February', 20, 8],
+        ]);
     });
 });

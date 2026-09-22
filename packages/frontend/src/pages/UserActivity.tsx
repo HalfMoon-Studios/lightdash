@@ -48,8 +48,7 @@ const VisualizationCard = ({
     return (
         <Card
             className={classes.visualizationCard}
-            style={{ gridArea: grid }}
-            withBorder
+            style={{ '--tile-area': grid }}
         >
             <Text style={{ float: 'left' }} fw={600} mb={10}>
                 {description}
@@ -227,7 +226,7 @@ const UserActivity: FC = () => {
     }
 
     return (
-        <Page title={`User activity for ${project?.name}`} withFitContent>
+        <Page title={`User activity for ${project?.name}`} withPaddedContent>
             <Group mt={10} mb={30} justify="space-between">
                 <PageBreadcrumbs
                     items={[
@@ -279,21 +278,7 @@ const UserActivity: FC = () => {
                     </Button>
                 </Tooltip>
             </Group>
-            <Box
-                style={{
-                    display: 'grid',
-                    gridTemplateColumns: '300px 300px 300px 300px',
-                    gridTemplateRows: '200px 200px 400px 400px 400px 400px',
-                    gap: '10px 10px',
-                    gridTemplateAreas: `
-                     'total-users total-users weekly-active weekly-active'
-                     'viewers interactive-viewers editors admins '
-                     'chart-active-users chart-active-users queries-per-user queries-per-user'
-                     'table-most-queries table-most-queries table-most-charts table-most-charts'
-                     'table-not-logged-in table-not-logged-in table-most-viewed table-most-viewed'
-                     'table-dashboard-views table-dashboard-views table-chart-views table-chart-views'`,
-                }}
-            >
+            <Box className={classes.grid}>
                 <VisualizationCard grid="total-users">
                     <BigNumberVis
                         value={data.numberUsers}

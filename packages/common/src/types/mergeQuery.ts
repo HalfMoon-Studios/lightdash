@@ -1,10 +1,23 @@
+import assertUnreachable from '../utils/assertUnreachable';
+import { getTotalFilterRules } from '../utils/filters';
+import { getItemId } from '../utils/item';
+import { SupportedDbtAdapter } from './dbt';
 import {
     DimensionType,
+    type CustomDimension,
     type FieldId,
     type ItemsMap,
+    type TableCalculation,
     type TimestampDomain,
 } from './field';
-import { type MetricQuery } from './metricQuery';
+import { type Filters } from './filter';
+import {
+    type AdditionalMetric,
+    type DimensionOverrides,
+    type MetricOverrides,
+    type MetricQuery,
+    type SortField,
+} from './metricQuery';
 import { type ParametersValuesMap } from './parameters';
 import { type PivotConfiguration } from './pivot';
 import { type TimeFrames } from './timeFrames';
@@ -21,26 +34,38 @@ export enum MergeJoinType {
     INNER = 'inner',
 }
 
-/** One side of a merge: a metric query compiled and run as part of the merge. */
+/**
+ * One side of a merge: a metric query compiled and run as part of the merge.
+ * A plain object, not an intersection: TSOA emits an intersection as `allOf`,
+ * which reads as a changed response contract to the API compatibility check.
+ */
 export type MergeQueryMetricSource = {
     /** Stable id. Names the CTE, and the table its merged fields belong to. */
     id: string;
     metricQuery: MetricQuery;
+    /**
+     * Opt in to an intentional one-to-many join: this source's value columns
+     * repeat on every row the other sources produce for the same key, so the
+     * others may carry dimensions that are not join keys. Off by default,
+     * because a repeated metric is counted more than once by any sum over
+     * the merged rows.
+     */
+    repeatValues?: boolean;
 };
 
 /**
  * One side of a merge: an existing query result, referenced by queryUuid and
  * joined as the rows it already holds — nothing re-runs. Its structure and
- * types resolve at compile time from the stored query metadata, and the join
- * executes on the compose engine (`requiresCompose` on the compiled merge),
- * so a merge with a result source is refused where that engine is
- * unavailable. Results are creator-scoped and expire; an expired reference
- * is re-submitted as a query, not refreshed by handle.
+ * types resolve at compile time from the stored query metadata. Results are
+ * creator-scoped and expire; an expired reference is re-submitted as a
+ * query, not refreshed by handle.
  */
 export type MergeQueryResultSource = {
     /** Stable id. Names the CTE, and the table its merged fields belong to. */
     id: string;
     queryUuid: string;
+    /** See MergeQueryMetricSource.repeatValues. */
+    repeatValues?: boolean;
 };
 
 export type MergeQuerySource = MergeQueryMetricSource | MergeQueryResultSource;
@@ -59,6 +84,8 @@ export type MetricSourcedMergeQuery = {
     joinKey: MergeJoinKeyPart[];
     joinType: MergeJoinType;
     tableCalculations: MergeTableCalculation[];
+    // Optional for compatibility with merges stored before sorting existed
+    sorts?: SortField[];
     limit: number;
 };
 
@@ -108,6 +135,12 @@ export type MergeQuery = {
     joinType: MergeJoinType;
     /** Calculations over the merged result. Applied last, after any pivot. */
     tableCalculations: MergeTableCalculation[];
+    /**
+     * Sort of the merged result, by merged field id. Legs always run
+     * unsorted. Optional for compatibility with merges from before it
+     * existed; absent means join-key order.
+     */
+    sorts?: SortField[];
     limit: number;
 };
 
@@ -250,11 +283,6 @@ export enum MergeQueryErrorKind {
      */
     MISSING_PARAMETERS = 'missing_parameters',
     /**
-     * The merge references existing query results, which only the compose
-     * engine can join — there is no warehouse statement to fall back to.
-     */
-    COMPOSE_REQUIRED = 'compose_required',
-    /**
      * A referenced query result cannot back a merge source: not found, not
      * the caller's, not ready, or expired. The remedy is re-running the
      * referenced query, not retrying the merge.
@@ -303,6 +331,23 @@ export const getUnaccountedDimensions = (
 };
 
 /**
+ * Whether a source may carry dimensions that are not join keys: only when
+ * every other source has opted to repeat its values across them. The fan-out
+ * that would otherwise be refused is then the lookup the user asked for.
+ */
+export const isFanOutAccepted = (
+    sources: Pick<MergeQuerySource, 'id' | 'repeatValues'>[],
+    sourceId: string,
+): boolean =>
+    sources.length > 1 &&
+    sources.some(
+        (source) => source.id === sourceId && source.repeatValues !== true,
+    ) &&
+    sources.every(
+        (source) => source.id === sourceId || source.repeatValues === true,
+    );
+
+/**
  * Every reason this merge would produce a wrong or unbuildable result. Empty
  * means the merge is safe to compile.
  */
@@ -312,6 +357,114 @@ export const getUnaccountedDimensions = (
  * merged result.
  */
 export const MERGE_TABLE_NAME = 'merge';
+
+/**
+ * The sorts a merge can honour: those naming a field the merged result
+ * carries. A sort left behind by a field no longer selected is dropped, as
+ * the Explorer drops it for a single query, rather than refusing the merge.
+ */
+export const resolveMergeSorts = (
+    sorts: SortField[] | undefined,
+    mergedFieldIds: string[],
+): SortField[] => {
+    const known = new Set(mergedFieldIds);
+    return (sorts ?? []).filter((sort) => known.has(sort.fieldId));
+};
+
+/**
+ * Where a warehouse puts nulls when a sort does not say. A merge joins on
+ * the compose engine, so a sorted merge under a limit would keep different
+ * rows from the same query run on the warehouse unless the placement is
+ * stated. Postgres, Redshift, Snowflake, Trino and Athena treat null as the
+ * largest value; BigQuery, Databricks and Spark as the smallest; DuckDB and
+ * ClickHouse put nulls last whichever way the sort runs.
+ */
+export const getWarehouseDefaultNullsFirst = (
+    adapter: SupportedDbtAdapter,
+    descending: boolean,
+): boolean => {
+    switch (adapter) {
+        case SupportedDbtAdapter.POSTGRES:
+        case SupportedDbtAdapter.REDSHIFT:
+        case SupportedDbtAdapter.SNOWFLAKE:
+        case SupportedDbtAdapter.TRINO:
+        case SupportedDbtAdapter.ATHENA:
+            return descending;
+        case SupportedDbtAdapter.BIGQUERY:
+        case SupportedDbtAdapter.DATABRICKS:
+        case SupportedDbtAdapter.SPARK:
+            return !descending;
+        case SupportedDbtAdapter.DUCKDB:
+        case SupportedDbtAdapter.CLICKHOUSE:
+            return false;
+        default:
+            return assertUnreachable(adapter, `Unknown warehouse ${adapter}`);
+    }
+};
+
+/** Every sort states its null placement: its own, else the warehouse's. */
+export const placeMergeSortNulls = (
+    sorts: SortField[],
+    adapter: SupportedDbtAdapter,
+): SortField[] =>
+    sorts.map((sort) => ({
+        ...sort,
+        nullsFirst:
+            sort.nullsFirst ??
+            getWarehouseDefaultNullsFirst(adapter, sort.descending),
+    }));
+
+/**
+ * Sorts as the Explorer holds them, in merged-field space. The Explorer's
+ * sort state belongs to the primary source's metric query, so a sort set
+ * before merging names a primary field: it maps to that field's merged
+ * column, or to the join key column when the field is a key. A sort set on
+ * the merged table already names a merged field and passes through.
+ */
+export const toMergedSorts = ({
+    sorts,
+    primarySourceId,
+    primaryMetricQuery,
+    joinKey,
+}: {
+    sorts: SortField[];
+    primarySourceId: string;
+    primaryMetricQuery: Pick<
+        MetricQuery,
+        'dimensions' | 'metrics' | 'tableCalculations'
+    >;
+    joinKey: MergeJoinKeyPart[];
+}): SortField[] => {
+    const primaryFieldIds = new Set([
+        ...primaryMetricQuery.dimensions,
+        ...primaryMetricQuery.metrics,
+        ...primaryMetricQuery.tableCalculations.map(({ name }) => name),
+    ]);
+    return sorts.map((sort) => {
+        const keyPart = joinKey.find(
+            (part) => part.fieldIdBySourceId[primarySourceId] === sort.fieldId,
+        );
+        if (keyPart) {
+            return {
+                ...sort,
+                fieldId: getItemId({
+                    table: MERGE_TABLE_NAME,
+                    name: keyPart.name,
+                }),
+            };
+        }
+        if (primaryFieldIds.has(sort.fieldId)) {
+            return {
+                ...sort,
+                fieldId: getItemId({
+                    table: primarySourceId,
+                    name: sort.fieldId,
+                }),
+            };
+        }
+        return sort;
+    });
+};
 
 export const validateMergeQuery = (
     mergeQuery: MergeQuery,
@@ -392,8 +545,11 @@ export const validateMergeQuery = (
             }
             // The join compiles against the source's own output columns, so a
             // key naming a field the source does not select produces SQL that
-            // references a column the warehouse has never heard of. Result
-            // sources defer this to the compiler, which has their structure.
+            // references a column the warehouse has never heard of. The
+            // compiler groups a leg by any key dimension of its explore
+            // before validating, so what reaches here is a field the explore
+            // does not have. Result sources defer this to the compiler, which
+            // has their structure.
             if (
                 isMergeMetricSource(source) &&
                 !source.metricQuery.dimensions.includes(fieldId)
@@ -402,7 +558,7 @@ export const validateMergeQuery = (
                     kind: MergeQueryErrorKind.JOIN_KEY_NOT_SELECTED,
                     sourceId: source.id,
                     fieldIds: [fieldId],
-                    message: `Query "${source.id}" joins on ${fieldId}, which it does not group by. Add it to that query, or join on a field it already has.`,
+                    message: `Query "${source.id}" joins on ${fieldId}, which is not a dimension it can group by. Join on a dimension of that query's explore.`,
                 });
             }
         });
@@ -466,14 +622,14 @@ export const validateMergeQuery = (
 
     sources.forEach((source) => {
         const unaccounted = getUnaccountedDimensions(source, joinKey);
-        if (unaccounted.length > 0) {
+        if (unaccounted.length > 0 && !isFanOutAccepted(sources, source.id)) {
             errors.push({
                 kind: MergeQueryErrorKind.FAN_OUT,
                 sourceId: source.id,
                 fieldIds: unaccounted,
                 message: `Query "${source.id}" carries ${unaccounted.join(
                     ', ',
-                )}, which is not joined on. Merging would repeat the other queries' rows once per value.`,
+                )}, which is not joined on. Merging would repeat the other queries' rows once per value. Join on it, or set repeatValues on the other queries to repeat their values on purpose.`,
             });
         }
     });
@@ -537,36 +693,68 @@ export type MergeTypedColumn = {
 };
 
 /**
- * The terminal stage of a merged statement, owned by the run path: sort,
- * limit, and truncation detection. Kept as data rather than SQL text so the
- * run path can attach it above whatever it stacked on the core (for example a
- * date spine), and so the composable core stays clean under `SELECT *`.
+ * The terminal stage of a merged statement, owned by the run path: sort and
+ * limit. Kept as data rather than SQL text so the run path can attach it
+ * above whatever it stacked on the core (for example a pivot), and so the
+ * composable core stays clean under `SELECT *`.
  */
 export type MergeTerminalWrapper = {
     /** ORDER BY terms in output-alias space, already quoted for the dialect. */
     orderBy: string[];
     limit: number | null;
-    /** Boolean SQL expression that is true when a source exceeded its cap. */
+    /**
+     * @deprecated Always null: a source reaching its row cap is refused from
+     * the leg's own row count, never detected in SQL. Stays on the response
+     * until the legacy merge endpoints are retired, because removing a
+     * required response property is an API break.
+     */
     sourceLimitExceededSql: string | null;
+};
+
+/**
+ * One side of a merge as it runs: the statement its metric query compiles to,
+ * or null for a result source, whose rows already exist.
+ */
+export type MergeCompiledLeg = {
+    sourceId: string;
+    sql: string | null;
+    /**
+     * The query the leg runs: the source's query widened by any join key it
+     * did not select. Null for a result source, which runs nothing.
+     */
+    metricQuery: MetricQuery | null;
 };
 
 /**
  * What the compile endpoint returns. `sql` is null exactly when `errors` is
  * non-empty: a merge that would produce wrong numbers is reported, not run.
+ *
+ * A merge runs as a composition: each metric source runs on its own as a
+ * leg, and the join runs on the compose engine over the legs' results, which
+ * it reads as `merge_source_N` tables in source order. `legs` and `sql`
+ * together are the SQL that runs.
  */
 export type ApiCompiledMergeQueryResults = {
+    /** The join statement over the `merge_source_N` reference tables. */
     sql: string | null;
+    /** What each source runs on its own, in source order. Empty on an error. */
+    legs: MergeCompiledLeg[];
     /**
-     * The composable core: a self-contained single-statement SELECT with no
-     * ORDER BY, no LIMIT and no guard column — valid under `SELECT *`, so it
-     * can back a virtual view. `sql` is this core with the terminal wrapper
-     * attached.
+     * The composable core of the join: a self-contained single-statement
+     * SELECT with no ORDER BY, no LIMIT and no guard column — valid under
+     * `SELECT *`, so it can back a virtual view. `sql` is this core with the
+     * terminal wrapper attached.
      */
     coreSql: string | null;
     /** The core's columns, in the order the statement returns them. */
     typedColumns: MergeTypedColumn[] | null;
     /** The terminal stage `sql` attaches over the core. */
     terminalWrapper: MergeTerminalWrapper | null;
+    /**
+     * The sorts the merged result honours, by merged field id, each with
+     * its null placement stated. Empty on an error or an unsorted merge.
+     */
+    sorts: SortField[];
     columns: MergeQueryColumns | null;
     /** Selectable description of every merged column. Empty when sql is null. */
     fields: MergeQueryField[];
@@ -589,27 +777,39 @@ export type ApiCompiledMergeQueryResults = {
      */
     fieldIdByColumn: Record<string, FieldId>;
     /**
-     * The merge references existing query results, so it has no warehouse
-     * statement (`sql`/`coreSql` stay null without that being an error) and
-     * only the compose engine can run it.
+     * @deprecated Always false: every merge runs on the compose engine.
+     * Nothing reads it; it stays on the response until the legacy merge
+     * endpoints are retired, because removing a required response property
+     * is an API break.
      */
     requiresCompose: boolean;
     errors: MergeQueryError[];
 };
 
-/**
- * Column the merged statement carries to report that a query produced more
- * rows than the merge is willing to join. It is a guard, not data: the caller
- * refuses the result rather than showing a partial join.
- */
-export const MERGE_TRUNCATED_COLUMN = '__merge_truncated';
-
-/** Internal marker that distinguishes the empty-result guard row from data. */
-export const MERGE_ROW_PRESENT_COLUMN = '__merge_row_present';
-
 /** Label for the pseudo-table a source's merged fields belong to. */
 export const getMergeSourceTableLabel = (sourceIndex: number): string =>
     `Query ${String.fromCharCode(65 + sourceIndex)}`;
+
+/**
+ * The SQL a compiled merge runs, as one readable text: each leg under a
+ * comment naming its source, then the join. Null when the merge did not
+ * compile.
+ */
+export const getMergeCompiledSqlText = (
+    compiled: Pick<ApiCompiledMergeQueryResults, 'legs' | 'sql'>,
+): string | null => {
+    if (compiled.sql === null) return null;
+    const legs = compiled.legs.map((leg, index) => {
+        const label = `${getMergeSourceTableLabel(index)} ("${leg.sourceId}")`;
+        return leg.sql === null
+            ? `-- ${label}: existing results, nothing runs`
+            : `-- ${label}: runs on the warehouse\n${leg.sql}`;
+    });
+    return [
+        ...legs,
+        `-- Merge: runs on the compose engine over the results above, read as merge_source_0, merge_source_1, ...\n${compiled.sql}`,
+    ].join('\n\n');
+};
 
 /**
  * Where a merged field came from. Carried beside the fields rather than on
@@ -634,8 +834,10 @@ export type MergeFieldOrigin =
 /** Provenance of every merged field, by field id. */
 export type MergeFieldOrigins = Record<FieldId, MergeFieldOrigin>;
 
-/** Current JSON schema stored in `saved_queries_version_merges.merge`. */
-export const SAVED_MERGE_QUERY_SCHEMA_VERSION = 2;
+/** Current JSON schema stored in `saved_queries_version_merges.merge`: a merge. */
+export const SAVED_MERGE_QUERY_SCHEMA_VERSION = 3;
+/** The legacy shape with explicit source ids. Still read, never written. */
+export const SAVED_MERGE_QUERY_SCHEMA_VERSION_V2 = 2;
 
 /**
  * A persisted merge source.
@@ -656,7 +858,12 @@ export type SavedMergeQuerySource =
           metricQuery: MetricQuery;
       };
 
-/** Canonical, scalable representation of a merge stored on a chart version. */
+/**
+ * Schema v2 of a merge stored on a chart version. Accepted on requests and
+ * read from rows written before schema v3; rewritten to schema v3 by
+ * upgradeSavedMergeQuery. Never written.
+ * @deprecated use SavedMergeDefinition
+ */
 export type SavedMergeQuery = {
     /** Source whose rows a LEFT merge preserves. */
     primarySourceId: string;
@@ -664,35 +871,13 @@ export type SavedMergeQuery = {
     joinKey: MergeJoinKeyPart[];
     joinType: MergeJoinType;
     tableCalculations: MergeTableCalculation[];
-};
-
-/**
- * Rebuilds a runnable merge from a chart's own query and its stored merge.
- */
-export const buildMergeQueryFromSaved = (
-    chartMetricQuery: MetricQuery,
-    saved: SavedMergeQuery,
-): MergeQuery => {
-    const sources = saved.sources.map((source): MergeQuerySource => {
-        if (source.kind === 'chart') {
-            return { id: source.id, metricQuery: chartMetricQuery };
-        }
-        return { id: source.id, metricQuery: source.metricQuery };
-    });
-    const primaryIndex = sources.findIndex(
-        (source) => source.id === saved.primarySourceId,
-    );
-    if (primaryIndex > 0) {
-        sources.unshift(...sources.splice(primaryIndex, 1));
-    }
-
-    return {
-        sources,
-        joinKey: saved.joinKey,
-        joinType: saved.joinType,
-        tableCalculations: saved.tableCalculations,
-        limit: chartMetricQuery.limit,
-    };
+    /**
+     * Sources that repeat their values across the other sources' extra
+     * dimensions (MergeQueryMetricSource.repeatValues). Kept on the merge,
+     * not the source, so the source shapes stay as they were saved.
+     * Omitted when none repeat.
+     */
+    repeatValuesSourceIds?: string[];
 };
 
 const parseJoinType = (value: unknown): MergeJoinType =>
@@ -701,15 +886,12 @@ const parseJoinType = (value: unknown): MergeJoinType =>
         : MergeJoinType.FULL;
 
 /**
- * Reads a stored merge back, returning null for anything that does not hold
- * together. An unknown future version leaves the chart working without its
- * merge rather than breaking the chart entirely.
+ * Reads a v2 merge back, returning null for anything that does not hold
+ * together.
  */
 export const parseSavedMergeQuery = (
-    schemaVersion: number,
     value: unknown,
 ): SavedMergeQuery | null => {
-    if (schemaVersion !== SAVED_MERGE_QUERY_SCHEMA_VERSION) return null;
     if (value === null || typeof value !== 'object') return null;
     const candidate = value as Partial<SavedMergeQuery>;
 
@@ -767,6 +949,12 @@ export const parseSavedMergeQuery = (
         );
     });
     if (!hasCompleteJoinKeys) return null;
+    const repeatValuesSourceIds = Array.isArray(candidate.repeatValuesSourceIds)
+        ? candidate.repeatValuesSourceIds.filter(
+              (id): id is string =>
+                  typeof id === 'string' && sourceIds.includes(id),
+          )
+        : [];
 
     return {
         primarySourceId: candidate.primarySourceId,
@@ -776,5 +964,607 @@ export const parseSavedMergeQuery = (
         tableCalculations: Array.isArray(candidate.tableCalculations)
             ? candidate.tableCalculations
             : [],
+        ...(repeatValuesSourceIds.length > 0 ? { repeatValuesSourceIds } : {}),
     };
 };
+
+/*
+ * Schema v3: a merged chart stores named source queries and one join. The chart's own query is the
+ * first input and goes by its explore's name; every other query is stored
+ * in full under the name it goes by; one join over all of them; the sort
+ * and limit of the merged result. Nothing here is SQL. The server compiles
+ * it into the DuckDB join at submit, so only where the truth lives changed.
+ *
+ * Names are the merged result's table names: a query saved as `payments`
+ * yields `payments_<fieldId>` columns, and a key named after the chart's
+ * field yields `merge_<chartFieldId>`. A row rewritten from schema v2 keeps
+ * the ids it had (`chartAs`, `keyNames`), so no chart config moves.
+ */
+
+/** A query the merge owns, run against an explore. */
+export type SavedMergeDefinitionQuery = {
+    explore: string;
+    dimensions: FieldId[];
+    metrics: FieldId[];
+    filters?: Filters;
+    tableCalculations?: TableCalculation[];
+    additionalMetrics?: AdditionalMetric[];
+    customDimensions?: CustomDimension[];
+    metricOverrides?: MetricOverrides;
+    dimensionOverrides?: DimensionOverrides;
+    timezone?: string;
+    /** See MergeQueryMetricSource.repeatValues. Omitted when off. */
+    repeat?: boolean;
+};
+
+export type SavedMergeDefinitionSortDirection = 'asc' | 'desc';
+
+/**
+ * A sort of the merged result. `by` is a chart field id, a `query.fieldId`
+ * reference into another query, or the name of a merge table calculation.
+ * A chart field that is a join key sorts the key column.
+ */
+export type SavedMergeDefinitionSort = {
+    by: string;
+    direction: SavedMergeDefinitionSortDirection;
+};
+
+export type SavedMergeDefinition = {
+    /** The chart query's name in merged column ids, when not its explore's. */
+    chartAs?: string;
+    /** The chart's own query repeats its values. Omitted when off. */
+    chartRepeats?: boolean;
+    /** The other queries, by the name they go by. */
+    queries: { [name: string]: SavedMergeDefinitionQuery };
+    join: MergeJoinType;
+    /**
+     * The join keys: each entry is the chart's field and one `query.fieldId`
+     * reference per other query. The key column takes the chart field's id.
+     */
+    keys: { [chartFieldId: string]: string[] };
+    /** The key column's name, when not the chart field's id. */
+    keyNames?: { [chartFieldId: string]: string };
+    sort?: SavedMergeDefinitionSort[];
+    limit: number;
+    tableCalculations?: MergeTableCalculation[];
+};
+
+const MERGE_DEFINITION_REFERENCE_SEPARATOR = '.';
+const MERGE_DEFINITION_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
+
+/** `query.fieldId` into another query, or a bare chart field id. */
+export const parseMergeDefinitionReference = (
+    reference: string,
+): { query: string | null; fieldId: FieldId } => {
+    const separator = reference.indexOf(MERGE_DEFINITION_REFERENCE_SEPARATOR);
+    return separator === -1
+        ? { query: null, fieldId: reference }
+        : {
+              query: reference.slice(0, separator),
+              fieldId: reference.slice(separator + 1),
+          };
+};
+
+/** The name the chart's query goes by in the merged result. */
+export const getMergeDefinitionChartName = (
+    merge: Pick<SavedMergeDefinition, 'chartAs'>,
+    chartExploreName: string,
+): string => merge.chartAs ?? chartExploreName;
+
+/** The explore names of the queries beside the chart's, in order. */
+export const getMergeDefinitionQueryExploreNames = (
+    merge: Pick<SavedMergeDefinition, 'queries'>,
+): string[] => Object.values(merge.queries).map(({ explore }) => explore);
+
+const getMergeDefinitionJoinKey = (
+    merge: Pick<SavedMergeDefinition, 'keys' | 'keyNames'>,
+    chartName: string,
+): MergeJoinKeyPart[] =>
+    Object.entries(merge.keys).map(([chartFieldId, references]) => ({
+        name: merge.keyNames?.[chartFieldId] ?? chartFieldId,
+        fieldIdBySourceId: {
+            [chartName]: chartFieldId,
+            ...Object.fromEntries(
+                references.map((reference) => {
+                    const { query, fieldId } =
+                        parseMergeDefinitionReference(reference);
+                    return [query ?? chartName, fieldId];
+                }),
+            ),
+        },
+    }));
+
+/** The merged field id a sort's `by` names. */
+const resolveMergeDefinitionSortField = (
+    by: string,
+    merge: Pick<
+        SavedMergeDefinition,
+        'keys' | 'keyNames' | 'tableCalculations'
+    >,
+    chartName: string,
+): FieldId => {
+    if (merge.tableCalculations?.some(({ name }) => name === by)) return by;
+    if (by in merge.keys) {
+        return getItemId({
+            table: MERGE_TABLE_NAME,
+            name: merge.keyNames?.[by] ?? by,
+        });
+    }
+    const { query, fieldId } = parseMergeDefinitionReference(by);
+    return getItemId({ table: query ?? chartName, name: fieldId });
+};
+
+/** The `by` that names a merged field id, or null when nothing does. */
+const toMergeDefinitionSortReference = (
+    mergedFieldId: FieldId,
+    {
+        chartName,
+        queryNames,
+        joinKey,
+        calculationNames,
+    }: {
+        chartName: string;
+        queryNames: string[];
+        joinKey: MergeJoinKeyPart[];
+        calculationNames: string[];
+    },
+): string | null => {
+    if (calculationNames.includes(mergedFieldId)) return mergedFieldId;
+    const keyPart = joinKey.find(
+        (part) =>
+            getItemId({ table: MERGE_TABLE_NAME, name: part.name }) ===
+            mergedFieldId,
+    );
+    if (keyPart) return keyPart.fieldIdBySourceId[chartName] ?? null;
+    // Longest name first: `orders_2` must win over `orders`
+    const names = [chartName, ...queryNames].sort(
+        (a, b) => b.length - a.length,
+    );
+    const owner = names.find((name) => mergedFieldId.startsWith(`${name}_`));
+    if (!owner) return null;
+    const fieldId = mergedFieldId.slice(owner.length + 1);
+    return owner === chartName
+        ? fieldId
+        : `${owner}${MERGE_DEFINITION_REFERENCE_SEPARATOR}${fieldId}`;
+};
+
+const toMergeDefinitionQuery = (
+    metricQuery: MetricQuery,
+    repeat: boolean,
+): SavedMergeDefinitionQuery => ({
+    explore: metricQuery.exploreName,
+    dimensions: metricQuery.dimensions,
+    metrics: metricQuery.metrics,
+    ...(getTotalFilterRules(metricQuery.filters).length > 0
+        ? { filters: metricQuery.filters }
+        : {}),
+    ...(metricQuery.tableCalculations.length > 0
+        ? { tableCalculations: metricQuery.tableCalculations }
+        : {}),
+    ...(metricQuery.additionalMetrics?.length
+        ? { additionalMetrics: metricQuery.additionalMetrics }
+        : {}),
+    ...(metricQuery.customDimensions?.length
+        ? { customDimensions: metricQuery.customDimensions }
+        : {}),
+    ...(metricQuery.metricOverrides &&
+    Object.keys(metricQuery.metricOverrides).length > 0
+        ? { metricOverrides: metricQuery.metricOverrides }
+        : {}),
+    ...(metricQuery.dimensionOverrides &&
+    Object.keys(metricQuery.dimensionOverrides).length > 0
+        ? { dimensionOverrides: metricQuery.dimensionOverrides }
+        : {}),
+    ...(metricQuery.timezone ? { timezone: metricQuery.timezone } : {}),
+    ...(repeat ? { repeat: true } : {}),
+});
+
+/**
+ * The merge a runnable merge saves as. The chart's source must be one of
+ * the sources and every other source must be a metric query, because a
+ * saved chart cannot re-run a referenced result.
+ */
+export const buildSavedMergeDefinition = ({
+    mergeQuery,
+    chartSourceId,
+}: {
+    mergeQuery: MergeQuery;
+    chartSourceId: string;
+}): SavedMergeDefinition => {
+    const chartSource = mergeQuery.sources.find(
+        (source) => source.id === chartSourceId,
+    );
+    if (!chartSource || !isMergeMetricSource(chartSource)) {
+        throw new Error('A saved merge requires the chart query.');
+    }
+    const others = mergeQuery.sources.filter(
+        (source) => source.id !== chartSourceId,
+    );
+    const queries = Object.fromEntries(
+        others.map((source) => {
+            if (!isMergeMetricSource(source)) {
+                throw new Error(
+                    'A merge over existing query results cannot be saved to a chart.',
+                );
+            }
+            return [
+                source.id,
+                toMergeDefinitionQuery(
+                    source.metricQuery,
+                    source.repeatValues === true,
+                ),
+            ];
+        }),
+    );
+    const keys = Object.fromEntries(
+        mergeQuery.joinKey.map((part) => {
+            const chartFieldId = part.fieldIdBySourceId[chartSourceId];
+            if (!chartFieldId) {
+                throw new Error('Every join key needs the chart query.');
+            }
+            return [
+                chartFieldId,
+                others.map(
+                    (source) =>
+                        `${source.id}${MERGE_DEFINITION_REFERENCE_SEPARATOR}${part.fieldIdBySourceId[source.id]}`,
+                ),
+            ];
+        }),
+    );
+    const keyNames = Object.fromEntries(
+        mergeQuery.joinKey.flatMap((part) => {
+            const chartFieldId = part.fieldIdBySourceId[chartSourceId];
+            return part.name === chartFieldId
+                ? []
+                : [[chartFieldId, part.name]];
+        }),
+    );
+    const sortContext = {
+        chartName: chartSourceId,
+        queryNames: others.map(({ id }) => id),
+        joinKey: mergeQuery.joinKey,
+        calculationNames: mergeQuery.tableCalculations.map(({ name }) => name),
+    };
+    const sort = (mergeQuery.sorts ?? []).flatMap((field) => {
+        const by = toMergeDefinitionSortReference(field.fieldId, sortContext);
+        return by === null
+            ? []
+            : [{ by, direction: field.descending ? 'desc' : 'asc' } as const];
+    });
+    const chartRepeats = chartSource.repeatValues === true;
+    return {
+        ...(chartSourceId !== chartSource.metricQuery.exploreName
+            ? { chartAs: chartSourceId }
+            : {}),
+        queries,
+        join: mergeQuery.joinType,
+        keys,
+        ...(Object.keys(keyNames).length > 0 ? { keyNames } : {}),
+        ...(sort.length > 0 ? { sort } : {}),
+        limit: mergeQuery.limit,
+        ...(mergeQuery.tableCalculations.length > 0
+            ? { tableCalculations: mergeQuery.tableCalculations }
+            : {}),
+        ...(chartRepeats ? { chartRepeats: true } : {}),
+    };
+};
+
+/** Rebuilds a runnable merge from a chart's own query and its stored merge. */
+export const buildMergeQueryFromMergeDefinition = (
+    chartMetricQuery: MetricQuery,
+    merge: SavedMergeDefinition,
+): MergeQuery => {
+    const chartName = getMergeDefinitionChartName(
+        merge,
+        chartMetricQuery.exploreName,
+    );
+    const sources: MergeQueryMetricSource[] = [
+        {
+            id: chartName,
+            metricQuery: chartMetricQuery,
+            ...(merge.chartRepeats ? { repeatValues: true } : {}),
+        },
+        ...Object.entries(merge.queries).map(
+            ([name, query]): MergeQueryMetricSource => {
+                const { explore, repeat, ...intent } = query;
+                return {
+                    id: name,
+                    metricQuery: {
+                        exploreName: explore,
+                        ...intent,
+                        filters: query.filters ?? {},
+                        tableCalculations: query.tableCalculations ?? [],
+                        sorts: [],
+                        limit: merge.limit,
+                    },
+                    ...(repeat ? { repeatValues: true } : {}),
+                };
+            },
+        ),
+    ];
+    return {
+        sources,
+        joinKey: getMergeDefinitionJoinKey(merge, chartName),
+        joinType: merge.join,
+        tableCalculations: merge.tableCalculations ?? [],
+        sorts: (merge.sort ?? []).map(({ by, direction }) => ({
+            fieldId: resolveMergeDefinitionSortField(by, merge, chartName),
+            descending: direction === 'desc',
+        })),
+        limit: merge.limit,
+    };
+};
+
+/**
+ * Rebuilds a runnable merge from a chart's own query and a schema v2 merge,
+ * the shape requests and Document chart cells still carry.
+ */
+export const buildMergeQueryFromSaved = (
+    chartMetricQuery: MetricQuery,
+    saved: SavedMergeQuery,
+): MergeQuery => {
+    const repeating = new Set(saved.repeatValuesSourceIds ?? []);
+    const sources = saved.sources.map((source): MergeQuerySource => {
+        const repeat = repeating.has(source.id) ? { repeatValues: true } : {};
+        if (source.kind === 'chart') {
+            return { ...repeat, id: source.id, metricQuery: chartMetricQuery };
+        }
+        return { ...repeat, id: source.id, metricQuery: source.metricQuery };
+    });
+    const primaryIndex = sources.findIndex(
+        (source) => source.id === saved.primarySourceId,
+    );
+    if (primaryIndex > 0) {
+        sources.unshift(...sources.splice(primaryIndex, 1));
+    }
+    return {
+        sources,
+        joinKey: saved.joinKey,
+        joinType: saved.joinType,
+        tableCalculations: saved.tableCalculations,
+        // The chart's sort state is the Explorer's, so it may still name
+        // primary fields from before the merge was built
+        sorts: toMergedSorts({
+            sorts: chartMetricQuery.sorts,
+            primarySourceId: saved.primarySourceId,
+            primaryMetricQuery: chartMetricQuery,
+            joinKey: saved.joinKey,
+        }),
+        limit: chartMetricQuery.limit,
+    };
+};
+
+/**
+ * A pure rewrite of the v2 shape, keeping the ids it had. The chart's sort
+ * state was the Explorer's and named primary fields, so it is mapped once
+ * here; the chart's limit was the merged result's. A v2 merge whose
+ * primary was not the chart has no merge form: the chart is always the
+ * first input.
+ */
+export const upgradeSavedMergeQuery = (
+    saved: SavedMergeQuery,
+    chartMetricQuery: MetricQuery,
+): SavedMergeDefinition | null => {
+    const chartSource = saved.sources.find((source) => source.kind === 'chart');
+    if (!chartSource || chartSource.id !== saved.primarySourceId) return null;
+    return buildSavedMergeDefinition({
+        mergeQuery: buildMergeQueryFromSaved(chartMetricQuery, saved),
+        chartSourceId: chartSource.id,
+    });
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const isStringArray = (value: unknown): value is string[] =>
+    Array.isArray(value) && value.every((item) => typeof item === 'string');
+
+const isMergeDefinitionName = (value: unknown): value is string =>
+    typeof value === 'string' &&
+    MERGE_DEFINITION_NAME_PATTERN.test(value) &&
+    value !== MERGE_TABLE_NAME;
+
+const parseMergeDefinitionQuery = (
+    candidate: unknown,
+): SavedMergeDefinitionQuery | null => {
+    if (
+        !isRecord(candidate) ||
+        typeof candidate.explore !== 'string' ||
+        !isStringArray(candidate.dimensions) ||
+        !isStringArray(candidate.metrics) ||
+        (candidate.filters !== undefined && !isRecord(candidate.filters)) ||
+        (candidate.tableCalculations !== undefined &&
+            !Array.isArray(candidate.tableCalculations)) ||
+        (candidate.repeat !== undefined &&
+            typeof candidate.repeat !== 'boolean')
+    ) {
+        return null;
+    }
+    return toMergeDefinitionQuery(
+        {
+            exploreName: candidate.explore,
+            dimensions: candidate.dimensions,
+            metrics: candidate.metrics,
+            filters: (candidate.filters as Filters | undefined) ?? {},
+            tableCalculations:
+                (candidate.tableCalculations as
+                    | TableCalculation[]
+                    | undefined) ?? [],
+            sorts: [],
+            limit: 0,
+            additionalMetrics: Array.isArray(candidate.additionalMetrics)
+                ? (candidate.additionalMetrics as AdditionalMetric[])
+                : undefined,
+            customDimensions: Array.isArray(candidate.customDimensions)
+                ? (candidate.customDimensions as CustomDimension[])
+                : undefined,
+            metricOverrides: isRecord(candidate.metricOverrides)
+                ? (candidate.metricOverrides as MetricOverrides)
+                : undefined,
+            dimensionOverrides: isRecord(candidate.dimensionOverrides)
+                ? (candidate.dimensionOverrides as DimensionOverrides)
+                : undefined,
+            timezone:
+                typeof candidate.timezone === 'string'
+                    ? candidate.timezone
+                    : undefined,
+        },
+        candidate.repeat === true,
+    );
+};
+
+const parseMergeDefinitionKeys = (
+    candidate: unknown,
+    queryNames: string[],
+): SavedMergeDefinition['keys'] | null => {
+    if (!isRecord(candidate) || Object.keys(candidate).length === 0)
+        return null;
+    const entries = Object.entries(candidate).map(
+        ([chartFieldId, references]): [string, string[]] | null => {
+            if (chartFieldId.length === 0 || !isStringArray(references)) {
+                return null;
+            }
+            // One reference per other query, each into a query that exists
+            const referenced = references.map(
+                (reference) => parseMergeDefinitionReference(reference).query,
+            );
+            const complete =
+                referenced.length === queryNames.length &&
+                queryNames.every((name) => referenced.includes(name)) &&
+                references.every(
+                    (reference) =>
+                        parseMergeDefinitionReference(reference).fieldId
+                            .length > 0,
+                );
+            return complete ? [chartFieldId, references] : null;
+        },
+    );
+    return entries.every((entry) => entry !== null)
+        ? Object.fromEntries(entries as [string, string[]][])
+        : null;
+};
+
+/**
+ * Reads a stored merge back, returning null for anything that does not
+ * hold together: named queries against explores, one join with a key that
+ * reaches every query, a known join type, a numeric limit.
+ */
+export const parseSavedMergeDefinition = (
+    value: unknown,
+): SavedMergeDefinition | null => {
+    if (!isRecord(value)) return null;
+    const rawQueries = value.queries;
+    if (!isRecord(rawQueries)) return null;
+    const queryNames = Object.keys(rawQueries);
+    if (
+        queryNames.length === 0 ||
+        !queryNames.every(isMergeDefinitionName) ||
+        (value.chartAs !== undefined &&
+            (!isMergeDefinitionName(value.chartAs) ||
+                queryNames.includes(value.chartAs)))
+    ) {
+        return null;
+    }
+    const parsedQueries = queryNames.map((name) => [
+        name,
+        parseMergeDefinitionQuery(rawQueries[name]),
+    ]);
+    if (parsedQueries.some(([, query]) => query === null)) return null;
+    if (!(Object.values(MergeJoinType) as unknown[]).includes(value.join)) {
+        return null;
+    }
+    const keys = parseMergeDefinitionKeys(value.keys, queryNames);
+    if (keys === null) return null;
+    if (
+        value.keyNames !== undefined &&
+        (!isRecord(value.keyNames) ||
+            !Object.entries(value.keyNames).every(
+                ([chartFieldId, name]) =>
+                    chartFieldId in keys &&
+                    typeof name === 'string' &&
+                    name.length > 0,
+            ))
+    ) {
+        return null;
+    }
+    if (
+        value.sort !== undefined &&
+        (!Array.isArray(value.sort) ||
+            !value.sort.every(
+                (sort: unknown) =>
+                    isRecord(sort) &&
+                    typeof sort.by === 'string' &&
+                    (sort.direction === 'asc' || sort.direction === 'desc'),
+            ))
+    ) {
+        return null;
+    }
+    if (
+        typeof value.limit !== 'number' ||
+        (value.tableCalculations !== undefined &&
+            !Array.isArray(value.tableCalculations)) ||
+        (value.chartRepeats !== undefined &&
+            typeof value.chartRepeats !== 'boolean')
+    ) {
+        return null;
+    }
+    const keyNames = value.keyNames as SavedMergeDefinition['keyNames'];
+    const sort = value.sort as SavedMergeDefinitionSort[] | undefined;
+    const tableCalculations = value.tableCalculations as
+        | MergeTableCalculation[]
+        | undefined;
+    return {
+        ...(value.chartAs !== undefined
+            ? { chartAs: value.chartAs as string }
+            : {}),
+        queries: Object.fromEntries(
+            parsedQueries,
+        ) as SavedMergeDefinition['queries'],
+        join: value.join as MergeJoinType,
+        keys,
+        ...(keyNames && Object.keys(keyNames).length > 0 ? { keyNames } : {}),
+        ...(sort && sort.length > 0 ? { sort } : {}),
+        limit: value.limit,
+        ...(tableCalculations && tableCalculations.length > 0
+            ? { tableCalculations }
+            : {}),
+        ...(value.chartRepeats === true ? { chartRepeats: true } : {}),
+    };
+};
+
+/**
+ * Reads whatever a chart version stored. A v2 merge is rewritten to a
+ * merge with the chart's own sort and limit; an unknown version leaves
+ * the chart working without its merge rather than breaking the chart.
+ */
+export const parseStoredMergeDefinition = ({
+    schemaVersion,
+    value,
+    chartMetricQuery,
+}: {
+    schemaVersion: number;
+    value: unknown;
+    chartMetricQuery: MetricQuery;
+}): SavedMergeDefinition | null => {
+    switch (schemaVersion) {
+        case SAVED_MERGE_QUERY_SCHEMA_VERSION:
+            return parseSavedMergeDefinition(value);
+        case SAVED_MERGE_QUERY_SCHEMA_VERSION_V2: {
+            const saved = parseSavedMergeQuery(value);
+            return saved
+                ? upgradeSavedMergeQuery(saved, chartMetricQuery)
+                : null;
+        }
+        default:
+            return null;
+    }
+};
+
+/** Normalizes either supported request shape to the saved schema v3 definition. */
+export const normalizeSavedMergeDefinition = (
+    value: SavedMergeDefinition | SavedMergeQuery,
+    chartMetricQuery: MetricQuery,
+): SavedMergeDefinition | null =>
+    'queries' in value
+        ? parseSavedMergeDefinition(value)
+        : upgradeSavedMergeQuery(value, chartMetricQuery);

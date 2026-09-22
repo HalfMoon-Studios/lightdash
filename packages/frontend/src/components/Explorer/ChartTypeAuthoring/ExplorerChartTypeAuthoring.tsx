@@ -12,10 +12,17 @@ import { useCanCreateDataApp } from '../../../features/apps/hooks/useCanCreateDa
 import { useCanEditDataApp } from '../../../features/apps/hooks/useCanEditDataApp';
 import { useDeleteApp } from '../../../features/apps/hooks/useDeleteApp';
 import { useChartTypeBuilderWorkspace } from '../../../features/chartTypes/builder/useChartTypeBuilderWorkspace';
-import { buildExplorerVizContext } from '../../../features/chartTypes/utils/explorerVizContext';
+import { type VizBuildRequest } from '../../../features/chartTypes/hooks/useDataAppVizBuild';
+import { useDataAppVizResolvedColors } from '../../../features/chartTypes/hooks/useDataAppVizResolvedColors';
+import {
+    buildExplorerVizContext,
+    resolveExplorerVizFieldMapping,
+} from '../../../features/chartTypes/utils/explorerVizContext';
+import { vizBuildSampleRows } from '../../../features/chartTypes/utils/vizBuildSampleRows';
 import {
     explorerActions,
     selectChartConfig,
+    selectSavedChart,
     useExplorerDispatch,
     useExplorerSelector,
 } from '../../../features/explorer/store';
@@ -32,6 +39,7 @@ import { useDirtyPivotConfiguration } from '../VisualizationCard/useDirtyPivotCo
 import { useExplorerChartColorPalette } from '../VisualizationCard/useExplorerChartColorPalette';
 import { useExplorerResultsData } from '../VisualizationCard/useExplorerResultsData';
 import VisualizationWarning from '../VisualizationCard/VisualizationWarning';
+import classes from './ExplorerChartTypeAuthoring.module.css';
 import ExplorerChartTypeAuthoringView from './ExplorerChartTypeAuthoringView';
 
 // Stable identities, so the workspace does not rebind before results land.
@@ -58,6 +66,7 @@ const ExplorerChartTypeAuthoring: FC<Props> = ({ authoring }) => {
         resultsData.setFetchAll(true);
     }, [resultsData]);
     const itemsMap = resultsData.fields ?? NO_ITEMS;
+    const savedChart = useExplorerSelector(selectSavedChart);
 
     // The same staleness signal the chart card shows: results computed with
     // pivot settings that no longer match the configuration.
@@ -71,6 +80,9 @@ const ExplorerChartTypeAuthoring: FC<Props> = ({ authoring }) => {
         // embedded builder is its successor.
         creationExperience: 'explorer_chart_config',
         itemsMap,
+        chartReference: savedChart
+            ? { uuid: savedChart.uuid, includeSampleData: false }
+            : undefined,
     });
     const { build, dataAppViz, dataAppVizUuid, history } = workspace;
 
@@ -132,7 +144,8 @@ const ExplorerChartTypeAuthoring: FC<Props> = ({ authoring }) => {
     const isForbidden =
         (!dataAppsFlag.isLoading && !dataAppsFlag.data?.enabled) ||
         (dataAppVizUuid === null && !canCreate) ||
-        (dataAppViz !== undefined && !canEdit);
+        (dataAppViz !== undefined && !canEdit) ||
+        (dataAppViz !== undefined && dataAppViz.registrySlug !== null);
     useEffect(() => {
         if (!isForbidden) return;
         showToastError({ title: 'You cannot author this chart type' });
@@ -145,6 +158,50 @@ const ExplorerChartTypeAuthoring: FC<Props> = ({ authoring }) => {
     const schema = dataAppViz?.schema ?? null;
     const persistedFieldMapping = chartTypeConfig?.fieldMapping ?? null;
     const optionValues = chartTypeConfig?.optionValues ?? NO_OPTIONS;
+    const previewFieldMapping = useMemo(
+        () =>
+            schema
+                ? resolveExplorerVizFieldMapping({
+                      schema,
+                      itemsMap,
+                      persistedFieldMapping,
+                  })
+                : {},
+        [schema, itemsMap, persistedFieldMapping],
+    );
+    const latestReadySchema =
+        workspace.history.versions.find(
+            (version) =>
+                version.version === workspace.history.latestReadyVersion,
+        )?.resources?.vizSchema ??
+        (workspace.viewedVersion === null && !workspace.isFetchingSchema
+            ? schema
+            : null);
+    const buildFieldMapping = useMemo(
+        () =>
+            latestReadySchema
+                ? resolveExplorerVizFieldMapping({
+                      schema: latestReadySchema,
+                      itemsMap,
+                      persistedFieldMapping,
+                  })
+                : {},
+        [latestReadySchema, itemsMap, persistedFieldMapping],
+    );
+    const buildContext: VizBuildRequest['context'] = latestReadySchema
+        ? { schema: latestReadySchema, fieldMapping: buildFieldMapping }
+        : undefined;
+    const sampleRows = useMemo(
+        () => vizBuildSampleRows(resultsData.rows ?? [], buildFieldMapping),
+        [resultsData.rows, buildFieldMapping],
+    );
+    const resolvedColors = useDataAppVizResolvedColors({
+        itemsMap,
+        rows: resultsData.rows,
+        fieldMapping: previewFieldMapping,
+        pivotDetails: resultsData.pivotDetails ?? null,
+        colorPalette,
+    });
     const previewContext = useMemo(
         () =>
             schema
@@ -156,6 +213,7 @@ const ExplorerChartTypeAuthoring: FC<Props> = ({ authoring }) => {
                       pivotDetails: resultsData.pivotDetails ?? null,
                       colorPalette,
                       optionValues,
+                      resolvedColors,
                   })
                 : null,
         [
@@ -166,6 +224,7 @@ const ExplorerChartTypeAuthoring: FC<Props> = ({ authoring }) => {
             resultsData.pivotDetails,
             colorPalette,
             optionValues,
+            resolvedColors,
         ],
     );
 
@@ -250,40 +309,61 @@ const ExplorerChartTypeAuthoring: FC<Props> = ({ authoring }) => {
 
     return (
         <>
-            <ExplorerChartTypeAuthoringView
-                projectUuid={projectUuid}
-                app={
-                    dataAppViz
-                        ? {
-                              appUuid: dataAppViz.dataAppVizUuid,
-                              name: dataAppViz.name,
-                              description: dataAppViz.description,
-                          }
-                        : null
-                }
-                upgrade={
-                    dataAppVizUuid !== null &&
-                    history.latestReadyVersion !== null
-                        ? {
-                              ...workspace.sdkUpgradeOffer,
-                              disabled: workspace.isBuilding,
-                          }
-                        : null
-                }
-                workspace={workspace}
-                previewContext={previewContext}
-                warning={
-                    <VisualizationWarning
-                        dirtyPivotConfiguration={dirtyPivotConfiguration}
-                        chartConfig={chartConfig}
-                        resultsData={resultsData}
-                        isLoading={isLoadingQueryResults}
-                        maxColumnLimit={health.data?.pivotTable?.maxColumnLimit}
-                    />
-                }
-                onDetailsSaved={handleDetailsSaved}
-                onDone={handleDone}
-            />
+            {/* Esc routes through the same exit flow as Done; a stray click
+                outside must not dump a running build. */}
+            <MantineModal
+                opened
+                onClose={handleDone}
+                title="Chart Studio"
+                fullScreen
+                withCloseButton={false}
+                cancelLabel={false}
+                modalRootProps={{ closeOnClickOutside: false }}
+                modalHeaderProps={{
+                    className: classes.visuallyHiddenModalHeader,
+                }}
+                modalBodyProps={{ px: 0, py: 0 }}
+            >
+                <ExplorerChartTypeAuthoringView
+                    projectUuid={projectUuid}
+                    app={
+                        dataAppViz
+                            ? {
+                                  appUuid: dataAppViz.dataAppVizUuid,
+                                  name: dataAppViz.name,
+                                  description: dataAppViz.description,
+                                  icon: dataAppViz.icon,
+                              }
+                            : null
+                    }
+                    upgrade={
+                        dataAppVizUuid !== null &&
+                        history.latestReadyVersion !== null
+                            ? {
+                                  ...workspace.sdkUpgradeOffer,
+                                  disabled: workspace.isBuilding,
+                              }
+                            : null
+                    }
+                    workspace={workspace}
+                    previewContext={previewContext}
+                    sampleRows={sampleRows}
+                    buildContext={buildContext}
+                    warning={
+                        <VisualizationWarning
+                            dirtyPivotConfiguration={dirtyPivotConfiguration}
+                            chartConfig={chartConfig}
+                            resultsData={resultsData}
+                            isLoading={isLoadingQueryResults}
+                            maxColumnLimit={
+                                health.data?.pivotTable?.maxColumnLimit
+                            }
+                        />
+                    }
+                    onDetailsSaved={handleDetailsSaved}
+                    onDone={handleDone}
+                />
+            </MantineModal>
             {isExitConfirmOpen && (
                 <MantineModal
                     opened

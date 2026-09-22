@@ -1,7 +1,13 @@
 import { type DataAppVizContext } from '@lightdash/common';
-import { Box } from '@mantine/core';
-import { type FC, type ReactNode } from 'react';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { Box, Transition } from '@mantine/core';
+import { useReducedMotion } from '@mantine/hooks';
+import { useRef, useState, type FC, type ReactNode } from 'react';
+import { SIDEBAR_ANIMATION_DURATION } from '../../../components/common/Page/constants';
+import ResizableSplitter from '../../../components/common/ResizableSplitter';
+import { type AppIframePreviewHandle } from '../../apps/AppIframePreview';
+import { useElementPicker } from '../../apps/hooks/useElementPicker';
+import { refToWireString } from '../../apps/utils/elementRefs';
+import { type VizBuildRequest } from '../hooks/useDataAppVizBuild';
 import BuilderCanvas from './BuilderCanvas';
 import BuilderPromptBar from './BuilderPromptBar';
 import classes from './ChartTypeBuilderWorkspace.module.css';
@@ -13,11 +19,16 @@ type Props = {
     workspace: ChartTypeBuilderWorkspaceState;
     /** What the preview renders with; null renders the app bare. */
     previewContext: DataAppVizContext | null;
+    /** Bounded sample of the host's current rows, even before a schema exists. */
+    sampleRows?: Record<string, string>[];
+    currentBuildContext?: VizBuildRequest['context'];
     /** Whether the previewed viz may write its own state into the page URL. */
     syncPreviewUrlState: boolean;
     /** The previewed version's options beside it; null when the host
      *  configures the type elsewhere. */
     configurePanel: ReactNode;
+    /** Host-owned configuration kept beside the preview, before history. */
+    configurationSidebar?: ReactNode;
 };
 
 /**
@@ -29,8 +40,11 @@ const ChartTypeBuilderWorkspace: FC<Props> = ({
     projectUuid,
     workspace,
     previewContext,
+    sampleRows = [],
+    currentBuildContext,
     syncPreviewUrlState,
     configurePanel,
+    configurationSidebar,
 }) => {
     const {
         dataAppVizUuid,
@@ -59,75 +73,184 @@ const ChartTypeBuilderWorkspace: FC<Props> = ({
         onPickExample,
     } = workspace;
 
+    const reducedMotion = useReducedMotion();
+    const previewRef = useRef<AppIframePreviewHandle>(null);
+    const [screenshotAvailable, setScreenshotAvailable] = useState(false);
+    const elementPicker = useElementPicker({
+        identityKey: `${dataAppVizUuid ?? 'draft'}:${previewVersion ?? 0}`,
+        refsIdentityKey: dataAppVizUuid ?? 'draft',
+        maxRefs: 5,
+    });
+    const [isResizingHistory, setIsResizingHistory] = useState(false);
+    const showHistory = hasHistory && isHistoryOpen && dataAppVizUuid !== null;
+    const latestReadySchema =
+        history.versions.find(
+            (version) => version.version === history.latestReadyVersion,
+        )?.resources?.vizSchema ??
+        (viewedVersion === null && !workspace.isFetchingSchema
+            ? workspace.dataAppViz?.schema
+            : undefined);
+    const buildContext =
+        currentBuildContext ??
+        (latestReadySchema ? { schema: latestReadySchema } : {});
+
     return (
-        <PanelGroup direction="horizontal" className={classes.main}>
-            <Panel id="chart-type-builder-canvas" order={1} minSize={50}>
-                <Box className={classes.content}>
-                    <BuilderCanvas
-                        projectUuid={projectUuid}
-                        appUuid={dataAppVizUuid}
-                        previewVersion={previewVersion}
-                        isBuilding={isBuilding}
-                        failureMessage={failureMessage}
-                        isClarifyRoundOpen={isClarifyRoundOpen}
-                        clarifierUnavailable={clarification.fellThrough}
-                        previewContext={previewContext}
-                        configurePanel={configurePanel}
-                        onPickExample={onPickExample}
-                        onSdkManifest={onSdkManifest}
-                        syncPreviewUrlState={syncPreviewUrlState}
-                    />
-                    {isPromptBarMounted && (
-                        <BuilderPromptBar
-                            ref={promptBarRef}
-                            sessionKey={promptSessionKey}
-                            projectUuid={projectUuid}
-                            composerAppUuid={composerAppUuid}
-                            hasVersions={history.versions.length > 0}
-                            isBuilding={isBuilding}
-                            buildingPrompt={buildingPrompt}
-                            elapsed={elapsed}
-                            latestReadyVersion={history.latestReadyVersion}
-                            build={build}
-                            onCancelBuild={onCancelBuild}
-                            narration={narration}
-                            modelSelection={modelSelection}
-                            clarification={clarification}
-                        />
-                    )}
-                </Box>
-            </Panel>
-            {hasHistory && isHistoryOpen && dataAppVizUuid !== null && (
-                <>
-                    <PanelResizeHandle
-                        className={classes.historyResizeHandle}
-                        aria-label="Resize version history"
-                    />
-                    <Panel
+        <Box
+            className={classes.root}
+            data-history-open={showHistory || undefined}
+            data-history-resizing={isResizingHistory || undefined}
+            style={{
+                '--history-transition-duration': `${SIDEBAR_ANIMATION_DURATION}ms`,
+            }}
+        >
+            <ResizableSplitter
+                handleLabel="Resize version history"
+                resizable={showHistory}
+                attributes={{
+                    handle: { 'aria-hidden': !showHistory || undefined },
+                }}
+                onResizeStart={() => setIsResizingHistory(true)}
+                onResizeEnd={() => setIsResizingHistory(false)}
+                classNames={{ handle: classes.historyResizeHandle }}
+                orientation="horizontal"
+                className={classes.main}
+            >
+                <ResizableSplitter.Pane
+                    id="chart-type-builder-canvas"
+                    defaultSize={80}
+                    min={50}
+                >
+                    <Box className={classes.versionSurface}>
+                        <Box className={classes.content}>
+                            <BuilderCanvas
+                                projectUuid={projectUuid}
+                                appUuid={dataAppVizUuid}
+                                previewVersion={previewVersion}
+                                isBuilding={isBuilding}
+                                failureMessage={failureMessage}
+                                isClarifyRoundOpen={isClarifyRoundOpen}
+                                clarifierUnavailable={clarification.fellThrough}
+                                previewContext={previewContext}
+                                configurePanel={configurePanel}
+                                onPickExample={onPickExample}
+                                onSdkManifest={onSdkManifest}
+                                syncPreviewUrlState={syncPreviewUrlState}
+                                elementPickerProps={elementPicker.iframeProps}
+                                previewRef={previewRef}
+                                onScreenshotAvailabilityChange={
+                                    setScreenshotAvailable
+                                }
+                            />
+                            {isPromptBarMounted && (
+                                <BuilderPromptBar
+                                    ref={promptBarRef}
+                                    sessionKey={promptSessionKey}
+                                    projectUuid={projectUuid}
+                                    composerAppUuid={composerAppUuid}
+                                    hasVersions={history.versions.length > 0}
+                                    latestVersion={history.latest}
+                                    isNewChart={
+                                        dataAppVizUuid === null &&
+                                        build.appUuid === null
+                                    }
+                                    isBuilding={isBuilding}
+                                    buildingPrompt={buildingPrompt}
+                                    elapsed={elapsed}
+                                    latestReadyVersion={
+                                        history.latestReadyVersion
+                                    }
+                                    build={build}
+                                    onCancelBuild={onCancelBuild}
+                                    narration={narration}
+                                    modelSelection={modelSelection}
+                                    clarification={clarification}
+                                    buildContext={{
+                                        ...buildContext,
+                                        ...(sampleRows.length > 0
+                                            ? { sampleRows }
+                                            : {}),
+                                        ...(elementPicker.refs.length > 0
+                                            ? {
+                                                  elementReferences:
+                                                      elementPicker.refs.map(
+                                                          refToWireString,
+                                                      ),
+                                              }
+                                            : {}),
+                                    }}
+                                    elementPicker={elementPicker}
+                                    onCaptureScreenshot={
+                                        screenshotAvailable
+                                            ? async () => {
+                                                  const capture =
+                                                      previewRef.current
+                                                          ?.captureScreenshot;
+                                                  if (!capture) {
+                                                      throw new Error(
+                                                          'Screenshot capture is not available',
+                                                      );
+                                                  }
+                                                  return capture();
+                                              }
+                                            : undefined
+                                    }
+                                />
+                            )}
+                        </Box>
+                        {configurationSidebar && (
+                            <Box className={classes.configurationSidebar}>
+                                {configurationSidebar}
+                            </Box>
+                        )}
+                    </Box>
+                </ResizableSplitter.Pane>
+                {hasHistory && dataAppVizUuid !== null && (
+                    <ResizableSplitter.Pane
                         id="chart-type-builder-history"
                         className={classes.historyPanel}
-                        order={2}
-                        defaultSize={20}
-                        minSize={15}
-                        maxSize={50}
+                        defaultSize="320px"
+                        min="240px"
+                        max="360px"
+                        inert={!showHistory}
+                        aria-hidden={!showHistory || undefined}
                     >
-                        <VersionHistoryPanel
-                            projectUuid={projectUuid}
-                            appUuid={dataAppVizUuid}
-                            versions={history.versions}
-                            latestReadyVersion={history.latestReadyVersion}
-                            viewedVersion={viewedVersion}
-                            onView={onViewVersion}
-                            onClose={closeHistory}
-                            build={build}
-                            hasEarlier={history.hasEarlier}
-                            isFetchingEarlier={history.isFetchingEarlier}
-                            fetchEarlier={history.fetchEarlier}
-                        />
-                    </Panel>
-                </>
-            )}
-        </PanelGroup>
+                        <Transition
+                            mounted={showHistory}
+                            transition={reducedMotion ? 'fade' : 'slide-left'}
+                            duration={SIDEBAR_ANIMATION_DURATION}
+                        >
+                            {(style) => (
+                                <Box
+                                    className={classes.historyContent}
+                                    style={style}
+                                >
+                                    <VersionHistoryPanel
+                                        projectUuid={projectUuid}
+                                        appUuid={dataAppVizUuid}
+                                        versions={history.versions}
+                                        latestReadyVersion={
+                                            history.latestReadyVersion
+                                        }
+                                        viewedVersion={viewedVersion}
+                                        onView={onViewVersion}
+                                        onClose={closeHistory}
+                                        build={build}
+                                        hasEarlier={history.hasEarlier}
+                                        isFetchingEarlier={
+                                            history.isFetchingEarlier
+                                        }
+                                        fetchEarlier={history.fetchEarlier}
+                                        currentThreadNumber={
+                                            history.currentThreadNumber
+                                        }
+                                    />
+                                </Box>
+                            )}
+                        </Transition>
+                    </ResizableSplitter.Pane>
+                )}
+            </ResizableSplitter>
+        </Box>
     );
 };
 

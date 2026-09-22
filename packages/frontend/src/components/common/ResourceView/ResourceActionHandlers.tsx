@@ -1,4 +1,5 @@
 import {
+    ContentReviewContentType,
     assertUnreachable,
     ChartSourceType,
     ContentType,
@@ -14,11 +15,13 @@ import {
     IconFolderX,
 } from '@tabler/icons-react';
 import { useCallback, useEffect, type FC } from 'react';
+import { RequestReviewModal } from '../../../ee/features/contentReview';
 import { MoveAppToSpaceModal } from '../../../features/apps/components/MoveAppToSpaceModal';
 import { useAppPinningMutation } from '../../../features/apps/hooks/useAppPinningMutation';
 import { DeleteSqlChartModal } from '../../../features/sqlRunner/components/DeleteSqlChartModal';
 import { useChartPinningMutation } from '../../../hooks/pinning/useChartPinningMutation';
 import { useDashboardPinningMutation } from '../../../hooks/pinning/useDashboardPinningMutation';
+import { useDocumentPinningMutation } from '../../../hooks/pinning/useDocumentPinningMutation';
 import { useSpacePinningMutation } from '../../../hooks/pinning/useSpaceMutation';
 import { useContentAction } from '../../../hooks/useContent';
 import { useProjectUuid } from '../../../hooks/useProjectUuid';
@@ -32,6 +35,7 @@ import ChartUpdateModal from '../modal/ChartUpdateModal';
 import DashboardDeleteModal from '../modal/DashboardDeleteModal';
 import DashboardDuplicateModal from '../modal/DashboardDuplicateModal';
 import DashboardUpdateModal from '../modal/DashboardUpdateModal';
+import DocumentDeleteModal from '../modal/DocumentDeleteModal';
 import ShareSpaceModal from '../ShareSpaceModal';
 import SpaceActionModal from '../SpaceActionModal';
 import { ActionType } from '../SpaceActionModal/types';
@@ -85,6 +89,7 @@ const ResourceActionHandlers: FC<ResourceActionHandlersProps> = ({
         useContentAction(projectUuid);
 
     const { mutate: pinChart } = useChartPinningMutation();
+    const { mutate: pinDocument } = useDocumentPinningMutation();
     const { mutate: pinDashboard } = useDashboardPinningMutation();
     const { mutate: pinSpace } = useSpacePinningMutation(projectUuid);
     const { mutate: pinApp } = useAppPinningMutation();
@@ -110,6 +115,7 @@ const ResourceActionHandlers: FC<ResourceActionHandlersProps> = ({
                         },
                     });
                 case ResourceViewItemType.DASHBOARD:
+                case ResourceViewItemType.DOCUMENT:
                     return contentAction({
                         action: {
                             type: 'move',
@@ -117,7 +123,7 @@ const ResourceActionHandlers: FC<ResourceActionHandlersProps> = ({
                         },
                         item: {
                             uuid: item.data.uuid,
-                            contentType: ContentType.DASHBOARD,
+                            contentType: item.type,
                         },
                     });
                 case ResourceViewItemType.SPACE:
@@ -166,6 +172,11 @@ const ResourceActionHandlers: FC<ResourceActionHandlersProps> = ({
         if (action.type !== ResourceViewItemAction.PIN_TO_HOMEPAGE) return;
 
         switch (action.item.type) {
+            case ResourceViewItemType.DOCUMENT:
+                return pinDocument({
+                    projectUuid: action.item.data.projectUuid,
+                    documentUuid: action.item.data.uuid,
+                });
             case ResourceViewItemType.CHART:
                 return pinChart({ uuid: action.item.data.uuid });
             case ResourceViewItemType.DASHBOARD:
@@ -184,7 +195,15 @@ const ResourceActionHandlers: FC<ResourceActionHandlersProps> = ({
                     'Resource type not supported',
                 );
         }
-    }, [action, pinChart, pinDashboard, pinSpace, pinApp, projectUuid]);
+    }, [
+        action,
+        pinChart,
+        pinDashboard,
+        pinDocument,
+        pinSpace,
+        pinApp,
+        projectUuid,
+    ]);
 
     useEffect(() => {
         if (action.type === ResourceViewItemAction.PIN_TO_HOMEPAGE) {
@@ -200,6 +219,8 @@ const ResourceActionHandlers: FC<ResourceActionHandlersProps> = ({
     switch (action.type) {
         case ResourceViewItemAction.UPDATE:
             switch (action.item.type) {
+                case ResourceViewItemType.DOCUMENT:
+                    return null;
                 case ResourceViewItemType.CHART:
                     return (
                         <ChartUpdateModal
@@ -243,6 +264,7 @@ const ResourceActionHandlers: FC<ResourceActionHandlersProps> = ({
                             initialDescription={
                                 action.item.data.description ?? ''
                             }
+                            iconPicker={null}
                             onClose={handleReset}
                             onConfirm={handleReset}
                         />
@@ -255,6 +277,17 @@ const ResourceActionHandlers: FC<ResourceActionHandlersProps> = ({
             }
         case ResourceViewItemAction.DELETE:
             switch (action.item.type) {
+                case ResourceViewItemType.DOCUMENT:
+                    return (
+                        <DocumentDeleteModal
+                            opened
+                            projectUuid={action.item.data.projectUuid}
+                            uuid={action.item.data.uuid}
+                            name={action.item.data.name}
+                            onClose={handleReset}
+                            onConfirm={handleReset}
+                        />
+                    );
                 case ResourceViewItemType.CHART:
                     if (action.item.data.source === ChartSourceType.SQL) {
                         return (
@@ -395,6 +428,24 @@ const ResourceActionHandlers: FC<ResourceActionHandlersProps> = ({
                         await moveToSpace(action.item, spaceUuid);
                         handleReset();
                     }}
+                />
+            );
+
+        case ResourceViewItemAction.REQUEST_REVIEW:
+            return (
+                <RequestReviewModal
+                    projectUuid={projectUuid}
+                    contentType={
+                        action.item.type === ResourceViewItemType.DASHBOARD
+                            ? ContentReviewContentType.DASHBOARD
+                            : action.item.data.source === ChartSourceType.SQL
+                              ? ContentReviewContentType.SQL_CHART
+                              : ContentReviewContentType.CHART
+                    }
+                    contentUuid={action.item.data.uuid}
+                    contentName={action.item.data.name}
+                    opened
+                    onClose={handleReset}
                 />
             );
 

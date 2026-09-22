@@ -1,360 +1,636 @@
+import { subject } from '@casl/ability';
 import {
+    assertUnreachable,
+    DirectAccessPrincipalType,
+    DirectAccessResourceType,
+    FeatureFlags,
     ForbiddenError,
+    NotFoundError,
+    SpaceMemberRole,
+    type DirectAccessAssignment,
+    type DirectAccessGroupPrincipal,
+    type DirectAccessPrincipalRef,
     type RegisteredAccount,
-    type SpaceMemberRole,
     type UUID,
 } from '@lightdash/common';
 import { createActorFromAccount } from '../../logging/caslAuditWrapper';
+import { type AppAccessModel } from '../../models/AppAccessModel';
+import { type DashboardAccessModel } from '../../models/DashboardAccessModel';
 import {
-    type DirectAccess,
     type DirectAccessModel,
-    type DirectAccessModelActorRoleResolver,
-    type DirectAccessMutationContext,
-    type DirectAccessMutationResult,
-    type DirectAccessResetResult,
-} from '../../models/directAccessModelUtils';
+    type DirectAccessResourceLocation,
+} from '../../models/DirectAccessModel';
+import type { DocumentAccessModel } from '../../models/DocumentAccessModel';
+import type { FeatureFlagModel } from '../../models/FeatureFlagModel/FeatureFlagModel';
+import { type SavedChartAccessModel } from '../../models/SavedChartAccessModel';
+import { type SavedSqlAccessModel } from '../../models/SavedSqlAccessModel';
 import { BaseService } from '../BaseService';
 import {
-    auditDirectAccessMutation,
-    auditDirectAccessReset,
-    type DirectAccessAuditLogger,
-} from './directAccessAudit';
-import { DirectAccessFeatureGate } from './DirectAccessFeatureGate';
+    type AccessTarget,
+    type SpacePermissionService,
+} from '../SpaceService/SpacePermissionService';
 import {
-    getLogicalAccessBatch,
-    resolveDirectAccessBatch,
-    type DirectAccessResources,
-} from './directAccessResolver';
+    auditDirectAccessMutation,
+    auditDirectAccessReplace,
+    auditDirectAccessReset,
+} from './directAccessAudit';
+import { type DirectAccessFeatureGate } from './DirectAccessFeatureGate';
 
-export type DirectAccessResourceType =
-    | 'dashboard'
-    | 'savedChart'
-    | 'savedSql'
-    | 'app';
-
-export type DirectAccessResource = {
-    type: DirectAccessResourceType;
-    uuid: UUID;
+type DirectAccessServiceArguments = {
+    directAccessModel: DirectAccessModel;
+    spacePermissionService: SpacePermissionService;
+    directAccessFeatureGate: DirectAccessFeatureGate;
+    appAccessModel: AppAccessModel;
+    documentAccessModel: DocumentAccessModel;
+    featureFlagModel: FeatureFlagModel;
+    dashboardAccessModel: DashboardAccessModel;
+    savedChartAccessModel: SavedChartAccessModel;
+    savedSqlAccessModel: SavedSqlAccessModel;
 };
 
-export type DirectAccessModels = Record<
-    DirectAccessResourceType,
-    DirectAccessModel
->;
+export type SharedWithMeUuids = Record<DirectAccessResourceType, UUID[]>;
 
-const auditResourceTypes: Record<DirectAccessResourceType, string> = {
-    dashboard: 'Dashboard',
-    savedChart: 'SavedChart',
-    savedSql: 'SavedSql',
-    app: 'App',
+type SharedWithMeAccess = {
+    uuidsByType: SharedWithMeUuids;
+    rolesByType: Record<
+        DirectAccessResourceType,
+        Record<UUID, SpaceMemberRole[]>
+    >;
 };
-
-type DirectAccessActorRoleResolverInput = {
-    account: RegisteredAccount;
-    organizationUuid: UUID;
-    resource: DirectAccessResource;
-} & (
-    | { phase: 'preflight' }
-    | {
-          phase: 'transaction';
-          transaction: Parameters<DirectAccessModelActorRoleResolver>[0]['transaction'];
-          context: DirectAccessMutationContext;
-      }
-);
 
 /**
- * `preflight` is an advisory, read-only check used to fail closed before any
- * target lookup. `transaction` is authoritative: it must lock every source
- * whose state could lower the returned role until the supplied transaction
- * completes. Authority based on an absent row requires a stable anchor lock
- * or an equivalent serialization mechanism.
+ * One administration seam for direct access across every registered resource
+ * type. Requests are feature-gated, resolved against the concrete resource,
+ * and authorized for effective admins through the existing access context:
+ * space-backed resources require the same standing that administers space
+ * sharing today (org/project admins, space admins, and admin-role direct
+ * grants), while personal apps fall back to data-app management (their
+ * creator plus org/project admins).
  */
-export type DirectAccessActorRoleResolver = (
-    input: DirectAccessActorRoleResolverInput,
-) => Promise<SpaceMemberRole | undefined>;
-
-type DirectAccessMutationInput = {
-    account: RegisteredAccount;
-    resource: DirectAccessResource;
-};
-
 export class DirectAccessService extends BaseService {
-    private readonly models: DirectAccessModels;
+    private readonly directAccessModel: DirectAccessModel;
 
-    private readonly actorRoleResolver: DirectAccessActorRoleResolver;
+    private readonly spacePermissionService: SpacePermissionService;
 
-    private readonly featureGate: DirectAccessFeatureGate;
+    private readonly directAccessFeatureGate: DirectAccessFeatureGate;
 
-    private readonly auditLogger?: DirectAccessAuditLogger;
+    private readonly appAccessModel: AppAccessModel;
 
-    constructor({
-        models,
-        actorRoleResolver,
-        featureGate,
-        auditLogger,
-    }: {
-        models: DirectAccessModels;
-        actorRoleResolver: DirectAccessActorRoleResolver;
-        featureGate: DirectAccessFeatureGate;
-        auditLogger?: DirectAccessAuditLogger;
-    }) {
+    private readonly documentAccessModel: DocumentAccessModel;
+
+    private readonly featureFlagModel: FeatureFlagModel;
+
+    private readonly dashboardAccessModel: DashboardAccessModel;
+
+    private readonly savedChartAccessModel: SavedChartAccessModel;
+
+    private readonly savedSqlAccessModel: SavedSqlAccessModel;
+
+    constructor(args: DirectAccessServiceArguments) {
         super();
-        this.models = models;
-        this.actorRoleResolver = actorRoleResolver;
-        this.featureGate = featureGate;
-        this.auditLogger = auditLogger;
+        this.directAccessModel = args.directAccessModel;
+        this.spacePermissionService = args.spacePermissionService;
+        this.directAccessFeatureGate = args.directAccessFeatureGate;
+        this.appAccessModel = args.appAccessModel;
+        this.documentAccessModel = args.documentAccessModel;
+        this.featureFlagModel = args.featureFlagModel;
+        this.dashboardAccessModel = args.dashboardAccessModel;
+        this.savedChartAccessModel = args.savedChartAccessModel;
+        this.savedSqlAccessModel = args.savedSqlAccessModel;
     }
 
-    private static getOrganizationUuid(account: RegisteredAccount): UUID {
+    private getGrantReadModel(resourceType: DirectAccessResourceType): {
+        getUserAccess: (
+            resourceUuids: string[],
+            userUuid: string,
+            opts: { organizationUuid: string },
+        ) => Promise<
+            Record<
+                string,
+                {
+                    projectUuid: UUID;
+                    userRole: SpaceMemberRole | null;
+                    groupRoles: SpaceMemberRole[];
+                }
+            >
+        >;
+    } {
+        switch (resourceType) {
+            case DirectAccessResourceType.DOCUMENT:
+                return this.documentAccessModel;
+            case DirectAccessResourceType.DASHBOARD:
+                return this.dashboardAccessModel;
+            case DirectAccessResourceType.CHART:
+                return this.savedChartAccessModel;
+            case DirectAccessResourceType.SQL_CHART:
+                return this.savedSqlAccessModel;
+            case DirectAccessResourceType.APP:
+                return this.appAccessModel;
+            default:
+                return assertUnreachable(
+                    resourceType,
+                    'Unsupported direct access resource type',
+                );
+        }
+    }
+
+    /**
+     * Roles the user holds through direct grants on the given resources, keyed
+     * by resource UUID. Discovery surfaces need these to reason about what the
+     * viewer may do with a granted resource: a content grant never puts its
+     * parent space in the viewer's space list, so space-derived access alone
+     * under-reports their rights. Feature off means no roles.
+     */
+    async findGrantedRoles(
+        user: { userUuid: UUID; organizationUuid: UUID },
+        resources: { resourceType: DirectAccessResourceType; uuids: UUID[] }[],
+    ): Promise<Record<string, SpaceMemberRole[]>> {
+        const withUuids = resources.filter(({ uuids }) => uuids.length > 0);
+        if (withUuids.length === 0) {
+            return {};
+        }
+        const enabled =
+            await this.directAccessFeatureGate.isEnabledForUser(user);
+        if (!enabled) {
+            return {};
+        }
+
+        const perType = await Promise.all(
+            withUuids.map(async ({ resourceType, uuids }) => {
+                if (
+                    resourceType === DirectAccessResourceType.DOCUMENT &&
+                    !(
+                        await this.featureFlagModel.get({
+                            featureFlagId: FeatureFlags.Documents,
+                            user,
+                        })
+                    ).enabled
+                )
+                    return {};
+                return this.getGrantReadModel(resourceType).getUserAccess(
+                    uuids,
+                    user.userUuid,
+                    { organizationUuid: user.organizationUuid },
+                );
+            }),
+        );
+
+        return perType.reduce<Record<string, SpaceMemberRole[]>>(
+            (acc, access) => {
+                Object.entries(access).forEach(([resourceUuid, grant]) => {
+                    const roles = [
+                        ...(grant.userRole ? [grant.userRole] : []),
+                        ...grant.groupRoles,
+                    ];
+                    if (roles.length > 0) {
+                        acc[resourceUuid] = roles;
+                    }
+                });
+                return acc;
+            },
+            {},
+        );
+    }
+
+    async findSharedWithMeUuids(
+        user: { userUuid: UUID; organizationUuid: UUID },
+        projectUuids: UUID[],
+    ): Promise<SharedWithMeUuids> {
+        const access = await this.findSharedWithMeAccess(user, projectUuids);
+        return access.uuidsByType;
+    }
+
+    /**
+     * Resources and roles of every type directly granted to the user or their
+     * groups, deduplicated and restricted to the given projects. Candidates
+     * from the grant tables are validated through each type's read model, so
+     * inert grants (lost membership, inactive granted groups, deleted or
+     * ineligible resources) never surface. Feature off means no results —
+     * grant rows are preserved but stay invisible.
+     */
+    async findSharedWithMeAccess(
+        user: { userUuid: UUID; organizationUuid: UUID },
+        projectUuids: UUID[],
+    ): Promise<SharedWithMeAccess> {
+        const empty: SharedWithMeAccess = {
+            uuidsByType: {
+                [DirectAccessResourceType.DOCUMENT]: [],
+                [DirectAccessResourceType.DASHBOARD]: [],
+                [DirectAccessResourceType.CHART]: [],
+                [DirectAccessResourceType.SQL_CHART]: [],
+                [DirectAccessResourceType.APP]: [],
+            },
+            rolesByType: {
+                [DirectAccessResourceType.DOCUMENT]: {},
+                [DirectAccessResourceType.DASHBOARD]: {},
+                [DirectAccessResourceType.CHART]: {},
+                [DirectAccessResourceType.SQL_CHART]: {},
+                [DirectAccessResourceType.APP]: {},
+            },
+        };
+        if (projectUuids.length === 0) {
+            return empty;
+        }
+        const enabled =
+            await this.directAccessFeatureGate.isEnabledForUser(user);
+        if (!enabled) {
+            return empty;
+        }
+
+        const allowedProjects = new Set(projectUuids);
+        const resourceTypes = Object.values(DirectAccessResourceType);
+        const entries = await Promise.all(
+            resourceTypes.map(async (resourceType) => {
+                if (
+                    resourceType === DirectAccessResourceType.DOCUMENT &&
+                    !(
+                        await this.featureFlagModel.get({
+                            featureFlagId: FeatureFlags.Documents,
+                            user,
+                        })
+                    ).enabled
+                )
+                    return [resourceType, {}] as const;
+                const candidates =
+                    await this.directAccessModel.findCandidateResourceUuidsForUser(
+                        resourceType,
+                        user.userUuid,
+                    );
+                if (candidates.length === 0) {
+                    return [resourceType, {}] as const;
+                }
+                const access = await this.getGrantReadModel(
+                    resourceType,
+                ).getUserAccess(candidates, user.userUuid, {
+                    organizationUuid: user.organizationUuid,
+                });
+                const roles = Object.fromEntries(
+                    Object.entries(access)
+                        .filter(([, grant]) =>
+                            allowedProjects.has(grant.projectUuid),
+                        )
+                        .map(([resourceUuid, grant]) => [
+                            resourceUuid,
+                            [
+                                ...(grant.userRole ? [grant.userRole] : []),
+                                ...grant.groupRoles,
+                            ],
+                        ]),
+                );
+                return [resourceType, roles] as const;
+            }),
+        );
+        return entries.reduce<SharedWithMeAccess>(
+            (result, [resourceType, roles]) => ({
+                uuidsByType: {
+                    ...result.uuidsByType,
+                    [resourceType]: Object.keys(roles),
+                },
+                rolesByType: { ...result.rolesByType, [resourceType]: roles },
+            }),
+            empty,
+        );
+    }
+
+    private static toAccessTarget(
+        resourceType: DirectAccessResourceType,
+        resourceUuid: UUID,
+        location: DirectAccessResourceLocation,
+    ): AccessTarget {
+        // Only apps can be space-less; a space-backed type without a space is
+        // an inconsistent row, not a target we can authorize against.
+        const requireSpaceUuid = (): UUID => {
+            if (location.spaceUuid === null) {
+                throw new NotFoundError('Direct access target not found');
+            }
+            return location.spaceUuid;
+        };
+
+        switch (resourceType) {
+            case DirectAccessResourceType.DOCUMENT:
+                return {
+                    type: 'document',
+                    documentUuid: resourceUuid,
+                    spaceUuid: requireSpaceUuid(),
+                };
+            case DirectAccessResourceType.DASHBOARD:
+                return {
+                    type: 'dashboard',
+                    dashboardUuid: resourceUuid,
+                    spaceUuid: requireSpaceUuid(),
+                };
+            case DirectAccessResourceType.CHART:
+                return {
+                    type: 'chart',
+                    chartUuid: resourceUuid,
+                    dashboardUuid: location.dashboardUuid,
+                    spaceUuid: requireSpaceUuid(),
+                };
+            case DirectAccessResourceType.SQL_CHART:
+                return {
+                    type: 'sqlChart',
+                    savedSqlUuid: resourceUuid,
+                    spaceUuid: requireSpaceUuid(),
+                };
+            case DirectAccessResourceType.APP:
+                return {
+                    type: 'app',
+                    appUuid: resourceUuid,
+                    organizationUuid: location.organizationUuid,
+                    projectUuid: location.projectUuid,
+                    spaceUuid: location.spaceUuid,
+                };
+            default:
+                return assertUnreachable(
+                    resourceType,
+                    'Unsupported direct access resource type',
+                );
+        }
+    }
+
+    private async authorizeManage(
+        account: RegisteredAccount,
+        projectUuid: UUID,
+        resourceType: DirectAccessResourceType,
+        resourceUuid: UUID,
+    ): Promise<{ organizationUuid: UUID }> {
+        await this.directAccessFeatureGate.assertEnabled(account);
+
         const { organizationUuid } = account.organization;
         if (organizationUuid === undefined) {
             throw new ForbiddenError('Direct access is not available');
         }
-        return organizationUuid;
-    }
-
-    private createActorRoleResolver(
-        input: DirectAccessMutationInput,
-    ): DirectAccessModelActorRoleResolver {
-        const organizationUuid = DirectAccessService.getOrganizationUuid(
-            input.account,
-        );
-        return ({ transaction, context }) => {
-            if (context.organizationUuid !== organizationUuid) {
-                throw new ForbiddenError('Direct access is not available');
-            }
-            return this.actorRoleResolver({
-                account: input.account,
-                organizationUuid,
-                phase: 'transaction',
-                transaction,
-                context,
-                resource: input.resource,
-            });
-        };
-    }
-
-    private resolveActorRole(
-        input: DirectAccessMutationInput,
-    ): Promise<SpaceMemberRole | undefined> {
-        const organizationUuid = DirectAccessService.getOrganizationUuid(
-            input.account,
-        );
-        return this.actorRoleResolver({
-            account: input.account,
+        if (
+            resourceType === DirectAccessResourceType.DOCUMENT &&
+            !(
+                await this.featureFlagModel.get({
+                    featureFlagId: FeatureFlags.Documents,
+                    user: { userUuid: account.user.userUuid, organizationUuid },
+                })
+            ).enabled
+        ) {
+            throw new ForbiddenError('Documents are not enabled');
+        }
+        const location = await this.directAccessModel.findResourceLocation(
+            resourceType,
+            resourceUuid,
             organizationUuid,
-            phase: 'preflight',
-            resource: input.resource,
-        });
+        );
+        if (location === undefined || location.projectUuid !== projectUuid) {
+            throw new NotFoundError('Direct access target not found');
+        }
+
+        const context = await this.spacePermissionService.resolveAccess(
+            account.user.userUuid,
+            DirectAccessService.toAccessTarget(
+                resourceType,
+                resourceUuid,
+                location,
+            ),
+        );
+        const ability = this.createAuditedAbility(account);
+        const authorized =
+            location.spaceUuid !== null
+                ? ability.can('manage', subject('Space', context))
+                : ability.can(
+                      'manage',
+                      subject('DataApp', {
+                          ...context,
+                          // App editing rights do not include policy management.
+                          access: context.access.filter(
+                              ({ role }) => role === SpaceMemberRole.ADMIN,
+                          ),
+                          // A null creator can never match the self rule.
+                          createdByUserUuid: location.createdByUserUuid ?? '',
+                      }),
+                  );
+        if (!authorized) {
+            throw new ForbiddenError(
+                'You do not have permission to manage direct access for this resource',
+            );
+        }
+        return { organizationUuid };
     }
 
-    private async prepareMutation(input: DirectAccessMutationInput): Promise<{
-        organizationUuid: UUID;
-        actorRole?: SpaceMemberRole;
-        actorRoleResolver: DirectAccessModelActorRoleResolver;
-    }> {
-        const organizationUuid = DirectAccessService.getOrganizationUuid(
-            input.account,
-        );
-        await this.featureGate.assertEnabled(input.account);
-        const actorRole = await this.resolveActorRole(input);
+    private static toAuditPrincipal(principal: DirectAccessPrincipalRef): {
+        type: 'user' | 'group';
+        uuid: string;
+    } {
         return {
-            organizationUuid,
-            actorRole,
-            actorRoleResolver: this.createActorRoleResolver(input),
+            type:
+                principal.type === DirectAccessPrincipalType.USER
+                    ? 'user'
+                    : 'group',
+            uuid: principal.uuid,
         };
     }
 
-    private getModel(
+    /**
+     * Batch policy read for content-as-code export. The caller owns
+     * authorization (the export endpoints gate on ContentAsCode view, the
+     * same permission that already exports space access blocks) and must pass
+     * uuids located within the given project. Feature off returns no
+     * policies, so exports written while sharing is disabled simply omit
+     * access blocks instead of failing.
+     */
+    async listPoliciesForExport(
+        user: { userUuid: UUID; organizationUuid: UUID },
         resourceType: DirectAccessResourceType,
-    ): DirectAccessModel {
-        return this.models[resourceType];
-    }
-
-    private auditMutation(
-        input: DirectAccessMutationInput,
-        principal: { type: 'user' | 'group'; uuid: UUID },
-        result: DirectAccessMutationResult,
-    ): void {
-        auditDirectAccessMutation({
-            actor: createActorFromAccount(input.account),
-            context: input.account.requestContext ?? {},
-            resourceType: auditResourceTypes[input.resource.type],
-            resourceUuid: input.resource.uuid,
-            principal,
-            result,
-            auditLogger: this.auditLogger,
-        });
-    }
-
-    private auditReset(
-        input: DirectAccessMutationInput,
-        result: DirectAccessResetResult,
-    ): void {
-        auditDirectAccessReset({
-            actor: createActorFromAccount(input.account),
-            context: input.account.requestContext ?? {},
-            resourceType: auditResourceTypes[input.resource.type],
-            resourceUuid: input.resource.uuid,
-            result,
-            auditLogger: this.auditLogger,
-        });
-    }
-
-    async getUserAccess({
-        account,
-        resourceType,
-        resourceUuids,
-    }: {
-        account: RegisteredAccount;
-        resourceType: DirectAccessResourceType;
-        resourceUuids: UUID[];
-    }): Promise<Record<string, DirectAccess>> {
-        const organizationUuid =
-            DirectAccessService.getOrganizationUuid(account);
-        if (!(await this.featureGate.isEnabled(account))) {
+        resourceUuids: UUID[],
+    ): Promise<Record<string, DirectAccessAssignment[]>> {
+        if (resourceUuids.length === 0) {
             return {};
         }
-        return this.getModel(resourceType).getUserAccess(
-            resourceUuids,
-            account.user.userUuid,
-            { organizationUuid },
-        );
-    }
-
-    async resolveUserAccess({
-        account,
-        resourceType,
-        resources,
-    }: {
-        account: RegisteredAccount;
-        resourceType: DirectAccessResourceType;
-        resources: DirectAccessResources;
-    }): Promise<Record<string, SpaceMemberRole | undefined>> {
-        const organizationUuid =
-            DirectAccessService.getOrganizationUuid(account);
-        if (!(await this.featureGate.isEnabled(account))) {
-            // Disabled preserves pure logical-space behavior: capability
-            // ceilings belong to the direct-access feature and only apply
-            // while it is enabled.
-            return getLogicalAccessBatch(resources);
+        const enabled =
+            await this.directAccessFeatureGate.isEnabledForUser(user);
+        if (!enabled) {
+            return {};
         }
-        const directAccess = await this.getModel(resourceType).getUserAccess(
-            Object.keys(resources),
-            account.user.userUuid,
-            { organizationUuid },
+        if (
+            resourceType === DirectAccessResourceType.DOCUMENT &&
+            !(
+                await this.featureFlagModel.get({
+                    featureFlagId: FeatureFlags.Documents,
+                    user,
+                })
+            ).enabled
+        )
+            return {};
+        return this.directAccessModel.listAssignmentsForResources({
+            resourceType,
+            resourceUuids,
+        });
+    }
+
+    async listGroups(
+        account: RegisteredAccount,
+        projectUuid: UUID,
+        resourceType: DirectAccessResourceType,
+        resourceUuid: UUID,
+    ): Promise<DirectAccessGroupPrincipal[]> {
+        const { organizationUuid } = await this.authorizeManage(
+            account,
+            projectUuid,
+            resourceType,
+            resourceUuid,
         );
-        return resolveDirectAccessBatch({
-            resources,
-            directAccess,
+        return this.directAccessModel.listGroups({
+            organizationUuid,
+            projectUuid,
+        });
+    }
+
+    async listAssignments(
+        account: RegisteredAccount,
+        projectUuid: UUID,
+        resourceType: DirectAccessResourceType,
+        resourceUuid: UUID,
+    ): Promise<DirectAccessAssignment[]> {
+        const { organizationUuid } = await this.authorizeManage(
+            account,
+            projectUuid,
+            resourceType,
+            resourceUuid,
+        );
+        return this.directAccessModel.listAssignments({
+            resourceType,
+            resourceUuid,
             organizationUuid,
         });
     }
 
-    async upsertUserAccess(
-        input: DirectAccessMutationInput & {
-            userUuid: UUID;
+    async upsertAssignment(
+        account: RegisteredAccount,
+        projectUuid: UUID,
+        resourceType: DirectAccessResourceType,
+        resourceUuid: UUID,
+        principal: DirectAccessPrincipalRef,
+        role: SpaceMemberRole,
+    ): Promise<void> {
+        const { organizationUuid } = await this.authorizeManage(
+            account,
+            projectUuid,
+            resourceType,
+            resourceUuid,
+        );
+        const result = await this.directAccessModel.upsertAccess({
+            resourceType,
+            resourceUuid,
+            principal,
+            role,
+            organizationUuid,
+            grantedByUserUuid: account.user.userUuid,
+        });
+        auditDirectAccessMutation({
+            actor: createActorFromAccount(account),
+            context: {},
+            resourceType,
+            resourceUuid,
+            principal: DirectAccessService.toAuditPrincipal(principal),
+            result,
+        });
+    }
+
+    async revokeAssignment(
+        account: RegisteredAccount,
+        projectUuid: UUID,
+        resourceType: DirectAccessResourceType,
+        resourceUuid: UUID,
+        principal: DirectAccessPrincipalRef,
+    ): Promise<void> {
+        const { organizationUuid } = await this.authorizeManage(
+            account,
+            projectUuid,
+            resourceType,
+            resourceUuid,
+        );
+        const result = await this.directAccessModel.revokeAccess({
+            resourceType,
+            resourceUuid,
+            principal,
+            organizationUuid,
+        });
+        auditDirectAccessMutation({
+            actor: createActorFromAccount(account),
+            context: {},
+            resourceType,
+            resourceUuid,
+            principal: DirectAccessService.toAuditPrincipal(principal),
+            result,
+        });
+    }
+
+    /**
+     * Fail-closed feature check for callers that must validate before their
+     * own writes (content-as-code preflight): a file with an access block is
+     * rejected up front when sharing is disabled, instead of importing the
+     * content and then failing the policy step halfway.
+     */
+    async assertEnabled(account: RegisteredAccount): Promise<void> {
+        await this.directAccessFeatureGate.assertEnabled(account);
+    }
+
+    /**
+     * Atomically replace a resource's whole direct policy. Backs the
+     * content-as-code import: authorization and locking are identical to the
+     * single-assignment mutations, and any invalid principal aborts the
+     * transaction with the previous policy intact.
+     */
+    async replacePolicy(
+        account: RegisteredAccount,
+        projectUuid: UUID,
+        resourceType: DirectAccessResourceType,
+        resourceUuid: UUID,
+        assignments: {
+            principal: DirectAccessPrincipalRef;
             role: SpaceMemberRole;
-        },
+        }[],
     ): Promise<void> {
-        const { actorRole, actorRoleResolver, organizationUuid } =
-            await this.prepareMutation(input);
-        const result = await this.getModel(
-            input.resource.type,
-        ).upsertUserAccess({
-            resourceUuid: input.resource.uuid,
-            userUuid: input.userUuid,
-            role: input.role,
-            actorRole,
-            actorRoleResolver,
-            grantedByUserUuid: input.account.user.userUuid,
-            organizationUuid,
-        });
-        this.auditMutation(
-            input,
-            { type: 'user', uuid: input.userUuid },
-            result,
+        const { organizationUuid } = await this.authorizeManage(
+            account,
+            projectUuid,
+            resourceType,
+            resourceUuid,
         );
+        const result = await this.directAccessModel.replacePolicy({
+            resourceType,
+            resourceUuid,
+            organizationUuid,
+            grantedByUserUuid: account.user.userUuid,
+            assignments,
+        });
+        auditDirectAccessReplace({
+            actor: createActorFromAccount(account),
+            context: {},
+            resourceType,
+            resourceUuid,
+            result,
+        });
     }
 
-    async upsertGroupAccess(
-        input: DirectAccessMutationInput & {
-            groupUuid: UUID;
-            role: SpaceMemberRole;
-        },
+    async resetAssignments(
+        account: RegisteredAccount,
+        projectUuid: UUID,
+        resourceType: DirectAccessResourceType,
+        resourceUuid: UUID,
     ): Promise<void> {
-        const { actorRole, actorRoleResolver, organizationUuid } =
-            await this.prepareMutation(input);
-        const result = await this.getModel(
-            input.resource.type,
-        ).upsertGroupAccess({
-            resourceUuid: input.resource.uuid,
-            groupUuid: input.groupUuid,
-            role: input.role,
-            actorRole,
-            actorRoleResolver,
-            grantedByUserUuid: input.account.user.userUuid,
-            organizationUuid,
-        });
-        this.auditMutation(
-            input,
-            { type: 'group', uuid: input.groupUuid },
-            result,
+        const { organizationUuid } = await this.authorizeManage(
+            account,
+            projectUuid,
+            resourceType,
+            resourceUuid,
         );
-    }
-
-    async revokeUserAccess(
-        input: DirectAccessMutationInput & { userUuid: UUID },
-    ): Promise<void> {
-        const { actorRole, actorRoleResolver, organizationUuid } =
-            await this.prepareMutation(input);
-        const result = await this.getModel(
-            input.resource.type,
-        ).revokeUserAccess({
-            resourceUuid: input.resource.uuid,
-            userUuid: input.userUuid,
-            actorRole,
-            actorRoleResolver,
-            actorUserUuid: input.account.user.userUuid,
+        const result = await this.directAccessModel.resetAccess({
+            resourceType,
+            resourceUuid,
             organizationUuid,
         });
-        this.auditMutation(
-            input,
-            { type: 'user', uuid: input.userUuid },
+        auditDirectAccessReset({
+            actor: createActorFromAccount(account),
+            context: {},
+            resourceType,
+            resourceUuid,
             result,
-        );
-    }
-
-    async revokeGroupAccess(
-        input: DirectAccessMutationInput & { groupUuid: UUID },
-    ): Promise<void> {
-        const { actorRole, actorRoleResolver, organizationUuid } =
-            await this.prepareMutation(input);
-        const result = await this.getModel(
-            input.resource.type,
-        ).revokeGroupAccess({
-            resourceUuid: input.resource.uuid,
-            groupUuid: input.groupUuid,
-            actorRole,
-            actorRoleResolver,
-            organizationUuid,
         });
-        this.auditMutation(
-            input,
-            { type: 'group', uuid: input.groupUuid },
-            result,
-        );
-    }
-
-    async resetAccess(input: DirectAccessMutationInput): Promise<void> {
-        const { actorRole, actorRoleResolver, organizationUuid } =
-            await this.prepareMutation(input);
-        const result = await this.getModel(input.resource.type).resetAccess({
-            resourceUuid: input.resource.uuid,
-            actorRole,
-            actorRoleResolver,
-            organizationUuid,
-        });
-        this.auditReset(input, result);
     }
 }

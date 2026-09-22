@@ -4,6 +4,7 @@ import {
     type ToolName,
 } from '@lightdash/common';
 import {
+    IconAppWindow,
     IconChartDots3,
     IconChartHistogram,
     IconDatabase,
@@ -19,6 +20,7 @@ import {
     IconListDetails,
     IconBook2,
     IconBooks,
+    IconPalette,
     IconPencil,
     IconPlayerPlay,
     IconPlugConnected,
@@ -65,6 +67,9 @@ export const getToolIcon = (toolName: AiAgentToolName) => {
             loadSkill: IconBook2,
             loadProjectContext: IconVocabulary,
             loadMcpTools: IconPlugConnected,
+            generateDataApp: IconAppWindow,
+            iterateDataApp: IconAppWindow,
+            listDataAppThemes: IconPalette,
             editDbtProject: IconPencil,
             editProjectContext: IconVocabulary,
             editRepo: IconPencil,

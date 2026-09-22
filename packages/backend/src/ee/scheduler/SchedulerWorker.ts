@@ -1,4 +1,5 @@
 import {
+    ConflictError,
     EE_SCHEDULER_TASKS,
     getErrorMessage,
     getManagedAgentScheduleCron,
@@ -10,8 +11,11 @@ import {
 } from '@lightdash/common';
 import type { AddJobFunction } from 'graphile-worker';
 import Logger from '../../logging/logger';
+import { type ContentReviewRequestModel } from '../../models/ContentReviewRequestModel';
+import { type ContentReviewSettingsModel } from '../../models/ContentReviewSettingsModel';
 import { type OpenIdIdentityModel } from '../../models/OpenIdIdentitiesModel';
 import { type ProjectModel } from '../../models/ProjectModel/ProjectModel';
+import { type UserModel } from '../../models/UserModel';
 import type PrometheusMetrics from '../../prometheus/PrometheusMetrics';
 import { SchedulerClient } from '../../scheduler/SchedulerClient';
 import { tryJobOrTimeout } from '../../scheduler/SchedulerJobTimeout';
@@ -20,9 +24,13 @@ import {
     SchedulerWorkerArguments,
 } from '../../scheduler/SchedulerWorker';
 import { TypedEETaskList } from '../../scheduler/types';
+import { type JiraAppService } from '../../services/JiraAppService/JiraAppService';
+import { type LinearAppService } from '../../services/LinearAppService/LinearAppService';
 import { type AiAgentReviewClassifierModel } from '../models/AiAgentReviewClassifierModel';
 import { type AiAgentReviewNotificationModel } from '../models/AiAgentReviewNotificationModel';
+import { type AiOrganizationSettingsModel } from '../models/AiOrganizationSettingsModel';
 import { type McpToolCallModel } from '../models/McpToolCallModel';
+import { type ScimRequestLogModel } from '../models/ScimRequestLogModel';
 import { AiAgentAdminService } from '../services/AiAgentAdminService';
 import { AiAgentMemoryService } from '../services/AiAgentMemoryService/AiAgentMemoryService';
 import { AiAgentReviewClassifierService } from '../services/AiAgentReviewClassifierService';
@@ -31,12 +39,17 @@ import { AiAgentService } from '../services/AiAgentService/AiAgentService';
 import { type AiDeepResearchService } from '../services/AiDeepResearchService/AiDeepResearchService';
 import type { AiWritebackService } from '../services/AiWritebackService/AiWritebackService';
 import { AppGenerateService } from '../services/AppGenerateService/AppGenerateService';
+import type { DataAppAnalysisService } from '../services/DataAppAnalysisService/DataAppAnalysisService';
 import type { EmbedService } from '../services/EmbedService/EmbedService';
 import type { ExternalSourceService } from '../services/ExternalSourceService/ExternalSourceService';
 import { ManagedAgentService } from '../services/ManagedAgentService/ManagedAgentService';
+import { type MobilePushNotificationService } from '../services/MobilePushNotificationService/MobilePushNotificationService';
 import { type OnboardingAgentService } from '../services/OnboardingAgentService/OnboardingAgentService';
 import { ProjectContextService } from '../services/ProjectContextService/ProjectContextService';
 import type { ProjectHomepageService } from '../services/ProjectHomepageService';
+import { createReviewJiraIssue } from './tasks/createReviewJiraIssue';
+import { createReviewLinearIssue } from './tasks/createReviewLinearIssue';
+import { sendContentReviewNotification } from './tasks/sendContentReviewNotification';
 import { sendReviewNotification } from './tasks/sendReviewNotification';
 
 const MCP_TOOL_CALL_RETENTION_DAYS = 90;
@@ -44,6 +57,7 @@ const AI_THREAD_RETENTION_CLEANUP_BATCH_SIZE = 500;
 export const AI_DEEP_RESEARCH_REPORT_CLEANUP_BATCH_SIZE = 100;
 const AI_AGENT_EVAL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const AI_AGENT_REVIEW_REMEDIATION_RUN_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const DATA_APP_INVESTIGATE_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
 const AI_AGENT_REVIEW_CLASSIFIER_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
 const AI_AGENT_REVIEW_WRITEBACK_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const AI_AGENT_MEMORY_LLM_TIMEOUT_MS = 4 * 60 * 1000; // 4 minutes
@@ -104,6 +118,7 @@ export const cleanAiDeepResearchReports = async ({
 
 type CommercialSchedulerWorkerArguments = SchedulerWorkerArguments & {
     aiAgentService: AiAgentService;
+    dataAppAnalysisService: DataAppAnalysisService;
     aiAgentMemoryService: AiAgentMemoryService;
     aiWritebackService: AiWritebackService;
     aiDeepResearchService: AiDeepResearchService;
@@ -111,7 +126,10 @@ type CommercialSchedulerWorkerArguments = SchedulerWorkerArguments & {
     aiAgentReviewClassifierService: AiAgentReviewClassifierService;
     aiAgentReviewClassifierModel: AiAgentReviewClassifierModel;
     aiAgentReviewNotificationModel: AiAgentReviewNotificationModel;
+    aiOrganizationSettingsModel: AiOrganizationSettingsModel;
     aiAgentReviewNotificationService: AiAgentReviewNotificationService;
+    jiraAppService: JiraAppService;
+    linearAppService: LinearAppService;
     aiAgentAdminService: AiAgentAdminService;
     embedService: EmbedService;
     managedAgentService: ManagedAgentService;
@@ -120,6 +138,7 @@ type CommercialSchedulerWorkerArguments = SchedulerWorkerArguments & {
     projectModel: ProjectModel;
     openIdIdentityModel: OpenIdIdentityModel;
     mcpToolCallModel: McpToolCallModel;
+    scimRequestLogModel: ScimRequestLogModel;
     projectHomepageService: Pick<
         ProjectHomepageService,
         'publishScheduledAnnouncement' | 'sweepDueAnnouncements'
@@ -128,10 +147,21 @@ type CommercialSchedulerWorkerArguments = SchedulerWorkerArguments & {
         ExternalSourceService,
         'runIngest' | 'markIngestError' | 'maintain'
     >;
+    mobilePushNotificationService: Pick<
+        MobilePushNotificationService,
+        | 'deliverLiveActivityStart'
+        | 'reconcileLiveActivity'
+        | 'sweepLiveActivities'
+    >;
+    contentReviewRequestModel: ContentReviewRequestModel;
+    contentReviewSettingsModel: ContentReviewSettingsModel;
+    userModel: UserModel;
 };
 
 export class CommercialSchedulerWorker extends SchedulerWorker {
     protected readonly aiAgentService: AiAgentService;
+
+    protected readonly dataAppAnalysisService: DataAppAnalysisService;
 
     protected readonly aiAgentMemoryService: AiAgentMemoryService;
 
@@ -147,7 +177,13 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
 
     protected readonly aiAgentReviewNotificationModel: AiAgentReviewNotificationModel;
 
+    protected readonly aiOrganizationSettingsModel: AiOrganizationSettingsModel;
+
     protected readonly aiAgentReviewNotificationService: AiAgentReviewNotificationService;
+
+    protected readonly jiraAppService: JiraAppService;
+
+    protected readonly linearAppService: LinearAppService;
 
     protected readonly aiAgentAdminService: AiAgentAdminService;
 
@@ -165,15 +201,26 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
 
     protected readonly mcpToolCallModel: McpToolCallModel;
 
+    protected readonly scimRequestLogModel: ScimRequestLogModel;
+
     protected readonly projectHomepageService: CommercialSchedulerWorkerArguments['projectHomepageService'];
 
     protected readonly externalSourceService: CommercialSchedulerWorkerArguments['externalSourceService'];
+
+    protected readonly mobilePushNotificationService: CommercialSchedulerWorkerArguments['mobilePushNotificationService'];
+
+    protected readonly contentReviewRequestModel: ContentReviewRequestModel;
+
+    protected readonly contentReviewSettingsModel: ContentReviewSettingsModel;
+
+    protected readonly userModel: UserModel;
 
     private readonly cleanupMetrics: PrometheusMetrics | null;
 
     constructor(args: CommercialSchedulerWorkerArguments) {
         super(args);
         this.aiAgentService = args.aiAgentService;
+        this.dataAppAnalysisService = args.dataAppAnalysisService;
         this.aiAgentMemoryService = args.aiAgentMemoryService;
         this.aiWritebackService = args.aiWritebackService;
         this.aiDeepResearchService = args.aiDeepResearchService;
@@ -183,8 +230,11 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
         this.aiAgentReviewClassifierModel = args.aiAgentReviewClassifierModel;
         this.aiAgentReviewNotificationModel =
             args.aiAgentReviewNotificationModel;
+        this.aiOrganizationSettingsModel = args.aiOrganizationSettingsModel;
         this.aiAgentReviewNotificationService =
             args.aiAgentReviewNotificationService;
+        this.jiraAppService = args.jiraAppService;
+        this.linearAppService = args.linearAppService;
         this.aiAgentAdminService = args.aiAgentAdminService;
         this.embedService = args.embedService;
         this.managedAgentService = args.managedAgentService;
@@ -193,14 +243,24 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
         this.projectModel = args.projectModel;
         this.openIdIdentityModel = args.openIdIdentityModel;
         this.mcpToolCallModel = args.mcpToolCallModel;
+        this.scimRequestLogModel = args.scimRequestLogModel;
         this.projectHomepageService = args.projectHomepageService;
         this.externalSourceService = args.externalSourceService;
+        this.mobilePushNotificationService = args.mobilePushNotificationService;
+        this.contentReviewRequestModel = args.contentReviewRequestModel;
+        this.contentReviewSettingsModel = args.contentReviewSettingsModel;
+        this.userModel = args.userModel;
         this.cleanupMetrics = args.prometheusMetrics ?? null;
     }
 
     protected getCronItems() {
         return [
             ...super.getCronItems(),
+            {
+                task: EE_SCHEDULER_TASKS.SWEEP_SLACK_AI_ARTIFACT_IMAGES,
+                pattern: '* * * * *',
+                options: { backfillPeriod: 5 * 60 * 1000, maxAttempts: 1 },
+            },
             {
                 task: EE_SCHEDULER_TASKS.MAINTAIN_EXTERNAL_SOURCES,
                 pattern: '*/5 * * * *',
@@ -236,6 +296,14 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
                 },
             },
             {
+                task: EE_SCHEDULER_TASKS.SWEEP_STALE_AI_EVAL_RUNS,
+                pattern: '*/2 * * * *',
+                options: {
+                    backfillPeriod: 5 * 60 * 1000,
+                    maxAttempts: 1,
+                },
+            },
+            {
                 task: EE_SCHEDULER_TASKS.SWEEP_STALE_AI_DEEP_RESEARCH_RUNS,
                 pattern: '*/2 * * * *',
                 options: {
@@ -248,6 +316,14 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
                 pattern: '0 */3 * * *',
                 options: {
                     backfillPeriod: 6 * 60 * 60 * 1000,
+                    maxAttempts: 1,
+                },
+            },
+            {
+                task: EE_SCHEDULER_TASKS.SWEEP_MOBILE_PUSH_LIVE_ACTIVITIES,
+                pattern: '*/2 * * * *',
+                options: {
+                    backfillPeriod: 5 * 60 * 1000,
                     maxAttempts: 1,
                 },
             },
@@ -280,6 +356,14 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
                 pattern: '17 * * * *',
                 options: {
                     backfillPeriod: 2 * 60 * 60 * 1000,
+                    maxAttempts: 3,
+                },
+            },
+            {
+                task: EE_SCHEDULER_TASKS.CLEAN_SCIM_REQUEST_LOGS,
+                pattern: '10 2 * * *', // 02:10 UTC daily
+                options: {
+                    backfillPeriod: 24 * 3600 * 1000, // 24 hours in ms
                     maxAttempts: 3,
                 },
             },
@@ -329,6 +413,21 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
                     payload.slackPromptUuid,
                 );
             },
+            [EE_SCHEDULER_TASKS.SLACK_AI_ARTIFACT_IMAGES]: async (
+                payload,
+                helpers,
+            ) => {
+                await tryJobOrTimeout(
+                    this.aiAgentService.deliverSlackArtifactImages(
+                        payload.slackPromptUuid,
+                    ),
+                    helpers.job,
+                    60_000,
+                );
+            },
+            [EE_SCHEDULER_TASKS.SWEEP_SLACK_AI_ARTIFACT_IMAGES]: async () => {
+                await this.aiAgentService.sweepSlackArtifactImages();
+            },
             [EE_SCHEDULER_TASKS.CLEAN_MCP_TOOL_CALLS]: async () => {
                 Logger.info('Starting MCP tool call cleanup job');
                 const deleted =
@@ -367,6 +466,27 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
                     );
                 }
             },
+            [EE_SCHEDULER_TASKS.CLEAN_SCIM_REQUEST_LOGS]: async () => {
+                const cleanupConfig =
+                    this.lightdashConfig.scheduler.scimRequestLogs.cleanup;
+                if (!cleanupConfig.enabled) {
+                    Logger.info('SCIM request log cleanup job is disabled');
+                    return;
+                }
+                Logger.info('Starting SCIM request log cleanup job');
+                const cutoffDate = new Date(
+                    Date.now() - cleanupConfig.retentionDays * 24 * 3600 * 1000,
+                );
+                const { totalDeleted, batchCount } =
+                    await this.scimRequestLogModel.cleanupBatch(cutoffDate, {
+                        batchSize: cleanupConfig.batchSize,
+                        delayMs: cleanupConfig.delayMs,
+                        maxBatches: cleanupConfig.maxBatches,
+                    });
+                Logger.info(
+                    `SCIM request log cleanup completed. Records deleted: ${totalDeleted} in ${batchCount} batches`,
+                );
+            },
             [EE_SCHEDULER_TASKS.AI_AGENT_REVIEW_REMEDIATION_PREVIEW]: async (
                 payload,
                 _helpers,
@@ -381,6 +501,48 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
             ) => {
                 await this.aiAgentAdminService.pollReviewRemediationCompile(
                     payload,
+                );
+            },
+            [EE_SCHEDULER_TASKS.DATA_APP_INVESTIGATE]: async (
+                payload,
+                helpers,
+            ) => {
+                // The timeout must stop the agent, not just report it.
+                const abort = new AbortController();
+                await tryJobOrTimeout(
+                    SchedulerClient.processJob(
+                        EE_SCHEDULER_TASKS.DATA_APP_INVESTIGATE,
+                        helpers.job.id,
+                        helpers.job.run_at,
+                        payload,
+                        async () => {
+                            await this.dataAppAnalysisService.runInvestigation(
+                                payload,
+                                helpers.job.id,
+                                helpers.job.run_at,
+                                abort.signal,
+                            );
+                        },
+                    ),
+                    helpers.job,
+                    DATA_APP_INVESTIGATE_TIMEOUT_MS,
+                    async (job, e) => {
+                        abort.abort();
+                        await this.schedulerService.logSchedulerJob({
+                            task: EE_SCHEDULER_TASKS.DATA_APP_INVESTIGATE,
+                            jobId: job.id,
+                            scheduledTime: job.run_at,
+                            status: SchedulerJobStatus.ERROR,
+                            details: {
+                                error: getErrorMessage(e),
+                                projectUuid: payload.projectUuid,
+                                organizationUuid: payload.organizationUuid,
+                                createdByUserUuid: payload.userUuid,
+                                analysisId: payload.analysisId,
+                                anomalyId: payload.anomalyId,
+                            },
+                        });
+                    },
                 );
             },
             [EE_SCHEDULER_TASKS.AI_AGENT_REVIEW_REMEDIATION_RUN]: async (
@@ -577,6 +739,18 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
                     return;
                 }
 
+                // Re-arm before running so a worker crash mid-run cannot drop
+                // the schedule; the locked job is left alone by the same key.
+                if (triggeredBy === 'cron') {
+                    const schedule =
+                        getManagedAgentScheduleCron(settings.schedule) ??
+                        this.lightdashConfig.managedAgent.schedule;
+                    await this.schedulerClient.scheduleManagedAgentHeartbeat(
+                        schedule,
+                        projectUuid,
+                    );
+                }
+
                 const aiAutopilotEnabled =
                     await this.managedAgentService.isAiAutopilotEnabledForProject(
                         settings,
@@ -592,10 +766,21 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
                     `Running managed agent heartbeat for project ${projectUuid} (${triggeredBy})`,
                 );
 
-                const { runUuid } = await this.managedAgentService.startRun(
-                    projectUuid,
-                    triggeredBy,
-                );
+                let runUuid: string;
+                try {
+                    ({ runUuid } = await this.managedAgentService.startRun(
+                        projectUuid,
+                        triggeredBy,
+                    ));
+                } catch (error) {
+                    if (error instanceof ConflictError) {
+                        Logger.info(
+                            `Managed agent heartbeat already running for project ${projectUuid}, skipping (${triggeredBy})`,
+                        );
+                        return;
+                    }
+                    throw error;
+                }
 
                 try {
                     await this.managedAgentService.runHeartbeat(
@@ -610,16 +795,6 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
                         `Error during heartbeat for project ${projectUuid}:`,
                         error,
                     );
-                } finally {
-                    if (triggeredBy === 'cron') {
-                        const schedule =
-                            getManagedAgentScheduleCron(settings.schedule) ??
-                            this.lightdashConfig.managedAgent.schedule;
-                        await this.schedulerClient.scheduleManagedAgentHeartbeat(
-                            schedule,
-                            projectUuid,
-                        );
-                    }
                 }
             },
             [EE_SCHEDULER_TASKS.APP_GENERATE_PIPELINE]: async (
@@ -637,10 +812,18 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
                         helpers.job.run_at,
                         payload,
                         async () => {
-                            await this.appGenerateService.runPipeline(
-                                payload,
-                                schedulerWaitMs,
-                            );
+                            try {
+                                await this.appGenerateService.runPipeline(
+                                    payload,
+                                    schedulerWaitMs,
+                                );
+                            } finally {
+                                // Pipeline exited (ready, error or cancelled):
+                                // record the outcome on the starting tool call.
+                                await this.aiAgentService.recordDataAppBuildOutcome(
+                                    payload,
+                                );
+                            }
                         },
                     ),
                     helpers.job,
@@ -657,6 +840,9 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
                                 payload,
                                 e,
                                 schedulerWaitMs,
+                            );
+                            await this.aiAgentService.recordDataAppBuildOutcome(
+                                payload,
                             );
                         }
                     },
@@ -808,6 +994,42 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
             [EE_SCHEDULER_TASKS.SWEEP_DUE_ANNOUNCEMENTS]: async () => {
                 await this.projectHomepageService.sweepDueAnnouncements();
             },
+            [EE_SCHEDULER_TASKS.MOBILE_PUSH_LIVE_ACTIVITY]: async (
+                payload,
+                helpers,
+            ) => {
+                await SchedulerClient.processJob(
+                    EE_SCHEDULER_TASKS.MOBILE_PUSH_LIVE_ACTIVITY,
+                    helpers.job.id,
+                    helpers.job.run_at,
+                    payload,
+                    async () => {
+                        await this.mobilePushNotificationService.reconcileLiveActivity(
+                            payload.liveActivityUuid,
+                        );
+                    },
+                );
+            },
+            [EE_SCHEDULER_TASKS.MOBILE_PUSH_LIVE_ACTIVITY_START]: async (
+                payload,
+                helpers,
+            ) => {
+                await SchedulerClient.processJob(
+                    EE_SCHEDULER_TASKS.MOBILE_PUSH_LIVE_ACTIVITY_START,
+                    helpers.job.id,
+                    helpers.job.run_at,
+                    payload,
+                    async () => {
+                        await this.mobilePushNotificationService.deliverLiveActivityStart(
+                            payload.liveActivityStartAttemptUuid,
+                        );
+                    },
+                );
+            },
+            [EE_SCHEDULER_TASKS.SWEEP_MOBILE_PUSH_LIVE_ACTIVITIES]:
+                async () => {
+                    await this.mobilePushNotificationService.sweepLiveActivities();
+                },
             [EE_SCHEDULER_TASKS.SWEEP_STALE_AI_WRITEBACK_RUNS]: async () => {
                 const swept = await this.aiWritebackService.sweepStaleRuns();
                 // A chat run's card reflects the tool-result row, not the run
@@ -838,6 +1060,9 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
                 async () => {
                     await this.aiDeepResearchService.sweepStaleRuns();
                 },
+            [EE_SCHEDULER_TASKS.SWEEP_STALE_AI_EVAL_RUNS]: async () => {
+                await this.aiAgentService.sweepStaleEvalRuns();
+            },
             [EE_SCHEDULER_TASKS.SWEEP_AI_AGENT_MEMORY_THREADS]: async (
                 payload,
                 helpers,
@@ -951,6 +1176,49 @@ export class CommercialSchedulerWorker extends SchedulerWorker {
                     projectModel: this.projectModel,
                     openIdIdentityModel: this.openIdIdentityModel,
                     slackClient: this.slackClient,
+                    analytics: this.analytics,
+                })(payload);
+            },
+            [EE_SCHEDULER_TASKS.SEND_CONTENT_REVIEW_NOTIFICATION]: async (
+                payload,
+            ) => {
+                await sendContentReviewNotification({
+                    siteUrl: this.lightdashConfig.siteUrl,
+                    contentReviewRequestModel: this.contentReviewRequestModel,
+                    contentReviewSettingsModel: this.contentReviewSettingsModel,
+                    projectModel: this.projectModel,
+                    userModel: this.userModel,
+                    openIdIdentityModel: this.openIdIdentityModel,
+                    emailClient: this.emailClient,
+                    slackClient: this.slackClient,
+                    analytics: this.analytics,
+                })(payload);
+            },
+            [EE_SCHEDULER_TASKS.CREATE_REVIEW_LINEAR_ISSUE]: async (
+                payload,
+            ) => {
+                await createReviewLinearIssue({
+                    siteUrl: this.lightdashConfig.siteUrl, // pragma: allowlist secret
+                    model: this.aiAgentReviewNotificationModel,
+                    aiOrganizationSettingsModel:
+                        this.aiOrganizationSettingsModel,
+                    aiAgentReviewClassifierModel:
+                        this.aiAgentReviewClassifierModel,
+                    projectModel: this.projectModel,
+                    linearAppService: this.linearAppService,
+                    analytics: this.analytics,
+                })(payload);
+            },
+            [EE_SCHEDULER_TASKS.CREATE_REVIEW_JIRA_ISSUE]: async (payload) => {
+                await createReviewJiraIssue({
+                    siteUrl: this.lightdashConfig.siteUrl, // pragma: allowlist secret
+                    model: this.aiAgentReviewNotificationModel,
+                    aiOrganizationSettingsModel:
+                        this.aiOrganizationSettingsModel,
+                    aiAgentReviewClassifierModel:
+                        this.aiAgentReviewClassifierModel,
+                    projectModel: this.projectModel,
+                    jiraAppService: this.jiraAppService,
                     analytics: this.analytics,
                 })(payload);
             },

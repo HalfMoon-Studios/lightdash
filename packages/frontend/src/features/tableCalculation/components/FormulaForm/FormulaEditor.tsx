@@ -15,7 +15,7 @@ import { useEditor, type Editor } from '@tiptap/react';
 import type { JSONContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { useEffect, useMemo, useRef, useState, type FC } from 'react';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import ResizableSplitter from '../../../../components/common/ResizableSplitter';
 import {
     generateFieldSuggestion,
     sortFieldSuggestions,
@@ -299,6 +299,9 @@ export const FormulaEditor: FC<Props> = ({
                 blockquote: false,
                 codeBlock: false,
                 horizontalRule: false,
+                link: false,
+                underline: false,
+                trailingNode: false,
             }),
             MentionWithLabel.configure({
                 suggestion: {
@@ -346,7 +349,8 @@ export const FormulaEditor: FC<Props> = ({
     }, [editor, editorRef]);
 
     useEffect(() => {
-        if (!editor || initialContent === undefined) return;
+        if (!editor || editor.isDestroyed || initialContent === undefined)
+            return;
         if (editor.getText() === initialContent) return;
         editor.commands.setContent(
             buildInitialContent(initialContent, fieldSuggestions),
@@ -355,7 +359,7 @@ export const FormulaEditor: FC<Props> = ({
     }, [editor, initialContent, fieldSuggestions]);
 
     useEffect(() => {
-        if (editor && fieldSuggestions.length > 0) {
+        if (editor && !editor.isDestroyed && fieldSuggestions.length > 0) {
             editor.extensionManager.extensions.forEach((ext) => {
                 if (ext.name === 'mention') {
                     ext.options.suggestion =
@@ -439,16 +443,18 @@ export const FormulaEditor: FC<Props> = ({
 
     return (
         <Box className={styles.container}>
-            <PanelGroup
-                direction="vertical"
+            <ResizableSplitter
+                handleLabel="Resize formula reference"
+                classNames={{ handle: styles.resizeHandle }}
+                orientation="vertical"
                 className={styles.panelGroup}
-                autoSaveId="formula-editor-split"
+                lineSize={4}
+                storageKey="formula-editor-split"
             >
-                <Panel
+                <ResizableSplitter.Pane
                     id="formula-editor"
-                    order={1}
                     defaultSize={referenceOpened ? 55 : 100}
-                    minSize={20}
+                    min={20}
                 >
                     <RichTextEditor
                         editor={editor}
@@ -466,28 +472,21 @@ export const FormulaEditor: FC<Props> = ({
                             />
                         </Box>
                     </RichTextEditor>
-                </Panel>
+                </ResizableSplitter.Pane>
                 {referenceOpened && (
-                    <>
-                        <PanelResizeHandle
-                            className={styles.resizeHandle}
-                            aria-label="Resize formula reference"
+                    <ResizableSplitter.Pane
+                        id="formula-reference"
+                        defaultSize={45}
+                        min={20}
+                    >
+                        <FormulaReferencePanel
+                            opened={referenceOpened}
+                            onToggle={onReferenceToggle}
+                            onInsert={insertFunction}
                         />
-                        <Panel
-                            id="formula-reference"
-                            order={2}
-                            defaultSize={45}
-                            minSize={20}
-                        >
-                            <FormulaReferencePanel
-                                opened={referenceOpened}
-                                onToggle={onReferenceToggle}
-                                onInsert={insertFunction}
-                            />
-                        </Panel>
-                    </>
+                    </ResizableSplitter.Pane>
                 )}
-            </PanelGroup>
+            </ResizableSplitter>
             <FormulaReferenceBar
                 opened={referenceOpened}
                 onToggle={onReferenceToggle}

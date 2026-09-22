@@ -5,6 +5,9 @@ import { type SdkUpgradeOffer } from '../../../features/apps/hooks/useSdkUpgrade
 import { type ChartTypeAppMeta } from '../../../features/chartTypes/builder/appMeta';
 import ChartTypeBuilderWorkspace from '../../../features/chartTypes/builder/ChartTypeBuilderWorkspace';
 import { type ChartTypeBuilderWorkspaceState } from '../../../features/chartTypes/builder/useChartTypeBuilderWorkspace';
+import { type VizBuildRequest } from '../../../features/chartTypes/hooks/useDataAppVizBuild';
+import { ChartGalleryContext } from '../../common/ChartGallery/ChartGalleryContext';
+import { ConfigTabs as DataAppVizConfigTabs } from '../../VisualizationConfigs/DataAppVizConfig/DataAppVizConfigTabs';
 import { deriveAuthoringStatus } from './authoringStatus';
 import ExplorerChartTypeAuthoringHeader from './ExplorerChartTypeAuthoringHeader';
 import classes from './ExplorerChartTypeAuthoringView.module.css';
@@ -15,6 +18,8 @@ type Props = {
     upgrade: (SdkUpgradeOffer & { disabled: boolean }) | null;
     workspace: ChartTypeBuilderWorkspaceState;
     previewContext: DataAppVizContext | null;
+    sampleRows: Record<string, string>[];
+    buildContext?: VizBuildRequest['context'];
     /** The host's results-staleness warning; renders nothing while clean. */
     warning: ReactNode;
     onDetailsSaved: () => void;
@@ -28,11 +33,24 @@ const ExplorerChartTypeAuthoringView: FC<Props> = ({
     upgrade,
     workspace,
     previewContext,
+    sampleRows,
+    buildContext,
     warning,
     onDetailsSaved,
     onDone,
 }) => {
     const titleId = useId();
+    const schema = workspace.dataAppViz?.schema;
+    // A schema is useful once it has something the chart can configure. The
+    // first build can claim an app before its preview/schema is ready, so do
+    // not reserve an empty rail while the workspace is still the only task.
+    const hasGeneratedConfig =
+        workspace.previewVersion !== null &&
+        schema !== null &&
+        schema !== undefined &&
+        (schema.fields.length > 0 ||
+            schema.configOptions.length > 0 ||
+            schema.colorPalette != null);
     return (
         <Box
             component="section"
@@ -58,8 +76,23 @@ const ExplorerChartTypeAuthoringView: FC<Props> = ({
                 projectUuid={projectUuid}
                 workspace={workspace}
                 previewContext={previewContext}
+                sampleRows={sampleRows}
+                currentBuildContext={buildContext}
                 syncPreviewUrlState={false}
                 configurePanel={null}
+                configurationSidebar={
+                    hasGeneratedConfig ? (
+                        <Box
+                            component="aside"
+                            className={classes.configColumn}
+                            aria-label="Chart type configuration"
+                        >
+                            <ChartGalleryContext.Provider value={true}>
+                                <DataAppVizConfigTabs />
+                            </ChartGalleryContext.Provider>
+                        </Box>
+                    ) : null
+                }
             />
         </Box>
     );

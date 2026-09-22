@@ -1,11 +1,12 @@
 import {
     getResourceViewItemName,
     isResourceViewItemChart,
+    isResourceViewDocumentItem,
     isResourceViewItemDashboard,
     isResourceViewSpaceItem,
     type ResourceViewItem,
 } from '@lightdash/common';
-import { Anchor, Box, Group, Stack, Table, Text, Tooltip } from '@mantine/core';
+import { Anchor, Box, Group, Stack, Table, Text } from '@mantine/core';
 import {
     IconAlertTriangle,
     IconChevronDown,
@@ -19,10 +20,12 @@ import { useSpaceSummaries } from '../../../../hooks/useSpaces';
 import { useValidationUserAbility } from '../../../../hooks/validation/useValidation';
 import { ResourceIcon, ResourceIndicator } from '../../ResourceIcon';
 import { ResourceInfoPopup } from '../../ResourceInfoPopup/ResourceInfoPopup';
+import ViewsCountPopover from '../../ViewsCountPopover';
 import {
     getResourceTypeName,
     getResourceUrl,
     getResourceViewsSinceWhenDescription,
+    getViewStatsResourceType,
 } from '../resourceUtils';
 import {
     ResourceSortDirection,
@@ -231,24 +234,27 @@ const ResourceViewList: FC<ResourceViewListProps> = ({
                                                 </Box>
                                             )}
                                     </Group>
+                                    {isResourceViewDocumentItem(item) && (
+                                        <Text fz="xs" c="dimmed">
+                                            Document
+                                        </Text>
+                                    )}
                                     {canBelongToSpace && (
-                                        <Text fz="xs" c="ldGray.6">
+                                        <Text fz="xs" c="dimmed">
                                             {getResourceTypeName(item)} •{' '}
-                                            <Tooltip
-                                                position="top-start"
-                                                disabled={
-                                                    !item.data.views ||
-                                                    !item.data.firstViewedAt
-                                                }
-                                                label={getResourceViewsSinceWhenDescription(
+                                            <ViewsCountPopover
+                                                resourceType={getViewStatsResourceType(
+                                                    item,
+                                                )}
+                                                resourceUuid={item.data.uuid}
+                                                projectUuid={projectUuid}
+                                                views={item.data.views}
+                                                fallbackTooltip={getResourceViewsSinceWhenDescription(
                                                     item,
                                                 )}
                                             >
-                                                <span>
-                                                    {item.data.views || '0'}{' '}
-                                                    views
-                                                </span>
-                                            </Tooltip>
+                                                {item.data.views || '0'} views
+                                            </ViewsCountPopover>
                                         </Text>
                                     )}
                                 </Stack>

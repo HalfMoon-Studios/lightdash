@@ -17,7 +17,6 @@ import {
 } from '@lightdash/common';
 import { type Knex } from 'knex';
 import { usersInProjectSql } from '../../models/AnalyticsModelSql';
-import type { EncryptionUtil } from '../../utils/EncryptionUtil/EncryptionUtil';
 import {
     ManagedAgentActionsTableName,
     ManagedAgentProtectionsTableName,
@@ -44,17 +43,8 @@ import {
 export class ManagedAgentModel {
     private readonly database: Knex;
 
-    private readonly encryptionUtil: EncryptionUtil;
-
-    constructor({
-        database,
-        encryptionUtil,
-    }: {
-        database: Knex;
-        encryptionUtil: EncryptionUtil;
-    }) {
+    constructor({ database }: { database: Knex }) {
         this.database = database;
-        this.encryptionUtil = encryptionUtil;
     }
 
     // --- Settings ---
@@ -114,86 +104,6 @@ export class ManagedAgentModel {
                 );
             }
         });
-    }
-
-    async getServiceAccountToken(projectUuid: string): Promise<string | null> {
-        const row = await this.database(ManagedAgentSettingsTableName)
-            .where({ project_uuid: projectUuid })
-            .select('service_account_token')
-            .first();
-        if (!row?.service_account_token) {
-            return null;
-        }
-        return this.encryptionUtil.decrypt(row.service_account_token);
-    }
-
-    async setServiceAccountToken(
-        projectUuid: string,
-        token: string,
-    ): Promise<void> {
-        const encrypted = this.encryptionUtil.encrypt(token);
-        await this.database(ManagedAgentSettingsTableName)
-            .where({ project_uuid: projectUuid })
-            .update({ service_account_token: encrypted });
-    }
-
-    async getAnthropicResourceIds(projectUuid: string): Promise<{
-        agentId: string | null;
-        agentConfigHash: string | null;
-        agentVersion: number | null;
-        environmentId: string | null;
-        vaultId: string | null;
-        vaultConfigHash: string | null;
-    }> {
-        const row = await this.database(ManagedAgentSettingsTableName)
-            .where({ project_uuid: projectUuid })
-            .select(
-                'anthropic_agent_id',
-                'anthropic_agent_config_hash',
-                'anthropic_agent_version',
-                'anthropic_environment_id',
-                'anthropic_vault_id',
-                'anthropic_vault_config_hash',
-            )
-            .first();
-        return {
-            agentId: row?.anthropic_agent_id ?? null,
-            agentConfigHash: row?.anthropic_agent_config_hash ?? null,
-            agentVersion: row?.anthropic_agent_version ?? null,
-            environmentId: row?.anthropic_environment_id ?? null,
-            vaultId: row?.anthropic_vault_id ?? null,
-            vaultConfigHash: row?.anthropic_vault_config_hash ?? null,
-        };
-    }
-
-    async setAnthropicAgentState(
-        projectUuid: string,
-        agentId: string,
-        agentConfigHash: string,
-        agentVersion: number,
-    ): Promise<void> {
-        await this.database(ManagedAgentSettingsTableName)
-            .where({ project_uuid: projectUuid })
-            .update({
-                anthropic_agent_id: agentId,
-                anthropic_agent_config_hash: agentConfigHash,
-                anthropic_agent_version: agentVersion,
-            });
-    }
-
-    async setAnthropicResourceIds(
-        projectUuid: string,
-        environmentId: string,
-        vaultId: string,
-        vaultConfigHash: string,
-    ): Promise<void> {
-        await this.database(ManagedAgentSettingsTableName)
-            .where({ project_uuid: projectUuid })
-            .update({
-                anthropic_environment_id: environmentId,
-                anthropic_vault_id: vaultId,
-                anthropic_vault_config_hash: vaultConfigHash,
-            });
     }
 
     async getSettings(
@@ -402,6 +312,7 @@ export class ManagedAgentModel {
             actionUuid: row.action_uuid,
             projectUuid: row.project_uuid,
             sessionId: row.session_id,
+            managedAgentRunUuid: row.managed_agent_run_uuid ?? null,
             actionType: row.action_type as ManagedAgentAction['actionType'],
             targetType: row.target_type as ManagedAgentAction['targetType'],
             targetUuid: row.target_uuid,
@@ -620,6 +531,42 @@ export class ManagedAgentModel {
         return row !== undefined;
     }
 
+    async isOnlyChartOnDashboard(
+        projectUuid: string,
+        chartUuid: string,
+    ): Promise<boolean> {
+        const result = await this.database.raw(
+            `SELECT EXISTS (
+                SELECT 1
+                FROM dashboards d
+                JOIN spaces s ON s.space_id = d.space_id
+                JOIN projects p ON p.project_id = s.project_id
+                JOIN dashboard_tile_charts target ON target.dashboard_version_id = (
+                    SELECT MAX(dv.dashboard_version_id)
+                    FROM dashboard_versions dv WHERE dv.dashboard_id = d.dashboard_id
+                )
+                JOIN saved_queries target_chart ON target_chart.saved_query_id = target.saved_chart_id
+                WHERE p.project_uuid = ? AND d.deleted_at IS NULL
+                    AND target_chart.saved_query_uuid = ?
+                    AND NOT EXISTS (
+                        SELECT 1 FROM dashboard_tile_charts other
+                        JOIN saved_queries other_chart ON other_chart.saved_query_id = other.saved_chart_id
+                        WHERE other.dashboard_version_id = target.dashboard_version_id
+                            AND other.saved_chart_id <> target.saved_chart_id
+                            AND other_chart.deleted_at IS NULL
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM dashboard_tile_sql_charts sql_tile
+                        JOIN saved_sql sql_chart ON sql_chart.saved_sql_uuid = sql_tile.saved_sql_uuid
+                        WHERE sql_tile.dashboard_version_id = target.dashboard_version_id
+                            AND sql_chart.deleted_at IS NULL
+                    )
+            ) AS only_chart`,
+            [projectUuid, chartUuid],
+        );
+        return result.rows[0].only_chart;
+    }
+
     async getChartSpaceUuid(chartUuid: string): Promise<string | null> {
         const row = await this.database('saved_queries as sq')
             .leftJoin('spaces as s', 's.space_id', 'sq.space_id')
@@ -697,7 +644,7 @@ export class ManagedAgentModel {
     > {
         const membership = await this.database.raw<{
             rows: Array<{ user_uuid: string; role: string }>;
-        }>(usersInProjectSql(projectUuid, organizationUuid));
+        }>(usersInProjectSql(), { projectUuid, organizationUuid });
         const memberUuids = membership.rows.map((row) => row.user_uuid);
         if (memberUuids.length === 0) return [];
 
@@ -1067,6 +1014,9 @@ export class ManagedAgentModel {
     // locked forever.
     private static readonly STALE_RUN_THRESHOLD_MS = 15 * 60 * 1000;
 
+    private static readonly STALE_RUN_ERROR =
+        'Run timed out. The worker may have crashed';
+
     // Backfilled historical runs (see 20260507114958_backfill_managed_agent_runs.ts)
     // tag `error` with this sentinel so the down migration can distinguish them
     // from future legitimate runs that happen to share the same fingerprint.
@@ -1100,6 +1050,8 @@ export class ManagedAgentModel {
             triggeredBy: row.triggered_by as ManagedAgentRunTriggeredBy,
             status: isStale ? ManagedAgentRunStatus.ERROR : rawStatus,
             sessionId: row.session_id,
+            modelProvider: row.model_provider,
+            modelName: row.model_name,
             startedAt: row.started_at,
             finishedAt:
                 isStale && !row.finished_at
@@ -1111,24 +1063,65 @@ export class ManagedAgentModel {
                 {},
             summary: row.summary,
             error: isStale
-                ? (cleanError ?? 'Run timed out. The worker may have crashed')
+                ? (cleanError ?? ManagedAgentModel.STALE_RUN_ERROR)
                 : cleanError,
             currentActivity: row.current_activity,
         };
     }
 
-    async createRun(input: {
+    // One live run per project: the advisory lock serialises concurrent starts
+    // and runs older than the stale threshold are closed first, so a crashed
+    // worker never blocks the next heartbeat. Returns null while a run is live.
+    async createRunIfIdle(input: {
         projectUuid: string;
         triggeredBy: ManagedAgentRunTriggeredBy;
-    }): Promise<ManagedAgentRun> {
-        const [row] = await this.database(ManagedAgentRunsTableName)
-            .insert({
-                project_uuid: input.projectUuid,
-                triggered_by: input.triggeredBy,
-                status: ManagedAgentRunStatus.STARTED,
-            })
-            .returning('*');
-        return ManagedAgentModel.mapDbRun(row);
+    }): Promise<ManagedAgentRun | null> {
+        return this.database.transaction(async (trx) => {
+            await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [
+                `managed-agent-run:${input.projectUuid}`,
+            ]);
+            await trx.raw(
+                `UPDATE ${ManagedAgentRunsTableName}
+                 SET status = ?,
+                     finished_at = started_at + interval '1 millisecond' * ?,
+                     error = COALESCE(error, ?)
+                 WHERE project_uuid = ? AND status = ? AND started_at < ?`,
+                [
+                    ManagedAgentRunStatus.ERROR,
+                    ManagedAgentModel.STALE_RUN_THRESHOLD_MS,
+                    ManagedAgentModel.STALE_RUN_ERROR,
+                    input.projectUuid,
+                    ManagedAgentRunStatus.STARTED,
+                    new Date(
+                        Date.now() - ManagedAgentModel.STALE_RUN_THRESHOLD_MS,
+                    ),
+                ],
+            );
+            const live = await trx(ManagedAgentRunsTableName)
+                .where({
+                    project_uuid: input.projectUuid,
+                    status: ManagedAgentRunStatus.STARTED,
+                })
+                .first('managed_agent_run_uuid');
+            if (live) return null;
+            const [row] = await trx(ManagedAgentRunsTableName)
+                .insert({
+                    project_uuid: input.projectUuid,
+                    triggered_by: input.triggeredBy,
+                    status: ManagedAgentRunStatus.STARTED,
+                })
+                .returning('*');
+            return ManagedAgentModel.mapDbRun(row);
+        });
+    }
+
+    async setRunModel(
+        runUuid: string,
+        model: { provider: string | null; name: string | null },
+    ): Promise<void> {
+        await this.database(ManagedAgentRunsTableName)
+            .where({ managed_agent_run_uuid: runUuid })
+            .update({ model_provider: model.provider, model_name: model.name });
     }
 
     async setRunSessionId(runUuid: string, sessionId: string): Promise<void> {
@@ -1177,7 +1170,7 @@ export class ManagedAgentModel {
         return result ? Number(result.count) : 0;
     }
 
-    // Bulk deletions (metadata.bulk = true) have their own per-call cap, so
+    // Bulk deletions (metadata.bulk = true) have their own per-run cap, so
     // they are excluded from the individual soft-delete run cap
     async countNonBulkSoftDeletesForRun(runUuid: string): Promise<number> {
         const [row] = await this.database(ManagedAgentActionsTableName)
@@ -1186,6 +1179,17 @@ export class ManagedAgentModel {
                 action_type: ManagedAgentActionType.SOFT_DELETED,
             })
             .whereRaw(`COALESCE(metadata->>'bulk', '') <> 'true'`)
+            .count<{ count: string }[]>('* as count');
+        return Number(row?.count ?? 0);
+    }
+
+    async countBulkSoftDeletesForRun(runUuid: string): Promise<number> {
+        const [row] = await this.database(ManagedAgentActionsTableName)
+            .where({
+                managed_agent_run_uuid: runUuid,
+                action_type: ManagedAgentActionType.SOFT_DELETED,
+            })
+            .whereRaw(`metadata->>'bulk' = 'true'`)
             .count<{ count: string }[]>('* as count');
         return Number(row?.count ?? 0);
     }
@@ -1212,10 +1216,30 @@ export class ManagedAgentModel {
         return row ? ManagedAgentModel.mapDbRun(row) : null;
     }
 
+    // Per-run action counts keyed by action type, for every run read that
+    // feeds the activity page.
+    private actionCountsByTypeColumn() {
+        return this.database.raw(
+            `(SELECT json_object_agg(action_type, cnt) FROM (
+                SELECT action_type, COUNT(*) AS cnt
+                FROM ${ManagedAgentActionsTableName}
+                WHERE managed_agent_run_uuid = ${ManagedAgentRunsTableName}.managed_agent_run_uuid
+                GROUP BY action_type
+            ) sub) AS action_counts_by_type`,
+        );
+    }
+
     async getLatestRun(projectUuid: string): Promise<ManagedAgentRun | null> {
         const row = await this.database(ManagedAgentRunsTableName)
             .where({ project_uuid: projectUuid })
-            .orderBy('started_at', 'desc')
+            .orderBy([
+                { column: 'started_at', order: 'desc' },
+                { column: 'managed_agent_run_uuid', order: 'desc' },
+            ])
+            .select(
+                `${ManagedAgentRunsTableName}.*`,
+                this.actionCountsByTypeColumn(),
+            )
             .first();
         return row ? ManagedAgentModel.mapDbRun(row) : null;
     }
@@ -1239,14 +1263,7 @@ export class ManagedAgentModel {
             .limit(opts.limit + 1)
             .select(
                 `${ManagedAgentRunsTableName}.*`,
-                this.database.raw(
-                    `(SELECT json_object_agg(action_type, cnt) FROM (
-                        SELECT action_type, COUNT(*) AS cnt
-                        FROM ${ManagedAgentActionsTableName}
-                        WHERE managed_agent_run_uuid = ${ManagedAgentRunsTableName}.managed_agent_run_uuid
-                        GROUP BY action_type
-                    ) sub) AS action_counts_by_type`,
-                ),
+                this.actionCountsByTypeColumn(),
             );
         if (opts.cursor) {
             query = query.whereRaw(

@@ -20,6 +20,7 @@ import {
     type EchartsGrid,
     type EchartsLegend,
     type ItemsMap,
+    type MergeFieldOrigins,
     type MarkLineData,
     type MetricQuery,
     type PivotReference,
@@ -36,6 +37,7 @@ import {
     getMarkLineAxis,
     type ReferenceLineField,
 } from '../../components/common/ReferenceLine';
+import { getMergeDefaultYAxisIndexByField } from '../../features/mergeQuery/utils/getMergeDefaultYAxisIndex';
 import type { InfiniteQueryResults } from '../useQueryResults';
 import {
     getExpectedSeriesMap,
@@ -60,6 +62,7 @@ type Args = {
               metricQuery?: MetricQuery;
               fields?: ItemsMap;
               resolvedTimezone?: string;
+              fieldOrigins?: MergeFieldOrigins;
           })
         | undefined;
     columnOrder: string[];
@@ -68,6 +71,9 @@ type Args = {
     cartesianType: CartesianTypeOptions | undefined;
     colorPalette: string[];
     tableCalculationsMetadata?: TableCalculationMetadata[];
+    /** The not-yet-run metric query; its fields count as valid layout
+     *  references so a just-added field survives until results land. */
+    unsavedMetricQuery?: MetricQuery;
 };
 
 const getReferenceLineKey = ({ fieldId, fieldRef, data }: ReferenceLineField) =>
@@ -322,6 +328,7 @@ const useCartesianChartConfig = ({
     stacking,
     cartesianType,
     tableCalculationsMetadata,
+    unsavedMetricQuery,
 }: Args) => {
     const [columnLimit, setColumnLimit] = useState<number | undefined>(
         initialChartConfig?.columnLimit,
@@ -974,6 +981,22 @@ const useCartesianChartConfig = ({
             ];
         }, [resultsData, sortedDimensions]);
 
+    // `availableFields` only knows the last run; a field just added from a
+    // config picker must not be stripped before its results land.
+    const pendingFieldIds = useMemo(
+        () =>
+            unsavedMetricQuery
+                ? new Set([
+                      ...unsavedMetricQuery.dimensions,
+                      ...unsavedMetricQuery.metrics,
+                      ...unsavedMetricQuery.tableCalculations.map(
+                          ({ name }) => name,
+                      ),
+                  ])
+                : undefined,
+        [unsavedMetricQuery],
+    );
+
     /**
      * Is valid when the field is a table calculation in the metadata with the current name
      */
@@ -1049,18 +1072,17 @@ const useCartesianChartConfig = ({
                 const xField = getXField(prev?.xField);
                 const yFields = getYFields(prev?.yField);
 
+                const isValidFieldReference = (fieldId: string) =>
+                    availableFields.includes(fieldId) ||
+                    isFieldValidTableCalculation(fieldId) ||
+                    pendingFieldIds?.has(fieldId) === true;
+
                 const isCurrentXFieldValid: boolean =
                     xField === EMPTY_X_AXIS ||
-                    (!!xField &&
-                        (availableFields.includes(xField) ||
-                            isFieldValidTableCalculation(xField)));
+                    (!!xField && isValidFieldReference(xField));
 
                 const currentValidYFields = yFields
-                    ? yFields.filter(
-                          (y) =>
-                              availableFields.includes(y) ||
-                              isFieldValidTableCalculation(y),
-                      )
+                    ? yFields.filter(isValidFieldReference)
                     : [];
 
                 const isCurrentYFieldsValid: boolean =
@@ -1196,6 +1218,7 @@ const useCartesianChartConfig = ({
         getXField,
         getYFields,
         isFieldValidTableCalculation,
+        pendingFieldIds,
         itemsMap,
     ]);
 
@@ -1291,6 +1314,12 @@ const useCartesianChartConfig = ({
                     defaultStackLabel,
                     itemsMap,
                     columnLimit,
+                    existingSeries: prev?.series,
+                    defaultYAxisIndexByField: getMergeDefaultYAxisIndexByField({
+                        yFields: dirtyLayout.yField,
+                        itemsMap,
+                        fieldOrigins: resultsData.fieldOrigins,
+                    }),
                 });
                 const sortedByPivot = isPivotSeriesOrderDeterminedByQuery(
                     pivotKeys,

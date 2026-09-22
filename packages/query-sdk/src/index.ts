@@ -22,14 +22,18 @@ export { createPostMessageTransport } from './postMessageTransport';
 export {
     SDK_FEATURES,
     SDK_FEATURE_KEYS,
+    SDK_FEATURE_TARGETS,
     SDK_MANIFEST_MESSAGE_TYPE,
     type SdkFeature,
+    type SdkFeatureTarget,
     type SdkManifestMessage,
 } from './features';
 
 // Types
 export type {
     AdditionalMetric,
+    AiPromptRequest,
+    AiPromptResult,
     Column,
     ColumnType,
     CustomDimension,
@@ -99,6 +103,9 @@ export {
     useVizContext,
     getFormatted,
     getRaw,
+    getFieldLabel,
+    resolveSeriesColor,
+    resolveValueColor,
 } from './vizContext';
 export type {
     VizContext,
@@ -106,6 +113,8 @@ export type {
     VizContextOptionValue,
     VizContextPivotDetails,
     VizContextRow,
+    VizFieldFormat,
+    VizFieldMetadata,
     VizUnderlyingData,
     VizDrillDown,
     DataAppVizContextMessage,
@@ -127,3 +136,19 @@ export { isDeliveryRender, useDeliveryRender } from './deliveryRender';
 // Shareable URL state (seeded from and written back to the host page URL)
 export { useUrlState } from './urlState';
 export type { SdkUrlStateChangeMessage, UrlStateMap } from './urlState';
+
+// Free-form AI prompts over loaded results (data apps)
+export { useAiPrompt } from './aiPrompt';
+export type { AiPrompt, AiPromptOptions, AiPromptSource } from './aiPrompt';
+
+// AI analysis pushed by the host (data apps)
+export { useInsights } from './insights';
+export type {
+    Insight,
+    InsightInvestigation,
+    InsightSeverity,
+    InsightsPayload,
+    InsightsStatus,
+    QueryInsights,
+    ViewInsights,
+} from './insights';

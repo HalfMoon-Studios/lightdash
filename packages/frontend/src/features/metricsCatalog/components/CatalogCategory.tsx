@@ -1,8 +1,9 @@
-import type { CatalogItem } from '@lightdash/common';
+import { interpolateUiString, type CatalogItem } from '@lightdash/common';
 import { Group, ActionIcon, Badge, Tooltip } from '@mantine/core';
 import { IconCode, IconX } from '@tabler/icons-react';
 import type { CSSProperties, FC } from 'react';
 import MantineIcon from '../../../components/common/MantineIcon';
+import { useUiStrings } from '../../../ee/providers/Embed/useUiStrings';
 import { useCategoryColors } from '../styles/useCategoryColors';
 import styles from './CatalogCategory.module.css';
 
@@ -23,6 +24,7 @@ export const CatalogCategory: FC<Props> = ({
     showYamlIcon = false,
 }) => {
     const colors = useCategoryColors(category.color);
+    const getUiString = useUiStrings();
 
     const categoryVars = {
         '--category-text-color': colors.textColor,
@@ -38,7 +40,6 @@ export const CatalogCategory: FC<Props> = ({
             pos="relative"
             size="sm"
             radius="md"
-            variant="light"
             onClick={onClick}
             py={10}
             h={24}
@@ -48,7 +49,6 @@ export const CatalogCategory: FC<Props> = ({
                     <Tooltip
                         maw={200}
                         position="top"
-                        withinPortal
                         openDelay={200}
                         fz="xs"
                         label="This category cannot be removed from this metric because it was defined in the .yml file."
@@ -69,7 +69,10 @@ export const CatalogCategory: FC<Props> = ({
                 {category.name}
                 {onRemove && (
                     <ActionIcon
-                        variant="subtle"
+                        aria-label={interpolateUiString(
+                            getUiString('metrics.removeCategory'),
+                            { category: category.name },
+                        )}
                         size={14}
                         onClick={onRemove}
                         className={styles.removeButton}

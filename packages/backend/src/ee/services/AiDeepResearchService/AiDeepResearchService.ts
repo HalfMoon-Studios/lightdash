@@ -9,10 +9,14 @@ import {
     aiDeepResearchWorkerFindingsInputSchema,
     AiResultType,
     applyDeepResearchChartRefsWithAdjustments,
+    buildDeepResearchVizConfig,
     ConflictError,
+    derivePivotConfigurationFromChart,
     findDeepResearchChartRefs,
     ForbiddenError,
     getErrorMessage,
+    getGroupByDimensions,
+    getWebAiChartConfig,
     isAiDeepResearchEvidencePackEmpty,
     isAiDeepResearchRunTerminal,
     isUserWithOrg,
@@ -44,6 +48,7 @@ import {
     type AiDeepResearchTerminalStatus,
     type AiDeepResearchWarehouseChart,
     type ApiAiAgentThreadMessageVizQuery,
+    type PivotConfiguration,
     type SessionUser,
 } from '@lightdash/common';
 import { validate as isValidUuid } from 'uuid';
@@ -68,6 +73,8 @@ import { type AiOrganizationSettingsModel } from '../../models/AiOrganizationSet
 import { type CommercialSchedulerClient } from '../../scheduler/SchedulerClient';
 import { convertQueryResultsToCsv } from '../ai/utils/convertQueryResultsToCsv';
 import { type AiAgentService } from '../AiAgentService/AiAgentService';
+import { canStartDeepResearch } from '../AiAgentService/dataAppThreadPolicy';
+import { AI_DEEP_RESEARCH_STALE_RUN_THRESHOLD_MINUTES } from './constants';
 import { resolveDeepResearchWarehouseChart } from './resolveDeepResearchWarehouseChart';
 import {
     isDeepResearchEvidenceQueryTool,
@@ -76,7 +83,6 @@ import {
 
 const MAX_EVENT_PAGE_SIZE = 100;
 const DEFAULT_EVENT_PAGE_SIZE = 50;
-const STALE_RUN_THRESHOLD_MINUTES = 75;
 const REPORT_FINALIZATION_RETRY_DELAYS_MS = [100, 500] as const;
 const STALE_RUN_ERROR_MESSAGE =
     'Deep Research stopped unexpectedly before it could finish.';
@@ -837,6 +843,11 @@ export class AiDeepResearchService extends BaseService {
         const prompt = await this.aiAgentModel.findWebAppPrompt(
             args.promptUuid,
         );
+        if (prompt && !canStartDeepResearch(prompt.threadCreatedFrom)) {
+            throw new ForbiddenError(
+                'Deep Research is not available on a thread started from a data app',
+            );
+        }
         if (
             !prompt ||
             prompt.threadUuid !== args.aiThreadUuid ||
@@ -1068,6 +1079,7 @@ export class AiDeepResearchService extends BaseService {
             projectUuid: args.projectUuid,
             metricQuery: chart.metricQuery,
             context: QueryExecutionContext.AI,
+            pivotConfiguration: this.getChartPivotConfiguration(chart),
         });
 
         return {
@@ -1089,6 +1101,37 @@ export class AiDeepResearchService extends BaseService {
                 description: null,
             },
         };
+    }
+
+    // Grouped charts expect server-pivoted results, matching the chat viz path.
+    private getChartPivotConfiguration(
+        chart: AiDeepResearchChartData,
+    ): PivotConfiguration | undefined {
+        try {
+            const webAiChartConfig = getWebAiChartConfig({
+                vizConfig: buildDeepResearchVizConfig(chart),
+                metricQuery: chart.metricQuery,
+                fieldsMap: chart.fields,
+                overrideChartType: chart.chartConfig.defaultVizType,
+            });
+            const groupByDimensions = getGroupByDimensions(webAiChartConfig);
+            if (!groupByDimensions?.length) {
+                return undefined;
+            }
+            return derivePivotConfigurationFromChart(
+                {
+                    chartConfig: webAiChartConfig.echartsConfig,
+                    pivotConfig: { columns: groupByDimensions },
+                },
+                chart.metricQuery,
+                chart.fields,
+            );
+        } catch (error) {
+            this.logger.warn(
+                `Deep Research chart ${chart.queryUuid} refresh falls back to unpivoted results: ${getErrorMessage(error)}`,
+            );
+            return undefined;
+        }
     }
 
     async getChart(args: {
@@ -1908,12 +1951,12 @@ export class AiDeepResearchService extends BaseService {
 
     async sweepStaleRuns(): Promise<number> {
         const runs = await this.aiDeepResearchRunModel.markStaleRunsAsFailed(
-            STALE_RUN_THRESHOLD_MINUTES,
+            AI_DEEP_RESEARCH_STALE_RUN_THRESHOLD_MINUTES,
             STALE_RUN_ERROR_MESSAGE,
         );
         if (runs.length > 0) {
             this.logger.warn(
-                `Swept ${runs.length} stale Deep Research run(s) after ${STALE_RUN_THRESHOLD_MINUTES} minutes`,
+                `Swept ${runs.length} stale Deep Research run(s) after ${AI_DEEP_RESEARCH_STALE_RUN_THRESHOLD_MINUTES} minutes`,
             );
         }
         await this.dispatchPendingLifecycleAnalytics();

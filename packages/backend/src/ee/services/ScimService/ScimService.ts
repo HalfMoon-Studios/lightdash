@@ -10,6 +10,8 @@ import {
     isOrganizationMemberRole,
     isSystemRole,
     isValidEmailAddress,
+    KnexPaginateArgs,
+    KnexPaginatedData,
     LightdashUser,
     NotFoundError,
     OrganizationMemberProfile,
@@ -22,6 +24,7 @@ import {
     ScimError,
     ScimGroup,
     ScimListResponse,
+    ScimRequestLog,
     ScimResourceType,
     ScimRole,
     ScimSchema,
@@ -36,7 +39,7 @@ import {
 import * as Sentry from '@sentry/node';
 import { groupBy } from 'lodash';
 import {
-    InvalidScimPatchRequest,
+    InvalidScimPatch,
     ScimResource as PatchLibScimResource,
     ScimPatch,
     scimPatch,
@@ -55,6 +58,10 @@ import { BaseService } from '../../../services/BaseService';
 import type { UserService } from '../../../services/UserService';
 import { wrapSentryTransaction } from '../../../utils';
 import { CommercialFeatureFlagModel } from '../../models/CommercialFeatureFlagModel';
+import {
+    CreateScimRequestLog,
+    ScimRequestLogModel,
+} from '../../models/ScimRequestLogModel';
 import { ServiceAccountModel } from '../../models/ServiceAccountModel';
 
 type ScimServiceArguments = {
@@ -70,6 +77,7 @@ type ScimServiceArguments = {
     rolesModel: RolesModel;
     projectModel: ProjectModel;
     openIdIdentityModel: OpenIdIdentityModel;
+    scimRequestLogModel: ScimRequestLogModel;
 };
 
 const NO_ROLE_KEYWORD = 'no-role';
@@ -108,6 +116,8 @@ export class ScimService extends BaseService {
 
     private readonly openIdIdentityModel: OpenIdIdentityModel;
 
+    private readonly scimRequestLogModel: ScimRequestLogModel;
+
     constructor({
         lightdashConfig,
         organizationMemberProfileModel,
@@ -121,6 +131,7 @@ export class ScimService extends BaseService {
         rolesModel,
         projectModel,
         openIdIdentityModel,
+        scimRequestLogModel,
     }: ScimServiceArguments) {
         super();
         this.lightdashConfig = lightdashConfig;
@@ -135,6 +146,22 @@ export class ScimService extends BaseService {
         this.rolesModel = rolesModel;
         this.projectModel = projectModel;
         this.openIdIdentityModel = openIdIdentityModel;
+        this.scimRequestLogModel = scimRequestLogModel;
+    }
+
+    async createRequestLog(log: CreateScimRequestLog): Promise<void> {
+        await this.scimRequestLogModel.create(log);
+    }
+
+    async getRequestLogs(
+        account: Account,
+        paginateArgs: KnexPaginateArgs,
+    ): Promise<KnexPaginatedData<ScimRequestLog[]>> {
+        this.throwForbiddenErrorOnNoPermission(account);
+        return this.scimRequestLogModel.getPaginated({
+            organizationUuid: account.organization.organizationUuid!,
+            paginateArgs,
+        });
     }
 
     private throwForbiddenErrorOnNoPermission(account: Account) {
@@ -1140,14 +1167,18 @@ export class ScimService extends BaseService {
             return patchedUser;
         } catch (error) {
             if (error instanceof Error) {
+                // scim-patch throws several InvalidScimPatch subclasses (bad path, forbidden key, ...)
+                if (
+                    error instanceof ParameterError ||
+                    error instanceof InvalidScimPatch
+                ) {
+                    throw new ScimError({
+                        detail: error.message,
+                        status: 400,
+                        scimType: 'invalidValue',
+                    });
+                }
                 switch (error.constructor) {
-                    case ParameterError:
-                    case InvalidScimPatchRequest:
-                        throw new ScimError({
-                            detail: error.message,
-                            status: 400,
-                            scimType: 'invalidValue',
-                        });
                     case NotFoundError:
                         this.logger.warn(
                             'SCIM: user lookup failed — possible IdP cache drift',
@@ -1871,7 +1902,7 @@ export class ScimService extends BaseService {
             }
             if (
                 error instanceof ParameterError ||
-                error instanceof InvalidScimPatchRequest
+                error instanceof InvalidScimPatch
             ) {
                 this.logger.error('SCIM: Invalid group patch request', {
                     organizationUuid,

@@ -1,8 +1,11 @@
+import { interpolateUiString } from '@lightdash/common';
 import {
+    ActionIcon,
     Badge,
     Box,
     Button,
     Checkbox,
+    CloseButton,
     Group,
     Loader,
     Popover,
@@ -17,9 +20,11 @@ import {
 import {
     IconChevronDown,
     IconSearch,
+    IconX,
     type Icon as TablerIcon,
 } from '@tabler/icons-react';
-import { useCallback, useRef, type ReactNode } from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
+import { useUiStrings } from '../../../ee/providers/Embed/useUiStrings';
 import MantineIcon from '../MantineIcon';
 import classes from './FilterFacet.module.css';
 
@@ -59,6 +64,15 @@ export type FilterFacetProps = {
     scrollEndOffset?: number;
     /** Shows a row that selects/deselects every listed option at once */
     enableSelectAll?: boolean;
+    /** Rendered at the top of the dropdown, above the search input */
+    headerSection?: ReactNode;
+    /** Walkthrough markers for the button that opens the facet. */
+    triggerProps?: Record<`data-tour-${string}`, string>;
+    /** Walkthrough anchor name for each option, picked by its search label. */
+    optionAnchor?: string;
+    /** Shows a clear button next to the trigger while there is a selection */
+    clearable?: boolean;
+    showSelectionCount?: boolean;
 };
 
 const isOptionVisible = (
@@ -89,7 +103,14 @@ const FilterFacet = ({
     onScrollEnd,
     scrollEndOffset = 50,
     enableSelectAll = false,
+    headerSection,
+    clearable = false,
+    showSelectionCount = true,
+    triggerProps,
+    optionAnchor,
 }: FilterFacetProps) => {
+    const getUiString = useUiStrings();
+    const [opened, setOpened] = useState(false);
     const selectedSet = new Set(selected);
     const viewportRef = useRef<HTMLDivElement>(null);
 
@@ -170,6 +191,18 @@ const FilterFacet = ({
             <UnstyledButton
                 key={option.value}
                 onClick={() => toggle(option.value, disabled)}
+                aria-pressed={isChecked}
+                {...(optionAnchor
+                    ? {
+                          'data-tour-anchor': optionAnchor,
+                          'data-tour-hint': 'Choose {value}',
+                          'data-tour-value':
+                              option.searchLabel ??
+                              (typeof option.label === 'string'
+                                  ? option.label
+                                  : option.value),
+                      }
+                    : {})}
                 px="xs"
                 py={6}
                 className={`${classes.option} ${
@@ -180,25 +213,23 @@ const FilterFacet = ({
                 <Group justify="space-between" wrap="nowrap" gap="md">
                     <Group gap="xs" wrap="nowrap">
                         {mode === 'single' ? (
-                            <Radio
+                            <Radio.Indicator
                                 size="xs"
                                 checked={isChecked}
-                                readOnly
-                                tabIndex={-1}
+                                aria-hidden
                                 disabled={disabled}
                             />
                         ) : (
-                            <Checkbox
+                            <Checkbox.Indicator
                                 size="xs"
                                 checked={isChecked}
-                                readOnly
-                                tabIndex={-1}
+                                aria-hidden
                                 disabled={disabled}
                             />
                         )}
-                        <Box maw={200} style={{ overflow: 'hidden' }}>
+                        <Box maw={200} className={classes.optionLabel}>
                             {typeof option.label === 'string' ? (
-                                <Text fz="xs" c="ldGray.9" truncate>
+                                <Text fz="xs" truncate>
                                     {option.label}
                                 </Text>
                             ) : (
@@ -207,7 +238,7 @@ const FilterFacet = ({
                         </Box>
                     </Group>
                     {option.count !== undefined && (
-                        <Text fz="xs" c="ldGray.6" fw={500}>
+                        <Text fz="xs" c="dimmed" fw={500}>
                             {option.count}
                         </Text>
                     )}
@@ -220,8 +251,9 @@ const FilterFacet = ({
         <Button
             variant="default"
             size="xs"
-            radius="md"
             loading={loading}
+            {...triggerProps}
+            onClick={() => setOpened((value) => !value)}
             className={
                 hasSelection
                     ? classes.filterButtonSelected
@@ -232,7 +264,7 @@ const FilterFacet = ({
                     <MantineIcon
                         icon={icon}
                         size="md"
-                        color={hasSelection ? 'indigo.5' : 'ldGray.5'}
+                        color={hasSelection ? 'ldGray.7' : 'ldGray.5'}
                     />
                 ) : undefined
             }
@@ -240,20 +272,16 @@ const FilterFacet = ({
                 <MantineIcon
                     icon={IconChevronDown}
                     size="sm"
-                    color={hasSelection ? 'indigo.5' : 'ldGray.5'}
+                    color={hasSelection ? 'ldGray.7' : 'ldGray.5'}
                 />
             }
         >
             <Group gap={6} wrap="nowrap">
-                <Text
-                    fz="xs"
-                    fw={500}
-                    c={hasSelection ? 'indigo.7' : 'ldGray.7'}
-                >
+                <Text fz="xs" fw={500} c="ldGray.7">
                     {label}
                 </Text>
-                {hasSelection && (
-                    <Badge size="xs" radius="xl" variant="light" color="indigo">
+                {hasSelection && showSelectionCount && (
+                    <Badge size="xs" radius="xl" variant="filled">
                         {selected.length}
                     </Badge>
                 )}
@@ -261,18 +289,53 @@ const FilterFacet = ({
         </Button>
     );
 
-    return (
-        <Popover position="bottom-start" withArrow shadow="md" radius="md">
+    const popover = (
+        <Popover
+            position="bottom-start"
+            withArrow
+            opened={opened}
+            onDismiss={() => setOpened(false)}
+            floatingStrategy="fixed"
+            middlewares={{ shift: { crossAxis: true, padding: 12 } }}
+            trapFocus
+            returnFocus
+        >
             <Popover.Target>
                 {tooltipLabel ? (
-                    <Tooltip withinPortal label={tooltipLabel}>
+                    <Tooltip
+                        label={tooltipLabel}
+                        maw="min(300px, calc(100vw - 24px))"
+                        multiline
+                    >
                         {trigger}
                     </Tooltip>
                 ) : (
                     trigger
                 )}
             </Popover.Target>
-            <Popover.Dropdown p={4} miw={240}>
+            <Popover.Dropdown p={4} className={classes.dropdown}>
+                <Group
+                    justify="space-between"
+                    px="xs"
+                    className={classes.header}
+                >
+                    <Text fw={600} size="xs">
+                        {label}
+                    </Text>
+                    <CloseButton
+                        size={44}
+                        aria-label={interpolateUiString(
+                            getUiString('filters.closeFacet'),
+                            { filter: label },
+                        )}
+                        onClick={() => setOpened(false)}
+                    />
+                </Group>
+                {headerSection && (
+                    <Box px="xs" pt={4} pb={6}>
+                        {headerSection}
+                    </Box>
+                )}
                 {helperText && (
                     <Text fz="xs" c="dimmed" px="xs" py={4}>
                         {helperText}
@@ -284,6 +347,8 @@ const FilterFacet = ({
                             size="xs"
                             autoFocus
                             placeholder={searchPlaceholder}
+                            aria-label={searchPlaceholder}
+                            className={classes.search}
                             value={searchValue ?? ''}
                             onChange={(e) =>
                                 onSearchChange(e.currentTarget.value)
@@ -302,26 +367,28 @@ const FilterFacet = ({
                 {showSelectAll && (
                     <UnstyledButton
                         onClick={toggleAll}
+                        aria-pressed={
+                            allSelected ? true : someSelected ? 'mixed' : false
+                        }
                         px="xs"
                         py={6}
                         className={classes.option}
                     >
                         <Group gap="xs" wrap="nowrap">
-                            <Checkbox
+                            <Checkbox.Indicator
                                 size="xs"
                                 checked={allSelected}
                                 indeterminate={someSelected}
-                                readOnly
-                                tabIndex={-1}
+                                aria-hidden
                             />
-                            <Text fz="xs" fw={500} c="ldGray.9">
+                            <Text fz="xs" fw={500}>
                                 {allSelected ? 'Deselect all' : 'Select all'}
                             </Text>
                         </Group>
                     </UnstyledButton>
                 )}
                 {!hasAnyOption ? (
-                    <Text fz="xs" c="ldGray.6" p="xs">
+                    <Text fz="xs" c="dimmed" p="xs">
                         {emptyLabel}
                     </Text>
                 ) : (
@@ -349,6 +416,27 @@ const FilterFacet = ({
                 )}
             </Popover.Dropdown>
         </Popover>
+    );
+
+    if (!clearable) return popover;
+
+    return (
+        <Group gap={2} wrap="nowrap">
+            {popover}
+            {hasSelection && (
+                <Tooltip label="Clear">
+                    <ActionIcon
+                        size="xs"
+                        className={classes.clearButton}
+                        color="ldGray.5"
+                        aria-label={`Clear ${label} filter`}
+                        onClick={() => onChange([])}
+                    >
+                        <MantineIcon icon={IconX} />
+                    </ActionIcon>
+                </Tooltip>
+            )}
+        </Group>
     );
 };
 

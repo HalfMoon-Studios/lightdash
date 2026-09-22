@@ -34,7 +34,7 @@ export type HomepageGreetingBlock = {
 };
 
 export type HomepageCollectionItemRef = {
-    contentType: 'chart' | 'dashboard' | 'space' | 'data_app';
+    contentType: 'chart' | 'dashboard' | 'space' | 'data_app' | 'document';
     uuid: string;
 };
 
@@ -168,7 +168,10 @@ export type HomepageQuickActionTarget =
     | { type: 'run-query' }
     | { type: 'browse-dashboards' }
     | { type: 'browse-spaces' }
-    | { type: 'dashboard'; dashboardUuid: string; label: string };
+    | { type: 'dashboard'; dashboardUuid: string; label: string }
+    | { type: 'space'; spaceUuid: string; label: string }
+    /** Resolves per viewer to their personal space; hidden when they have none. */
+    | { type: 'my-space' };
 
 /** Any quick action can be promoted to the row's primary one, which renders
  * as the same chip inverted. Optional so older configs still load. */

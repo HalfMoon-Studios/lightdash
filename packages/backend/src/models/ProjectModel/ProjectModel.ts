@@ -11,6 +11,7 @@ import {
     createVirtualView,
     CreateVirtualViewPayload,
     CreateWarehouseCredentials,
+    CreateWarehouseCredentialsWithOptionalSecrets,
     DbtProjectConfig,
     DEFAULT_USER_SPACES_PARENT_NAME,
     DuckdbConnectionType,
@@ -70,19 +71,34 @@ import {
     warehouseClientFromCredentials,
 } from '@lightdash/warehouses';
 import { Knex } from 'knex';
-import chunk from 'lodash/chunk';
 import isEqual from 'lodash/isEqual';
 import NodeCache from 'node-cache';
 import { DatabaseError } from 'pg';
 import { v4 as uuidv4 } from 'uuid';
 import { LightdashConfig } from '../../config/parseConfig';
 import {
+    CatalogTableName,
+    MetricsTreeEdgesTableName,
+    MetricsTreeNodesTableName,
+    MetricsTreesTableName,
+} from '../../database/entities/catalog';
+import { DashboardTileCommentsTableName } from '../../database/entities/comments';
+import {
     DashboardsTableName,
     DashboardTabsTableName,
+    DashboardTileChartTableName,
+    DashboardTileDataAppsTableName,
+    DashboardTileHeadingsTableName,
+    DashboardTileLoomsTableName,
+    DashboardTileMarkdownsTableName,
+    DashboardTileSqlChartTableName,
+    DashboardTilesTableName,
+    DashboardVersionsTableName,
     DashboardViewsTableName,
     DbDashboard,
     DbDashboardTabs,
 } from '../../database/entities/dashboards';
+import { DashboardSlugMappingsTableName } from '../../database/entities/dashboardSlugMappings';
 import {
     ExternalSourcesTableName,
     ExternalSourceTablesTableName,
@@ -95,7 +111,12 @@ import {
     DbOrganization,
     OrganizationTableName,
 } from '../../database/entities/organizations';
-import { PinnedListTableName } from '../../database/entities/pinnedList';
+import {
+    PinnedChartTableName,
+    PinnedDashboardTableName,
+    PinnedListTableName,
+    PinnedSpaceTableName,
+} from '../../database/entities/pinnedList';
 import { ProjectGroupAccessTableName } from '../../database/entities/projectGroupAccess';
 import { ProjectGroupAccessCustomRolesTableName } from '../../database/entities/projectGroupAccessCustomRoles';
 import { ProjectMembershipCustomRolesTableName } from '../../database/entities/projectMembershipCustomRoles';
@@ -106,12 +127,14 @@ import {
 import { ProjectMergedManifestsTable } from '../../database/entities/projectMergedManifests';
 import {
     CachedExploresTableName,
+    CachedExploreStagingTableName,
     CachedExploreTableName,
     CachedWarehouseTableName,
     DbCachedWarehouse,
     DbProject,
     ProjectTableName,
     type DbCachedExplore,
+    type DbCachedExploreStaging,
 } from '../../database/entities/projects';
 import { RolesTableName } from '../../database/entities/roles';
 import {
@@ -131,8 +154,14 @@ import {
     SpaceTableName,
     SpaceUserAccessTableName,
 } from '../../database/entities/spaces';
+import { TagsTableName } from '../../database/entities/tags';
 import { DbUser, UserTableName } from '../../database/entities/users';
 import { WarehouseCredentialTableName } from '../../database/entities/warehouseCredentials';
+import {
+    AiPromptTableName,
+    AiThreadTableName,
+    AiWebAppThreadTableName,
+} from '../../ee/database/entities/ai';
 import {
     AiAgentGroupAccessTableName,
     AiAgentInstructionVersionsTableName,
@@ -142,9 +171,23 @@ import {
     AiAgentUserAccessTableName,
     type DbAiAgent,
 } from '../../ee/database/entities/aiAgent';
+import {
+    AiDeepResearchEventsTableName,
+    AiDeepResearchRunsTableName,
+} from '../../ee/database/entities/aiDeepResearch';
 import { ServiceAccountsTableName } from '../../ee/database/entities/serviceAccounts';
+import {
+    newExploreCacheReadContext,
+    summarizeExploreCacheRead,
+    type ExploreCacheReadContext,
+} from '../../logging/exploreCacheReadMetrics';
 import Logger from '../../logging/logger';
+import { measureTime } from '../../logging/measureTime';
 import { wrapSentryTransaction, wrapSentryTransactionSync } from '../../utils';
+import {
+    chunkAsyncRowsByBytes,
+    chunkRowsByBytes,
+} from '../../utils/chunkRowsByBytes';
 import {
     hasSameDbtCredentialDestination,
     hasSameWarehouseCredentialDestination,
@@ -221,7 +264,137 @@ type RawSummaryRow = {
         | null;
     baseTableAnyAttributes: Explore['tables'][string]['anyAttributes'] | null;
     aiHint: Explore['aiHint'] | null;
+    customMeta: Explore['customMeta'] | null;
 };
+
+export type ExploreTableSummary = Pick<
+    CompiledTable,
+    | 'name'
+    | 'originalName'
+    | 'database'
+    | 'schema'
+    | 'description'
+    | 'sqlTable'
+    | 'ymlPath'
+    | 'dbtSourceUuid'
+>;
+
+export type ExploreTableSummaryRecord = {
+    name: string;
+    type: ExploreType | undefined;
+    baseTable: string;
+    tables: Record<string, ExploreTableSummary>;
+} & ({ errors: true } | { errors?: never });
+
+type RawExploreTableSummaryRow = {
+    exploreName: string;
+    exploreType: ExploreType | null;
+    baseTable: string | null;
+    hasErrors: boolean;
+    tableKey: string | null;
+    tableName: unknown;
+    originalName: unknown;
+    database: unknown;
+    schema: unknown;
+    description: unknown;
+    hasDescription: boolean;
+    sqlTable: unknown;
+    ymlPath: unknown;
+    dbtSourceUuid: unknown;
+};
+
+type CachedExploreStorageStats = {
+    exploreCount: number;
+    totalBytes: number;
+};
+
+const isJsonObject = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const toOptionalJsonScalarText = (value: unknown): string | undefined =>
+    value == null ? undefined : String(value);
+
+export const toExploreTableSummaryRecord = (
+    explore: unknown,
+): ExploreTableSummaryRecord | undefined => {
+    if (!isJsonObject(explore) || typeof explore.name !== 'string') {
+        return undefined;
+    }
+
+    const tables = Object.create(null) as Record<string, ExploreTableSummary>;
+    if (isJsonObject(explore.tables)) {
+        Object.entries(explore.tables).forEach(([tableKey, table]) => {
+            if (!isJsonObject(table)) {
+                return;
+            }
+            tables[tableKey] = {
+                name: (table.name ?? null) as string,
+                database: (table.database ?? null) as string,
+                schema: (table.schema ?? null) as string,
+                sqlTable: (table.sqlTable ?? null) as string,
+                ...(table.originalName
+                    ? { originalName: table.originalName as string }
+                    : {}),
+                ...(Object.hasOwn(table, 'description')
+                    ? { description: table.description as string }
+                    : {}),
+                ...(table.ymlPath ? { ymlPath: table.ymlPath as string } : {}),
+                ...(table.dbtSourceUuid == null
+                    ? {}
+                    : { dbtSourceUuid: table.dbtSourceUuid as string }),
+            };
+        });
+    }
+
+    return {
+        name: explore.name,
+        type: toOptionalJsonScalarText(explore.type) as ExploreType | undefined,
+        baseTable: toOptionalJsonScalarText(explore.baseTable) ?? '',
+        tables,
+        ...(Object.hasOwn(explore, 'errors') ? { errors: true as const } : {}),
+    };
+};
+
+export const reduceExploreTableSummaryRows = (
+    rows: RawExploreTableSummaryRow[],
+): Record<string, ExploreTableSummaryRecord> =>
+    rows.reduce<Record<string, ExploreTableSummaryRecord>>(
+        (acc, row) => {
+            const explore = acc[row.exploreName] ?? {
+                name: row.exploreName,
+                type: row.exploreType ?? undefined,
+                baseTable: row.baseTable ?? '',
+                tables: Object.create(null) as Record<
+                    string,
+                    ExploreTableSummary
+                >,
+                ...(row.hasErrors ? { errors: true as const } : {}),
+            };
+
+            if (row.tableKey !== null) {
+                explore.tables[row.tableKey] = {
+                    name: row.tableName as string,
+                    database: row.database as string,
+                    schema: row.schema as string,
+                    sqlTable: row.sqlTable as string,
+                    ...(row.originalName
+                        ? { originalName: row.originalName as string }
+                        : {}),
+                    ...(row.hasDescription
+                        ? { description: row.description as string }
+                        : {}),
+                    ...(row.ymlPath ? { ymlPath: row.ymlPath as string } : {}),
+                    ...(row.dbtSourceUuid === null
+                        ? {}
+                        : { dbtSourceUuid: row.dbtSourceUuid as string }),
+                };
+            }
+
+            acc[row.exploreName] = explore;
+            return acc;
+        },
+        Object.create(null) as Record<string, ExploreTableSummaryRecord>,
+    );
 
 type PreviewChartUuidMapping = {
     sourceChartUuid: string;
@@ -229,6 +402,26 @@ type PreviewChartUuidMapping = {
 };
 
 export class ProjectModel {
+    /** Serializes create-or-get across API pods without relying on a slug. */
+    async runInAnalyticsProvisioningLock<T>(
+        organizationUuid: string,
+        callback: () => Promise<T>,
+    ): Promise<T> {
+        return this.database.transaction(async (trx) => {
+            const organization = await trx(OrganizationTableName)
+                .where('organization_uuid', organizationUuid)
+                .select('organization_id')
+                .first();
+            if (!organization)
+                throw new NotFoundError('Cannot find organization');
+            await trx.raw('SELECT pg_advisory_xact_lock(?, ?)', [
+                19350431,
+                organization.organization_id,
+            ]);
+            return callback();
+        });
+    }
+
     protected database: Knex;
 
     protected lightdashConfig: LightdashConfig;
@@ -305,7 +498,8 @@ export class ProjectModel {
     }
 
     static mergeMissingWarehouseSecrets<
-        T extends CreateWarehouseCredentials = CreateWarehouseCredentials,
+        T extends CreateWarehouseCredentialsWithOptionalSecrets =
+            CreateWarehouseCredentials,
     >(incompleteConfig: T, completeConfig: CreateWarehouseCredentials): T {
         if (
             !hasSameWarehouseCredentialDestination(
@@ -401,18 +595,32 @@ export class ProjectModel {
             warehouseConnection?: CreateWarehouseCredentials;
         },
     ): UpdateProject {
+        const incomingWarehouse = incompleteProjectConfig.warehouseConnection;
+        const savedWarehouse = completeProjectConfig.warehouseConnection;
+        // CLI credential refreshes omit project-only settings. Preserve the
+        // opt-in unless the update explicitly enables or disables it.
+        const warehouseConnection =
+            incomingWarehouse.type === WarehouseTypes.BIGQUERY &&
+            savedWarehouse?.type === WarehouseTypes.BIGQUERY
+                ? {
+                      ...incomingWarehouse,
+                      allowUserCredentials:
+                          incomingWarehouse.allowUserCredentials ??
+                          savedWarehouse.allowUserCredentials,
+                  }
+                : incomingWarehouse;
         return {
             ...incompleteProjectConfig,
             dbtConnection: ProjectModel.mergeMissingDbtConfigSecrets(
                 incompleteProjectConfig.dbtConnection,
                 completeProjectConfig.dbtConnection,
             ),
-            warehouseConnection: completeProjectConfig.warehouseConnection
+            warehouseConnection: savedWarehouse
                 ? ProjectModel.mergeMissingWarehouseSecrets(
-                      incompleteProjectConfig.warehouseConnection,
-                      completeProjectConfig.warehouseConnection,
+                      warehouseConnection,
+                      savedWarehouse,
                   )
-                : incompleteProjectConfig.warehouseConnection,
+                : warehouseConnection,
         };
     }
 
@@ -612,10 +820,13 @@ export class ProjectModel {
         projectId: number,
         data: CreateWarehouseCredentials,
     ): Promise<void> {
+        // Normalize on write too, so stored blobs never hold legacy values
+        // that violate the credentials types
+        const credentials = normalizeWarehouseCredentials(data);
         let encryptedCredentials: Buffer;
         try {
             encryptedCredentials = this.encryptionUtil.encrypt(
-                JSON.stringify(data),
+                JSON.stringify(credentials),
             );
         } catch (e) {
             throw new UnexpectedServerError('Could not save credentials.');
@@ -624,7 +835,7 @@ export class ProjectModel {
         await trx('warehouse_credentials')
             .insert({
                 project_id: projectId,
-                warehouse_type: data.type,
+                warehouse_type: credentials.type,
                 encrypted_credentials: encryptedCredentials,
             })
             .onConflict('project_id')
@@ -925,9 +1136,15 @@ export class ProjectModel {
     }
 
     async update(projectUuid: string, data: UpdateProject): Promise<void> {
-        const previousConnectionString = getMotherduckConnectionString(
-            await this.getWarehouseCredentialsForProject(projectUuid),
-        );
+        let previousConnectionString: string | undefined;
+        try {
+            previousConnectionString = getMotherduckConnectionString(
+                await this.getWarehouseCredentialsForProject(projectUuid),
+            );
+        } catch (e) {
+            // Projects created without warehouse credentials have none to invalidate
+            if (!(e instanceof NotFoundError)) throw e;
+        }
         const nextConnectionString = getMotherduckConnectionString(
             data.warehouseConnection,
         );
@@ -1012,6 +1229,271 @@ export class ProjectModel {
             projectUuid: r.project_uuid,
             organizationUuid: r.organization_uuid,
         }));
+    }
+
+    /**
+     * Give a training copy the seeded deep research, as the learner's own:
+     * a run lives in a thread, and a thread belongs to the person who asked,
+     * so the copy's thread, prompt and run are owned by the learner (the
+     * source's stay with the seed user). The copy's agent is found by slug.
+     */
+    async copyDeepResearchForTrainingCopy(
+        sourceProjectUuid: string,
+        previewProjectUuid: string,
+        learnerUserUuid: string,
+        seedUserUuid: string | null,
+    ): Promise<void> {
+        await this.database.transaction(async (trx) => {
+            // Only the seed's runs (made by whoever enabled Learn) travel
+            // into copies; nothing another learner or admin ran afterwards.
+            const runs = await trx(AiDeepResearchRunsTableName)
+                .where('project_uuid', sourceProjectUuid)
+                .where('created_by_user_uuid', seedUserUuid ?? '')
+                .where('status', 'completed');
+            // eslint-disable-next-line no-restricted-syntax
+            for (const run of runs) {
+                // eslint-disable-next-line no-await-in-loop
+                const sourceAgent = await trx(AiAgentTableName)
+                    .where('ai_agent_uuid', run.agent_uuid)
+                    .first();
+                if (!sourceAgent) continue; // eslint-disable-line no-continue
+                // eslint-disable-next-line no-await-in-loop
+                const agent = await trx(AiAgentTableName)
+                    .where({
+                        project_uuid: previewProjectUuid,
+                        slug: sourceAgent.slug,
+                    })
+                    .first();
+                if (!agent) continue; // eslint-disable-line no-continue
+                // eslint-disable-next-line no-await-in-loop
+                const thread = await trx(AiThreadTableName)
+                    .where('ai_thread_uuid', run.ai_thread_uuid)
+                    .first();
+                // eslint-disable-next-line no-await-in-loop
+                const prompt = await trx(AiPromptTableName)
+                    .where('ai_prompt_uuid', run.prompt_uuid)
+                    .first();
+                if (!thread || !prompt) continue; // eslint-disable-line no-continue
+                const runUuid = uuidv4();
+                // eslint-disable-next-line no-await-in-loop
+                const [{ ai_thread_uuid: threadUuid }] = await trx(
+                    AiThreadTableName,
+                )
+                    .insert({
+                        organization_uuid: thread.organization_uuid,
+                        project_uuid: previewProjectUuid,
+                        created_from: thread.created_from,
+                        agent_uuid: agent.ai_agent_uuid,
+                    })
+                    .returning('ai_thread_uuid');
+                // eslint-disable-next-line no-await-in-loop
+                await trx(AiThreadTableName)
+                    .where('ai_thread_uuid', threadUuid)
+                    .update({
+                        title: thread.title,
+                        title_generated_at: thread.title_generated_at,
+                    });
+                // eslint-disable-next-line no-await-in-loop
+                await trx(AiWebAppThreadTableName).insert({
+                    ai_thread_uuid: threadUuid,
+                    user_uuid: learnerUserUuid,
+                });
+                // eslint-disable-next-line no-await-in-loop
+                const [{ ai_prompt_uuid: promptUuid }] = await trx(
+                    AiPromptTableName,
+                )
+                    .insert({
+                        ai_thread_uuid: threadUuid,
+                        created_by_user_uuid: learnerUserUuid,
+                        prompt: prompt.prompt,
+                        execution_mode: prompt.execution_mode,
+                    })
+                    .returning('ai_prompt_uuid');
+                const {
+                    ai_deep_research_run_uuid: _sourceRunUuid,
+                    created_at: _createdAt,
+                    updated_at: _updatedAt,
+                    ...runColumns
+                } = run;
+                // eslint-disable-next-line no-await-in-loop
+                await trx(AiDeepResearchRunsTableName).insert({
+                    ...runColumns,
+                    ai_deep_research_run_uuid: runUuid,
+                    project_uuid: previewProjectUuid,
+                    created_by_user_uuid: learnerUserUuid,
+                    agent_uuid: agent.ai_agent_uuid,
+                    ai_thread_uuid: threadUuid,
+                    prompt_uuid: promptUuid,
+                    // A copy is a finished report, never a resumable run.
+                    resume_from_run_uuid: null,
+                    budget_snapshot: JSON.stringify(run.budget_snapshot),
+                    execution_context_snapshot: JSON.stringify(
+                        run.execution_context_snapshot,
+                    ),
+                });
+                // eslint-disable-next-line no-await-in-loop
+                const events = await trx(AiDeepResearchEventsTableName)
+                    .where(
+                        'ai_deep_research_run_uuid',
+                        run.ai_deep_research_run_uuid,
+                    )
+                    .orderBy('created_at', 'asc');
+                if (events.length > 0) {
+                    // eslint-disable-next-line no-await-in-loop
+                    await trx(AiDeepResearchEventsTableName).insert(
+                        events.map((event) => ({
+                            ai_deep_research_run_uuid: runUuid,
+                            event_type: event.event_type,
+                            payload: JSON.stringify(event.payload),
+                            created_at: event.created_at,
+                        })),
+                    );
+                }
+            }
+        });
+    }
+
+    /**
+     * Give a training copy its own dashboard tile uuids, and its own copies
+     * of the comments on those tiles. A preview normally keeps the source's
+     * tile uuids, and tile comments are keyed by tile uuid alone, so a
+     * comment posted or resolved in one learner's copy would show in the
+     * shared training project and in every other copy. With their own
+     * uuids, a copy's comments start as clones of the seeded ones and stay
+     * its own; they go with the copy's charts when it is removed.
+     */
+    async giveTrainingCopyOwnTiles(
+        previewProjectUuid: string,
+        seedUserUuid: string | null,
+    ): Promise<void> {
+        await this.database.transaction(async (trx) => {
+            const versions = await trx(DashboardVersionsTableName)
+                .join(
+                    DashboardsTableName,
+                    `${DashboardsTableName}.dashboard_id`,
+                    `${DashboardVersionsTableName}.dashboard_id`,
+                )
+                .join(
+                    SpaceTableName,
+                    `${SpaceTableName}.space_id`,
+                    `${DashboardsTableName}.space_id`,
+                )
+                .join(
+                    ProjectTableName,
+                    `${ProjectTableName}.project_id`,
+                    `${SpaceTableName}.project_id`,
+                )
+                .where(`${ProjectTableName}.project_uuid`, previewProjectUuid)
+                .select<{ dashboard_version_id: number; config: unknown }[]>(
+                    `${DashboardVersionsTableName}.dashboard_version_id`,
+                    `${DashboardVersionsTableName}.config`,
+                );
+            if (versions.length === 0) return;
+            const versionIds = versions.map((v) => v.dashboard_version_id);
+            const tiles = await trx(DashboardTilesTableName)
+                .whereIn('dashboard_version_id', versionIds)
+                .select('*');
+            const renamed = new Map<string, string>();
+            const childTables = [
+                DashboardTileChartTableName,
+                DashboardTileSqlChartTableName,
+                DashboardTileMarkdownsTableName,
+                DashboardTileLoomsTableName,
+                DashboardTileHeadingsTableName,
+                DashboardTileDataAppsTableName,
+            ];
+            // Child rows reference the tile by (version, uuid) without ON
+            // UPDATE, so the tile is re-inserted under the new uuid, the
+            // children moved across, and the old row removed last.
+            await tiles.reduce(async (previous, tile) => {
+                await previous;
+                const to = renamed.get(tile.dashboard_tile_uuid) ?? uuidv4();
+                renamed.set(tile.dashboard_tile_uuid, to);
+                await trx(DashboardTilesTableName).insert({
+                    ...tile,
+                    dashboard_tile_uuid: to,
+                });
+                await childTables.reduce(async (prev, table) => {
+                    await prev;
+                    await trx(table)
+                        .where({
+                            dashboard_version_id: tile.dashboard_version_id,
+                            dashboard_tile_uuid: tile.dashboard_tile_uuid,
+                        })
+                        .update({ dashboard_tile_uuid: to });
+                }, Promise.resolve());
+                await trx(DashboardTilesTableName)
+                    .where({
+                        dashboard_version_id: tile.dashboard_version_id,
+                        dashboard_tile_uuid: tile.dashboard_tile_uuid,
+                    })
+                    .delete();
+            }, Promise.resolve());
+            // Filters and date zoom target tiles by uuid inside the
+            // version's config; rewrite those references in place.
+            await versions.reduce(async (previous, version) => {
+                await previous;
+                if (!version.config) return;
+                let text = JSON.stringify(version.config);
+                renamed.forEach((to, from) => {
+                    text = text.split(from).join(to);
+                });
+                await trx(DashboardVersionsTableName)
+                    .where('dashboard_version_id', version.dashboard_version_id)
+                    .update({ config: JSON.parse(text) });
+            }, Promise.resolve());
+            // The copy's own comments: clones of the seeded ones, attached
+            // to the copy's charts so they are removed with the copy.
+            const chartOfTile = new Map<string, string>(
+                (
+                    await trx(DashboardTileChartTableName)
+                        .join(
+                            SavedChartsTableName,
+                            `${SavedChartsTableName}.saved_query_id`,
+                            `${DashboardTileChartTableName}.saved_chart_id`,
+                        )
+                        .whereIn(
+                            `${DashboardTileChartTableName}.dashboard_version_id`,
+                            versionIds,
+                        )
+                        .select<
+                            { dashboard_tile_uuid: string; uuid: string }[]
+                        >(
+                            `${DashboardTileChartTableName}.dashboard_tile_uuid`,
+                            `${SavedChartsTableName}.saved_query_uuid as uuid`,
+                        )
+                ).map((row) => [row.dashboard_tile_uuid, row.uuid]),
+            );
+            // Only the seed's comments (made by whoever enabled Learn) come
+            // along; nothing anyone wrote on the shared project afterwards.
+            const comments = await trx(DashboardTileCommentsTableName)
+                .whereIn('dashboard_tile_uuid', [...renamed.keys()])
+                .where('user_uuid', seedUserUuid ?? '')
+                .orderBy('created_at', 'asc')
+                .select('*');
+            const clonedIds = new Map<string, string>();
+            await comments.reduce(async (previous, comment) => {
+                await previous;
+                const to = renamed.get(comment.dashboard_tile_uuid);
+                if (!to) return;
+                const [clone] = await trx(DashboardTileCommentsTableName)
+                    .insert({
+                        text: comment.text,
+                        text_html: comment.text_html,
+                        dashboard_tile_uuid: to,
+                        reply_to: comment.reply_to
+                            ? (clonedIds.get(comment.reply_to) ?? null)
+                            : null,
+                        user_uuid: comment.user_uuid,
+                        saved_chart_uuid: chartOfTile.get(to) ?? null,
+                        mentions: comment.mentions,
+                        resolved: comment.resolved,
+                        created_at: comment.created_at,
+                    })
+                    .returning('comment_id');
+                clonedIds.set(comment.comment_id, clone.comment_id);
+            }, Promise.resolve());
+        });
     }
 
     async delete(
@@ -1568,6 +2050,9 @@ export class ProjectModel {
         const convertedExplore = { ...explore };
         if (convertedExplore.tables) {
             Object.values(convertedExplore.tables).forEach((table) => {
+                if (!isJsonObject(table)) {
+                    return;
+                }
                 if (table.metrics) {
                     Object.values(table.metrics).forEach((metric) => {
                         if (metric.filters) {
@@ -1628,21 +2113,219 @@ export class ProjectModel {
                     () =>
                         explores.reduce<Record<string, Explore | ExploreError>>(
                             (acc, { explore, cached_explore_uuid }) => {
+                                if (
+                                    !isJsonObject(explore) ||
+                                    typeof explore.name !== 'string'
+                                ) {
+                                    return acc;
+                                }
                                 const exploreKey =
                                     key === 'name'
                                         ? explore.name
                                         : cached_explore_uuid;
                                 acc[exploreKey] =
                                     ProjectModel.convertMetricFiltersFieldIdsToFieldRef(
-                                        explore,
+                                        explore as Explore | ExploreError,
                                     );
                                 return acc;
                             },
-                            {},
+                            Object.create(null) as Record<
+                                string,
+                                Explore | ExploreError
+                            >,
                         ),
                 );
 
                 return finalExplores;
+            },
+        );
+    }
+
+    /**
+     * Sums the on-disk (TOAST) byte size of the `explore` column for the
+     * matched rows via `pg_column_size`, which reads the stored/compressed
+     * size from the TOAST pointer rather than detoasting the full JSONB
+     * value. Used for cache-read telemetry and to select the explore-summary
+     * read strategy.
+     */
+    async getCachedExploreStorageBytes(
+        projectUuid: string,
+        exploreNamesWithDuplicates?: string[],
+    ): Promise<number> {
+        const { totalBytes } = await this.getCachedExploreStorageStats(
+            projectUuid,
+            exploreNamesWithDuplicates,
+        );
+        return totalBytes;
+    }
+
+    async getCachedExploreStorageStats(
+        projectUuid: string,
+        exploreNamesWithDuplicates?: string[],
+    ): Promise<CachedExploreStorageStats> {
+        const exploreNames = exploreNamesWithDuplicates
+            ? [...new Set(exploreNamesWithDuplicates)]
+            : undefined;
+        const query = this.database(CachedExploreTableName)
+            .select<{ exploreCount: string; totalBytes: string }[]>(
+                this.database.raw(
+                    'COUNT(*)::bigint as "exploreCount", COALESCE(SUM(pg_column_size("explore")), 0)::bigint as "totalBytes"',
+                ),
+            )
+            .where('project_uuid', projectUuid);
+        if (exploreNames) {
+            void query.whereIn('name', exploreNames);
+        }
+        const [row] = await query;
+        return {
+            exploreCount: Number(row?.exploreCount ?? 0),
+            totalBytes: Number(row?.totalBytes ?? 0),
+        };
+    }
+
+    async findExploreTableSummariesFromCache(
+        projectUuid: string,
+        exploreNamesWithDuplicates?: string[],
+        readContext?: ExploreCacheReadContext,
+    ): Promise<Record<string, ExploreTableSummaryRecord>> {
+        const exploreNames = exploreNamesWithDuplicates
+            ? [...new Set(exploreNamesWithDuplicates)]
+            : undefined;
+
+        return wrapSentryTransaction(
+            'ProjectModel.findExploreTableSummariesFromCache',
+            { projectUuid, exploreNames },
+            async (span) => {
+                const { exploreCount, totalBytes } =
+                    await this.getCachedExploreStorageStats(
+                        projectUuid,
+                        exploreNames,
+                    );
+                const storedBytesPerExplore =
+                    exploreCount === 0 ? undefined : totalBytes / exploreCount;
+                const projectionThresholdBytesPerExplore =
+                    this.lightdashConfig.query
+                        .exploreSummaryProjectionMinStoredBytesPerExplore;
+                const shouldReadFullExplores =
+                    exploreCount > 0 &&
+                    projectionThresholdBytesPerExplore > 0 &&
+                    storedBytesPerExplore !== undefined &&
+                    storedBytesPerExplore < projectionThresholdBytesPerExplore;
+
+                if (readContext) {
+                    Object.assign(readContext, {
+                        readStrategy: shouldReadFullExplores
+                            ? ('full-explore-read' as const)
+                            : ('table-summary-projection' as const),
+                        storedExploreBytes: totalBytes,
+                        storedBytesPerExplore,
+                        projectionThresholdBytesPerExplore,
+                    });
+                }
+
+                if (exploreCount === 0) {
+                    span.setAttribute('foundExplores', false);
+                    return Object.create(null) as Record<
+                        string,
+                        ExploreTableSummaryRecord
+                    >;
+                }
+
+                if (shouldReadFullExplores) {
+                    const fullExplores = await this.findExploresFromCache(
+                        projectUuid,
+                        'name',
+                        exploreNames,
+                    );
+                    const summaries = Object.values(fullExplores).reduce<
+                        Record<string, ExploreTableSummaryRecord>
+                    >((acc, explore) => {
+                        const summary = toExploreTableSummaryRecord(explore);
+                        if (summary) {
+                            acc[summary.name] = summary;
+                        }
+                        return acc;
+                    }, Object.create(null));
+                    span.setAttribute(
+                        'foundExplores',
+                        !!Object.keys(summaries).length,
+                    );
+                    return summaries;
+                }
+
+                const query = this.database(CachedExploreTableName)
+                    .select<RawExploreTableSummaryRow[]>(
+                        this.database.raw(`
+                            explore_summary.name as "exploreName",
+                            explore_summary.type as "exploreType",
+                            explore_summary."baseTable" as "baseTable",
+                            explore_summary."hasErrors" as "hasErrors",
+                            table_entry.key as "tableKey",
+                            table_entry.value->'name' as "tableName",
+                            table_entry.value->'originalName' as "originalName",
+                            table_entry.value->'database' as "database",
+                            table_entry.value->'schema' as "schema",
+                            table_entry.value->'description' as "description",
+                            jsonb_exists(table_entry.value, 'description') as "hasDescription",
+                            table_entry.value->'sqlTable' as "sqlTable",
+                            table_entry.value->'ymlPath' as "ymlPath",
+                            table_entry.value->'dbtSourceUuid' as "dbtSourceUuid"
+                        `),
+                    )
+                    .joinRaw(
+                        `LEFT JOIN LATERAL (
+                            SELECT
+                                explore_fields.name,
+                                explore_fields.type,
+                                explore_fields."baseTable",
+                                explore_fields.tables,
+                                jsonb_exists(${CachedExploreTableName}.explore, 'errors') as "hasErrors"
+                            FROM jsonb_to_record(
+                                CASE
+                                    WHEN jsonb_typeof(${CachedExploreTableName}.explore) = 'object'
+                                        THEN ${CachedExploreTableName}.explore
+                                    ELSE '{}'::jsonb
+                                END
+                            ) AS explore_fields(
+                                name text,
+                                type text,
+                                "baseTable" text,
+                                tables jsonb
+                            )
+                            OFFSET 0
+                        ) AS explore_summary ON TRUE
+                        LEFT JOIN LATERAL jsonb_each(
+                            CASE
+                                WHEN jsonb_typeof(explore_summary.tables) = 'object' THEN explore_summary.tables
+                                ELSE '{}'::jsonb
+                            END
+                        ) AS table_entry(key, value)
+                            ON jsonb_typeof(table_entry.value) = 'object'`,
+                    )
+                    .where(
+                        `${CachedExploreTableName}.project_uuid`,
+                        projectUuid,
+                    )
+                    .whereRaw(
+                        `jsonb_typeof(${CachedExploreTableName}.explore->'name') = 'string'`,
+                    )
+                    .whereNotNull('explore_summary.name');
+
+                if (exploreNames) {
+                    void query.whereIn(
+                        `${CachedExploreTableName}.name`,
+                        exploreNames,
+                    );
+                }
+
+                const rows = await query;
+                const explores = reduceExploreTableSummaryRows(rows);
+
+                span.setAttribute(
+                    'foundExplores',
+                    !!Object.keys(explores).length,
+                );
+                return explores;
             },
         );
     }
@@ -1694,7 +2377,8 @@ export class ProjectModel {
 
     /**
      * Get all explore summaries with only the fields needed for the summary view.
-     * This is optimized to avoid fetching the full explore JSON by using PostgreSQL JSON operators.
+     * This is optimized to avoid detoasting the full explore JSON per projected field by
+     * extracting every field once per row with a single lateral jsonb_to_record.
      * @param projectUuid - The project uuid.
      * @returns An array of lightweight explore summary objects.
      */
@@ -1709,24 +2393,52 @@ export class ProjectModel {
         const summaries = await this.database(CachedExploreTableName)
             .select<RawSummaryRow[]>(
                 this.database.raw(`
-                    explore->'name' as name,
-                    explore->'label' as label,
-                    explore->'tags' as tags,
-                    explore->'groupLabel' as "groupLabel",
-                    explore->'groups' as "groups",
-                    explore->'type' as type,
-                    explore->'preAggregateSource' as "preAggregateSource",
-                    explore->'externalSource' as "externalSource",
-                    explore->'errors' as errors,
-                    explore->'warnings' as warnings,
-                    explore->'baseTable' as "baseTable",
-                    explore->'tables'->(explore->>'baseTable')->>'database' as "baseTableDatabase",
-                    explore->'tables'->(explore->>'baseTable')->>'schema' as "baseTableSchema",
-                    explore->'tables'->(explore->>'baseTable')->>'description' as "baseTableDescription",
-                    explore->'tables'->(explore->>'baseTable')->'requiredAttributes' as "baseTableRequiredAttributes",
-                    explore->'tables'->(explore->>'baseTable')->'anyAttributes' as "baseTableAnyAttributes",
-                    explore->'aiHint' as "aiHint"
+                    explore_summary."name" as "name",
+                    explore_summary."label" as "label",
+                    explore_summary."tags" as "tags",
+                    explore_summary."groupLabel" as "groupLabel",
+                    explore_summary."groups" as "groups",
+                    explore_summary."type" as "type",
+                    explore_summary."preAggregateSource" as "preAggregateSource",
+                    explore_summary."externalSource" as "externalSource",
+                    explore_summary."errors" as "errors",
+                    explore_summary."warnings" as "warnings",
+                    explore_summary."baseTable" as "baseTable",
+                    base_table.value->>'database' as "baseTableDatabase",
+                    base_table.value->>'schema' as "baseTableSchema",
+                    base_table.value->>'description' as "baseTableDescription",
+                    base_table.value->'requiredAttributes' as "baseTableRequiredAttributes",
+                    base_table.value->'anyAttributes' as "baseTableAnyAttributes",
+                    explore_summary."aiHint" as "aiHint",
+                    explore_summary."customMeta" as "customMeta"
                 `),
+            )
+            .joinRaw(
+                `LEFT JOIN LATERAL jsonb_to_record(
+                    CASE
+                        WHEN jsonb_typeof(${CachedExploreTableName}.explore) = 'object'
+                            THEN ${CachedExploreTableName}.explore
+                        ELSE '{}'::jsonb
+                    END
+                ) AS explore_summary(
+                    "name" jsonb,
+                    "label" jsonb,
+                    "tags" jsonb,
+                    "groupLabel" jsonb,
+                    "groups" jsonb,
+                    "type" jsonb,
+                    "preAggregateSource" jsonb,
+                    "externalSource" jsonb,
+                    "errors" jsonb,
+                    "warnings" jsonb,
+                    "baseTable" text,
+                    "tables" jsonb,
+                    "aiHint" jsonb,
+                    "customMeta" jsonb
+                ) ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT explore_summary."tables" -> explore_summary."baseTable" AS value
+                ) AS base_table ON TRUE`,
             )
             .where('project_uuid', projectUuid);
 
@@ -1740,6 +2452,7 @@ export class ProjectModel {
             schemaName: row.baseTableSchema,
             description: row.baseTableDescription ?? undefined,
             aiHint: row.aiHint ?? undefined,
+            customMeta: row.customMeta ?? undefined,
             type: row.type ?? undefined,
             preAggregateSource: row.preAggregateSource ?? undefined,
             externalSource: row.externalSource ?? undefined,
@@ -1778,9 +2491,25 @@ export class ProjectModel {
         projectUuid: string,
         exploreName: string,
     ): Promise<string[]> {
-        const allCachedExplores = await this.findExploresFromCache(
-            projectUuid,
-            'name',
+        const splitLookupReadContext = newExploreCacheReadContext(
+            'split-lookup',
+            undefined,
+        );
+        const { result: allCachedExplores } = await measureTime(
+            async () => {
+                const explores = await this.findExploreTableSummariesFromCache(
+                    projectUuid,
+                    undefined,
+                    splitLookupReadContext,
+                );
+                Object.assign(splitLookupReadContext, {
+                    ...summarizeExploreCacheRead(explores),
+                });
+                return explores;
+            },
+            'ProjectModel.findExploreSplitCandidates.cachedExploreRead',
+            Logger,
+            splitLookupReadContext,
         );
         return getExploreSplitCandidates(
             exploreName,
@@ -1899,6 +2628,7 @@ export class ProjectModel {
         projectUuid: string,
         explores: (Explore | ExploreError)[],
         complete = false,
+        dbtModelNames?: string[],
     ) {
         return wrapSentryTransaction(
             'ProjectModel.saveExploresToCache',
@@ -1921,6 +2651,43 @@ export class ProjectModel {
                         );
                     }
                     const cachedExplores = await cachedExploresQuery;
+                    const retainedNames = new Set([
+                        ...(dbtModelNames ?? []),
+                        ...explores.map((explore) => explore.name),
+                    ]);
+                    const hasCombinedSources = cachedExplores.some(
+                        ({ explore }) =>
+                            Object.values(explore.tables ?? {}).some(
+                                (table) => table.dbtSourceUuid !== undefined,
+                            ),
+                    );
+                    const deletedNames =
+                        !complete &&
+                        dbtModelNames !== undefined &&
+                        !hasCombinedSources
+                            ? cachedExplores
+                                  .filter(({ explore }) => {
+                                      const sourceName =
+                                          explore.preAggregateSource
+                                              ?.sourceExploreName ??
+                                          explore.tables?.[
+                                              explore.baseTable ?? explore.name
+                                          ]?.nestedFrom?.parentTable ??
+                                          explore.name;
+                                      return (
+                                          !isUserManagedExplore(explore) &&
+                                          !retainedNames.has(sourceName)
+                                      );
+                                  })
+                                  .map(({ explore }) => explore.name)
+                            : [];
+                    if (deletedNames.length > 0) {
+                        await trx(CachedExploreTableName)
+                            .where('project_uuid', projectUuid)
+                            .whereIn('name', deletedNames)
+                            .delete();
+                    }
+                    const deletedNamesSet = new Set(deletedNames);
                     const userManagedExplores = cachedExplores.filter(
                         ({ explore }) => isUserManagedExplore(explore),
                     );
@@ -1938,10 +2705,15 @@ export class ProjectModel {
                     const exploresMap = new Map(
                         complete
                             ? []
-                            : cachedExplores.map(({ explore }) => [
-                                  explore.name,
-                                  explore,
-                              ]),
+                            : cachedExplores
+                                  .filter(
+                                      ({ explore }) =>
+                                          !deletedNamesSet.has(explore.name),
+                                  )
+                                  .map(({ explore }) => [
+                                      explore.name,
+                                      explore,
+                                  ]),
                     );
                     explores.forEach((explore) =>
                         exploresMap.set(explore.name, explore),
@@ -1951,7 +2723,10 @@ export class ProjectModel {
                     );
                     const uniqueExplores = Array.from(exploresMap.values());
 
-                    if (uniqueExplores.length <= 0) {
+                    if (
+                        uniqueExplores.length <= 0 &&
+                        (complete || dbtModelNames === undefined)
+                    ) {
                         throw new ParameterError('No explores to save');
                     }
 
@@ -1976,36 +2751,64 @@ export class ProjectModel {
                             .delete();
                     }
 
-                    const rowsToSave = exploresToSave.map((explore) => ({
-                        project_uuid: projectUuid,
-                        name: explore.name,
-                        table_names: Object.keys(explore.tables || {}),
-                        explore: JSON.stringify(explore),
-                    }));
-                    const savedExploreBatches = await Promise.all(
-                        chunk(rowsToSave, 1000).map((rows) => {
-                            const insertQuery = trx<DbCachedExplore>(
-                                CachedExploreTableName,
-                            ).insert(rows);
-                            return complete
-                                ? insertQuery.returning('cached_explore_uuid')
-                                : insertQuery
-                                      .onConflict(['name', 'project_uuid'])
-                                      .merge(['table_names', 'explore'])
-                                      .returning('cached_explore_uuid');
-                        }),
-                    );
-                    const individualCachedExplores = savedExploreBatches.flat();
+                    // Serialise one explore at a time so a chunk can be built, inserted and
+                    // released. Building every row up front held the whole set as strings.
+                    let savedBytes = 0;
+                    function* sizedRows() {
+                        // eslint-disable-next-line no-restricted-syntax
+                        for (const explore of exploresToSave) {
+                            const serialised = JSON.stringify(explore);
+                            savedBytes += Buffer.byteLength(serialised);
+                            yield {
+                                row: {
+                                    project_uuid: projectUuid,
+                                    name: explore.name,
+                                    table_names: Object.keys(
+                                        explore.tables || {},
+                                    ),
+                                    explore: serialised,
+                                },
+                                bytes: Buffer.byteLength(serialised),
+                            };
+                        }
+                    }
 
-                    // Cache explores together
-                    await trx(CachedExploresTableName)
-                        .insert({
-                            project_uuid: projectUuid,
-                            explores: JSON.stringify(uniqueExplores),
-                        })
-                        .onConflict('project_uuid')
-                        .merge()
-                        .returning('*');
+                    const individualCachedExplores: {
+                        cached_explore_uuid: string;
+                    }[] = [];
+                    let chunkCount = 0;
+                    let largestChunkBytes = 0;
+                    // Sequential, not Promise.all: every chunk statement was alive at once.
+                    // eslint-disable-next-line no-restricted-syntax
+                    for (const { rows, bytes } of chunkRowsByBytes(
+                        sizedRows(),
+                    )) {
+                        chunkCount += 1;
+                        largestChunkBytes = Math.max(largestChunkBytes, bytes);
+                        const insertQuery = trx<DbCachedExplore>(
+                            CachedExploreTableName,
+                        ).insert(rows);
+                        // eslint-disable-next-line no-await-in-loop
+                        const saved = await (complete
+                            ? insertQuery.returning('cached_explore_uuid')
+                            : insertQuery
+                                  .onConflict(['name', 'project_uuid'])
+                                  .merge(['table_names', 'explore'])
+                                  .returning('cached_explore_uuid'));
+                        individualCachedExplores.push(...saved);
+                    }
+
+                    Logger.info(
+                        `dbt.compile.saveExplores projectUuid=${projectUuid} explores=${uniqueExplores.length} chunks=${chunkCount} largestChunkBytes=${largestChunkBytes}`,
+                        {
+                            event: 'dbt.compile.saveExplores',
+                            projectUuid,
+                            explores: uniqueExplores.length,
+                            chunks: chunkCount,
+                            largestChunkBytes,
+                            savedBytes,
+                        },
+                    );
 
                     return {
                         cachedExploreUuids: individualCachedExplores.map(
@@ -2013,6 +2816,243 @@ export class ProjectModel {
                         ),
                     };
                 }),
+        );
+    }
+
+    async saveExploreStreamToCache(
+        projectUuid: string,
+        explores: AsyncIterable<Explore | ExploreError>,
+    ): Promise<{ cachedExploreUuids: string[] }> {
+        return wrapSentryTransaction(
+            'ProjectModel.saveExploresToCache',
+            {},
+            async () => {
+                const saveUuid = uuidv4();
+                try {
+                    const stageStartedAt = performance.now();
+                    let savedBytes = 0;
+                    const stagedNames = new Set<string>();
+                    const stagedNameOrder: string[] = [];
+                    const sizedRows = async function* sizedRowsGenerator() {
+                        for await (const explore of explores) {
+                            if (!stagedNames.has(explore.name)) {
+                                stagedNames.add(explore.name);
+                                stagedNameOrder.push(explore.name);
+                            }
+                            const serialised = JSON.stringify(explore);
+                            const bytes = Buffer.byteLength(serialised);
+                            savedBytes += bytes;
+                            yield {
+                                row: {
+                                    save_uuid: saveUuid,
+                                    project_uuid: projectUuid,
+                                    name: explore.name,
+                                    table_names: Object.keys(
+                                        explore.tables || {},
+                                    ),
+                                    explore: serialised,
+                                },
+                                bytes,
+                            };
+                        }
+                    };
+
+                    let chunkCount = 0;
+                    let largestChunkBytes = 0;
+                    for await (const { rows, bytes } of chunkAsyncRowsByBytes(
+                        sizedRows(),
+                    )) {
+                        const uniqueRows = Array.from(
+                            new Map(
+                                rows.map((row) => [row.name, row]),
+                            ).values(),
+                        );
+                        await this.database<DbCachedExploreStaging>(
+                            CachedExploreStagingTableName,
+                        )
+                            .insert(uniqueRows)
+                            .onConflict(['save_uuid', 'name', 'project_uuid'])
+                            .merge(['table_names', 'explore']);
+                        chunkCount += 1;
+                        largestChunkBytes = Math.max(largestChunkBytes, bytes);
+                    }
+                    const stageDurationMs = Math.round(
+                        performance.now() - stageStartedAt,
+                    );
+
+                    const swapStartedAt = performance.now();
+                    const { promotedRows, managedNames } =
+                        await this.database.transaction(async (trx) => {
+                            await ProjectModel.lockAndEnsureCachedExplores(
+                                trx,
+                                projectUuid,
+                            );
+                            const managedResult = await trx.raw<{
+                                rows: {
+                                    name: string;
+                                    cached_explore_uuid: string;
+                                }[];
+                            }>(
+                                `INSERT INTO ?? (save_uuid, project_uuid, name, table_names, explore)
+                                 SELECT ?, project_uuid, name, table_names, explore
+                                 FROM ??
+                                 WHERE project_uuid = ?
+                                   AND explore->>'type' = ANY(?)
+                                 ON CONFLICT (save_uuid, name, project_uuid) DO UPDATE
+                                 SET table_names = EXCLUDED.table_names,
+                                     explore = EXCLUDED.explore
+                                 RETURNING name, cached_explore_uuid`,
+                                [
+                                    CachedExploreStagingTableName,
+                                    saveUuid,
+                                    CachedExploreTableName,
+                                    projectUuid,
+                                    [...USER_MANAGED_EXPLORE_TYPES],
+                                ],
+                            );
+                            const expectedNames = new Set(stagedNames);
+                            managedResult.rows.forEach(({ name }) =>
+                                expectedNames.add(name),
+                            );
+                            if (expectedNames.size === 0) {
+                                throw new ParameterError('No explores to save');
+                            }
+                            const lockedStagedRows = await trx(
+                                CachedExploreStagingTableName,
+                            )
+                                .select<{ name: string }[]>('name')
+                                .where({
+                                    save_uuid: saveUuid,
+                                    project_uuid: projectUuid,
+                                })
+                                .forUpdate();
+                            if (
+                                lockedStagedRows.length !==
+                                    expectedNames.size ||
+                                lockedStagedRows.some(
+                                    ({ name }) => !expectedNames.has(name),
+                                )
+                            ) {
+                                throw new UnexpectedServerError(
+                                    'Cached explore staging name set mismatch',
+                                );
+                            }
+                            await trx(CachedExploreTableName)
+                                .where('project_uuid', projectUuid)
+                                .delete();
+                            const promotedResult = await trx.raw<{
+                                rows: {
+                                    name: string;
+                                    cached_explore_uuid: string;
+                                }[];
+                            }>(
+                                `INSERT INTO ?? (cached_explore_uuid, project_uuid, name, table_names, explore)
+                                 SELECT cached_explore_uuid, project_uuid, name, table_names, explore
+                                 FROM ??
+                                 WHERE save_uuid = ? AND project_uuid = ?
+                                 RETURNING name, cached_explore_uuid`,
+                                [
+                                    CachedExploreTableName,
+                                    CachedExploreStagingTableName,
+                                    saveUuid,
+                                    projectUuid,
+                                ],
+                            );
+                            return {
+                                promotedRows: promotedResult.rows,
+                                managedNames: managedResult.rows.map(
+                                    ({ name }) => name,
+                                ),
+                            };
+                        });
+                    const swapDurationMs = Math.round(
+                        performance.now() - swapStartedAt,
+                    );
+                    const cachedExploreUuidsByName = new Map(
+                        promotedRows.map(
+                            ({
+                                name,
+                                cached_explore_uuid: cachedExploreUuid,
+                            }) => [name, cachedExploreUuid],
+                        ),
+                    );
+                    const resultNames = [...stagedNameOrder];
+                    for (const name of managedNames) {
+                        if (!stagedNames.has(name)) resultNames.push(name);
+                    }
+                    Logger.info(
+                        `dbt.compile.saveExplores projectUuid=${projectUuid} explores=${cachedExploreUuidsByName.size} chunks=${chunkCount} largestChunkBytes=${largestChunkBytes} stageDurationMs=${stageDurationMs} swapDurationMs=${swapDurationMs}`,
+                        {
+                            event: 'dbt.compile.saveExplores',
+                            projectUuid,
+                            explores: cachedExploreUuidsByName.size,
+                            chunks: chunkCount,
+                            largestChunkBytes,
+                            savedBytes,
+                            stageDurationMs,
+                            swapDurationMs,
+                        },
+                    );
+                    return {
+                        cachedExploreUuids: resultNames.map((name) => {
+                            const cachedExploreUuid =
+                                cachedExploreUuidsByName.get(name);
+                            if (cachedExploreUuid === undefined) {
+                                throw new UnexpectedServerError(
+                                    `Missing cached explore UUID for ${name}`,
+                                );
+                            }
+                            return cachedExploreUuid;
+                        }),
+                    };
+                } finally {
+                    const cleanupErrors: Error[] = [];
+                    try {
+                        await this.database(CachedExploreStagingTableName)
+                            .where('save_uuid', saveUuid)
+                            .delete();
+                    } catch (error) {
+                        cleanupErrors.push(
+                            error instanceof Error
+                                ? error
+                                : new Error(String(error)),
+                        );
+                    }
+                    try {
+                        await this.database(CachedExploreStagingTableName)
+                            .whereIn(
+                                'save_uuid',
+                                this.database(CachedExploreStagingTableName)
+                                    .select('save_uuid')
+                                    .groupBy('save_uuid')
+                                    .havingRaw(
+                                        "max(created_at) < now() - interval '24 hours'",
+                                    )
+                                    .limit(100),
+                            )
+                            .delete();
+                    } catch (error) {
+                        cleanupErrors.push(
+                            error instanceof Error
+                                ? error
+                                : new Error(String(error)),
+                        );
+                    }
+                    if (cleanupErrors.length > 0) {
+                        Logger.error(
+                            `dbt.compile.saveExplores.cleanupFailed projectUuid=${projectUuid} saveUuid=${saveUuid} errors=${cleanupErrors.length}`,
+                            {
+                                event: 'dbt.compile.saveExplores.cleanupFailed',
+                                projectUuid,
+                                saveUuid,
+                                errors: cleanupErrors.map(
+                                    (error) => error.message,
+                                ),
+                            },
+                        );
+                    }
+                }
+            },
         );
     }
 
@@ -2038,6 +3078,42 @@ export class ProjectModel {
                 await onLockFailed();
             }
         });
+    }
+
+    /**
+     * Who holds the compile lock for a project, and for how long.
+     *
+     * A retry blocked by a zombie compile otherwise reads "Compilation is already in progress"
+     * about a job the server has already declared failed, with nothing to identify the holder.
+     */
+    async getProjectLockHolder(projectUuid: string): Promise<{
+        heldForSeconds: number;
+        backendPid: number;
+        applicationName: string | null;
+    } | null> {
+        const result = await this.database.raw(
+            `
+            SELECT a.pid,
+                   a.application_name,
+                   EXTRACT(EPOCH FROM (now() - a.xact_start)) AS held_for_seconds
+            FROM pg_locks l
+            JOIN pg_stat_activity a ON a.pid = l.pid
+            JOIN projects p ON p.project_uuid = ?
+            WHERE l.locktype = 'advisory'
+              AND l.classid = ?
+              AND l.objid = p.project_id
+              AND l.granted
+            ORDER BY a.xact_start ASC
+            LIMIT 1`,
+            [projectUuid, CACHED_EXPLORES_PG_LOCK_NAMESPACE],
+        );
+        const row = result.rows[0];
+        if (!row) return null;
+        return {
+            heldForSeconds: Math.round(Number(row.held_for_seconds ?? 0)),
+            backendPid: Number(row.pid),
+            applicationName: row.application_name ?? null,
+        };
     }
 
     async getWarehouseFromCache(
@@ -3154,10 +4230,10 @@ export class ProjectModel {
 
         const aliases = await trx(SavedChartSlugMappingsTableName)
             .where('project_uuid', sourceProjectUuid)
-            .whereIn(
+            .whereRaw('?? = ANY(?::uuid[])', [
                 'saved_query_uuid',
                 chartUuidMapping.map(({ sourceChartUuid }) => sourceChartUuid),
-            )
+            ])
             .select('saved_query_uuid', 'slug');
         if (aliases.length === 0) return;
 
@@ -3190,6 +4266,173 @@ export class ProjectModel {
         );
     }
 
+    async copyDashboardSlugMappingsToPreview(
+        trx: Knex,
+        sourceProjectUuid: string,
+        previewProjectUuid: string,
+        dashboardUuidMapping: Array<{
+            sourceDashboardUuid: string;
+            previewDashboardUuid: string;
+        }>,
+    ): Promise<void> {
+        if (dashboardUuidMapping.length === 0) return;
+
+        const aliases = await trx(DashboardSlugMappingsTableName)
+            .where('project_uuid', sourceProjectUuid)
+            .whereRaw('?? = ANY(?::uuid[])', [
+                'dashboard_uuid',
+                dashboardUuidMapping.map(
+                    ({ sourceDashboardUuid }) => sourceDashboardUuid,
+                ),
+            ])
+            .select('dashboard_uuid', 'slug');
+        if (aliases.length === 0) return;
+
+        const previewDashboardUuidBySource = new Map(
+            dashboardUuidMapping.map(
+                ({ sourceDashboardUuid, previewDashboardUuid }) => [
+                    sourceDashboardUuid,
+                    previewDashboardUuid,
+                ],
+            ),
+        );
+        const previewAliases = aliases.map((alias) => {
+            const previewDashboardUuid = previewDashboardUuidBySource.get(
+                alias.dashboard_uuid,
+            );
+            if (!previewDashboardUuid) {
+                throw new UnexpectedServerError(
+                    `Missing preview dashboard mapping for ${alias.dashboard_uuid}`,
+                );
+            }
+            return {
+                project_uuid: previewProjectUuid,
+                dashboard_uuid: previewDashboardUuid,
+                slug: alias.slug,
+            };
+        });
+
+        await trx.batchInsert(
+            DashboardSlugMappingsTableName,
+            previewAliases,
+            INSERT_BATCH_SIZE,
+        );
+    }
+
+    async copyMetricsTreesForTrainingCopy(
+        sourceProjectUuid: string,
+        targetProjectUuid: string,
+        userUuid: string,
+    ): Promise<void> {
+        if (sourceProjectUuid === targetProjectUuid) {
+            throw new ParameterError(
+                'A training copy must be a different project',
+            );
+        }
+        await this.database.transaction(async (trx) => {
+            const trees = await trx(MetricsTreesTableName).where(
+                'project_uuid',
+                sourceProjectUuid,
+            );
+            if (trees.length === 0) return;
+            const sourceMetrics = await trx(CatalogTableName).where({
+                project_uuid: sourceProjectUuid,
+                field_type: 'metric',
+            });
+            const targetMetrics = await trx(CatalogTableName).where({
+                project_uuid: targetProjectUuid,
+                field_type: 'metric',
+            });
+            const metricMapping = new Map(
+                sourceMetrics.map((source) => [
+                    source.catalog_search_uuid,
+                    targetMetrics.find(
+                        (target) =>
+                            target.table_name === source.table_name &&
+                            target.name === source.name &&
+                            target.type === source.type,
+                    )?.catalog_search_uuid,
+                ]),
+            );
+            const remap = (sourceUuid: string): string => {
+                const targetUuid = metricMapping.get(sourceUuid);
+                if (!targetUuid)
+                    throw new ParameterError(
+                        `Training copy is missing a tree metric: ${sourceUuid}`,
+                    );
+                return targetUuid;
+            };
+            const copiedMetricUuids = new Set<string>();
+            await trees.reduce<Promise<void>>(async (previous, tree) => {
+                await previous;
+                const nodes = await trx(MetricsTreeNodesTableName).where(
+                    'metrics_tree_uuid',
+                    tree.metrics_tree_uuid,
+                );
+                const mappedNodes = nodes.map((node) => ({
+                    catalog_search_uuid: remap(node.catalog_search_uuid),
+                    x_position: node.x_position,
+                    y_position: node.y_position,
+                    source: node.source,
+                }));
+                const [created] = await trx(MetricsTreesTableName)
+                    .insert({
+                        project_uuid: targetProjectUuid,
+                        name: tree.name,
+                        slug: tree.slug,
+                        description: tree.description,
+                        source: tree.source,
+                        created_by_user_uuid: userUuid,
+                    })
+                    .returning('*');
+                if (mappedNodes.length > 0) {
+                    await trx(MetricsTreeNodesTableName).insert(
+                        mappedNodes.map((node) => ({
+                            ...node,
+                            metrics_tree_uuid: created.metrics_tree_uuid,
+                        })),
+                    );
+                }
+                nodes.forEach((node) =>
+                    copiedMetricUuids.add(node.catalog_search_uuid),
+                );
+            }, Promise.resolve());
+            // YAML edges already belong to the new catalog; copy published UI edges only.
+            const edges = await trx(MetricsTreeEdgesTableName)
+                .where({
+                    project_uuid: sourceProjectUuid,
+                    source: 'ui',
+                })
+                .whereIn('source_metric_catalog_search_uuid', [
+                    ...copiedMetricUuids,
+                ])
+                .whereIn('target_metric_catalog_search_uuid', [
+                    ...copiedMetricUuids,
+                ]);
+            if (edges.length > 0) {
+                await trx(MetricsTreeEdgesTableName)
+                    .insert(
+                        edges.map((edge) => ({
+                            source_metric_catalog_search_uuid: remap(
+                                edge.source_metric_catalog_search_uuid,
+                            ),
+                            target_metric_catalog_search_uuid: remap(
+                                edge.target_metric_catalog_search_uuid,
+                            ),
+                            project_uuid: targetProjectUuid,
+                            created_by_user_uuid: userUuid,
+                            source: edge.source,
+                        })),
+                    )
+                    .onConflict([
+                        'source_metric_catalog_search_uuid',
+                        'target_metric_catalog_search_uuid',
+                    ])
+                    .ignore();
+            }
+        });
+    }
+
     async duplicateContent(
         projectUuid: string,
         previewProjectUuid: string,
@@ -3212,9 +4455,10 @@ export class ProjectModel {
                 .select('project_id');
             const projectId = project.project_id;
 
-            const dbSpaces = await trx(SpaceTableName).whereIn(
-                'space_uuid',
-                spaces.map((s) => s.uuid),
+            // Bind ID lists as arrays so large copies stay below Postgres's parameter limit.
+            const dbSpaces = await trx(SpaceTableName).whereRaw(
+                '?? = ANY(?::uuid[])',
+                ['space_uuid', spaces.map((s) => s.uuid)],
             );
 
             Logger.info(
@@ -3225,36 +4469,34 @@ export class ProjectModel {
 
             const newSpaces =
                 spaces.length > 0
-                    ? await trx(SpaceTableName)
-                          .insert(
-                              dbSpaces.map((d) => {
-                                  type CloneSpace = Omit<
-                                      DbSpace,
-                                      | 'space_id'
-                                      | 'space_uuid'
-                                      | 'search_vector'
-                                  > & {
-                                      search_vector?: undefined;
-                                      space_id?: number;
-                                      space_uuid?: string;
-                                  };
-                                  const createSpace: CloneSpace = {
-                                      ...d,
-                                      search_vector: undefined,
-                                      space_id: undefined,
-                                      space_uuid: undefined,
-                                      project_id: previewProject.project_id,
-                                      parent_space_uuid: null,
-                                  };
-                                  // Remove the keys for the autogenerated fields
-                                  // Some databases do not support undefined values
-                                  delete createSpace.search_vector;
-                                  delete createSpace.space_id;
-                                  delete createSpace.space_uuid;
-                                  return createSpace;
-                              }),
-                          )
-                          .returning('*')
+                    ? await chunkedInsertReturning<DbSpace>(
+                          trx,
+                          SpaceTableName,
+                          dbSpaces.map((d) => {
+                              type CloneSpace = Omit<
+                                  DbSpace,
+                                  'space_id' | 'space_uuid' | 'search_vector'
+                              > & {
+                                  search_vector?: undefined;
+                                  space_id?: number;
+                                  space_uuid?: string;
+                              };
+                              const createSpace: CloneSpace = {
+                                  ...d,
+                                  search_vector: undefined,
+                                  space_id: undefined,
+                                  space_uuid: undefined,
+                                  project_id: previewProject.project_id,
+                                  parent_space_uuid: null,
+                              };
+                              // Remove the keys for the autogenerated fields
+                              // Some databases do not support undefined values
+                              delete createSpace.search_vector;
+                              delete createSpace.space_id;
+                              delete createSpace.space_uuid;
+                              return createSpace;
+                          }),
+                      )
                     : [];
 
             // fix parent_space_uuid based on path for the spaces
@@ -3277,33 +4519,41 @@ export class ProjectModel {
                 newId: newSpaces[i].space_id,
                 newUuid: newSpaces[i].space_uuid,
             }));
+            const previewSpaceIdBySource = new Map(
+                spaceMapping.map((m) => [m.id, m.newId]),
+            );
+            const previewSpaceUuidBySource = new Map(
+                spaceMapping.map((m) => [m.uuid, m.newUuid]),
+            );
 
-            const getNewSpaceId = (oldSpacId: number): number =>
-                spaceMapping.find((s) => s.id === oldSpacId)?.newId!;
+            const getNewSpaceId = (oldSpaceId: number): number =>
+                previewSpaceIdBySource.get(oldSpaceId)!;
 
             const getNewSpaceUuid = (oldSpaceUuid: string): string =>
-                spaceMapping.find((s) => s.uuid === oldSpaceUuid)?.newUuid!;
+                previewSpaceUuidBySource.get(oldSpaceUuid)!;
 
-            const spaceUserAccesses = await trx('space_user_access').whereIn(
-                'space_uuid',
-                spaceUuids,
+            const spaceUserAccesses = await trx('space_user_access').whereRaw(
+                '?? = ANY(?::uuid[])',
+                ['space_uuid', spaceUuids],
             );
 
             const newSpaceUserAccess =
                 spaceUserAccesses.length > 0
-                    ? await trx('space_user_access')
-                          .insert(
-                              spaceUserAccesses.map((d) => ({
-                                  ...d,
-                                  space_uuid: getNewSpaceUuid(d.space_uuid),
-                              })),
-                          )
-                          .returning('*')
+                    ? await chunkedInsertReturning<
+                          (typeof spaceUserAccesses)[number]
+                      >(
+                          trx,
+                          'space_user_access',
+                          spaceUserAccesses.map((d) => ({
+                              ...d,
+                              space_uuid: getNewSpaceUuid(d.space_uuid),
+                          })),
+                      )
                     : [];
 
-            const spaceGroupAccesses = await trx('space_group_access').whereIn(
-                'space_uuid',
-                spaceUuids,
+            const spaceGroupAccesses = await trx('space_group_access').whereRaw(
+                '?? = ANY(?::uuid[])',
+                ['space_uuid', spaceUuids],
             );
 
             Logger.info(
@@ -3312,14 +4562,16 @@ export class ProjectModel {
 
             const newSpaceGroupAccesses =
                 spaceGroupAccesses.length > 0
-                    ? await trx('space_group_access')
-                          .insert(
-                              spaceGroupAccesses.map((d) => ({
-                                  ...d,
-                                  space_uuid: getNewSpaceUuid(d.space_uuid),
-                              })),
-                          )
-                          .returning('*')
+                    ? await chunkedInsertReturning<
+                          (typeof spaceGroupAccesses)[number]
+                      >(
+                          trx,
+                          'space_group_access',
+                          spaceGroupAccesses.map((d) => ({
+                              ...d,
+                              space_uuid: getNewSpaceUuid(d.space_uuid),
+                          })),
+                      )
                     : [];
 
             const virtualViews = await trx(CachedExploreTableName)
@@ -3336,7 +4588,9 @@ export class ProjectModel {
                     `Copying ${virtualViews.length} virtual views into ${previewProjectUuid}`,
                 );
 
-                await trx(CachedExploreTableName).insert(
+                await chunkedInsertReturning<(typeof virtualViews)[number]>(
+                    trx,
+                    CachedExploreTableName,
                     virtualViews.map((v) => ({
                         ...v,
                         project_uuid: previewProjectUuid,
@@ -3367,10 +4621,10 @@ export class ProjectModel {
                     .andWhere('scope', ExternalSourceScope.CATALOG);
                 const sourceTables = await trx(
                     ExternalSourceTablesTableName,
-                ).whereIn(
+                ).whereRaw('?? = ANY(?::uuid[])', [
                     'external_source_uuid',
                     sources.map((source) => source.external_source_uuid),
-                );
+                ]);
                 const sourceUuidMap = new Map(
                     sources.map((s) => [s.external_source_uuid, uuidv4()]),
                 );
@@ -3381,7 +4635,9 @@ export class ProjectModel {
                     ]),
                 );
                 if (sources.length > 0) {
-                    await trx(ExternalSourcesTableName).insert(
+                    await chunkedInsertReturning<(typeof sources)[number]>(
+                        trx,
+                        ExternalSourcesTableName,
                         sources.map(
                             ({ created_at, updated_at, ...source }) => ({
                                 ...source,
@@ -3394,7 +4650,9 @@ export class ProjectModel {
                     );
                 }
                 if (sourceTables.length > 0) {
-                    await trx(ExternalSourceTablesTableName).insert(
+                    await chunkedInsertReturning<(typeof sourceTables)[number]>(
+                        trx,
+                        ExternalSourceTablesTableName,
                         sourceTables.map(
                             ({ created_at, updated_at, ...table }) => ({
                                 ...table,
@@ -3410,7 +4668,11 @@ export class ProjectModel {
                     );
                 }
 
-                await trx(CachedExploreTableName).insert(
+                await chunkedInsertReturning<
+                    (typeof externalSourceExplores)[number]
+                >(
+                    trx,
+                    CachedExploreTableName,
                     externalSourceExplores.map((v) => ({
                         ...v,
                         project_uuid: previewProjectUuid,
@@ -3439,10 +4701,100 @@ export class ProjectModel {
                 );
             }
 
-            // .dP"Y8    db    Yb    dP 888888 8888b.      .dP"Y8  dP"Yb  88
-            // `Ybo."   dPYb    Yb  dP  88__    8I  Yb     `Ybo." dP   Yb 88
-            // o.`Y8b  dP__Yb    YbdP   88""    8I  dY     o.`Y8b Yb b dP 88  .o
-            // 8bodP' dP""""Yb    YP    888888 8888Y"      8bodP'  `"YoYo 88ood8
+            // Dashboards
+            const dashboards = await trx(DashboardsTableName)
+                .leftJoin(
+                    SpaceTableName,
+                    `${DashboardsTableName}.space_id`,
+                    `${SpaceTableName}.space_id`,
+                )
+                .whereRaw('?? = ANY(?::int[])', [
+                    `${DashboardsTableName}.space_id`,
+                    spaceIds,
+                ])
+                .andWhere(`${SpaceTableName}.project_id`, projectId)
+                .whereNull(`${DashboardsTableName}.deleted_at`)
+                .whereNull(`${SpaceTableName}.deleted_at`)
+                .select<DbDashboard[]>(`${DashboardsTableName}.*`);
+
+            const dashboardIds = dashboards.map((d) => d.dashboard_id);
+
+            Logger.info(
+                `Copying ${dashboards.length} dashboards on ${previewProjectUuid}`,
+            );
+
+            const newDashboards =
+                dashboards.length > 0
+                    ? await chunkedInsertReturning<DbDashboard>(
+                          trx,
+                          DashboardsTableName,
+                          dashboards.map((d) => {
+                              type CloneDashboard = Omit<
+                                  DbDashboard,
+                                  | 'dashboard_id'
+                                  | 'dashboard_uuid'
+                                  | 'search_vector'
+                              > & {
+                                  search_vector?: string;
+                                  dashboard_id?: number;
+                                  dashboard_uuid?: string;
+                              };
+                              const createDashboard: CloneDashboard = {
+                                  ...replaceProjectUuid(d, previewProjectUuid),
+                                  search_vector: undefined,
+                                  dashboard_id: undefined,
+                                  dashboard_uuid: undefined,
+                                  space_id: getNewSpaceId(d.space_id),
+                              };
+                              delete createDashboard.search_vector;
+                              delete createDashboard.dashboard_id;
+                              delete createDashboard.dashboard_uuid;
+                              return createDashboard;
+                          }),
+                      )
+                    : [];
+
+            const dashboardMapping = dashboards.map((c, i) => ({
+                id: c.dashboard_id,
+                newId: newDashboards[i].dashboard_id,
+                uuid: c.dashboard_uuid,
+                newUuid: newDashboards[i].dashboard_uuid,
+            }));
+            const previewDashboardIdBySource = new Map(
+                dashboardMapping.map((m) => [m.id, m.newId]),
+            );
+            const previewDashboardUuidBySource = new Map(
+                dashboardMapping.map((m) => [m.uuid, m.newUuid]),
+            );
+            await this.copyDashboardSlugMappingsToPreview(
+                trx,
+                projectUuid,
+                previewProjectUuid,
+                dashboardMapping.map((mapping) => ({
+                    sourceDashboardUuid: mapping.uuid,
+                    previewDashboardUuid: mapping.newUuid,
+                })),
+            );
+            // Dashboard content is only copied when its dashboard was
+            const hasCopiedDashboard = <
+                T extends { dashboard_uuid: string | null },
+            >(
+                row: T,
+            ): row is T & { dashboard_uuid: string } =>
+                row.dashboard_uuid !== null &&
+                previewDashboardUuidBySource.has(row.dashboard_uuid);
+            const getPreviewDashboardUuid = (sourceDashboardUuid: string) => {
+                const previewDashboardUuid =
+                    previewDashboardUuidBySource.get(sourceDashboardUuid);
+                if (!previewDashboardUuid) {
+                    throw new UnexpectedServerError(
+                        `Missing preview dashboard mapping for ${sourceDashboardUuid}`,
+                    );
+                }
+                return previewDashboardUuid;
+            };
+
+            // Saved SQL
 
             // Get all the saved SQLs
             const savedSQLs = await trx(SavedSqlTableName)
@@ -3451,7 +4803,10 @@ export class ProjectModel {
                     `${SavedSqlTableName}.space_uuid`,
                     `${SpaceTableName}.space_uuid`,
                 )
-                .whereIn(`${SavedSqlTableName}.space_uuid`, spaceUuids)
+                .whereRaw('?? = ANY(?::uuid[])', [
+                    `${SavedSqlTableName}.space_uuid`,
+                    spaceUuids,
+                ])
                 .andWhere(`${SpaceTableName}.project_id`, projectId)
                 .whereNull(`${SavedSqlTableName}.deleted_at`)
                 .select<DbSavedSql[]>(`${SavedSqlTableName}.*`);
@@ -3495,17 +4850,17 @@ export class ProjectModel {
                     mappedSavedSQLsPromises,
                 );
                 // Insert all the saved SQLs after they have been mapped and return the result
-                const newSavedSQLs = await trx(SavedSqlTableName)
-                    .insert(mappedSavedSQLs)
-                    .returning('*');
-                return newSavedSQLs;
+                return chunkedInsertReturning<DbSavedSql>(
+                    trx,
+                    SavedSqlTableName,
+                    mappedSavedSQLs,
+                );
             };
 
             // Create the saved SQLs
             const newSavedSQLs = await createSavedSQLs(savedSQLs);
 
-            // Create a mapping of the old saved SQLs to the new saved SQLs
-            const savedSQLInDashboards = await trx(SavedSqlTableName)
+            const sourceSavedSQLInDashboards = await trx(SavedSqlTableName)
                 .leftJoin(
                     DashboardsTableName,
                     function nonDeletedDashboardJoin() {
@@ -3527,41 +4882,36 @@ export class ProjectModel {
                 .whereNull(`${SavedSqlTableName}.deleted_at`)
                 .select<DbSavedSql[]>(`${SavedSqlTableName}.*`);
 
+            const savedSQLInDashboards =
+                sourceSavedSQLInDashboards.filter(hasCopiedDashboard);
+
             Logger.info(
-                `Copying ${savedSQLInDashboards.length} charts in dashboards on ${previewProjectUuid}`,
+                `Copying ${savedSQLInDashboards.length} SQL charts in dashboards on ${previewProjectUuid}, skipping ${
+                    sourceSavedSQLInDashboards.length -
+                    savedSQLInDashboards.length
+                } whose dashboard was not copied`,
             );
 
-            // Create the saved SQLs in the dashboards
             const newSavedSQLInDashboards =
                 savedSQLInDashboards.length > 0
-                    ? await trx(SavedSqlTableName)
-                          .insert(
-                              savedSQLInDashboards.map((d) => {
-                                  if (!d.dashboard_uuid) {
-                                      throw new Error(
-                                          `Chart ${d.saved_sql_uuid} has no dashboard_uuid`,
-                                      );
-                                  }
-                                  const createSavedSQL: CloneSavedSQL = {
-                                      // The dashboard UUID is remapped after
-                                      // dashboards are cloned below. Keep the
-                                      // destination project UUID throughout
-                                      // this transaction.
-                                      ...replaceProjectUuid(
-                                          d,
-                                          previewProjectUuid,
-                                      ),
-                                      dashboard_uuid: d.dashboard_uuid,
-                                      search_vector: undefined,
-                                      saved_sql_uuid: undefined,
-                                      space_uuid: null,
-                                  };
-                                  delete createSavedSQL.search_vector;
-                                  delete createSavedSQL.saved_sql_uuid;
-                                  return createSavedSQL;
-                              }),
-                          )
-                          .returning('*')
+                    ? await chunkedInsertReturning<DbSavedSql>(
+                          trx,
+                          SavedSqlTableName,
+                          savedSQLInDashboards.map((d) => {
+                              const createSavedSQL: CloneSavedSQL = {
+                                  ...replaceProjectUuid(d, previewProjectUuid),
+                                  dashboard_uuid: getPreviewDashboardUuid(
+                                      d.dashboard_uuid,
+                                  ),
+                                  search_vector: undefined,
+                                  saved_sql_uuid: undefined,
+                                  space_uuid: null,
+                              };
+                              delete createSavedSQL.search_vector;
+                              delete createSavedSQL.saved_sql_uuid;
+                              return createSavedSQL;
+                          }),
+                      )
                     : [];
 
             // Create a mapping of the old saved SQLs to the new saved SQLs
@@ -3579,47 +4929,56 @@ export class ProjectModel {
                 ...savedSQLInSpacesMapping,
                 ...savedSQLInDashboardsMapping,
             ];
+            const previewSavedSqlUuidBySource = new Map(
+                savedSQLMapping.map((m) => [m.id, m.newId]),
+            );
 
             const savedSQLUuids = savedSQLMapping.map((c) => c.id);
 
             // Get the last saved SQL version by uuid and created_at
             const lastSavedSQLVersionEntries = await trx('saved_sql_versions')
-                .whereIn('saved_sql_uuid', savedSQLUuids)
+                .whereRaw('?? = ANY(?::uuid[])', [
+                    'saved_sql_uuid',
+                    savedSQLUuids,
+                ])
                 .select('saved_sql_uuid')
                 .max('created_at as latest_created_at')
                 .groupBy('saved_sql_uuid');
 
             // Now query the full records for each saved_sql_uuid where created_at is the latest
             const savedSQLVersions = await trx('saved_sql_versions')
-                .whereIn(
+                .whereRaw('?? = ANY(?::uuid[])', [
                     'saved_sql_uuid',
                     lastSavedSQLVersionEntries.map((d) => d.saved_sql_uuid),
-                )
+                ])
                 .select('*');
 
             const newSavedSQLVersions =
                 savedSQLVersions.length > 0
-                    ? await trx('saved_sql_versions')
-                          .insert(
-                              savedSQLVersions.map((d) => {
-                                  const newSavedSQLUuid = savedSQLMapping.find(
-                                      (m) => m.id === d.saved_sql_uuid,
-                                  )?.newId;
-                                  if (!newSavedSQLUuid) {
-                                      throw new Error(
-                                          `Cannot find new saved SQL uuid for ${d.saved_sql_uuid}`,
-                                      );
-                                  }
-                                  const createSavedSQLVersion = {
-                                      ...d,
-                                      saved_sql_version_uuid: undefined,
-                                      saved_sql_uuid: newSavedSQLUuid,
-                                  };
-                                  delete createSavedSQLVersion.saved_sql_version_uuid;
-                                  return createSavedSQLVersion;
-                              }),
-                          )
-                          .returning('*')
+                    ? await chunkedInsertReturning<
+                          (typeof savedSQLVersions)[number]
+                      >(
+                          trx,
+                          'saved_sql_versions',
+                          savedSQLVersions.map((d) => {
+                              const newSavedSQLUuid =
+                                  previewSavedSqlUuidBySource.get(
+                                      d.saved_sql_uuid,
+                                  );
+                              if (!newSavedSQLUuid) {
+                                  throw new Error(
+                                      `Cannot find new saved SQL uuid for ${d.saved_sql_uuid}`,
+                                  );
+                              }
+                              const createSavedSQLVersion = {
+                                  ...d,
+                                  saved_sql_version_uuid: undefined,
+                                  saved_sql_uuid: newSavedSQLUuid,
+                              };
+                              delete createSavedSQLVersion.saved_sql_version_uuid;
+                              return createSavedSQLVersion;
+                          }),
+                      )
                     : [];
 
             const savedSQLVersionMapping = savedSQLVersions.map((c, i) => ({
@@ -3627,17 +4986,17 @@ export class ProjectModel {
                 newId: newSavedSQLVersions[i].saved_sql_version_uuid,
             }));
 
-            //  dP""b8 88  88    db    88""Yb 888888 .dP"Y8
-            // dP   `" 88  88   dPYb   88__dP   88   `Ybo."
-            // Yb      888888  dP__Yb  88"Yb    88   o.`Y8b
-            //  YboodP 88  88 dP""""Yb 88  Yb   88   8bodP'
+            // Charts
             const charts = await trx(SavedChartsTableName)
                 .leftJoin(
                     SpaceTableName,
                     `${SavedChartsTableName}.space_id`,
                     `${SpaceTableName}.space_id`,
                 )
-                .whereIn(`${SpaceTableName}.space_id`, spaceIds)
+                .whereRaw('?? = ANY(?::int[])', [
+                    `${SpaceTableName}.space_id`,
+                    spaceIds,
+                ])
                 .andWhere(`${SpaceTableName}.project_id`, projectId)
                 .whereNull(`${SpaceTableName}.deleted_at`)
                 .whereNull(`${SavedChartsTableName}.deleted_at`)
@@ -3679,7 +5038,7 @@ export class ProjectModel {
                       )
                     : [];
 
-            const chartsInDashboards = await trx(SavedChartsTableName)
+            const sourceChartsInDashboards = await trx(SavedChartsTableName)
                 .leftJoin(
                     DashboardsTableName,
                     function nonDeletedDashboardJoin() {
@@ -3702,27 +5061,28 @@ export class ProjectModel {
                 .whereNull(`${SavedChartsTableName}.deleted_at`)
                 .select<DbSavedChart[]>(`${SavedChartsTableName}.*`);
 
+            const chartsInDashboards =
+                sourceChartsInDashboards.filter(hasCopiedDashboard);
+
             Logger.info(
-                `Copying ${chartsInDashboards.length} charts in dashboards on ${previewProjectUuid}`,
+                `Copying ${chartsInDashboards.length} charts in dashboards on ${previewProjectUuid}, skipping ${
+                    sourceChartsInDashboards.length - chartsInDashboards.length
+                } whose dashboard was not copied`,
             );
 
-            // We also copy charts in dashboards, we will replace the dashboard_uuid later
             const newChartsInDashboards =
                 chartsInDashboards.length > 0
                     ? await chunkedInsertReturning<DbSavedChart>(
                           trx,
                           SavedChartsTableName,
                           chartsInDashboards.map((d) => {
-                              if (!d.dashboard_uuid) {
-                                  throw new Error(
-                                      `Chart in dashboard ${d.saved_query_id} has no dashboard_uuid`,
-                                  );
-                              }
                               const createChart: CloneChart = {
                                   ...replaceProjectUuid(d, previewProjectUuid),
                                   search_vector: undefined,
                                   space_id: null,
-                                  dashboard_uuid: d.dashboard_uuid,
+                                  dashboard_uuid: getPreviewDashboardUuid(
+                                      d.dashboard_uuid,
+                                  ),
                               };
                               delete createChart.search_vector;
                               delete createChart.saved_query_id;
@@ -3752,6 +5112,12 @@ export class ProjectModel {
                         newChartsInDashboards[index].saved_query_uuid,
                 })),
             ];
+            const previewChartUuidBySource = new Map(
+                chartUuidMapping.map((m) => [
+                    m.sourceChartUuid,
+                    m.previewChartUuid,
+                ]),
+            );
 
             await this.copyChartSlugMappingsToPreview(
                 trx,
@@ -3764,20 +5130,23 @@ export class ProjectModel {
                 ...chartInSpacesMapping,
                 ...chartInDashboardsMapping,
             ];
+            const previewChartIdBySource = new Map(
+                chartMapping.map((m) => [m.id, m.newId]),
+            );
 
             const chartIds = chartMapping.map((c) => c.id);
 
             // only get last chart version
             const lastVersionIds = await trx('saved_queries_versions')
-                .whereIn('saved_query_id', chartIds)
+                .whereRaw('?? = ANY(?::int[])', ['saved_query_id', chartIds])
                 .groupBy('saved_query_id')
                 .max('saved_queries_version_id');
 
             const chartVersions = await trx('saved_queries_versions')
-                .whereIn(
+                .whereRaw('?? = ANY(?::int[])', [
                     'saved_queries_version_id',
                     lastVersionIds.map((d) => d.max),
-                )
+                ])
                 .select('*');
 
             const chartVersionIds = chartVersions.map(
@@ -3792,9 +5161,8 @@ export class ProjectModel {
                           trx,
                           'saved_queries_versions',
                           chartVersions.map((d) => {
-                              const newSavedQueryId = chartMapping.find(
-                                  (m) => m.id === d.saved_query_id,
-                              )?.newId;
+                              const newSavedQueryId =
+                                  previewChartIdBySource.get(d.saved_query_id);
                               if (!newSavedQueryId) {
                                   throw new Error(
                                       `Cannot find new chart id for ${d.saved_query_id}`,
@@ -3818,6 +5186,9 @@ export class ProjectModel {
                 id: c.saved_queries_version_id,
                 newId: newChartVersions[i].saved_queries_version_id,
             }));
+            const previewChartVersionIdBySource = new Map(
+                chartVersionMapping.map((m) => [m.id, m.newId]),
+            );
 
             const copyChartVersionContent = async (
                 table: string,
@@ -3827,7 +5198,10 @@ export class ProjectModel {
                 } = {},
             ) => {
                 const content = await trx(table)
-                    .whereIn('saved_queries_version_id', chartVersionIds)
+                    .whereRaw('?? = ANY(?::int[])', [
+                        'saved_queries_version_id',
+                        chartVersionIds,
+                    ])
                     .select(`*`);
 
                 if (content.length === 0) return undefined;
@@ -3843,10 +5217,9 @@ export class ProjectModel {
                             const createContent = {
                                 ...d,
                                 saved_queries_version_id:
-                                    chartVersionMapping.find(
-                                        (m) =>
-                                            m.id === d.saved_queries_version_id,
-                                    )?.newId,
+                                    previewChartVersionIdBySource.get(
+                                        d.saved_queries_version_id,
+                                    ),
                             };
                             excludedFields.forEach((fieldId) => {
                                 delete createContent[fieldId];
@@ -3901,72 +5274,9 @@ export class ProjectModel {
                 },
             );
 
-            // 8888b.     db    .dP"Y8 88  88 88""Yb  dP"Yb     db    88""Yb 8888b.  .dP"Y8
-            //  8I  Yb   dPYb   `Ybo." 88  88 88__dP dP   Yb   dPYb   88__dP  8I  Yb `Ybo."
-            //  8I  dY  dP__Yb  o.`Y8b 888888 88""Yb Yb   dP  dP__Yb  88"Yb   8I  dY o.`Y8b
-            // 8888Y"  dP""""Yb 8bodP' 88  88 88oodP  YbodP  dP""""Yb 88  Yb 8888Y"  8bodP'
-            const dashboards = await trx(DashboardsTableName)
-                .leftJoin(
-                    SpaceTableName,
-                    `${DashboardsTableName}.space_id`,
-                    `${SpaceTableName}.space_id`,
-                )
-                .whereIn(`${DashboardsTableName}.space_id`, spaceIds)
-                .andWhere(`${SpaceTableName}.project_id`, projectId)
-                .whereNull(`${DashboardsTableName}.deleted_at`)
-                .whereNull(`${SpaceTableName}.deleted_at`)
-                .select<DbDashboard[]>(`${DashboardsTableName}.*`);
-
-            const dashboardIds = dashboards.map((d) => d.dashboard_id);
-
-            Logger.info(
-                `Copying ${dashboards.length} dashboards on ${previewProjectUuid}`,
-            );
-
-            const newDashboards =
-                dashboards.length > 0
-                    ? await trx(DashboardsTableName)
-                          .insert(
-                              dashboards.map((d) => {
-                                  type CloneDashboard = Omit<
-                                      DbDashboard,
-                                      | 'dashboard_id'
-                                      | 'dashboard_uuid'
-                                      | 'search_vector'
-                                  > & {
-                                      search_vector?: string;
-                                      dashboard_id?: number;
-                                      dashboard_uuid?: string;
-                                  };
-                                  const createDashboard: CloneDashboard = {
-                                      ...replaceProjectUuid(
-                                          d,
-                                          previewProjectUuid,
-                                      ),
-                                      search_vector: undefined,
-                                      dashboard_id: undefined,
-                                      dashboard_uuid: undefined,
-                                      space_id: getNewSpaceId(d.space_id),
-                                  };
-                                  delete createDashboard.search_vector;
-                                  delete createDashboard.dashboard_id;
-                                  delete createDashboard.dashboard_uuid;
-                                  return createDashboard;
-                              }),
-                          )
-                          .returning('*')
-                    : [];
-
-            const dashboardMapping = dashboards.map((c, i) => ({
-                id: c.dashboard_id,
-                newId: newDashboards[i].dashboard_id,
-                uuid: c.dashboard_uuid,
-                newUuid: newDashboards[i].dashboard_uuid,
-            }));
-
             // Get last version of a dashboard
             const lastDashboardVersionsIds = await trx('dashboard_versions')
-                .whereIn('dashboard_id', dashboardIds)
+                .whereRaw('?? = ANY(?::int[])', ['dashboard_id', dashboardIds])
                 .groupBy('dashboard_id')
                 .max('dashboard_version_id');
 
@@ -3975,7 +5285,10 @@ export class ProjectModel {
             );
 
             const dashboardVersions = await trx('dashboard_versions')
-                .whereIn('dashboard_version_id', dashboardVersionIds)
+                .whereRaw('?? = ANY(?::int[])', [
+                    'dashboard_version_id',
+                    dashboardVersionIds,
+                ])
                 .select('*');
 
             const newDashboardVersions =
@@ -3990,9 +5303,9 @@ export class ProjectModel {
                                   ...d,
                                   dashboard_version_id: undefined,
                                   dashboard_version_uuid: undefined,
-                                  dashboard_id: dashboardMapping.find(
-                                      (m) => m.id === d.dashboard_id,
-                                  )?.newId!,
+                                  dashboard_id: previewDashboardIdBySource.get(
+                                      d.dashboard_id,
+                                  )!,
                               };
                               delete createDashboardVersion.dashboard_version_id;
                               delete createDashboardVersion.dashboard_version_uuid;
@@ -4005,10 +5318,13 @@ export class ProjectModel {
                 id: c.dashboard_version_id,
                 newId: newDashboardVersions[i].dashboard_version_id,
             }));
+            const previewDashboardVersionIdBySource = new Map(
+                dashboardVersionsMapping.map((m) => [m.id, m.newId]),
+            );
 
-            const dashboardTabs = await trx(DashboardTabsTableName).whereIn(
-                'dashboard_version_id',
-                dashboardVersionIds,
+            const dashboardTabs = await trx(DashboardTabsTableName).whereRaw(
+                '?? = ANY(?::int[])',
+                ['dashboard_version_id', dashboardVersionIds],
             );
 
             Logger.info(
@@ -4023,12 +5339,13 @@ export class ProjectModel {
                         dashboardTabs.map((d) => ({
                             ...d,
                             uuid: uuidv4(), // we need to generate the uuid here: https://github.com/lightdash/lightdash/issues/10408
-                            dashboard_id: dashboardMapping.find(
-                                (m) => m.id === d.dashboard_id,
-                            )?.newId!,
-                            dashboard_version_id: dashboardVersionsMapping.find(
-                                (m) => m.id === d.dashboard_version_id,
-                            )?.newId!,
+                            dashboard_id: previewDashboardIdBySource.get(
+                                d.dashboard_id,
+                            )!,
+                            dashboard_version_id:
+                                previewDashboardVersionIdBySource.get(
+                                    d.dashboard_version_id,
+                                )!,
                         })),
                     );
             }
@@ -4037,10 +5354,16 @@ export class ProjectModel {
                 newUuid: c.uuid,
                 dashboardVersionId: dashboardTabs[i].dashboard_version_id,
             }));
+            const previewTabUuidBySource = new Map(
+                dashboardTabsMapping.map((m) => [
+                    `${m.dashboardVersionId}:${m.uuid}`,
+                    m.newUuid,
+                ]),
+            );
 
-            const dashboardViews = await trx(DashboardViewsTableName).whereIn(
-                'dashboard_version_id',
-                dashboardVersionIds,
+            const dashboardViews = await trx(DashboardViewsTableName).whereRaw(
+                '?? = ANY(?::int[])',
+                ['dashboard_version_id', dashboardVersionIds],
             );
 
             Logger.info(
@@ -4054,16 +5377,17 @@ export class ProjectModel {
                     dashboardViews.map((d) => ({
                         ...d,
                         dashboard_view_uuid: undefined,
-                        dashboard_version_id: dashboardVersionsMapping.find(
-                            (m) => m.id === d.dashboard_version_id,
-                        )?.newId!,
+                        dashboard_version_id:
+                            previewDashboardVersionIdBySource.get(
+                                d.dashboard_version_id,
+                            )!,
                     })),
                 );
             }
 
-            const dashboardTiles = await trx('dashboard_tiles').whereIn(
-                'dashboard_version_id',
-                dashboardVersionIds,
+            const dashboardTiles = await trx('dashboard_tiles').whereRaw(
+                '?? = ANY(?::int[])',
+                ['dashboard_version_id', dashboardVersionIds],
             );
 
             Logger.info(
@@ -4073,56 +5397,6 @@ export class ProjectModel {
             const dashboardTileUuids = dashboardTiles.map(
                 (dv) => dv.dashboard_tile_uuid,
             );
-
-            Logger.info(
-                `Updating ${chartsInDashboards.length} charts in dashboards`,
-            );
-            // Update chart in dashboards with new dashboardUuids
-            const updateChartInDashboards = newChartsInDashboards.map(
-                (chart) => {
-                    const newDashboardUuid = dashboardMapping.find(
-                        (m) => m.uuid === chart.dashboard_uuid,
-                    )?.newUuid;
-
-                    if (!newDashboardUuid) {
-                        // The dashboard was not copied, perhaps becuase it belongs to a space the user doesn't have access to
-                        // We delete this chart in dashboard
-                        return trx(SavedChartsTableName)
-                            .where('saved_query_id', chart.saved_query_id)
-                            .delete();
-                    }
-                    return trx(SavedChartsTableName)
-                        .update({
-                            dashboard_uuid: newDashboardUuid,
-                        })
-                        .where('saved_query_id', chart.saved_query_id);
-                },
-            );
-            await Promise.all(updateChartInDashboards);
-
-            // update saved_sqls in dashboards
-            const updateSavedSQLInDashboards = newSavedSQLInDashboards.map(
-                (chart) => {
-                    const newDashboardUuid = dashboardMapping.find(
-                        (m) => m.uuid === chart.dashboard_uuid,
-                    )?.newUuid;
-
-                    if (!newDashboardUuid) {
-                        // The dashboard was not copied, perhaps becuase it belongs to a space the user doesn't have access to
-                        // We delete this chart in dashboard
-                        return trx(SavedSqlTableName)
-                            .where('saved_sql_uuid', chart.saved_sql_uuid)
-                            .delete();
-                    }
-                    return trx(SavedSqlTableName)
-                        .update({
-                            dashboard_uuid: newDashboardUuid,
-                        })
-                        .where('saved_sql_uuid', chart.saved_sql_uuid)
-                        .whereNull('deleted_at');
-                },
-            );
-            await Promise.all(updateSavedSQLInDashboards);
 
             const newDashboardTiles =
                 dashboardTiles.length > 0
@@ -4135,15 +5409,12 @@ export class ProjectModel {
                               ...d,
                               // we keep the same dashboard_tile_uuid
                               dashboard_version_id:
-                                  dashboardVersionsMapping.find(
-                                      (m) => m.id === d.dashboard_version_id,
-                                  )?.newId!,
-                              tab_uuid: dashboardTabsMapping.find(
-                                  (m) =>
-                                      m.uuid === d.tab_uuid &&
-                                      m.dashboardVersionId ===
-                                          d.dashboard_version_id,
-                              )?.newUuid,
+                                  previewDashboardVersionIdBySource.get(
+                                      d.dashboard_version_id,
+                                  )!,
+                              tab_uuid: previewTabUuidBySource.get(
+                                  `${d.dashboard_version_id}:${d.tab_uuid}`,
+                              ),
                           })),
                       )
                     : [];
@@ -4152,11 +5423,20 @@ export class ProjectModel {
                 id: c.dashboard_tile_uuid,
                 newId: newDashboardTiles[i].dashboard_tile_uuid,
             }));
+            const previewDashboardTileUuidBySource = new Map(
+                dashboardTilesMapping.map((m) => [m.id, m.newId]),
+            );
 
             const copyDashboardTileContent = async (table: string) => {
                 const content = await trx(table)
-                    .whereIn('dashboard_tile_uuid', dashboardTileUuids)
-                    .and.whereIn('dashboard_version_id', dashboardVersionIds);
+                    .whereRaw('?? = ANY(?::uuid[])', [
+                        'dashboard_tile_uuid',
+                        dashboardTileUuids,
+                    ])
+                    .and.whereRaw('?? = ANY(?::int[])', [
+                        'dashboard_version_id',
+                        dashboardVersionIds,
+                    ]);
 
                 if (content.length === 0) return undefined;
 
@@ -4170,24 +5450,26 @@ export class ProjectModel {
 
                         // only applied to tile charts
                         ...(d.saved_chart_id && {
-                            saved_chart_id: chartMapping.find(
-                                (c) => c.id === d.saved_chart_id,
-                            )?.newId,
+                            saved_chart_id: previewChartIdBySource.get(
+                                d.saved_chart_id,
+                            ),
                         }),
 
                         // only applied to saved sql tiles
                         ...(d.saved_sql_uuid && {
-                            saved_sql_uuid: savedSQLMapping.find(
-                                (c) => c.id === d.saved_sql_uuid,
-                            )?.newId,
+                            saved_sql_uuid: previewSavedSqlUuidBySource.get(
+                                d.saved_sql_uuid,
+                            ),
                         }),
 
-                        dashboard_version_id: dashboardVersionsMapping.find(
-                            (m) => m.id === d.dashboard_version_id,
-                        )?.newId!,
-                        dashboard_tile_uuid: dashboardTilesMapping.find(
-                            (m) => m.id === d.dashboard_tile_uuid,
-                        )?.newId!,
+                        dashboard_version_id:
+                            previewDashboardVersionIdBySource.get(
+                                d.dashboard_version_id,
+                            )!,
+                        dashboard_tile_uuid:
+                            previewDashboardTileUuidBySource.get(
+                                d.dashboard_tile_uuid,
+                            )!,
                     })),
                 );
                 return newContent;
@@ -4231,23 +5513,23 @@ export class ProjectModel {
 
                 const newAiAgents =
                     aiAgents.length > 0
-                        ? await trx(AiAgentTableName)
-                              .insert(
-                                  aiAgents.map((agent) => {
-                                      const createAgent: CloneAiAgent = {
-                                          ...agent,
-                                          ai_agent_uuid: undefined,
-                                          project_uuid: previewProjectUuid,
-                                          created_at: undefined,
-                                          updated_at: undefined,
-                                      };
-                                      delete createAgent.ai_agent_uuid;
-                                      delete createAgent.created_at;
-                                      delete createAgent.updated_at;
-                                      return createAgent;
-                                  }),
-                              )
-                              .returning('*')
+                        ? await chunkedInsertReturning<DbAiAgent>(
+                              trx,
+                              AiAgentTableName,
+                              aiAgents.map((agent) => {
+                                  const createAgent: CloneAiAgent = {
+                                      ...agent,
+                                      ai_agent_uuid: undefined,
+                                      project_uuid: previewProjectUuid,
+                                      created_at: undefined,
+                                      updated_at: undefined,
+                                  };
+                                  delete createAgent.ai_agent_uuid;
+                                  delete createAgent.created_at;
+                                  delete createAgent.updated_at;
+                                  return createAgent;
+                              }),
+                          )
                         : [];
 
                 aiAgentMapping = aiAgents
@@ -4256,6 +5538,9 @@ export class ProjectModel {
                         newId: newAiAgents[i]?.ai_agent_uuid,
                     }))
                     .filter((mapping) => !!mapping.newId);
+                const previewAiAgentUuidBySource = new Map(
+                    aiAgentMapping.map((m) => [m.id, m.newId]),
+                );
 
                 const aiAgentUuids = aiAgents.map(
                     (agent) => agent.ai_agent_uuid,
@@ -4266,7 +5551,10 @@ export class ProjectModel {
                     const aiAgentInstructionVersions = await trx(
                         AiAgentInstructionVersionsTableName,
                     )
-                        .whereIn('ai_agent_uuid', aiAgentUuids)
+                        .whereRaw('?? = ANY(?::uuid[])', [
+                            'ai_agent_uuid',
+                            aiAgentUuids,
+                        ])
                         .select('*');
 
                     Logger.debug(
@@ -4274,11 +5562,16 @@ export class ProjectModel {
                     );
 
                     if (aiAgentInstructionVersions.length > 0) {
-                        await trx(AiAgentInstructionVersionsTableName).insert(
+                        await chunkedInsertReturning<
+                            (typeof aiAgentInstructionVersions)[number]
+                        >(
+                            trx,
+                            AiAgentInstructionVersionsTableName,
                             aiAgentInstructionVersions.map((version) => {
-                                const newAiAgentUuid = aiAgentMapping.find(
-                                    (m) => m.id === version.ai_agent_uuid,
-                                )?.newId;
+                                const newAiAgentUuid =
+                                    previewAiAgentUuidBySource.get(
+                                        version.ai_agent_uuid,
+                                    );
                                 if (!newAiAgentUuid) {
                                     throw new Error(
                                         `Cannot find new AI agent UUID for ${version.ai_agent_uuid}`,
@@ -4308,7 +5601,10 @@ export class ProjectModel {
                     const aiAgentGroupAccesses = await trx(
                         AiAgentGroupAccessTableName,
                     )
-                        .whereIn('ai_agent_uuid', aiAgentUuids)
+                        .whereRaw('?? = ANY(?::uuid[])', [
+                            'ai_agent_uuid',
+                            aiAgentUuids,
+                        ])
                         .select('*');
 
                     Logger.debug(
@@ -4316,11 +5612,16 @@ export class ProjectModel {
                     );
 
                     if (aiAgentGroupAccesses.length > 0) {
-                        await trx(AiAgentGroupAccessTableName).insert(
+                        await chunkedInsertReturning<
+                            (typeof aiAgentGroupAccesses)[number]
+                        >(
+                            trx,
+                            AiAgentGroupAccessTableName,
                             aiAgentGroupAccesses.map((groupAccess) => {
-                                const newAiAgentUuid = aiAgentMapping.find(
-                                    (m) => m.id === groupAccess.ai_agent_uuid,
-                                )?.newId;
+                                const newAiAgentUuid =
+                                    previewAiAgentUuidBySource.get(
+                                        groupAccess.ai_agent_uuid,
+                                    );
                                 if (!newAiAgentUuid) {
                                     throw new Error(
                                         `Cannot find new AI agent UUID for ${groupAccess.ai_agent_uuid}`,
@@ -4341,7 +5642,10 @@ export class ProjectModel {
                     const aiAgentUserAccesses = await trx(
                         AiAgentUserAccessTableName,
                     )
-                        .whereIn('ai_agent_uuid', aiAgentUuids)
+                        .whereRaw('?? = ANY(?::uuid[])', [
+                            'ai_agent_uuid',
+                            aiAgentUuids,
+                        ])
                         .select('*');
 
                     Logger.debug(
@@ -4349,11 +5653,16 @@ export class ProjectModel {
                     );
 
                     if (aiAgentUserAccesses.length > 0) {
-                        await trx(AiAgentUserAccessTableName).insert(
+                        await chunkedInsertReturning<
+                            (typeof aiAgentUserAccesses)[number]
+                        >(
+                            trx,
+                            AiAgentUserAccessTableName,
                             aiAgentUserAccesses.map((userAccess) => {
-                                const newAiAgentUuid = aiAgentMapping.find(
-                                    (m) => m.id === userAccess.ai_agent_uuid,
-                                )?.newId;
+                                const newAiAgentUuid =
+                                    previewAiAgentUuidBySource.get(
+                                        userAccess.ai_agent_uuid,
+                                    );
                                 if (!newAiAgentUuid) {
                                     throw new Error(
                                         `Cannot find new AI agent UUID for ${userAccess.ai_agent_uuid}`,
@@ -4374,6 +5683,126 @@ export class ProjectModel {
                 Logger.debug(
                     `Skipping AI agent content copy: AI agent tables do not exist (likely non-EE instance)`,
                 );
+            }
+
+            // Categories (tags) belong to the project, not to content; copy
+            // them so the preview's catalog carries the same ones once it
+            // is indexed. Assignments are rebuilt by that index.
+            const tags = await trx(TagsTableName).where(
+                'project_uuid',
+                projectUuid,
+            );
+            Logger.info(`Copying ${tags.length} tags on ${previewProjectUuid}`);
+            if (tags.length > 0) {
+                await chunkedInsertReturning<(typeof tags)[number]>(
+                    trx,
+                    TagsTableName,
+                    tags.map(({ tag_uuid, created_at, ...tag }) => ({
+                        ...tag,
+                        project_uuid: previewProjectUuid,
+                    })),
+                );
+            }
+
+            // Pinned items: the preview's homepage shows what the project
+            // pins, mapped onto the copied dashboards, charts and spaces.
+            const [pinnedList] = await trx(PinnedListTableName).where(
+                'project_uuid',
+                projectUuid,
+            );
+            if (pinnedList) {
+                const [existingPreviewList] = await trx(
+                    PinnedListTableName,
+                ).where('project_uuid', previewProjectUuid);
+                const previewList =
+                    existingPreviewList ??
+                    (
+                        await trx(PinnedListTableName)
+                            .insert({ project_uuid: previewProjectUuid })
+                            .returning('*')
+                    )[0];
+                const pinnedDashboards = await trx(
+                    PinnedDashboardTableName,
+                ).where('pinned_list_uuid', pinnedList.pinned_list_uuid);
+                const pinnedCharts = await trx(PinnedChartTableName).where(
+                    'pinned_list_uuid',
+                    pinnedList.pinned_list_uuid,
+                );
+                const pinnedSpaces = await trx(PinnedSpaceTableName).where(
+                    'pinned_list_uuid',
+                    pinnedList.pinned_list_uuid,
+                );
+                Logger.info(
+                    `Copying ${
+                        pinnedDashboards.length +
+                        pinnedCharts.length +
+                        pinnedSpaces.length
+                    } pinned items on ${previewProjectUuid}`,
+                );
+                const dashboardInserts = pinnedDashboards.flatMap((pin) => {
+                    const mapped = previewDashboardUuidBySource.get(
+                        pin.dashboard_uuid,
+                    );
+                    return mapped
+                        ? [
+                              {
+                                  pinned_list_uuid:
+                                      previewList.pinned_list_uuid,
+                                  dashboard_uuid: mapped,
+                                  order: pin.order,
+                              },
+                          ]
+                        : [];
+                });
+                if (dashboardInserts.length > 0) {
+                    await chunkedInsertReturning(
+                        trx,
+                        PinnedDashboardTableName,
+                        dashboardInserts,
+                    );
+                }
+                const chartInserts = pinnedCharts.flatMap((pin) => {
+                    const mapped = previewChartUuidBySource.get(
+                        pin.saved_chart_uuid,
+                    );
+                    return mapped
+                        ? [
+                              {
+                                  pinned_list_uuid:
+                                      previewList.pinned_list_uuid,
+                                  saved_chart_uuid: mapped,
+                                  order: pin.order,
+                              },
+                          ]
+                        : [];
+                });
+                if (chartInserts.length > 0) {
+                    await chunkedInsertReturning(
+                        trx,
+                        PinnedChartTableName,
+                        chartInserts,
+                    );
+                }
+                const spaceInserts = pinnedSpaces.flatMap((pin) => {
+                    const mapped = previewSpaceUuidBySource.get(pin.space_uuid);
+                    return mapped
+                        ? [
+                              {
+                                  pinned_list_uuid:
+                                      previewList.pinned_list_uuid,
+                                  space_uuid: mapped,
+                                  order: pin.order,
+                              },
+                          ]
+                        : [];
+                });
+                if (spaceInserts.length > 0) {
+                    await chunkedInsertReturning(
+                        trx,
+                        PinnedSpaceTableName,
+                        spaceInserts,
+                    );
+                }
             }
 
             const contentMapping: PreviewContentMapping = {
@@ -4429,13 +5858,91 @@ export class ProjectModel {
         return typeof match?.newId === 'string' ? match.newId : null;
     }
 
+    async getUpstreamChartUuidFromPreview(
+        previewProjectUuid: string,
+        previewChartUuid: string,
+    ): Promise<string | null> {
+        const previewChart = await this.database(SavedChartsTableName)
+            .select('saved_query_id')
+            .where('project_uuid', previewProjectUuid)
+            .where('saved_query_uuid', previewChartUuid)
+            .whereNull('deleted_at')
+            .first();
+        if (!previewChart) return null;
+
+        const previewContent = await this.database('preview_content')
+            .select<
+                {
+                    project_uuid: string;
+                    content_mapping: PreviewContentMapping;
+                }[]
+            >('project_uuid', 'content_mapping')
+            .where('preview_project_uuid', previewProjectUuid)
+            .orderBy('created_at', 'desc')
+            .first();
+        const sourceMapping = previewContent?.content_mapping.charts.find(
+            ({ newId }) => Number(newId) === previewChart.saved_query_id,
+        );
+        if (!previewContent || !sourceMapping) return null;
+
+        const upstreamChart = await this.database(SavedChartsTableName)
+            .select('saved_query_uuid')
+            .where('project_uuid', previewContent.project_uuid)
+            .where('saved_query_id', sourceMapping.id)
+            .whereNull('deleted_at')
+            .first();
+
+        return upstreamChart?.saved_query_uuid ?? null;
+    }
+
+    async getUpstreamDashboardUuidFromPreview(
+        previewProjectUuid: string,
+        previewDashboardUuid: string,
+    ): Promise<string | null> {
+        const previewDashboard = await this.database(DashboardsTableName)
+            .select('dashboard_id')
+            .where('project_uuid', previewProjectUuid)
+            .where('dashboard_uuid', previewDashboardUuid)
+            .whereNull('deleted_at')
+            .first();
+        if (!previewDashboard) return null;
+
+        const previewContent = await this.database('preview_content')
+            .select<
+                {
+                    project_uuid: string;
+                    content_mapping: PreviewContentMapping;
+                }[]
+            >('project_uuid', 'content_mapping')
+            .where('preview_project_uuid', previewProjectUuid)
+            .orderBy('created_at', 'desc')
+            .first();
+        const sourceMapping = previewContent?.content_mapping.dashboards.find(
+            ({ newId }) => Number(newId) === previewDashboard.dashboard_id,
+        );
+        if (!previewContent || !sourceMapping) return null;
+
+        const upstreamDashboard = await this.database(DashboardsTableName)
+            .select('dashboard_uuid')
+            .where('project_uuid', previewContent.project_uuid)
+            .where('dashboard_id', sourceMapping.id)
+            .whereNull('deleted_at')
+            .first();
+
+        return upstreamDashboard?.dashboard_uuid ?? null;
+    }
+
     // Easier to mock in ProjectService
-    // eslint-disable-next-line class-methods-use-this
     getWarehouseClientFromCredentials(
         credentials: CreateWarehouseCredentials,
         options?: Parameters<typeof warehouseClientFromCredentials>[1],
     ) {
-        return warehouseClientFromCredentials(credentials, options);
+        return warehouseClientFromCredentials(credentials, {
+            // The client is shared by all concurrent async query jobs
+            maxOpenConnections:
+                this.lightdashConfig.natsWorker.workerConcurrency,
+            ...options,
+        });
     }
 
     async createVirtualView(
@@ -4476,7 +5983,6 @@ export class ProjectModel {
                 table_names: Object.keys(virtualView.tables || {}),
                 explore: virtualView,
             });
-            await ProjectModel.rebuildCachedExplores(trx, projectUuid);
         });
 
         return virtualView;
@@ -4525,7 +6031,6 @@ export class ProjectModel {
                 })
                 .where('project_uuid', projectUuid)
                 .andWhere('name', exploreName);
-            await ProjectModel.rebuildCachedExplores(trx, projectUuid);
         });
 
         return translatedToExplore;
@@ -4539,7 +6044,6 @@ export class ProjectModel {
                 .whereRaw("explore->>'type' = ?", [ExploreType.VIRTUAL])
                 .andWhere('name', name)
                 .delete();
-            await ProjectModel.rebuildCachedExplores(trx, projectUuid);
         });
     }
 
@@ -4585,7 +6089,6 @@ export class ProjectModel {
                     explore,
                 });
             }
-            await ProjectModel.rebuildCachedExplores(trx, projectUuid);
         });
     }
 
@@ -4601,7 +6104,6 @@ export class ProjectModel {
                 .whereRaw("explore->>'type' = ?", [ExploreType.EXTERNAL_SOURCE])
                 .whereIn('name', names)
                 .delete();
-            await ProjectModel.rebuildCachedExplores(trx, projectUuid);
         });
     }
 
@@ -4617,23 +6119,6 @@ export class ProjectModel {
             .where('project_uuid', projectUuid)
             .forUpdate()
             .first();
-    }
-
-    private static async rebuildCachedExplores(
-        trx: Transaction,
-        projectUuid: string,
-    ): Promise<void> {
-        const cachedExplores = await trx(CachedExploreTableName)
-            .select<{ explore: Explore | ExploreError }[]>('explore')
-            .where('project_uuid', projectUuid)
-            .orderBy('name');
-        await trx(CachedExploresTableName)
-            .where('project_uuid', projectUuid)
-            .update({
-                explores: JSON.stringify(
-                    cachedExplores.map(({ explore }) => explore),
-                ),
-            });
     }
 
     async updateSchedulerSettings(

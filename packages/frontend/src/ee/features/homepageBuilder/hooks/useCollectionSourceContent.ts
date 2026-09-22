@@ -2,6 +2,8 @@ import {
     assertUnreachable,
     collectionLimitOf,
     collectionSourceOf,
+    ContentType,
+    ResourceViewItemType,
     type HomepageCollectionBlock,
     type SummaryContent,
 } from '@lightdash/common';
@@ -13,10 +15,14 @@ import {
     useProject,
 } from '../../../../hooks/useProject';
 import { useVerifiedContentForHomepage } from '../../../../hooks/useVerifiedContentList';
-import { useCollectionContent } from './useCollectionContent';
+import {
+    useCollectionContent,
+    useCollectionItems,
+} from './useCollectionContent';
 import { useRecentContents } from './useRecentContents';
 
 type Config = HomepageCollectionBlock['config'];
+const DOCUMENT_CONTENT_TYPES = [ContentType.DOCUMENT];
 
 const isVerified = (content: SummaryContent) =>
     'verification' in content && !!content.verification;
@@ -36,14 +42,10 @@ export const useCollectionSourceContent = (
     const source = collectionSourceOf(config);
     const limit = collectionLimitOf(config);
 
-    const manualUuids = useMemo(
-        () =>
-            source === 'manual'
-                ? (config.items ?? []).map((item) => item.uuid)
-                : [],
-        [source, config.items],
+    const manual = useCollectionItems(
+        projectUuid,
+        source === 'manual' ? config.items : [],
     );
-    const manual = useCollectionContent(projectUuid, manualUuids);
 
     const popular = useMostPopularAndRecentlyUpdated(
         source === 'most-viewed' || source === 'recently-updated'
@@ -82,10 +84,17 @@ export const useCollectionSourceContent = (
                     (item) => item.uuid,
                 );
             case 'pinned':
-                return (pinned.data ?? []).map((item) => item.data.uuid);
+                return (pinned.data ?? [])
+                    .filter(
+                        (item) => item.type !== ResourceViewItemType.DOCUMENT,
+                    )
+                    .map((item) => item.data.uuid);
             case 'favorites':
-                // Favourites are ResourceViewItems: the uuid is on `data`.
-                return (favorites.data ?? []).map((item) => item.data.uuid);
+                return (favorites.data ?? [])
+                    .filter(
+                        (item) => item.type !== ResourceViewItemType.DOCUMENT,
+                    )
+                    .map((item) => item.data.uuid);
             case 'verified':
                 return (verified.data ?? []).map((item) => item.uuid);
             case 'manual':
@@ -97,12 +106,49 @@ export const useCollectionSourceContent = (
     }, [source, popular.data, pinned.data, favorites.data, verified.data]);
 
     const derived = useCollectionContent(projectUuid, derivedUuids);
+    const documentUuids = useMemo(
+        () =>
+            source === 'favorites' || source === 'pinned'
+                ? (
+                      (source === 'favorites' ? favorites.data : pinned.data) ??
+                      []
+                  )
+                      .filter(
+                          (item) => item.type === ResourceViewItemType.DOCUMENT,
+                      )
+                      .map((item) => item.data.uuid)
+                : [],
+        [source, favorites.data, pinned.data],
+    );
+    const documents = useCollectionContent(
+        projectUuid,
+        documentUuids,
+        DOCUMENT_CONTENT_TYPES,
+    );
 
     const resolved = useMemo<SummaryContent[]>(() => {
         if (source === 'manual') return manual.data ?? [];
         if (source === 'recently-viewed') return recent.contents;
+        if (source === 'favorites' || source === 'pinned') {
+            const byUuid = new Map(
+                [...(derived.data ?? []), ...(documents.data ?? [])].map(
+                    (item) => [item.uuid, item],
+                ),
+            );
+            return (
+                (source === 'favorites' ? favorites.data : pinned.data) ?? []
+            ).flatMap((item) => byUuid.get(item.data.uuid) ?? []);
+        }
         return derived.data ?? [];
-    }, [source, manual.data, recent.contents, derived.data]);
+    }, [
+        source,
+        manual.data,
+        recent.contents,
+        derived.data,
+        documents.data,
+        favorites.data,
+        pinned.data,
+    ]);
 
     const items = useMemo(() => {
         // Manual collections are already hand-filtered by picking; the type
@@ -131,6 +177,7 @@ export const useCollectionSourceContent = (
               popular.isInitialLoading ||
               pinned.isInitialLoading ||
               favorites.isInitialLoading ||
+              documents.isInitialLoading ||
               derived.isInitialLoading;
 
     return { items, isLoading, source };

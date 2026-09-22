@@ -129,6 +129,30 @@ over every `CustomFormatType` × `{round: undefined, 0, 2, -2}` × every
 separator × `{negative, zero, fractional}` values. G1–G10 fall out as
 failures.
 
+### Blast radius of the gap fixes (existing converter consumers)
+
+The converter is not only the future population workhorse — it has live
+consumers today, and G1–G3 flip their behavior the moment they land. Fixing
+the converter globally is still right (a column-only variant would recreate
+the exact divergence step 1 exists to kill), but PR 1 must make these changes
+deliberate with golden/snapshot coverage:
+
+- **`getFieldFormatOverrideProps` (formatting.ts:1198)** — DEFAULT/ID/DATE/
+  TIMESTAMP format overrides currently take the structured-`formatOptions`
+  branch because the converter returns null; after G1–G3 they take the
+  expression branch, changing what is spread onto query result fields.
+- **Excel exports via `getExcelFormatExpression` (formatting.ts:1232)** —
+  DEFAULT-format fields get an explicit `#,##0.###` numFmt instead of
+  General. The COUNT `#,##0` guard (G11) already anticipates the count case;
+  plain-number cells change. Assert the new numFmt in ExcelService tests.
+- **`convertCustomMetricsToYaml` (convertCustomMetricsToYaml.ts:15)** —
+  writeback starts emitting `format: '#,##0.###'` where it previously
+  omitted the key: YAML diff churn and an idempotency hazard of the same
+  class as the `VirtualViewCoder` concern in §5. Pin the new output with a
+  snapshot and verify writeback round-trips (emit → parse → emit stable).
+- `fields.ts:186` (custom-metric format comparison) converts both sides, so
+  it is safe by construction — no action.
+
 ## 3. Population rules per query source
 
 Columns are **persisted at write time** into `query_history.columns`
@@ -140,7 +164,7 @@ Columns are **persisted at write time** into `query_history.columns`
 | **Metric queries** | `itemsMap` is already a parameter of `runQueryAndTransformRows` (AsyncQueryService.ts:2370) and the unpivoted column key *is* the field id. `getUnpivotedColumns` gains an `itemsMap` arg: when `itemsMap[key]` exists → `label = getItemLabel(item)`, `format = getFormatExpression(item)` (post-gap-fixes, parameter-interpolated), `separator`/`formatOptions`/`timeInterval`/`shiftsTimezone` from the item, `provenance = { fieldId: key }`. That single rule is the whole metric-path algorithm. | getUnpivotedColumns.ts:3-21 + call sites :2425, :2629 |
 | **Pivoted value columns** | Pass `valuesColumnData.values()` (not `.keys()`) + `itemsMap` into `getPivotedColumns`. Each `{field}_{agg}_{groupValue}` column: `provenance.fieldId = referenceField`, `format` from the source metric, `label` composed from metric label + `pivotValues[].formatted` (already computed with full formatting, :2556-2580). Index/passthrough columns inherit for free (copied by reference). The hardcoded `type: NUMBER` (getPivotedColumns.ts:53) is wrong for MAX-of-timestamp / boolean ANY — fixing it via `convertItemTypeToDimensionType` is a behavior change, stage separately. | getPivotedColumns.ts + call site :2666-2672 |
 | **Raw SQL / SQL charts** | The virtual-view item map reaches the same seam as `fieldsMap`, so `label = friendlyName(reference)` comes free from the metric-path change. **No provenance** — virtual-view dimensions are not semantic fields; marking them would resurrect the fake-field failure mode. `format` stays undefined. | SqlQueryComposer.ts:86, virtualView.ts:29-102 |
-| **DuckDB compose (composer terminal nodes)** | `buildQueryReferenceCtes` already loads each referenced query's full `QueryHistory` (columns + fields) and discards everything but the CTE string (:6927-6990). Change its return to carry `{cte, tableName, columns, fields}` per reference; thread into `runDuckdbSqlQuery`; match probed output columns against referenced columns. **Pass-through** = name matches exactly one referenced column across all references AND probed type matches → inherit label/format/provenance (for a semanticLayer upstream, fieldId is exact; add `sourceQueryUuid`). **Ambiguous** (same name in ≥2 references) or **computed** (no match / type mismatch) → bare column. Known accuracy ceiling: `SUM(revenue) AS revenue` false-positives on name; the type-match requirement narrows but doesn't eliminate it without a SQL parser — accepted. | AsyncQueryService.ts:6927-6990, :7449-7476, :7578-7584 |
+| **DuckDB compose (composer nodes)** | **No metadata inference (rescoped 2026-08-27, PROD-10681).** A pipeline whose terminal node is a semantic-layer query serves that query's own enriched result set untouched. A DuckDB post-processing node is arbitrarily complex SQL: its columns carry only what DuckDB honestly knows — `reference` + probed type — with no label/format/provenance carried through from upstream nodes. The contract is the interface, not the metadata: every node's result set is the same `ResultColumns` shape and runs the same formatting pipeline (M2 per-type defaults make bare columns render reasonably). The earlier plan to match probed columns against referenced columns is dropped — name/type matching invents metadata (`SUM(revenue) AS revenue` false-positives) and is the fake-field failure mode this design bans; explicit carry-through, if ever wanted, is a user-declared mapping on the pipeline, never inference. Pin with tests: single-node `[semanticLayer]` pipelines must terminate at the metric query's own result set, not a DuckDB `SELECT *` wrap. | runDuckdbSqlQuery probe; PROD-10681 |
 | **Compose merges** | The cheapest prototype site: at the exact line where `originalColumns` are built (:8118-8123), `compiledMerge.itemsMap[reference]` (label/format) and `typedColumns[].origin` (provenance) are both in hand and currently dropped. Warehouse merges get the metric-path rule automatically. | AsyncQueryService.ts:8118-8123 |
 | **External sources** | DuckDB `DESCRIBE` only — bare columns. Second-class sources gain typing later. | ExternalSourceService.ts:354-373 |
 | **Static autocomplete results** | Full field object in scope at :5510 — trivial. | AsyncQueryService.ts:5477-5512 |
@@ -250,3 +274,76 @@ Each lands green on its own; 1–2 are inert to users.
 Linear mapping (Standardize project M1): PR1 ≈ PROD-9829/9830, PR2 ≈
 PROD-9831, PR3 ≈ PROD-9833 + PROD-9835, PR6 closes the composer half of M1;
 PROD-9832 (honest SQL column metadata) is the SQL-path rule in §3.
+
+## 7. Findings from implementation (PRs 1–2) and M1 convergence gaps
+
+Date: 2026-08-27. Two of this design's assumptions did not survive contact
+with the code, and the M1 "interface feels right" bar needs items this doc
+under-specified. Corrections first, then the decision they force, then the
+remaining gap list.
+
+### Corrections to §3
+
+- **Parameter interpolation needs a migration first.** §3 assumed
+  `usedParametersValues` is in scope at column-build time. It is not on the
+  queue path: when NATS is enabled, the worker rebuilds
+  `RunAsyncWarehouseQueryArgs` entirely from the `query_history` row
+  (`buildWarehouseQueryArgs`), and only `request_parameters` (caller-supplied
+  values, without resolved project defaults) is persisted — the composer that
+  knows the resolved values is gone. Prerequisite: persist the composer's
+  `getUsedParameters()` output to a new `query_history.used_parameters` jsonb
+  at creation, thread it into `runQueryAndTransformRows`, and interpolate in
+  `getResultColumnMetadataFromItem`. Until then, population omits
+  parameter-dependent formats entirely (never store an un-interpolated
+  placeholder — it throws at render and falls back to `String(value)`).
+- **The SQL path gets nothing for free.** §3 claimed `label =
+  friendlyName(reference)` "comes free from the metric-path change". False:
+  `SqlQueryComposer` keys its fields map by virtual-view field id
+  (`getItemMap` → `${table}_${column}`) while raw-SQL warehouse columns are
+  keyed by bare column name, so the items-map lookup always misses and SQL
+  columns stay bare *by accident*. PROD-9832 must make the rule explicit
+  code: `label = friendlyName(reference)`, and **never** provenance for
+  virtual-view dimensions (a guard, so a future key match cannot silently
+  stamp fake-field provenance).
+
+### Decision — rows are raw; columns carry the rendering recipe
+
+There are two row dialects today: the formatted `ResultValue`
+(`{raw, formatted}`) served by the page endpoint via the server-side
+per-page formatter, and raw JSONL streamed by the SQL runner directly from
+`/query/{uuid}/results`, bypassing formatting entirely. With self-describing
+columns, the interface contract is: **rows are raw values; the column carries
+everything needed to render them** (format expression + separator +
+formatOptions + timeInterval, rendered only through
+`formatValueWithExpression`, plus page-level `resolvedTimezone` and — once
+persisted — parameter values). The server-formatted `{raw, formatted}` shape
+and the per-page formatter closure are legacy: existing consumers keep
+working, but **no new consumer may depend on server-formatted values**, and
+M2 (shared formatter, PROD-9834) converges the existing ones. This is the
+single-formatting-path decision; revisiting it per-consumer is not allowed.
+
+### M1 gap list (the "interface feels right" bar)
+
+An engine (metric layer, raw SQL, composer) is inside the contract when its
+results page carries columns a consumer can label, format, and chart without
+knowing the engine. Remaining work, with tickets:
+
+| Gap | Where | Ticket |
+|---|---|---|
+| Used parameter values not persisted → parameter formats un-interpolatable on the queue path | `query_history` migration + `QueryHistoryModel` + create sites + `getResultColumnMetadataFromItem` | PROD-10680 |
+| Composer pipelines must speak the interface — the step-1 exit criterion | Rescoped to no-inference (see §3 DuckDB row): pin that single-node pipelines serve the semantic result untouched and DuckDB nodes serve honest bare columns | PROD-10681 |
+| Results page lacks `resolvedTimezone` — temporal rendering impossible from the page alone | `ReadyQueryResultsPage` (execute responses already carry it) | PROD-10682 |
+| Merged results drop metadata already in hand | the `originalColumns` build site: `compiledMerge.itemsMap` + `typedColumns[].origin` both in scope and discarded | PROD-10683 |
+| Pivoted value columns hardcode `type: NUMBER` — lies for MAX-of-timestamp / boolean ANY | `getPivotedColumns` via `convertItemTypeToDimensionType`; behavior change, staged alone | PROD-10690 |
+| SQL columns bare by accident, rule never made explicit | §3 SQL-path rule as deliberate code | PROD-9832 |
+
+### Revised sequencing
+
+Population must not re-land ahead of the parameters prerequisite — columns
+should be born self-contained, not patched later. Revised order for the rest
+of M1: (1) `used_parameters` persistence folded into the population PR so
+enrichment ships complete; (2) SQL-path rule + merge path + page
+`resolvedTimezone` (small, independent); (3) composer interface pinning
+(PROD-10681, rescoped to no-inference — small); (4) pivot type honesty
+(staged behavior change); then the M2 export/formatter flips prove the
+decoupling.

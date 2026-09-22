@@ -27,6 +27,7 @@ fetch anything yourself; the only host interaction is through the helpers the ho
 returns.
 
 ```tsx
+const context = useVizContext();
 const {
   fieldMapping,
   rows,
@@ -36,17 +37,23 @@ const {
   ready,
   underlyingData,
   drillDown,
-} = useVizContext();
+} = context;
 ```
 
-- `fieldMapping` — `Record<string, string>`: the field name you declared → the query field
-  id it is bound to. Read cells with `getFormatted(row, fieldId)` (display text) and
-  `getRaw(row, fieldId)` (raw value).
+- `fieldMapping` — `Record<string, string | string[]>`: each single-field input maps
+  to one query field id; inputs declared with `multiple: true` map to ordered arrays.
+  Narrow with `Array.isArray(binding)` before iterating. Read each id with
+  `getFormatted(row, fieldId)` (display text) and `getRaw(row, fieldId)` (raw value).
 - `rows` — the host-fetched result rows, keyed by query field id.
 - `options` — `Record<string, boolean | number | string>`: the current value of each config
   option you declared (the viewer's choice, else your declared `default`).
 - `colorPalette` — `string[]`: the Lightdash palette resolved for this chart. Always pushed,
   whether or not you declared `colorPalette`. Empty only when the host resolved none.
+- `seriesColors` — `Record<string, string>`: final host-resolved colours keyed by backend
+  pivot column name. Read them through `resolveSeriesColor(context, column, index)`.
+- `valueColors` — `Record<string, Record<string, string>>`: final host-resolved colours keyed
+  by query field id then raw value. Read them through
+  `resolveValueColor(context, fieldId, rawValue, index)`.
 - `pivotDetails` — the complete backend-pivot layout, or `null` for ordinary rows. See
   "Backend-pivoted results" below.
 - `ready` — false until the first context arrives.
@@ -55,8 +62,8 @@ const {
 - `drillDown` — host-mediated drill on a clicked data point. See "Data-point
   actions" below.
 
-Read all of them. Ignoring `options` and `colorPalette` is the most common way to build a
-viz nobody can configure.
+Read all of them. Pass the complete `context` to the colour helpers; they preserve model
+colours and shared dashboard assignments before falling back to `colorPalette`.
 
 ### These app-level APIs do not apply to a viz
 
@@ -82,10 +89,15 @@ shadcn, charting, theming, floating surfaces, screenshots) still applies.
 
 ## Series colours
 
-Never hardcode series hex values and never hand-pick a palette of your own. Colour series
-with `colorPalette[i % colorPalette.length]`, and declare `colorPalette` in your output so
-the viewer gets the palette picker. Keep a small fallback array in your own code for the
-case where `colorPalette` is empty.
+Use the query SDK's host-resolved colour helpers for every series or group:
+
+- Backend-pivoted series: `resolveSeriesColor(context, column, index)`.
+- Client-side groups: `resolveValueColor(context, fieldId, rawValue, index)`.
+
+The helpers first honor model-defined fixed colours and Lightdash's shared dashboard colour
+assignment, then fall back to `colorPalette[index % colorPalette.length]`. Keep a small
+fallback array only for the case where the helper returns `undefined`, and declare
+`colorPalette` in your output so the viewer gets the palette picker.
 
 This is the same rule as the sandbox skill's "chart series colors must come from
 `CHART_COLORS`" and `references/d3.md`'s "never hand-pick palettes" — the same Lightdash
@@ -132,11 +144,12 @@ const pivotedMetrics =
     (column) => column.referenceField === metricId,
   ) ?? [];
 
-const series = pivotedMetrics.map((column) => ({
+const series = pivotedMetrics.map((column, index) => ({
   columnId: column.pivotColumnName,
   label:
     column.pivotValues.find((value) => value.referenceField === seriesId)
       ?.formatted ?? 'Unknown',
+  color: resolveSeriesColor(context, column, index) ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length],
 }));
 
 const categoryId = fieldMapping['category'];
@@ -151,7 +164,7 @@ const data = rows.map((row) => ({
 }));
 ```
 
-Use the order of `valuesColumns` for stable colour assignment. A chart with multiple
+Use the order of `valuesColumns` for the helper's fallback index. A chart with multiple
 declared series fields builds its label from each matching `pivotValues` entry in declared
 field order. Backend-pivoted rows do not have safe one-source-row provenance, so the host
 sets `underlyingData.enabled` to false for them.
@@ -164,9 +177,10 @@ action menu. This is part of the component contract, not an optional nicety — 
 item shows; you always write the wiring, and it costs nothing visually when disabled.
 
 When `underlyingData.enabled` is true, viewers get the standard Lightdash action on
-chart marks: click a data point → small action menu → "View underlying data" → a dialog
-listing the raw rows behind that point, with a Download button. When it is false (host
-too old, viewer lacks permission, embed), render no menu item — never a disabled one.
+chart marks: click a data point → small action menu → "View underlying data" → the
+standard Lightdash dialog listing the raw rows behind that point, with its Download
+button. When it is false (host too old, viewer lacks permission, embed), render no menu
+item — never a disabled one.
 
 Provenance is the contract: **every interactive datum keeps a reference to its
 untransformed source row.** When mapping `rows` into chart data, carry the row:
@@ -183,33 +197,22 @@ Only attach the action where one mark maps to exactly ONE source row and ONE met
 field. A mark that aggregates several rows (a binned bucket, a "top N + other" slice)
 gets no underlying-data item.
 
-On click, fetch and render in a dialog themed like the rest of the viz:
+On click, send the intent and render nothing else. Lightdash opens the dialog outside
+the viz and owns its table, loading, error, sorting, and download controls:
 
 ```tsx
-const result = await underlyingData.get({ row: datum.sourceRow, metric: 'value' });
-// result.rows / result.columns / result.format — render as a table
-// Download button:
-// await underlyingData.download({ row: datum.sourceRow, metric: 'value', fileType: 'csv' });
+underlyingData.open({ row: datum.sourceRow, metric: 'value' }).catch(() => {});
 ```
 
 `metric` is the declared field NAME from your `fields` (the same key you read from
-`fieldMapping`), not a query field id. Show `get()`/`download()` rejection messages in
-the dialog — they are written for viewers.
+`fieldMapping`), not a query field id. The custom chart type owns only its data-point
+action menu. It never renders an underlying-data dialog, table, loading state, error
+state, or download control inside the iframe.
 
-Keep the dialog table dense — underlying data is often wide and long. Compact cell
-padding (the table is for scanning, not presenting). If the header is sticky: pin it
-flush at `top: 0` with an opaque background, and put NO padding on the scroll
-container itself — pad the cells, not the scroller. A sticky header pins to the
-container's content edge, so any container padding becomes a strip that rows
-visibly scroll through above the header.
-
-The table must scroll BOTH ways: `overflow: auto` on ONE wrapper directly around the
-`<table>`, and every element between that wrapper and the dialog body a plain block
-that can shrink (`min-width: 0`; no `display: table`, no `w-max`/`width:
-max-content`). A wrapper that sizes to the table's intrinsic width makes the
-overflow container's horizontal scroll dead — the table looks clipped and viewers
-cannot reach the right-hand columns. Verify by scrolling right in the rendered
-dialog with more columns than fit.
+For a multiple-metric input, also pass `fieldId`, the member of that input's binding
+whose mark was clicked: `underlyingData.open({ row: datum.sourceRow, metric: 'values',
+fieldId })`. Use the same `fieldId` with `drillDown.open`. A mark combining several
+metrics cannot identify one underlying metric and gets no data-point action.
 
 ### Drill into a data point
 
@@ -229,6 +232,90 @@ exactly ONE source row and ONE metric-slot field, and only when
 show each action on its own flag (a viewer may have one permission but not
 the other).
 
+### Open the menu at the data point
+
+Anchor this menu at the activated mark, not at an edge of the iframe or chart.
+If neither action is enabled, do not open or render an empty menu and do not
+give marks action-button semantics.
+Keep the clicked datum's `sourceRow` and declared metric name (and `fieldId` for
+a multiple input) in the menu state; the menu items must act on that exact
+identity. Pass the helper a library-neutral anchor: the activating DOM mark,
+whether activation was by pointer or keyboard, and pointer viewport coordinates
+when available. For a pointer activation, use native `clientX` and `clientY`,
+never chart-relative coordinates such as `chartX` or `chartY`. For keyboard
+activation, anchor at the centre of the activating mark's
+`getBoundingClientRect()` instead.
+
+Adapt each chart library before calling the helper. Recharts' React click
+handler supplies `event.currentTarget`, `event.clientX`, `event.clientY`, and
+`event.detail === 0` for keyboard-originated clicks. For ECharts, extract the
+native pointer event from its click parameters before reading `clientX` and
+`clientY`; do not assume React fields exist. D3 already passes the native event.
+
+**Make each eligible SVG mark keyboard reachable while either action is enabled.**
+When neither is enabled, omit the button role, tab stop, and action handlers.
+Otherwise give the mark `tabIndex={0}`,
+`role="button"`, and an accessible name from its category and formatted value.
+In Recharts, use a custom `shape` to wire `onClick` and `onKeyDown` on the rendered
+mark; the chart-wide `accessibilityLayer` alone does not open per-mark menus.
+On Enter or Space, prevent the default key action and call the same helper with
+`keyboard: true` and the mark as `activator`. Verify Tab → mark → Enter/Space →
+menu → Escape returns focus to that mark.
+Register rendered marks in a ref map keyed by stable datum key, using a ref callback
+on the SVG element: `ref={(node) => registerMark(datum.key, node)}`.
+Resolve the current mark after the menu unmounts when restoring
+focus: a saved DOM element can become detached during chart rerenders.
+
+Use the existing shadcn/Radix `DropdownMenu`, rendered with
+`createPortal(..., document.body)`. Its 1px fixed trigger is positioned at the
+stored viewport coordinates; this avoids transformed iframe ancestors changing
+the containing block for `position: fixed`. Let `DropdownMenuContent` use its
+normal Radix collision handling so a menu near a viewport edge flips or shifts
+onscreen. The placement state is small; the existing `underlyingData.open` and
+`drillDown.open` calls remain the menu items' host actions:
+
+```tsx
+const markElements = useRef(new Map());
+const registerMark = (key, node) => {
+  if (node) markElements.current.set(key, node);
+  else markElements.current.delete(key);
+};
+const openPointMenu = (datum, anchor) => {
+  if (!underlyingData.enabled && !drillDown.enabled) return;
+  const rect = anchor.activator.getBoundingClientRect();
+  setTooltipVisible(false);
+  setMenu({
+    sourceRow: datum.sourceRow,
+    metric: datum.metric,
+    fieldId: datum.fieldId,
+    pointKey: datum.key,
+    keyboard: anchor.keyboard,
+    x: anchor.keyboard ? rect.left + rect.width / 2 : anchor.clientX,
+    y: anchor.keyboard ? rect.top + rect.height / 2 : anchor.clientY,
+  });
+  if (!anchor.keyboard) anchor.activator.blur();
+};
+
+{menu && (underlyingData.enabled || drillDown.enabled) && createPortal(
+  <DropdownMenu open onOpenChange={(open) => !open && setMenu(null)}>
+    <DropdownMenuTrigger asChild>
+      <span aria-hidden style={{ position: 'fixed', left: menu.x, top: menu.y, width: 1, height: 1 }} />
+    </DropdownMenuTrigger>
+    <DropdownMenuContent
+      onCloseAutoFocus={(event) => {
+        event.preventDefault();
+        if (menu.keyboard) {
+          requestAnimationFrame(() => markElements.current.get(menu.pointKey)?.focus());
+        }
+      }}
+    >
+      {/* independently gated action items */}
+    </DropdownMenuContent>
+  </DropdownMenu>,
+  document.body,
+)}
+```
+
 ### Interaction hygiene
 
 One floating surface at a time, and no leftover emphasis — native Lightdash
@@ -242,8 +329,9 @@ highlighted:
   reappear until the pointer moves again after the menu closes.
 - **No persistent focus or active styling on a clicked mark.** Disable click
   emphasis (recharts: no `activeShape` on click state; echarts: turn off
-  lingering `emphasis`/`select`) and blur any focused SVG node after opening
-  the menu. Only hover may emphasise, and only while hovering.
+  lingering `emphasis`/`select`). A keyboard activator keeps its normal focus
+  affordance and receives focus again when the menu closes; it must not look
+  like a selected data point. Only hover may emphasise, and only while hovering.
 - **Subtle hover, no cursor band.** The library-default full-height band
   behind the hovered mark (recharts `<Tooltip cursor>`) is not native
   behaviour — use `cursor={false}` or a faint theme-token fill.
@@ -254,29 +342,84 @@ highlighted:
 ## The declaration
 
 Alongside the component you emit one structured declaration — as **structured output, not a
-file**. It has three parts: `fields`, `configOptions` and `colorPalette`. Lightdash builds
+file**. It has four parts: `fields`, `configOptions`, `colorPalette` and optional
+`inputGuidance`. Lightdash builds
 the field-mapping UI and the chart config panel from it, so the component is unusable
 without it.
 
-The correspondence is exact in both directions: **every key read from `fieldMapping` or
-`options` is declared, and everything declared is read.** A declared option nothing reads is
-a dead control the viewer can move with no effect.
+The correspondence is exact in both directions: **every key read from `fieldMapping` or `options` is declared, and everything declared is read.** A declared
+option nothing reads is a dead control the viewer can move with no effect.
 
 ### `fields`
 
-One entry per data column the component reads:
+One entry per input the component reads:
 
 - `name` — the key read from `fieldMapping`. Unique, no spaces.
 - `label` — human label shown in the mapping UI.
-- `type` — `dimension` (a category/grouping column), `metric` (a numeric measure), or
-  `series` (a dimension used to split or colour the chart).
+- `type` — `dimension` (a category/grouping column), `metric` (a numeric measure),
+  `series` (a dimension used to split or colour the chart), or `column` (any result
+  column, whether metric or dimension).
 - `required` — `false` only when the chart still renders with this field unmapped.
+- `multiple` — optional boolean, default `false`. Set `true` when this input accepts an
+  ordered selection of fields of its declared type. Its `fieldMapping` value is a
+  `string[]`, including when only one field is selected. A required input needs at least
+  one selection; an empty array means the viewer cleared it. Render a placeholder until
+  required selections exist.
+- `description` — optional reusable mapping help, maximum 160 characters. Use one
+  or two short, plain sentences explaining the field's role in the chart. Keep it agnostic
+  to any business, explore, or query; do not imply fixed categories or values.
+
+Do not generate field examples. Viewers supply their own values; describe the field's
+role and data shape without prescribing categories from a particular business.
+
+### Ordered multiple-field inputs
+
+Use one multiple input for a variable number of measures or grouping columns instead of
+declaring a fixed number of numbered slots:
+
+```json
+{
+  "fields": [
+    { "name": "groups", "label": "Grouping fields", "type": "dimension", "required": true, "multiple": true },
+    { "name": "values", "label": "Measures", "type": "metric", "required": true, "multiple": true }
+  ],
+  "configOptions": [],
+  "colorPalette": null
+}
+```
+
+```tsx
+const { fieldMapping, rows } = useVizContext();
+const groups = Array.isArray(fieldMapping.groups) ? fieldMapping.groups : [];
+const values = Array.isArray(fieldMapping.values) ? fieldMapping.values : [];
+const data = rows.map((row) => ({
+  label: groups.map((id) => getFormatted(row, id)).join(' / '),
+  values: values.map((id) => ({ id, value: getRaw(row, id) })),
+}));
+```
+
+Array order is the viewer's display order: preserve it when building axes, columns,
+legends and series. For pivoted metrics, iterate the selected ids first and then match
+`pivotDetails.valuesColumns` by `referenceField`. The flag also works for `series` and
+`column` inputs. Existing single inputs continue receiving strings in `fieldMapping`;
+leave their declarations unchanged when adding a separate multiple input. Keep field
+names stable across compatible upgrades so saved selections can be reconciled.
+
+### `inputGuidance`
+
+Optional reusable help shown above the mappings, maximum 200 characters. Use at most two
+short, plain sentences. State what each row represents, any ordering the visualization relies
+on, and how to change a query that has a different shape.
+For a funnel, say that each row contains one stage label and its count in stage order; separate
+stage metrics or boolean flags need reshaping into stage/count rows, or a differently authored
+chart. This explains how the same viz can be reused with other queries; it does not make the
+component infer semantics or transform host data.
 
 ### `configOptions`
 
 One entry per setting the viewer can change without regenerating the viz. Every option is a
-whole-viz value applying to the entire chart — there is no per-series option. To colour
-series individually, index into `colorPalette` by series position.
+whole-viz value applying to the entire chart — there is no per-series option. Colour series
+and groups with the SDK's resolved-colour helpers.
 
 Every option has:
 
@@ -296,14 +439,19 @@ Every option has:
 | `text` | single-line text input | a string | — |
 | `color` | single colour | a hex string, e.g. `"#7162FF"` | — |
 
+The `color` control includes swatches from the active Lightdash palette and accepts custom
+hex colours. It stores the chosen hex string. Changing the palette or light/dark theme
+updates the available swatches; it does not change previously chosen colours.
+
 Series colours are not in this list. They are declared separately, on `colorPalette`.
 
 ### `colorPalette`
 
 Whether the viewer gets the standard Lightdash palette picker. Declare
-`{ "group": "..." }` when your component colours anything from `colorPalette`, or `null`
-when it colours nothing. `group` is optional and works like an option's: the picker joins
-that tab, and gets a tab of its own when no option shares the name.
+`{ "group": "..." }` when your component colours anything with the resolved-colour helpers
+or `colorPalette`, or `null` when it colours nothing. `group` is optional and works like an
+option's: the picker joins that tab, and gets a tab of its own when no option shares the
+name.
 
 This is not a config option. There is one palette per chart, it has no `name` and no
 `default`, and its colours arrive on `colorPalette` — never on `options`.
@@ -313,19 +461,21 @@ This is not a config option. There is one palette per chart, it has no `name` an
 Component and declaration lining up. Your chart will differ; the correspondence must not.
 
 ```tsx
-import { useVizContext, getFormatted, getRaw } from '@lightdash/query-sdk';
+import { useVizContext, getFormatted, getRaw, resolveValueColor } from '@lightdash/query-sdk';
 import { Bar, BarChart, Cell, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 function Chart() {
-  const { fieldMapping, rows, options, colorPalette, ready } = useVizContext();
+  const context = useVizContext();
+  const { fieldMapping, rows, options, ready } = context;
   if (!ready) return <div style={{ height: '100vh' }}>Loading…</div>;
   const catField = fieldMapping['category'];            // your field name -> column id
   const valField = fieldMapping['value'];
   const showLabels = options['showLabels'] as boolean;  // your option name -> current value
   const maxBars = options['maxBars'] as number;
-  const colors = colorPalette.length ? colorPalette : ['#7162FF', '#1A1B1E'];
+  const fallbackColors = ['#7162FF', '#1A1B1E'];
   const data = rows.slice(0, maxBars).map((row) => ({
     label: getFormatted(row, catField),                 // display text, e.g. "Completed"
+    category: getRaw(row, catField),                    // raw value for host-resolved colour
     value: Number(getRaw(row, valField) ?? 0),          // raw number
   }));
   return (
@@ -340,7 +490,12 @@ function Chart() {
           <YAxis tickFormatter={(v) => v.toLocaleString()} />
           <Tooltip />
           <Bar dataKey="value">
-            {data.map((d, i) => <Cell key={d.label} fill={colors[i % colors.length]} />)}
+            {data.map((d, i) => (
+              <Cell
+                key={d.label}
+                fill={resolveValueColor(context, catField, d.category, i) ?? fallbackColors[i % fallbackColors.length]}
+              />
+            ))}
             {showLabels && <LabelList dataKey="value" position="top" />}
           </Bar>
         </BarChart>
@@ -353,11 +508,12 @@ function Chart() {
 The declaration that component emits is exactly:
 
 ```
-fields: [{ "name": "category", "label": "Category", "type": "dimension", "required": true },
-         { "name": "value", "label": "Value", "type": "metric", "required": true }]
+fields: [{ "name": "category", "label": "Category", "type": "dimension", "required": true, "description": "The label for each chart row." },
+         { "name": "value", "label": "Value", "type": "metric", "required": true, "description": "The numeric value for that row." }]
 configOptions: [{ "name": "showLabels", "label": "Show value labels", "group": "Labels", "type": "boolean", "default": true },
                 { "name": "maxBars", "label": "Max bars", "type": "number", "default": 10, "min": 1, "max": 50 }]
 colorPalette: {}
+inputGuidance: "Use one row per category in display order. Reshape queries with separate category columns into category/value rows before mapping."
 ```
 
 ## Final pass, before you finish
@@ -372,15 +528,21 @@ minimum, not a menu:
 - every number you chose (bar width, max rows, decimal places, a threshold) → `number`
 - every string you wrote into the chart (title, axis label, empty-state text) → `text`
 - every accent colour that is not a series colour (a target line, a highlight) → `color`
-- the series colours, whenever the chart draws more than one series → `colorPalette`
+- the series colours, whenever the chart draws more than one series → resolved-colour
+  helper plus `colorPalette`
 
 Where the answer is yes, make that literal the option's `default`, declare the option, and
 read the option in its place. Leave it hardcoded only where changing it would break the
 chart.
 
 Then check both directions: every key you read from `options` is declared, and every option
-you declared is read somewhere. `colorPalette` is declared when you colour from
-`colorPalette` — it is never read from `options`.
+you declared is read somewhere. `colorPalette` is declared when you use either resolved-
+colour helper or colour from `colorPalette` — it is never read from `options`.
+
+Before returning the declaration, add a `description` to each slot whose role
+could be ambiguous to a viewer, and add `inputGuidance` whenever row shape or ordering
+matters. Keep that help reusable across queries: describe the chart contract rather than a
+specific dataset.
 
 Finally, if any mark maps to exactly one source row, the data-point action
 menu is wired: each interactive datum carries `sourceRow`, the underlying-data

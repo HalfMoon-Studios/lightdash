@@ -13,17 +13,24 @@ import {
 } from '@lightdash/common';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { type PropsWithChildren } from 'react';
+import { PRIMARY_SOURCE_ID } from '../constants';
 import { MergeProvider } from './MergeContext';
+import { MERGE_URL_PARAM, serializeMergeState } from './mergeUrlState';
 import { useMerge } from './useMerge';
 
 const setSearchParams = vi.fn();
-const { executeMergeQuery } = vi.hoisted(() => ({
+const { executeMergeQuery, searchParams } = vi.hoisted(() => ({
     executeMergeQuery: vi.fn(),
+    searchParams: new URLSearchParams(),
 }));
 
 vi.mock('react-router', () => ({
     useParams: () => ({ projectUuid: 'project-uuid' }),
-    useSearchParams: () => [new URLSearchParams(), setSearchParams],
+    useSearchParams: () => [searchParams, setSearchParams],
+}));
+
+vi.mock('../../../hooks/useProjectUuid', () => ({
+    useProjectUuid: () => 'project-uuid',
 }));
 
 vi.mock('../../../hooks/useQueryResults', () => ({
@@ -111,6 +118,97 @@ const wrapper = ({ children }: PropsWithChildren) => (
 describe('MergeProvider', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        searchParams.delete(MERGE_URL_PARAM);
+    });
+
+    it('stops waiting for a restored merge once it is refused before execution', () => {
+        searchParams.set(
+            MERGE_URL_PARAM,
+            serializeMergeState({
+                focus: { kind: 'join' },
+                primarySourceName: null,
+                additionalSources: [
+                    {
+                        id: 'b',
+                        exploreName: 'payments',
+                        dimensions: [
+                            'orders_status',
+                            'payments_payment_method',
+                        ],
+                        metrics: ['payments_total_revenue'],
+                        filters: {},
+                    },
+                ],
+                joinParts: [
+                    {
+                        fieldIdBySourceId: {
+                            [PRIMARY_SOURCE_ID]: 'orders_status',
+                            b: 'orders_status',
+                        },
+                    },
+                ],
+                joinType: MergeJoinType.FULL,
+                repeatValuesSourceIds: [],
+            }),
+        );
+        const { result } = renderHook(() => useMerge(), { wrapper });
+        expect(result.current.wasRestored).toBe(true);
+
+        act(() => result.current.refuseRestoredRun());
+
+        expect(result.current.wasRestored).toBe(false);
+        expect(result.current.isRunning).toBe(false);
+        expect(result.current.mergeResults).toBeNull();
+        expect(result.current.runErrors).toEqual([]);
+        expect(result.current.runError).toBeNull();
+        expect(executeMergeQuery).not.toHaveBeenCalled();
+    });
+
+    it('keeps replacing the Explorer query through a re-run and a refusal, until the merge is removed', async () => {
+        executeMergeQuery.mockResolvedValueOnce(startedResult('first'));
+        const { result } = renderHook(() => useMerge(), { wrapper });
+        expect(result.current.replacesQuery).toBe(false);
+
+        act(() => result.current.run(mergeQuery));
+        await waitFor(() =>
+            expect(result.current.mergeResults?.queryUuid).toBe('first'),
+        );
+        expect(result.current.replacesQuery).toBe(true);
+
+        // A re-run clears the results while it waits; the Explorer's own
+        // query must not wake up in the gap, its sorts may name merged fields
+        let resolveRerun: (
+            value: ApiExecuteAsyncMergeQueryResults,
+        ) => void = () => {};
+        executeMergeQuery.mockReturnValueOnce(
+            new Promise<ApiExecuteAsyncMergeQueryResults>((resolve) => {
+                resolveRerun = resolve;
+            }),
+        );
+        act(() => result.current.run(mergeQuery));
+        expect(result.current.mergeResults).toBeNull();
+        expect(result.current.replacesQuery).toBe(true);
+
+        await act(async () => {
+            resolveRerun({
+                outcome: 'refused',
+                errors: [
+                    {
+                        kind: MergeQueryErrorKind.FAN_OUT,
+                        sourceId: 'b',
+                        fieldIds: [],
+                        message: 'Fan-out',
+                    },
+                ],
+                parameterReferences: [],
+                fieldOrigins: {},
+            });
+        });
+        await waitFor(() => expect(result.current.runErrors).toHaveLength(1));
+        expect(result.current.replacesQuery).toBe(true);
+
+        act(() => result.current.removeSource('b'));
+        expect(result.current.replacesQuery).toBe(false);
     });
 
     it('publishes join type changes immediately', () => {

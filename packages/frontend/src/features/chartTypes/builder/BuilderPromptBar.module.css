@@ -127,6 +127,7 @@
 
 .queueState {
     flex-shrink: 0;
+    white-space: nowrap;
     color: var(--mantine-color-ldGray-5);
 }
 
@@ -144,6 +145,9 @@
 }
 
 .liveNarration {
+    --reasoning-body-max-height: min(240px, 20dvh);
+    --reasoning-body-overflow-y: auto;
+
     position: relative;
     z-index: 3;
     padding: 5px 6px;
@@ -155,12 +159,18 @@
     box-shadow: var(--mantine-shadow-subtle);
 }
 
+.buildingLabel {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
 .buildingPrompt {
     min-width: 0;
 }
 
 .queuedCount {
     flex-shrink: 0;
+    white-space: nowrap;
 }
 
 .cancelBuild {
@@ -168,12 +178,29 @@
     margin-left: auto;
 }
 
-.queueHint {
-    white-space: nowrap;
+.connectionName {
+    max-width: 140px;
 }
 
 @media (prefers-reduced-motion: reduce) {
     .stackRow {
         transition: none;
     }
+}
+
+.composer :global(.ProseMirror) {
+    padding: 0;
+}
+
+.contextTray {
+    display: flex;
+    align-items: center;
+    gap: var(--mantine-spacing-xs);
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+
+.contextTray > * {
+    flex-shrink: 0;
 }

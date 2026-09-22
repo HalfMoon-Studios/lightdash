@@ -1,9 +1,10 @@
 import {
     assertUnreachable,
     getDataAppVizChartFromArtifact,
+    getMergeCompiledSqlText,
     type AiChartArtifactConfig,
-    type AiLegacySemanticChartArtifactConfig,
     type ApiAiAgentThreadMessageVizQuery,
+    type PersistedRunQueryPayload,
     type DataAppVizChart,
 } from '@lightdash/common';
 import { useCompiledSqlFromMetricQuery } from '../../../../hooks/useCompiledSql';
@@ -12,7 +13,7 @@ import { useAiMergeCompiledSql } from './useAiMergeCompiledSql';
 type AiArtifactChartSource = {
     isMergeArtifact: boolean;
     /** Tool args driving the semantic query render paths, when any. */
-    semanticChartConfig: AiLegacySemanticChartArtifactConfig | null;
+    semanticChartConfig: PersistedRunQueryPayload | null;
     /** Set for custom chart type answers: uuid from the envelope + mapping. */
     customChartType: DataAppVizChart | null;
 };
@@ -86,6 +87,7 @@ export const useAiArtifactCompiledSql = ({
         isMergeArtifact ? vizQueryData : undefined,
     );
     return isMergeArtifact
-        ? (mergeCompiledSql?.sql ?? undefined)
+        ? ((mergeCompiledSql && getMergeCompiledSqlText(mergeCompiledSql)) ??
+              undefined)
         : compiledSql?.query;
 };

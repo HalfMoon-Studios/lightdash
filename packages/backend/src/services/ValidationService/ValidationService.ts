@@ -62,7 +62,10 @@ import { SpaceModel } from '../../models/SpaceModel';
 import { ValidationModel } from '../../models/ValidationModel/ValidationModel';
 import { SchedulerClient } from '../../scheduler/SchedulerClient';
 import { BaseService } from '../BaseService';
-import type { SpacePermissionService } from '../SpaceService/SpacePermissionService';
+import {
+    spaceContextsByUuid,
+    type SpacePermissionService,
+} from '../SpaceService/SpacePermissionService';
 
 const VALIDATION_SUMMARY_AFFECTED_CONTENT_LIMIT = 20;
 
@@ -1449,13 +1452,19 @@ export class ValidationService extends BaseService {
                 ),
             ),
         ];
-        const spaceAccessContexts =
+        const resolvedSpaceAccessContexts =
             appSpaceUuids.length > 0
-                ? await this.spacePermissionService.getSpacesAccessContext(
+                ? await this.spacePermissionService.resolveAccessBatch(
                       user.userUuid,
-                      appSpaceUuids,
+                      appSpaceUuids.map((spaceUuid) => ({
+                          type: 'space' as const,
+                          spaceUuid,
+                      })),
                   )
-                : {};
+                : [];
+        const spaceAccessContexts = spaceContextsByUuid(
+            resolvedSpaceAccessContexts,
+        );
 
         return apps
             .filter((app) => {
@@ -2001,10 +2010,10 @@ export class ValidationService extends BaseService {
 
         // Check user permissions
         const { inheritsFromOrgOrProject, access } =
-            await this.spacePermissionService.getSpaceAccessContext(
-                user.userUuid,
-                chart.spaceUuid,
-            );
+            await this.spacePermissionService.resolveAccess(user.userUuid, {
+                type: 'space',
+                spaceUuid: chart.spaceUuid,
+            });
 
         if (
             auditedAbility.cannot(
@@ -2096,10 +2105,11 @@ export class ValidationService extends BaseService {
 
         // Check user permissions
         const { inheritsFromOrgOrProject, access } =
-            await this.spacePermissionService.getSpaceAccessContext(
-                user.userUuid,
-                dashboard.spaceUuid,
-            );
+            await this.spacePermissionService.resolveAccess(user.userUuid, {
+                type: 'dashboard',
+                dashboardUuid: dashboard.uuid,
+                spaceUuid: dashboard.spaceUuid,
+            });
 
         if (
             auditedAbility.cannot(

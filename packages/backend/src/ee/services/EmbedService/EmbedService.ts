@@ -112,9 +112,10 @@ import { EmbedModel } from '../../models/EmbedModel';
 import { ExternalConnectionModel } from '../../models/ExternalConnectionModel';
 import { getBundleServableChecker } from '../AppGenerateService/appBundleStorage';
 import {
+    assertDataAppVizPreviewVersionAllowed,
+    getDataAppVizVersionPin,
     resolveDataAppVisualizationForRender,
     resolveDataAppVizRenderMetadata,
-    resolveRenderableDataAppVizVersion,
 } from '../AppGenerateService/dataAppVizRender';
 
 const escapeEmbedJwtUserAttributeValue = (value: string): string =>
@@ -619,18 +620,53 @@ export class EmbedService extends BaseService {
         if (!isDashboardContent(decodedToken.content)) {
             throw new ParameterError('JWT content is not of type dashboard');
         }
-        const {
-            isPreview,
-            canExportCsv,
-            canExportDashboardCsv,
-            canExportImages,
-            canExportPagePdf,
-            canDateZoom,
-            canExplore,
-            canViewUnderlyingData,
-            canViewDataApps,
-            stickyHeader,
-        } = decodedToken.content;
+        const { isPreview, stickyHeader } = decodedToken.content;
+        const useJwtPermissions =
+            decodedToken.writeActions?.permissionsMode !== 'roles';
+        const ability = this.createAuditedAbility(account);
+        const embedTarget = {
+            organizationUuid: dashboard.organizationUuid,
+            projectUuid,
+        };
+        const canExportCsv =
+            ability.can(
+                'view',
+                subject('EmbedCsvExport', { ...embedTarget }),
+            ) ||
+            (useJwtPermissions && decodedToken.content.canExportCsv);
+        const canExportDashboardCsv =
+            ability.can(
+                'view',
+                subject('EmbedDashboardCsvExport', { ...embedTarget }),
+            ) ||
+            (useJwtPermissions && decodedToken.content.canExportDashboardCsv);
+        const canExportImages =
+            ability.can(
+                'view',
+                subject('EmbedImageExport', { ...embedTarget }),
+            ) ||
+            (useJwtPermissions && decodedToken.content.canExportImages);
+        const canExportPagePdf =
+            ability.can(
+                'view',
+                subject('EmbedPagePdfExport', { ...embedTarget }),
+            ) ||
+            (useJwtPermissions && decodedToken.content.canExportPagePdf);
+        const canDateZoom =
+            ability.can('view', subject('EmbedDateZoom', { ...embedTarget })) ||
+            (useJwtPermissions && decodedToken.content.canDateZoom);
+        const canExplore =
+            ability.can('view', subject('EmbedExplore', { ...embedTarget })) ||
+            (useJwtPermissions && decodedToken.content.canExplore);
+        const canViewUnderlyingData =
+            ability.can(
+                'view',
+                subject('EmbedUnderlyingData', { ...embedTarget }),
+            ) ||
+            (useJwtPermissions && decodedToken.content.canViewUnderlyingData);
+        const canViewDataApps =
+            ability.can('view', subject('EmbedDataApps', { ...embedTarget })) ||
+            (useJwtPermissions && decodedToken.content.canViewDataApps);
         // Embed paletteUuid query param overrides everything; otherwise fall back
         // through chart → dashboard → space → project → org via the resolver.
         let selectedPalette: {
@@ -768,9 +804,9 @@ export class EmbedService extends BaseService {
                         chart.spaceUuid === writeSpaceUuid
                     ) {
                         const spaceAccessContext =
-                            await this.spacePermissionService.getSpaceAccessContext(
+                            await this.spacePermissionService.resolveAccess(
                                 embedWriteUser.userUuid,
-                                chart.spaceUuid,
+                                { type: 'space', spaceUuid: chart.spaceUuid },
                             );
                         const auditedAbility =
                             this.createAuditedAbility(embedWriteUser);
@@ -1800,15 +1836,24 @@ export class EmbedService extends BaseService {
             );
         }
 
-        const { enabled } = await this.featureFlagModel.get({
-            user: {
-                userUuid: account.user.id,
-                organizationUuid: dataAppViz.organization_uuid,
-            },
-            featureFlagId: FeatureFlags.EnableDataApps,
-        });
-        if (!enabled) {
-            throw new ForbiddenError('Data apps are not enabled');
+        // Chart types render wherever data apps OR the chart type library is
+        // on — a customer without data apps can still use installed types.
+        const flagUser = {
+            userUuid: account.user.id,
+            organizationUuid: dataAppViz.organization_uuid,
+        };
+        const [dataApps, chartTypeLibrary] = await Promise.all([
+            this.featureFlagModel.get({
+                user: flagUser,
+                featureFlagId: FeatureFlags.EnableDataApps,
+            }),
+            this.featureFlagModel.get({
+                user: flagUser,
+                featureFlagId: FeatureFlags.ChartTypeRegistry,
+            }),
+        ]);
+        if (!dataApps.enabled && !chartTypeLibrary.enabled) {
+            throw new ForbiddenError('Chart types are not enabled');
         }
 
         const { chart } = await this.getAuthorizedSavedChartForEmbed(
@@ -1825,7 +1870,7 @@ export class EmbedService extends BaseService {
             );
         }
 
-        return dataAppViz;
+        return { dataAppViz, chart };
     }
 
     async getEmbedDataAppVizRenderMetadata(
@@ -1834,16 +1879,19 @@ export class EmbedService extends BaseService {
         savedChartUuid: string,
         dataAppVizUuid: string,
     ): Promise<DataAppVizRenderMetadata> {
-        const dataAppViz = await this.getAuthorizedDataAppVizForEmbed(
-            account,
-            projectUuid,
-            savedChartUuid,
-            dataAppVizUuid,
-        );
+        const { dataAppViz, chart } =
+            await this.getAuthorizedDataAppVizForEmbed(
+                account,
+                projectUuid,
+                savedChartUuid,
+                dataAppVizUuid,
+            );
+        const pinnedVersion = getDataAppVizVersionPin(chart.chartConfig);
         return resolveDataAppVizRenderMetadata(
             this.appModel,
             dataAppViz.app_id,
             getBundleServableChecker(this.lightdashConfig.appRuntime.s3),
+            pinnedVersion,
         );
     }
 
@@ -1854,16 +1902,18 @@ export class EmbedService extends BaseService {
         dataAppVizUuid: string,
         version: number,
     ): Promise<string> {
-        const dataAppViz = await this.getAuthorizedDataAppVizForEmbed(
-            account,
-            projectUuid,
-            savedChartUuid,
-            dataAppVizUuid,
-        );
-        await resolveRenderableDataAppVizVersion(
+        const { dataAppViz, chart } =
+            await this.getAuthorizedDataAppVizForEmbed(
+                account,
+                projectUuid,
+                savedChartUuid,
+                dataAppVizUuid,
+            );
+        await assertDataAppVizPreviewVersionAllowed(
             this.appModel,
             dataAppViz.app_id,
             version,
+            getDataAppVizVersionPin(chart.chartConfig),
         );
         return mintPreviewToken(
             this.lightdashConfig.lightdashSecrets,
@@ -2719,9 +2769,9 @@ export class EmbedService extends BaseService {
 
         try {
             const spaceAccessContext =
-                await this.spacePermissionService.getSpaceAccessContext(
+                await this.spacePermissionService.resolveAccess(
                     embedWriteUser.userUuid,
-                    writeActions.spaceUuid,
+                    { type: 'space', spaceUuid: writeActions.spaceUuid },
                 );
 
             if (spaceAccessContext.projectUuid !== projectUuid) {
@@ -2791,7 +2841,15 @@ export class EmbedService extends BaseService {
             const canUseAiAgent =
                 decodedToken.content.type === 'aiAgent' &&
                 canCreateSavedChart &&
-                canViewProject;
+                canViewProject &&
+                (writeActions.permissionsMode !== 'roles' ||
+                    auditedAbility.can(
+                        'view',
+                        subject('EmbedAiAgent', {
+                            organizationUuid,
+                            projectUuid,
+                        }),
+                    ));
 
             return {
                 canUpdateDashboard,
@@ -2846,7 +2904,7 @@ export class EmbedService extends BaseService {
             return 'Embed token write actor cannot view the embedded project';
         }
 
-        return 'Embed token does not allow AI agent actions';
+        return 'Embed token write actor cannot use embedded AI agents';
     }
 
     private async getEmbedWriteUser(

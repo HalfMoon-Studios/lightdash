@@ -37,6 +37,10 @@ export type ContentArgs = {
     // 'exclude' hides data app vizs (reusable custom chart types); 'only'
     // returns just them.
     dataAppVizsFilter?: 'exclude' | 'only';
+    // Restrict to dashboards owned by these users (other content types are excluded)
+    ownerUserUuids?: string[];
+    // Only resources directly granted to the caller or their groups.
+    sharedWithMe?: boolean;
 };
 
 const contentTypeLabel = (contentType: ContentType): string =>
@@ -127,6 +131,9 @@ export const invalidateContent = async (
 ) => {
     await Promise.all([
         queryClient.invalidateQueries(['content']),
+        queryClient.invalidateQueries(['documents', projectUuid]),
+        queryClient.invalidateQueries(['document', projectUuid]),
+        queryClient.invalidateQueries(['document-cell-query', projectUuid]),
         queryClient.invalidateQueries(['dashboards']),
         queryClient.invalidateQueries(['most-popular-and-recently-updated']),
         queryClient.invalidateQueries(['pinned_items']),
@@ -220,7 +227,7 @@ export const useContentAction = (
         },
         onError: (error, variables, context) => {
             showToastApiError({
-                title: `Failed to move content`,
+                title: `Failed to ${variables.action.type} content`,
                 apiError: error.error,
             });
 

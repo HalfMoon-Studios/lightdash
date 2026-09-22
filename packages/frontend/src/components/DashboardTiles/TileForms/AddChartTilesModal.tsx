@@ -8,6 +8,7 @@ import {
     type Dashboard,
 } from '@lightdash/common';
 import {
+    Box,
     Button,
     getDefaultZIndex,
     Group,
@@ -21,7 +22,6 @@ import { useDebouncedValue } from '@mantine/hooks';
 import { IconChartAreaLine } from '@tabler/icons-react';
 import uniqBy from 'lodash/uniqBy';
 import React, {
-    forwardRef,
     useEffect,
     useLayoutEffect,
     useMemo,
@@ -48,57 +48,42 @@ type Props = {
     maxSelectedValues?: number;
 };
 
-interface ItemProps extends React.ComponentPropsWithoutRef<'div'> {
+type ItemProps = {
     label: string;
     chartKind: ChartKind;
     tooltipLabel?: string;
     disabled?: boolean;
     selected?: boolean;
-}
+};
 
-const SelectItem = forwardRef<HTMLDivElement, ItemProps>(
-    (
-        {
-            label,
-            tooltipLabel,
-            chartKind,
-            disabled,
-            selected,
-            ...others
-        }: ItemProps,
-        ref,
-    ) => (
-        <div ref={ref} {...others}>
-            <Stack gap="1">
-                <Tooltip
-                    label={tooltipLabel}
-                    disabled={!tooltipLabel}
-                    position="top-start"
-                    withinPortal
+const SelectItem: FC<ItemProps> = ({
+    label,
+    tooltipLabel,
+    chartKind,
+    disabled,
+    selected,
+}) => (
+    <Stack gap="1">
+        <Tooltip
+            label={tooltipLabel}
+            disabled={!tooltipLabel}
+            position="top-start"
+        >
+            <Group gap="xs">
+                <ChartIcon
+                    chartKind={chartKind ?? ChartKind.VERTICAL_BAR}
+                    color={disabled ? 'ldGray.5' : undefined}
+                />
+                <Text
+                    c={disabled ? 'dimmed' : selected ? 'ldGray.9' : 'ldGray.8'}
+                    fw={500}
+                    fz="xs"
                 >
-                    <Group gap="xs">
-                        <ChartIcon
-                            chartKind={chartKind ?? ChartKind.VERTICAL_BAR}
-                            color={disabled ? 'ldGray.5' : undefined}
-                        />
-                        <Text
-                            c={
-                                disabled
-                                    ? 'dimmed'
-                                    : selected
-                                      ? 'ldGray.9'
-                                      : 'ldGray.8'
-                            }
-                            fw={500}
-                            fz="xs"
-                        >
-                            {label}
-                        </Text>
-                    </Group>
-                </Tooltip>
-            </Stack>
-        </div>
-    ),
+                    {label}
+                </Text>
+            </Group>
+        </Tooltip>
+    </Stack>
 );
 
 const AddChartTilesModal: FC<Props> = ({
@@ -285,15 +270,24 @@ const AddChartTilesModal: FC<Props> = ({
                         isInitialLoading ||
                         form.values.savedChartsUuids.length === 0
                     }
+                    data-tour-anchor="add-charts-submit"
+                    data-tour-hint="Click Add"
                 >
                     Add
                 </Button>
             }
         >
-            <form id="add-saved-charts-to-dashboard" onSubmit={handleSubmit}>
+            {/* Room for the open chart list, so it never covers Add. */}
+            <form
+                id="add-saved-charts-to-dashboard"
+                onSubmit={handleSubmit}
+                style={{ minHeight: 360 }}
+            >
                 <MultiSelectCombobox
                     radius="md"
                     maw={550}
+                    data-tour-anchor="chart-picker"
+                    data-tour-hint="Open the chart list"
                     id="saved-charts"
                     label={`Select the charts you want to add to this dashboard`}
                     options={filteredSavedCharts}
@@ -360,15 +354,23 @@ const AddChartTilesModal: FC<Props> = ({
                             (item) => item.value === option.value,
                         );
                         return (
-                            <SelectItem
-                                label={option.label}
-                                chartKind={
-                                    chart?.chartKind ?? ChartKind.VERTICAL_BAR
-                                }
-                                tooltipLabel={chart?.tooltipLabel}
-                                disabled={option.disabled}
-                                selected={selected}
-                            />
+                            <Box
+                                // Walkthrough anchor, one chart by name.
+                                data-tour-anchor="chart-option"
+                                data-tour-hint="Choose {value}"
+                                data-tour-value={option.label}
+                            >
+                                <SelectItem
+                                    label={option.label}
+                                    chartKind={
+                                        chart?.chartKind ??
+                                        ChartKind.VERTICAL_BAR
+                                    }
+                                    tooltipLabel={chart?.tooltipLabel}
+                                    disabled={option.disabled}
+                                    selected={selected}
+                                />
+                            </Box>
                         );
                     }}
                     onValueRemove={(chartUuid) => {

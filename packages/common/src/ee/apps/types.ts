@@ -1,12 +1,13 @@
 import { z } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
 import { type ReadyQueryResultsPage } from '../../types/api';
 import { type ApiSuccess, type ApiSuccessEmpty } from '../../types/api/success';
+import { type ContentVerificationInfo } from '../../types/contentVerification';
 import {
     type DashboardConfig,
     type DashboardTab,
     type DashboardTile,
 } from '../../types/dashboard';
+import { type CustomFormat } from '../../types/field';
 import { type DashboardFilters } from '../../types/filter';
 import {
     type KnexPaginateArgs,
@@ -15,8 +16,15 @@ import {
 import { type MetricQuery } from '../../types/metricQuery';
 import { type DashboardParameters } from '../../types/parameters';
 import { type ResultRow } from '../../types/results';
-import { type ChartConfig, type SavedChart } from '../../types/savedCharts';
+import {
+    type ChartConfig,
+    type DataAppVizFieldMapping,
+    type SavedChart,
+} from '../../types/savedCharts';
 import assertUnreachable from '../../utils/assertUnreachable';
+import { toLlmJsonSchema } from '../../utils/zodJsonSchema';
+import { type DataAppAutoAnalysis } from './analysis';
+import { type ChartTypeIcon } from './chartTypeIcons';
 import {
     type DataAppVizConfigOption,
     type DataAppVizOptionValue,
@@ -34,12 +42,14 @@ export type {
  * Ordered pipeline stages. Index position determines progression — used to
  * skip completed stages when a build is retried after a worker crash.
  * 'ready' is included as the final stage; 'error' is terminal but not a
- * stage (not reachable through normal progression).
+ * stage (not reachable through normal progression). 'compact' is optional —
+ * most builds go straight from 'catalog' to 'generating'.
  */
 export const APP_VERSION_STAGE_ORDER = [
     'pending',
     'sandbox',
     'catalog',
+    'compact',
     'generating',
     'building',
     'packaging',
@@ -47,6 +57,17 @@ export const APP_VERSION_STAGE_ORDER = [
 ] as const;
 
 export const APP_VERSION_TERMINAL_STATUSES = ['ready', 'error'] as const;
+
+/**
+ * Outcome of the compact stage. 'failed' — the agent reported it could not
+ * summarize. 'error' — the call produced no verdict (config, sandbox, timeout).
+ */
+export type DataAppCompactionResult =
+    | 'success'
+    | 'failed'
+    | 'error'
+    // an earlier attempt compacted, its outcome died with the pod
+    | 'interrupted';
 
 /**
  * Error message stamped on a version when the user cancels its build. There is
@@ -114,6 +135,8 @@ export const DATA_APP_CREATION_EXPERIENCES = [
     'app_builder',
     'explorer_chart_config',
     'chart_type_builder',
+    'ai_agent',
+    'mcp',
 ] as const;
 export type DataAppCreationExperience =
     (typeof DATA_APP_CREATION_EXPERIENCES)[number];
@@ -294,9 +317,24 @@ export const formatPromptWithClarifications = (
     return `${prompt}\n\nClarifications:\n${qa}`;
 };
 
+/** Chart-builder context sent to the coding agent for one build only. */
+export type AppVizBuildContext = {
+    schema?: DataAppVizSchema;
+    fieldMapping?: DataAppVizFieldMapping;
+    elementReferences?: string[];
+    sampleRows?: Record<string, string>[];
+};
+
+export const MAX_APP_VIZ_BUILD_SAMPLE_ROWS = 10;
+export const MAX_APP_VIZ_BUILD_SAMPLE_FIELDS = 20;
+export const MAX_APP_VIZ_BUILD_SAMPLE_CELL_CHARS = 500;
+export const MAX_APP_VIZ_BUILD_ELEMENT_REFS = 5;
+
 export type GenerateAppRequestBody = {
     prompt: string;
     template?: DataAppTemplate; // starter template selected on app creation; ignored on iteration
+    /** Transient chart context; never stored in an app version's prompt. */
+    vizContext?: AppVizBuildContext;
     // Product surface that submitted this version's AI generation. Optional for
     // API compatibility; older callers remain unattributed.
     creationExperience?: DataAppCreationExperience;
@@ -476,8 +514,24 @@ export type AppVersionStatusHistoryEntry = {
     kind: AppVersionStatusHistoryEntryKind;
 };
 
+/** What started a data app thread. */
+export const APP_THREAD_ORIGINS = ['builder', 'ai_thread', 'import'] as const;
+export type AppThreadOrigin = (typeof APP_THREAD_ORIGINS)[number];
+
+/** One conversation between the user and the coding agent on a data app. */
+export type AppThread = {
+    uuid: string;
+    // 1-based, unique per app; the highest number is the current thread.
+    number: number;
+    createdAt: Date;
+};
+
 export type ApiAppVersionSummary = {
     version: number;
+    // Thread the version's prompt was made in. Versions predating threads
+    // read back under thread 1.
+    threadUuid: string;
+    threadNumber: number;
     prompt: string;
     status: AppVersionStatus;
     statusMessage: string | null;
@@ -520,23 +574,40 @@ export type ApiGetAppResponse = ApiSuccess<{
     pinnedListOrder: number | null;
     slug: string;
     views: number;
+    // The app's newest thread; new prompts land here.
+    currentThread: AppThread;
     versions: ApiAppVersionSummary[];
     hasMore: boolean;
     // Latest ready version across ALL versions, not just the returned page.
     // Viewers must use this (not scan `versions`) to decide whether the app
     // can be previewed — the ready version may be older than the page window.
     latestReadyVersion: number | null;
+    // The registry slug it was installed from, or null for a project-authored
+    // (or forked) app. Registry-installed chart types are read-only.
+    registrySlug: string | null;
+    // Curated Tabler icon name of a custom chart type; null for other apps
+    // and for chart types with no icon chosen.
+    icon: ChartTypeIcon | null;
+    verification: ContentVerificationInfo | null;
+    // Whether AI analysis runs when the app loads; 'inherit' takes the
+    // organization default.
+    autoAnalysis: DataAppAutoAnalysis;
 }>;
 
 export type ApiUpdateAppRequest = {
     name?: string;
     description?: string;
+    // Custom chart types only; null clears the icon.
+    icon?: ChartTypeIcon | null;
+    autoAnalysis?: DataAppAutoAnalysis;
 };
 
 export type ApiUpdateAppResponse = ApiSuccess<{
     appUuid: string;
     name: string;
     description: string;
+    icon: ChartTypeIcon | null;
+    autoAnalysis: DataAppAutoAnalysis;
 }>;
 
 export type ApiCancelAppVersionResponse = ApiSuccessEmpty;
@@ -546,8 +617,13 @@ export type ApiRestoreAppVersionResponse = ApiSuccess<{
     version: number;
 }>;
 
+export type ApiDuplicateAppRequest = {
+    name?: string;
+};
+
 export type ApiDuplicateAppResponse = ApiSuccess<{
     appUuid: string;
+    slug: string;
     version: number;
 }>;
 
@@ -733,6 +809,10 @@ export type DataAppActivityEvent = {
     // Activity outlives the app: a deleted app's generations still show, so the
     // log stays a complete record of what the org spent effort on.
     appDeleted: boolean;
+    // 'data_app_viz' marks a custom chart type build rather than a data app,
+    // so admins can tell the two products' spend apart. Null for "Custom" or
+    // pre-template apps.
+    template: Exclude<DataAppTemplate, 'custom'> | null;
     // Version 1 created the app; every later version iterated on it.
     version: number;
     status: AppVersionStatus;
@@ -766,6 +846,9 @@ export type DataAppActivityFilters = {
     // ISO-8601, inclusive.
     dateFrom?: string;
     dateTo?: string;
+    // 'exclude' = data app builds only, 'only' = custom chart type builds
+    // only. Omitted = both.
+    dataAppVizsFilter?: DataAppVizsFilter;
 };
 
 export type ApiDataAppActivityResponse = ApiSuccess<{
@@ -780,13 +863,20 @@ export type ApiDataAppActivityResponse = ApiSuccess<{
 // schema (runtime validation of the generated declaration), kept in sync by the
 // compile-time assertion below.
 
-// Binds a host query column: dimension (grouping), metric (measure), series (splits/colours).
-export type DataAppVizFieldType = 'dimension' | 'metric' | 'series';
+// Binds a host query column: dimension (grouping), metric (measure), series
+// (splits/colours), column (any result column — metric or dimension).
+export type DataAppVizFieldType = 'dimension' | 'metric' | 'series' | 'column';
 export type DataAppVizField = {
     name: string;
     label: string;
     type: DataAppVizFieldType;
     required: boolean;
+    /** Whether this slot accepts an ordered collection of query fields. */
+    multiple?: boolean;
+    /** Explain what belongs in this slot for a reusable visualization. */
+    description?: string;
+    /** Scalar display examples for this slot, independent of any one query. */
+    examples?: Array<string | number | boolean | null>;
 };
 
 /** The full declaration a data app viz emits: data-binding fields + config form. */
@@ -795,10 +885,36 @@ export type DataAppVizSchema = {
     configOptions: DataAppVizConfigOption[];
     /** Null when the viz colours nothing from the resolved palette. */
     colorPalette: DataAppVizPaletteDeclaration | null;
+    /** Explains the row shape, ordering, and recovery needed to use this viz. */
+    inputGuidance?: string;
 };
 
 const uniqueNames = <T extends { name: string }>(arr: T[]): boolean =>
     new Set(arr.map((a) => a.name)).size === arr.length;
+
+export const MAX_DATA_APP_VIZ_FIELD_DESCRIPTION_LENGTH = 160;
+
+const optionalInputHelp = (maxLength?: number) => {
+    const text = z.string().trim();
+    return (maxLength === undefined ? text : text.max(maxLength))
+        .nullable()
+        .transform((value) => value || undefined)
+        .optional();
+};
+
+const nullableOptionalFieldExamples = () =>
+    z
+        .array(z.union([z.string(), z.number(), z.boolean(), z.null()]))
+        .nullable()
+        .transform((value) => value ?? undefined)
+        .optional();
+
+const vizInputGuidance = (strict: boolean) =>
+    optionalInputHelp(strict ? 200 : undefined).describe(
+        strict
+            ? 'Optional setup guidance in at most two short, plain sentences (maximum 200 characters). Describe the expected rows, ordering where relevant, and how to change a query that has a different shape.'
+            : 'Optional setup guidance describing the expected rows, ordering, and how to adapt a query with a different shape.',
+    );
 
 const optionBase = {
     name: z
@@ -813,40 +929,67 @@ const optionBase = {
     group: z
         .string()
         .nullable()
-        .optional()
         .transform((value) => value ?? undefined)
+        .optional()
         .describe(
             'Optional tab name. Options sharing a group are rendered in the same config tab; ungrouped options share a default tab.',
         ),
 };
 
-const vizFields = z
+const vizField = (strict: boolean) =>
+    z.object({
+        name: z
+            .string()
+            .min(1)
+            .describe(
+                'Key the component reads from `fieldMapping`. Unique across fields, no spaces.',
+            ),
+        label: z
+            .string()
+            .describe('Human label shown in the field-mapping UI.'),
+        type: z
+            .enum(['dimension', 'metric', 'series', 'column'])
+            .describe(
+                'dimension = a category/grouping column, metric = a numeric measure, series = a dimension used to split or colour the chart, column = any result column (metric or dimension) — use when the chart handles non-numeric values.',
+            ),
+        required: z
+            .boolean()
+            .describe(
+                'false only when the chart still renders with this field unmapped.',
+            ),
+        multiple: z
+            .boolean()
+            .nullable()
+            .transform((value) => value ?? undefined)
+            .optional()
+            .describe(
+                'Whether this slot accepts an ordered collection of fields. Omit or set false for one field.',
+            ),
+        description: optionalInputHelp(
+            strict ? MAX_DATA_APP_VIZ_FIELD_DESCRIPTION_LENGTH : undefined,
+        ).describe(
+            strict
+                ? 'Optional mapping help in one or two short, plain sentences (maximum 160 characters). Explain what this field represents and how to choose it, without naming a particular query.'
+                : 'Optional reusable mapping help explaining what this field represents.',
+        ),
+    });
+
+const vizFieldsDescription =
+    'Every data column the component reads. Declare exactly what you read — no more, no less.';
+
+const vizFieldsForRead = z
     .array(
-        z.object({
-            name: z
-                .string()
-                .min(1)
-                .describe(
-                    'Key the component reads from `fieldMapping`. Unique across fields, no spaces.',
-                ),
-            label: z
-                .string()
-                .describe('Human label shown in the field-mapping UI.'),
-            type: z
-                .enum(['dimension', 'metric', 'series'])
-                .describe(
-                    'dimension = a category/grouping column, metric = a numeric measure, series = a dimension used to split or colour the chart.',
-                ),
-            required: z
-                .boolean()
-                .describe(
-                    'false only when the chart still renders with this field unmapped.',
-                ),
+        vizField(false).extend({
+            examples: nullableOptionalFieldExamples().describe(
+                'Optional legacy scalar display examples for this field. Each value stands alone.',
+            ),
         }),
     )
-    .describe(
-        'Every data column the component reads. Declare exactly what you read — no more, no less.',
-    );
+    .describe(vizFieldsDescription);
+
+const vizFieldsForGeneration = z
+    .array(vizField(true))
+    .describe(vizFieldsDescription);
 
 const vizConfigOptions = z.array(
     z.discriminatedUnion('type', [
@@ -884,14 +1027,14 @@ const vizConfigOptions = z.array(
             min: z
                 .number()
                 .nullable()
-                .optional()
                 .transform((value) => value ?? undefined)
+                .optional()
                 .describe('Optional lower bound.'),
             max: z
                 .number()
                 .nullable()
-                .optional()
                 .transform((value) => value ?? undefined)
+                .optional()
                 .describe('Optional upper bound.'),
         }),
         z.object({
@@ -916,8 +1059,8 @@ const vizColorPalette = z
         group: z
             .string()
             .nullable()
-            .optional()
             .transform((value) => value ?? undefined)
+            .optional()
             .describe(
                 'Optional tab name, matching a config option `group`. The picker gets its own tab when no option shares it.',
             ),
@@ -927,28 +1070,30 @@ const vizColorPalette = z
         'Declare this when the component colours anything from `colorPalette`. It surfaces the standard Lightdash palette picker, so the viz inherits the same colours as the charts around it. Not a config option: the chosen colours arrive on `colorPalette`, never on `options`. Null when the component colours nothing.',
     );
 
-// Runtime validator for the untrusted generated declaration, and for schemas
-// round-tripped through an app manifest. `configOptions` defaults to `[]` so a
-// declaration persisted before config options existed still parses.
+// Read validator for persisted schemas and app manifests. Older generated
+// metadata may exceed today's authoring limits; keep those charts usable.
+// `configOptions` defaults to `[]` for declarations from before it existed.
 export const dataAppVizSchema = z.object({
-    fields: vizFields.refine(uniqueNames, 'duplicate field name'),
+    fields: vizFieldsForRead.refine(uniqueNames, 'duplicate field name'),
     configOptions: vizConfigOptions
         .default([])
         .refine(uniqueNames, 'duplicate option name'),
     colorPalette: vizColorPalette.default(null),
+    inputGuidance: vizInputGuidance(false),
 });
 
 // The stricter contract handed to the generator CLI: `configOptions` and
 // `colorPalette` are required, so an empty declaration is a deliberate answer
 // rather than the shape of the schema's defaults.
 export const dataAppVizGenerationSchema = z.object({
-    fields: vizFields.refine(uniqueNames, 'duplicate field name'),
+    fields: vizFieldsForGeneration.refine(uniqueNames, 'duplicate field name'),
     configOptions: vizConfigOptions
         .refine(uniqueNames, 'duplicate option name')
         .describe(
             'Every setting the viewer can change from the chart config panel without regenerating the viz — one per literal the component would otherwise hardcode: what it shows or hides, which variant it picked, and the numbers and labels it wrote in. Each `name` must be a key the component reads from `options`. Series colours are not among them: declare `colorPalette` instead. Empty is only right for a component that hardcodes nothing a viewer would want different.',
         ),
     colorPalette: vizColorPalette,
+    inputGuidance: vizInputGuidance(true),
 });
 
 // Compile-time guard: the zod schema's output type must match the explicit
@@ -979,13 +1124,51 @@ void dataAppVizGenerationSchemaIsPersistable;
 // output. Inline shared schemas because Codex only accepts top-level references,
 // and retain draft-07 because the Claude CLI does not support the OpenAI
 // target's 2019-09 meta-schema.
-export const dataAppVizJsonSchema = {
-    ...zodToJsonSchema(dataAppVizGenerationSchema, {
-        $refStrategy: 'none',
-        target: 'openAi',
-    }),
-    $schema: 'http://json-schema.org/draft-07/schema#',
+type JsonSchemaObject = Record<string, unknown>;
+
+const isJsonSchemaObject = (value: unknown): value is JsonSchemaObject =>
+    value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const makeOpenAiStrict = (value: unknown): unknown => {
+    if (Array.isArray(value)) {
+        return value.map(makeOpenAiStrict);
+    }
+    if (!isJsonSchemaObject(value)) {
+        return value;
+    }
+
+    const schema = Object.fromEntries(
+        Object.entries(value).map(([key, child]) => [
+            key,
+            makeOpenAiStrict(child),
+        ]),
+    );
+    if (!isJsonSchemaObject(schema.properties)) {
+        return schema;
+    }
+
+    const required = new Set(
+        Array.isArray(schema.required) ? schema.required : [],
+    );
+    const properties = Object.fromEntries(
+        Object.entries(schema.properties).map(([property, propertySchema]) => [
+            property,
+            required.has(property)
+                ? propertySchema
+                : { anyOf: [propertySchema, { type: 'null' }] },
+        ]),
+    );
+
+    return {
+        ...schema,
+        properties,
+        required: Object.keys(properties),
+    };
 };
+
+export const dataAppVizJsonSchema = makeOpenAiStrict(
+    toLlmJsonSchema(dataAppVizGenerationSchema),
+);
 
 /** Whether a stored value still has the shape the option declares. */
 const matchesDeclaredType = (
@@ -1025,6 +1208,24 @@ export const getEffectiveOptionValue = <T extends DataAppVizConfigOption>(
         ? (storedValue as T['default'])
         : option.default;
 
+/**
+ * The explicitly stored values that still fit the declared options. Used when
+ * a chart moves to a newer contract: stale names and mistyped values go,
+ * defaults are still never seeded.
+ */
+export const pruneDataAppVizOptionValues = (
+    configOptions: DataAppVizConfigOption[],
+    optionValues: Record<string, DataAppVizOptionValue>,
+): Record<string, DataAppVizOptionValue> =>
+    Object.fromEntries(
+        configOptions.flatMap((option) => {
+            const stored = optionValues[option.name];
+            return stored !== undefined && matchesDeclaredType(option, stored)
+                ? [[option.name, stored]]
+                : [];
+        }),
+    );
+
 /** Effective values for every declared option. */
 export const getEffectiveOptionValues = (
     configOptions: DataAppVizConfigOption[],
@@ -1042,19 +1243,46 @@ export const getEffectiveOptionValues = (
 // copy. `schema` is null until a version generates one.
 export type DataAppViz = {
     dataAppVizUuid: string;
+    slug: string;
     name: string;
     description: string;
     projectUuid: string;
     spaceUuid: string | null;
     schema: DataAppVizSchema | null;
+    // Tabler icon name from the curated set; null renders the puzzle piece.
+    icon: ChartTypeIcon | null;
     createdAt: Date;
     createdByUserUuid: string;
+    // Registry slug it was installed from, or null if project-authored (or
+    // forked). Registry-installed chart types are read-only; fork to edit.
+    registrySlug: string | null;
 };
+
+/** Whether a chart type is a registry install: read-only, only editable by forking. */
+export const isOfficialChartType = (
+    viz: Pick<DataAppViz, 'registrySlug'>,
+): boolean => viz.registrySlug !== null;
 
 export type ApiListDataAppVizsResponse = ApiSuccess<
     KnexPaginatedData<DataAppViz[]>
 >;
 export type ApiGetDataAppVizResponse = ApiSuccess<DataAppViz>;
+
+export type DataAppVizDeleteImpact = {
+    chartCount: number;
+};
+
+export type ApiDataAppVizDeleteImpactResponse =
+    ApiSuccess<DataAppVizDeleteImpact>;
+
+export type DataAppVizUpgradeImpact = {
+    chartCount: number;
+    /** Charts whose config pins a chart type version (`dataAppVizVersion`). */
+    pinnedChartCount: number;
+};
+
+export type ApiDataAppVizUpgradeImpactResponse =
+    ApiSuccess<DataAppVizUpgradeImpact>;
 
 export type DataAppVizRenderMetadata =
     | {
@@ -1110,10 +1338,32 @@ export const APP_SDK_COLOR_SCHEME_MESSAGE = 'lightdash:sdk:theme';
 export const APP_SDK_COLOR_SCHEME_REQUEST_MESSAGE =
     'lightdash:sdk:theme-request';
 
+// AI analysis pushed into a running app (mirrors packages/query-sdk/src/insights.ts).
+// Host → iframe with the current analysis, in reply to a request and on change.
+export const APP_SDK_INSIGHTS_MESSAGE = 'lightdash:sdk:insights';
+// Iframe → host once the SDK's listener is live (and on sdk:ready).
+export const APP_SDK_INSIGHTS_REQUEST_MESSAGE =
+    'lightdash:sdk:insights-request';
+// Iframe → host: the viewer clicked an action rendered by the app.
+export const APP_SDK_INSIGHT_ACTION_MESSAGE = 'lightdash:sdk:insight-action';
+// Iframe → host: which query uuids are rendered on screen right now.
+export const APP_SDK_MOUNTED_QUERIES_MESSAGE = 'lightdash:sdk:mounted-queries';
+
+export type DataAppInsightAction =
+    | { action: 'analyse' }
+    | { action: 'investigate'; anomalyId: string }
+    | { action: 'continue'; anomalyId: string };
+
 // Bridge-only virtual route: the viz posts semantic click intent here and the
 // host rewrites it into the real underlying-data POST. Never forwarded to the
 // API — `useAppSdkBridge` resolves it before allowlist matching.
 export const APP_SDK_VIZ_UNDERLYING_DATA_PATH = '/__sdk/viz/underlying-data';
+
+// Bridge-only virtual route for the current host-owned underlying-data dialog.
+// The fetch path above remains available for deployed bundles that still draw
+// their own dialog.
+export const APP_SDK_VIZ_UNDERLYING_DATA_OPEN_PATH =
+    '/__sdk/viz/underlying-data/open';
 
 // Click intent a viz sends to the virtual route: the untransformed source row
 // (as pushed in the viz context) and the declared field NAME bound to the
@@ -1121,6 +1371,8 @@ export const APP_SDK_VIZ_UNDERLYING_DATA_PATH = '/__sdk/viz/underlying-data';
 export type DataAppVizUnderlyingDataIntent = {
     row: ResultRow;
     metric: string;
+    /** Required by hosts for a multi-metric slot; must belong to that slot. */
+    fieldId?: string;
     limit?: number | null;
 };
 
@@ -1135,21 +1387,40 @@ export const APP_SDK_VIZ_DRILL_DOWN_PATH = '/__sdk/viz/drill-down';
 export type DataAppVizDrillDownIntent = {
     row: ResultRow;
     metric: string;
+    /** Required by hosts for a multi-metric slot; must belong to that slot. */
+    fieldId?: string;
+};
+
+// Display metadata for one bound query field, keyed by field id in
+// `DataAppVizContext.fields`. `label` is the field label without the table
+// prefix; `format` is the normalized semantic-layer format so a viz can build
+// axis-tick and legend formatters (per-cell `formatted` only covers values the
+// rows contain).
+export type DataAppVizFieldMetadata = {
+    label: string;
+    tableLabel?: string;
+    format?: CustomFormat;
 };
 
 // Host-owned render context pushed into a data app viz: field name → bound query
 // field id, the host-fetched result rows the renderer reads, the effective
 // config option values (stored value ?? declared default), and the palette
 // resolved for this chart (org → project → space → dashboard → chart, dark-mode
-// corrected). `colorPalette` is pushed whether or not the viz declared one, so a
-// viz that colours series never has to check first. `underlyingData.enabled` and
-// `drillDown.enabled` are required so every push site decides availability explicitly.
+// corrected), plus the host-resolved colors for pivot columns and raw dimension
+// values. `colorPalette` is pushed whether or not the viz declared one, so a viz
+// that colours series never has to check first. `underlyingData.enabled` and
+// `drillDown.enabled` are required so every push site decides availability
+// explicitly. `fields` carries display metadata for every bound field id, so a
+// viz labels axes and legends without parsing raw ids.
 export type DataAppVizContext = {
-    fieldMapping: Record<string, string>;
+    fieldMapping: Record<string, string | string[]>;
+    fields: Record<string, DataAppVizFieldMetadata>;
     rows: ResultRow[];
     options: Record<string, DataAppVizOptionValue>;
     colorPalette: string[];
+    seriesColors: Record<string, string>;
+    valueColors: Record<string, Record<string, string>>;
     pivotDetails: ReadyQueryResultsPage['pivotDetails'];
-    underlyingData: { enabled: boolean };
+    underlyingData: { enabled: boolean; openEnabled?: boolean };
     drillDown: { enabled: boolean };
 };

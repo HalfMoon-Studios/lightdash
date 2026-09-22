@@ -59,6 +59,9 @@ const TOOL_NAME_TO_DB_TOOL_NAME = {
     generateDashboard: 'generate_dashboard',
     listProjects: 'list_projects',
     getProjectInfo: 'get_project_info',
+    generateDataApp: 'generate_data_app',
+    iterateDataApp: 'iterate_data_app',
+    listDataAppThemes: 'list_data_app_themes',
     editDbtProject: 'edit_dbt_project',
     editProjectContext: 'edit_project_context',
     editRepo: 'edit_repo',
@@ -300,6 +303,9 @@ export const evaluateToolCallSequence = async (
         functionId: 'evaluateToolCallSequence',
         feature: 'llm-judge',
         ...getLanguageModelAttribution(judge),
+        // This is an instance-only evaluation path. It does not record the
+        // key origin.
+        keyManagement: null,
     });
     const result = await generateObject({
         model: judge,

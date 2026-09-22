@@ -4,6 +4,7 @@ import {
     getConditionalRuleLabel,
     getConditionalRuleLabelFromItem,
     getFilterTypeFromItemType,
+    getDashboardFilterField,
     hashStringToBase36,
     ProjectType,
     type DashboardDataAppTile,
@@ -14,14 +15,14 @@ import {
     ActionIcon,
     Badge,
     Box,
-    HoverCard,
+    Popover,
     Loader,
     Stack,
     Text,
 } from '@mantine/core';
 import { IconAppsOff, IconCode, IconFilter } from '@tabler/icons-react';
-import React, { useMemo, useState, type FC } from 'react';
-import AppIframePreview from '../../features/apps/AppIframePreview';
+import React, { useEffect, useMemo, useState, type FC } from 'react';
+import { AskAiAgentButton } from '../../ee/features/aiCopilot/components/AskAiAgentMenuItem/AskAiAgentButton';
 import { getVisiblePreviewTokenError } from '../../features/apps/hooks/previewTokenQueryOptions';
 import { useAppPreviewToken } from '../../features/apps/hooks/useAppPreviewToken';
 import { useGetApp } from '../../features/apps/hooks/useGetApp';
@@ -38,6 +39,7 @@ import { convertDateDashboardFilters } from '../../utils/dateFilter';
 import LinkMenuItem from '../common/LinkMenuItem';
 import MantineIcon from '../common/MantineIcon';
 import SuboptimalState from '../common/SuboptimalState/SuboptimalState';
+import DashboardDataAppIframe from './DashboardDataAppIframe';
 import TileBase from './TileBase/index';
 
 type Props = Pick<
@@ -49,10 +51,17 @@ const DashboardFiltersIndicator: FC<{
     filterRules: DashboardFilterRule[];
     filterableItems: Record<string, FilterableItem>;
 }> = ({ filterRules, filterableItems }) => {
+    const fieldsByTile = useDashboardContext(
+        (c) => c.filterableFieldsByTileUuid,
+    );
     if (filterRules.length === 0) return null;
 
     const labelledRules = filterRules.map((filterRule) => {
-        const filterableItem = filterableItems[filterRule.target.fieldId];
+        const filterableItem = getDashboardFilterField(
+            filterableItems,
+            filterRule,
+            fieldsByTile,
+        );
         const labels = filterableItem
             ? getConditionalRuleLabelFromItem(filterRule, filterableItem)
             : getConditionalRuleLabel(
@@ -71,15 +80,12 @@ const DashboardFiltersIndicator: FC<{
     } available to this Data App`;
 
     return (
-        <HoverCard
-            withArrow
-            withinPortal
-            shadow="md"
-            position="bottom-end"
-            offset={4}
-            arrowOffset={10}
-        >
-            <HoverCard.Dropdown>
+        <Popover withArrow position="bottom-end" offset={4} arrowOffset={10}>
+            <Popover.Dropdown
+                maw="calc(100vw - 24px)"
+                mah="calc(100dvh - 24px)"
+                style={{ overflowY: 'auto' }}
+            >
                 <Stack gap="xs" align="flex-start">
                     <Text c="ldGray.7" fw={500} fz="xs">
                         Dashboard filter{filterRules.length === 1 ? '' : 's'}{' '}
@@ -87,14 +93,15 @@ const DashboardFiltersIndicator: FC<{
                     </Text>
                     {labelledRules.map(({ filterRule, labels }) => (
                         <Badge
+                            maw="100%"
+                            h="auto"
+                            style={{ whiteSpace: 'normal' }}
                             key={filterRule.id}
                             variant="outline"
                             color="ldGray.4"
-                            radius="sm"
                             size="lg"
                             fz="xs"
                             fw="normal"
-                            tt="none"
                         >
                             <Text fw={600} span inherit c="foreground">
                                 {labels.field}:
@@ -116,18 +123,13 @@ const DashboardFiltersIndicator: FC<{
                         </Badge>
                     ))}
                 </Stack>
-            </HoverCard.Dropdown>
-            <HoverCard.Target>
-                <ActionIcon
-                    aria-label={availableFiltersLabel}
-                    size="sm"
-                    variant="subtle"
-                    color="gray"
-                >
+            </Popover.Dropdown>
+            <Popover.Target>
+                <ActionIcon aria-label={availableFiltersLabel} size="sm">
                     <MantineIcon icon={IconFilter} />
                 </ActionIcon>
-            </HoverCard.Target>
-        </HoverCard>
+            </Popover.Target>
+        </Popover>
     );
 };
 
@@ -139,6 +141,7 @@ const DataAppTile: FC<Props> = (props) => {
         },
     } = props;
     const projectUuid = useProjectUuid();
+    const dashboardUuid = useDashboardContext((c) => c.dashboard?.uuid);
 
     const [isCommentsMenuOpen, setIsCommentsMenuOpen] = useState(false);
     const showComments = useDashboardContext(
@@ -291,10 +294,32 @@ const DataAppTile: FC<Props> = (props) => {
         (latestReadyVersion !== undefined && isTokenLoading);
     const otherError =
         !isForbidden && !isNotFound && (appQuery.error || visibleTokenError);
+    const markTileScreenshotErrored = useDashboardTileStatusContext(
+        (context) => context.markTileScreenshotErrored,
+    );
+    const hasTerminalError = !!(
+        isForbidden ||
+        isNotFound ||
+        hasNoReadyVersion ||
+        otherError
+    );
+    useEffect(() => {
+        if (hasTerminalError) {
+            markTileScreenshotErrored(uuid);
+        }
+    }, [hasTerminalError, markTileScreenshotErrored, uuid]);
 
     return (
         <TileBase
             title={title}
+            titleLeftIcon={
+                <AskAiAgentButton
+                    projectUuid={projectUuid}
+                    dataAppUuid={appUuid}
+                    dashboardUuid={dashboardUuid}
+                    clickedFrom="dashboard_data_app_tile"
+                />
+            }
             lockHeaderVisibility={isCommentsMenuOpen}
             visibleHeaderElement={
                 tileHasComments ? dashboardComments : undefined
@@ -314,7 +339,7 @@ const DataAppTile: FC<Props> = (props) => {
             extraMenuItems={editMenuItem}
             {...props}
         >
-            <Box className="non-draggable" style={{ flex: 1, minHeight: 0 }}>
+            <Box className="non-draggable" flex={1} mih={0}>
                 {isNotFound ? (
                     <SuboptimalState
                         icon={IconAppsOff}
@@ -348,7 +373,9 @@ const DataAppTile: FC<Props> = (props) => {
                         <Loader size="sm" />
                     </Stack>
                 ) : (
-                    <AppIframePreview
+                    <DashboardDataAppIframe
+                        key={`${appUuid}:${latestReadyVersion}:${filtersKey}:${refreshCounter}`}
+                        tileUuid={uuid}
                         src={previewUrl}
                         previewToken={token}
                         expectedPreviewOrigin={previewOrigin}

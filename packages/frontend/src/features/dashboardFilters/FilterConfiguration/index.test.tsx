@@ -72,6 +72,16 @@ const mockField = {
     hidden: false,
 } as unknown as DashboardFilterableField;
 
+const mockTimestampField = {
+    ...mockField,
+    name: 'created_at',
+    type: DimensionType.TIMESTAMP,
+    table: 'orders',
+    tableLabel: 'Orders',
+    label: 'Created at',
+    sql: 'created_at',
+} as unknown as DashboardFilterableField;
+
 const anyValueRule: DashboardFilterRule = {
     id: 'filter-1',
     target: {
@@ -94,41 +104,108 @@ describe('FilterConfiguration', () => {
         };
     });
 
-    it('saves a value typed into the input when Apply is clicked without pressing Enter', async () => {
-        const user = userEvent.setup({ pointerEventsCheck: 0 });
-        const onSave = vi.fn();
+    it.each(['hover', 'focus', 'touch'])(
+        'shows the selected field description on %s, even with a custom filter label',
+        async (interaction) => {
+            const user = userEvent.setup();
+            const description = 'The first name supplied by the customer.';
+            renderWithProviders(
+                <FilterConfiguration
+                    isEditMode={false}
+                    tiles={[]}
+                    tabs={[]}
+                    availableTileFilters={{}}
+                    field={{ ...mockField, description }}
+                    defaultFilterRule={anyValueRule}
+                    originalFilterRule={{
+                        ...anyValueRule,
+                        label: 'Customer name',
+                    }}
+                    onSave={vi.fn()}
+                />,
+            );
 
-        renderWithProviders(
-            <FilterConfiguration
-                isEditMode={false}
-                tiles={[]}
-                tabs={[]}
-                availableTileFilters={{}}
-                field={mockField}
-                defaultFilterRule={anyValueRule}
-                originalFilterRule={anyValueRule}
-                onSave={onSave}
-            />,
-        );
+            expect(screen.getByText('Customer name')).toBeVisible();
+            expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+            const info = screen.getByRole('button', { name: description });
+            if (interaction === 'hover') {
+                await user.hover(info);
+            } else if (interaction === 'focus') {
+                info.focus();
+            } else {
+                await user.pointer({ keys: '[TouchA]', target: info });
+            }
+            expect(await screen.findByRole('tooltip')).toHaveTextContent(
+                description,
+            );
+        },
+    );
 
-        const input = document.querySelector(
-            'input[data-autofocus]',
-        ) as HTMLInputElement;
-        expect(input).toBeTruthy();
+    it.each([undefined, '', '   '])(
+        'hides the info icon when the field description is %j',
+        (description) => {
+            const { container } = renderWithProviders(
+                <FilterConfiguration
+                    isEditMode={false}
+                    tiles={[]}
+                    tabs={[]}
+                    availableTileFilters={{}}
+                    field={{ ...mockField, description }}
+                    defaultFilterRule={anyValueRule}
+                    onSave={vi.fn()}
+                />,
+            );
 
-        fireEvent.focus(input);
-        await user.type(input, 'adam');
+            expect(
+                container.querySelector('.tabler-icon-info-circle'),
+            ).not.toBeInTheDocument();
+        },
+    );
 
-        fireEvent.mouseDown(screen.getByRole('button', { name: 'Apply' }));
+    it.each(['pointer', 'keyboard'])(
+        'saves a typed value once when Apply is activated with %s',
+        async (activation) => {
+            const user = userEvent.setup({ pointerEventsCheck: 0 });
+            const onSave = vi.fn();
 
-        await waitFor(() => {
-            expect(onSave).toHaveBeenCalledTimes(1);
-        });
+            renderWithProviders(
+                <FilterConfiguration
+                    isEditMode={false}
+                    tiles={[]}
+                    tabs={[]}
+                    availableTileFilters={{}}
+                    field={mockField}
+                    defaultFilterRule={anyValueRule}
+                    originalFilterRule={anyValueRule}
+                    onSave={onSave}
+                />,
+            );
 
-        expect(onSave).toHaveBeenCalledWith(
-            expect.objectContaining({ values: ['adam'] }),
-        );
-    });
+            const input = document.querySelector(
+                'input[data-autofocus]',
+            ) as HTMLInputElement;
+            expect(input).toBeTruthy();
+
+            fireEvent.focus(input);
+            await user.type(input, 'adam');
+
+            const applyButton = screen.getByRole('button', { name: 'Apply' });
+            if (activation === 'keyboard') {
+                applyButton.focus();
+                await user.keyboard('{Enter}');
+            } else {
+                await user.click(applyButton);
+            }
+
+            await waitFor(() => {
+                expect(onSave).toHaveBeenCalledTimes(1);
+            });
+
+            expect(onSave).toHaveBeenCalledWith(
+                expect.objectContaining({ values: ['adam'] }),
+            );
+        },
+    );
 
     it('allows changing between multiple and single values', async () => {
         const user = userEvent.setup();
@@ -163,6 +240,49 @@ describe('FilterConfiguration', () => {
         expect(
             screen.getByRole('button', { name: 'Single value' }),
         ).toBeVisible();
+    });
+
+    it('preserves a timestamp value when changing to is between', async () => {
+        const user = userEvent.setup();
+        const onSave = vi.fn();
+        const timestampValue = '2024-11-01T10:00:00-05:00';
+        const timestampRule: DashboardFilterRule = {
+            ...anyValueRule,
+            target: {
+                fieldId: 'orders_created_at',
+                tableName: 'orders',
+            },
+            values: [timestampValue],
+            disabled: false,
+        };
+
+        renderWithProviders(
+            <FilterConfiguration
+                isEditMode={false}
+                isTemporary
+                tiles={[]}
+                tabs={[]}
+                availableTileFilters={{}}
+                field={mockTimestampField}
+                defaultFilterRule={timestampRule}
+                originalFilterRule={timestampRule}
+                onSave={onSave}
+            />,
+        );
+
+        await user.click(screen.getByDisplayValue('is'));
+        await user.click(
+            await screen.findByRole('option', { name: 'is between' }),
+        );
+        fireEvent.mouseDown(screen.getByRole('button', { name: 'Apply' }));
+
+        await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+        expect(onSave).toHaveBeenCalledWith(
+            expect.objectContaining({
+                operator: FilterOperator.IN_BETWEEN,
+                values: [timestampValue],
+            }),
+        );
     });
 
     it('keeps the required toggle on and lists rule siblings for a rule member', () => {

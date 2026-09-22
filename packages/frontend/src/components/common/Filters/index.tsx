@@ -25,7 +25,6 @@ import {
     Stack,
     Text,
     Tooltip,
-    useMantineColorScheme,
 } from '@mantine/core';
 import { IconAlertTriangle, IconPlus, IconX } from '@tabler/icons-react';
 import { memo, useCallback, useMemo, useRef, type FC } from 'react';
@@ -116,26 +115,18 @@ const AddFilterSection: FC<AddFilterSectionProps> = ({
     clearAllFilters,
     addFieldRule,
 }) => {
-    const { colorScheme } = useMantineColorScheme();
     return (
         <Box
             pos="relative"
             style={{
                 zIndex: 2,
-                backgroundColor:
-                    colorScheme === 'dark'
-                        ? 'var(--mantine-color-dark-6)'
-                        : 'white',
+                backgroundColor: 'var(--mantine-color-body)',
             }}
         >
             {!isOpen ? (
-                <Group
-                    align="center"
-                    justify="space-between"
-                    style={{ flex: 1 }}
-                >
+                <Group align="center" justify="space-between" flex={1}>
                     <Button
-                        variant="outline"
+                        variant="light"
                         size="xs"
                         leftSection={<MantineIcon icon={IconPlus} />}
                         disabled={fields.length <= 0}
@@ -172,11 +163,7 @@ const AddFilterSection: FC<AddFilterSectionProps> = ({
                     }}
                     onClosed={toggleFieldInput}
                     rightSection={
-                        <ActionIcon
-                            variant="subtle"
-                            color="gray"
-                            onClick={toggleFieldInput}
-                        >
+                        <ActionIcon onClick={toggleFieldInput}>
                             <MantineIcon icon={IconX} />
                         </ActionIcon>
                     }
@@ -296,7 +283,7 @@ const FiltersForm: FC<Props> = memo(({ filters, setFilters, isEditMode }) => {
     }, [andRootFilterGroupItems, orRootFilterGroups]);
 
     return (
-        <Stack gap="xs" pos="relative" m="sm" style={{ flexGrow: 1 }}>
+        <Stack gap="xs" pos="relative" m="sm" flex={1}>
             {totalFilterRules.length >= 1 &&
                 (showSimplifiedForm ? (
                     <SimplifiedFilterGroupForm
@@ -354,7 +341,7 @@ const FiltersForm: FC<Props> = memo(({ filters, setFilters, isEditMode }) => {
                                 icon={IconAlertTriangle}
                                 color="yellow.6"
                             />
-                            <Text c="yellow.6" fz="xs" style={{ flex: 1 }}>
+                            <Text c="yellow.6" fz="xs" flex={1}>
                                 {entry.reason === 'unknown_field' ? (
                                     <>
                                         Tried to reference field with unknown
@@ -377,9 +364,7 @@ const FiltersForm: FC<Props> = memo(({ filters, setFilters, isEditMode }) => {
                                 )}
                             </Text>
                             <ActionIcon
-                                variant="subtle"
                                 size="sm"
-                                color="gray"
                                 onClick={() =>
                                     updateFiltersFromGroup(
                                         deleteFilterRuleFromGroup(

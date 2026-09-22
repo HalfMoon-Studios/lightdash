@@ -24,7 +24,6 @@ import {
     isNumericItem,
     ItemsMap,
     PivotConfig,
-    pivotResultsAsCsv,
     pivotResultsAsData,
     ResultRow,
     shouldShiftItemTimezone,
@@ -34,7 +33,9 @@ import {
     type ConditionalFormattingConfig,
     type ConditionalFormattingMinMaxMap,
     type ConditionalFormattingRowFields,
+    type PivotResultsDataCell,
     type PivotRowTotalsByIndex,
+    type PivotValuesColumn,
     type ReadyQueryResultsPage,
 } from '@lightdash/common';
 import * as Excel from 'exceljs';
@@ -53,6 +54,10 @@ import {
     processFieldsForExport,
     streamJsonlData,
 } from '../../utils/FileDownloadUtils/FileDownloadUtils';
+import {
+    prepareFlatPivotExport,
+    unpivotResultsStream,
+} from '../../utils/flatPivotExport';
 
 export class ExcelService {
     private static readonly EXCEL_ROW_LIMIT = 1_000_000;
@@ -158,6 +163,48 @@ export class ExcelService {
                 undefined,
                 timezone,
             );
+        });
+    }
+
+    private static convertPivotCellToExcel(
+        cell: PivotResultsDataCell,
+        itemMap: ItemsMap,
+        onlyRaw: boolean,
+    ): string | number {
+        const item = itemMap[cell.itemId ?? cell.fieldId];
+        if (
+            !onlyRaw &&
+            isNumericItem(item) &&
+            cell.raw !== null &&
+            cell.raw !== undefined &&
+            String(cell.raw).trim() !== '' &&
+            isNumber(cell.raw)
+        ) {
+            return Number(cell.raw);
+        }
+
+        return cell.formatted;
+    }
+
+    private static applyPivotNumberFormats(
+        excelRow: Excel.Row,
+        pivotRow: PivotResultsDataCell[],
+        itemMap: ItemsMap,
+        onlyRaw: boolean,
+    ) {
+        if (onlyRaw) return;
+
+        pivotRow.forEach((cell, colIndex) => {
+            const excelCell = excelRow.getCell(colIndex + 1);
+            if (typeof excelCell.value !== 'number') return;
+
+            const formatExpression = getExcelFormatExpression(
+                itemMap[cell.itemId ?? cell.fieldId],
+            );
+
+            if (formatExpression) {
+                excelCell.numFmt = formatExpression;
+            }
         });
     }
 
@@ -431,10 +478,16 @@ export class ExcelService {
             );
         }
 
+        const pivotValuesColumnsMap = Object.fromEntries(
+            pivotDetails.valuesColumns?.map((column) => [
+                column.pivotColumnName,
+                column,
+            ]) ?? [],
+        );
         const formattedRows = formatRows(
             rows,
             itemMap,
-            undefined,
+            pivotValuesColumnsMap,
             undefined,
             timezone,
         );
@@ -520,7 +573,7 @@ export class ExcelService {
             }
         });
 
-        // Add data rows — use raw values for date columns, formatted for everything else
+        // Add data rows with native date/number values and Excel formats.
         pivotData.dataRows.forEach((row) => {
             const excelRow = row.map((cell, colIndex) => {
                 const dateFmt = dateColumnFormats.get(colIndex);
@@ -537,9 +590,15 @@ export class ExcelService {
                             : m.toDate();
                     }
                 }
-                return cell.formatted;
+                return ExcelService.convertPivotCellToExcel(
+                    cell,
+                    itemMap,
+                    onlyRaw,
+                );
             });
             const wsRow = worksheet.addRow(excelRow);
+
+            ExcelService.applyPivotNumberFormats(wsRow, row, itemMap, onlyRaw);
 
             // Apply numFmt to date cells in this row
             dateColumnFormats.forEach(({ numFmt }, colIndex) => {
@@ -598,7 +657,7 @@ export class ExcelService {
         warehouseGrandTotals?: Record<string, number>;
         timezone?: string;
     }): Promise<Excel.Buffer> {
-        const csvResults = pivotResultsAsCsv({
+        const pivotData = pivotResultsAsData({
             pivotConfig,
             rows: formattedRows,
             itemMap,
@@ -609,15 +668,41 @@ export class ExcelService {
             warehouseColumnTotals,
             warehouseGrandTotals,
         });
+        const csvResults = [
+            ...pivotData.headers,
+            ...pivotData.dataRows.map((row) =>
+                row.map((cell) => cell.formatted),
+            ),
+        ];
 
         const workbook = new Excel.Workbook();
         const worksheet = workbook.addWorksheet('Pivot Table');
 
         csvResults.forEach((row, index) => {
-            const excelRow = row.map((value) =>
+            const pivotRow =
+                pivotData.dataRows[index - pivotData.headers.length];
+            const rowValues = pivotRow
+                ? pivotRow.map((cell) =>
+                      ExcelService.convertPivotCellToExcel(
+                          cell,
+                          itemMap,
+                          onlyRaw,
+                      ),
+                  )
+                : row;
+            const excelRow = rowValues.map((value) =>
                 ExcelService.convertToExcelDate(value, timezone),
             );
-            worksheet.addRow(excelRow);
+            const wsRow = worksheet.addRow(excelRow);
+
+            if (pivotRow) {
+                ExcelService.applyPivotNumberFormats(
+                    wsRow,
+                    pivotRow,
+                    itemMap,
+                    onlyRaw,
+                );
+            }
 
             if (index === 0) {
                 const headerRow = worksheet.getRow(1);
@@ -928,6 +1013,7 @@ export class ExcelService {
             conditionalFormattings?: ConditionalFormattingConfig[];
             // Warehouse-computed totals appended as a final row, keyed by field id
             columnTotals?: Record<string, number>;
+            pivotValuesColumns?: PivotValuesColumn[];
         } = {},
         timezone?: string,
     ): Promise<{ fileUrl: string; truncated: boolean; s3Key: string }> {
@@ -941,17 +1027,48 @@ export class ExcelService {
             attachmentDownloadName,
             conditionalFormattings,
             columnTotals,
+            pivotValuesColumns,
         } = options;
 
         const { resultsStorageClient, exportsStorageClient } = clients;
 
-        // Process fields and generate headers using shared utility
-        const { sortedFieldIds, headers } = processFieldsForExport(fields, {
-            showTableNames,
-            customLabels,
-            columnOrder,
-            hiddenFields,
-        });
+        const exportConfig = pivotValuesColumns
+            ? prepareFlatPivotExport({
+                  fields,
+                  pivotValuesColumns,
+                  columnOrder,
+                  hiddenFields,
+                  customLabels,
+                  conditionalFormattings,
+                  columnTotals,
+              })
+            : {
+                  fields,
+                  pivotValuesColumns: undefined,
+                  columnOrder,
+                  hiddenFields,
+                  customLabels,
+                  conditionalFormattings,
+                  columnTotals,
+              };
+
+        const { sortedFieldIds, headers } = processFieldsForExport(
+            exportConfig.fields,
+            {
+                showTableNames,
+                customLabels: exportConfig.customLabels,
+                columnOrder: exportConfig.columnOrder,
+                hiddenFields: exportConfig.hiddenFields,
+            },
+        );
+
+        const getResultsStream = async () => {
+            const stream =
+                await resultsStorageClient.getDownloadStream(resultsFileName);
+            return exportConfig.pivotValuesColumns
+                ? unpivotResultsStream(stream, exportConfig.pivotValuesColumns)
+                : stream;
+        };
 
         // Create temporary file
         const tempFilePath = ExcelService.createTempFilePath('direct');
@@ -961,34 +1078,31 @@ export class ExcelService {
             // scan the results once with a dedicated stream (it is consumed).
             let minMaxMap: ConditionalFormattingMinMaxMap = {};
             if (conditionalFormattings?.length) {
-                const scanStream =
-                    await resultsStorageClient.getDownloadStream(
-                        resultsFileName,
-                    );
+                const scanStream = await getResultsStream();
                 minMaxMap =
                     await ExcelService.buildConditionalFormattingMinMaxMap({
                         resultsStream: scanStream,
-                        fields,
-                        conditionalFormattings,
+                        fields: exportConfig.fields,
+                        conditionalFormattings:
+                            exportConfig.conditionalFormattings ?? [],
                     });
             }
 
             // Step 2: Get source stream
-            const resultsStream =
-                await resultsStorageClient.getDownloadStream(resultsFileName);
+            const resultsStream = await getResultsStream();
 
             // Step 3: Stream JSONL data to Excel temp file
             const { truncated } = await ExcelService.streamJsonlToExcelFile(
                 resultsStream,
                 tempFilePath,
                 headers,
-                fields,
+                exportConfig.fields,
                 onlyRaw,
                 sortedFieldIds,
                 timezone,
-                conditionalFormattings,
+                exportConfig.conditionalFormattings,
                 minMaxMap,
-                columnTotals,
+                exportConfig.columnTotals,
             );
 
             // Generate filename with truncated flag

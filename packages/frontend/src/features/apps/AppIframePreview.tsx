@@ -1,5 +1,7 @@
 import {
     type AppColorScheme,
+    type DataAppInsightAction,
+    type DataAppInsightsPayload,
     type DataAppVizContext,
     type DashboardFilters,
     type QueryExecutionContext,
@@ -80,6 +82,14 @@ type Props = {
      *  bundles never send one — the parent owns the silence timeout that
      *  classifies them as legacy (see `useSdkUpgradeStatus`). */
     onSdkManifest?: (manifest: SdkManifest) => void;
+    /**
+     * Called when the iframe acknowledges painting the matching render context.
+     */
+    onVizRendered?: (renderId: string) => void;
+    /** Identity attached to the next viz context push and its acknowledgement. */
+    vizRenderId?: string;
+    /** Called when the iframe SDK requests its initial viz context. */
+    onVizContextRequest?: () => void;
     /** When true, clicks inside the iframe are intercepted to reveal the query. */
     lineageEnabled?: boolean;
     onLineageAvailabilityChange?: (available: boolean) => void;
@@ -117,6 +127,8 @@ type Props = {
     // Render context for data app vizs: the field mapping + host rows, pushed
     // into the iframe over the SDK bridge. Undefined for ordinary data apps.
     dataAppVizContext?: DataAppVizContext;
+    /** Enables the restricted bridge contract used by custom chart types. */
+    dataAppVizMode?: boolean;
     /** Rewrites the viz underlying-data virtual route into the real API
      *  request. Only set by DataAppVizRenderer when the capability is on. */
     rewriteVizUnderlyingDataRequest?: (intentBody: unknown) => {
@@ -124,6 +136,8 @@ type Props = {
         path: string;
         body: unknown;
     };
+    /** Opens Lightdash's underlying-data dialog for a viz click intent. */
+    onVizUnderlyingDataIntent?: (intentBody: unknown) => void;
     /** Handles the viz drill-down virtual route. Only set by
      *  DataAppVizRenderer when the capability is on. */
     onVizDrillDownIntent?: (intentBody: unknown) => void;
@@ -135,6 +149,10 @@ type Props = {
      *  `MinimalApp` so scheduled screenshots don't depend on whichever theme
      *  the rendering browser happens to have stored. */
     forceColorScheme?: AppColorScheme;
+    /** The host's AI analysis of the current view, pushed into the app. */
+    insights?: DataAppInsightsPayload | null;
+    onInsightAction?: (action: DataAppInsightAction) => void;
+    onMountedQueriesChange?: (queryUuids: string[]) => void;
 };
 
 /**
@@ -187,11 +205,19 @@ const AppIframePreview = forwardRef<AppIframePreviewHandle, Props>(
             onIframeLoad,
             capabilities,
             dataAppVizContext,
+            dataAppVizMode,
             rewriteVizUnderlyingDataRequest,
+            onVizUnderlyingDataIntent,
             onVizDrillDownIntent,
             urlStateSync,
             onSdkManifest,
+            onVizRendered,
+            vizRenderId,
+            onVizContextRequest,
             forceColorScheme,
+            insights,
+            onInsightAction,
+            onMountedQueriesChange,
         },
         ref,
     ) => {
@@ -247,6 +273,7 @@ const AppIframePreview = forwardRef<AppIframePreviewHandle, Props>(
                 iframeNavigation.src,
             ],
         );
+        const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
         // Memoized so the bridge's message listener doesn't re-attach on every
         // parent render — AppGenerate re-renders on every keystroke (editor's
         // `onUpdate` → `setIsPromptEmpty`) and we don't want to thrash listeners.
@@ -286,11 +313,19 @@ const AppIframePreview = forwardRef<AppIframePreviewHandle, Props>(
             onLineageSelected,
             onExternalRequestEvent,
             dataAppVizContext,
+            dataAppVizMode,
             rewriteVizUnderlyingDataRequest,
+            onVizUnderlyingDataIntent,
             onVizDrillDownIntent,
             onUrlStateChange: urlStateSync ? handleUrlStateChange : undefined,
             onSdkManifest,
+            onVizRendered,
+            vizRenderId,
+            onVizContextRequest,
             colorScheme,
+            insights,
+            onInsightAction,
+            onMountedQueriesChange,
         });
         const { captureScreenshot } = useIframeScreenshot(iframeRef);
 
@@ -357,6 +392,7 @@ const AppIframePreview = forwardRef<AppIframePreviewHandle, Props>(
         // re-fire if `inspectorEnabled` was already true, so re-sync on load.
         const handleLoad = () => {
             handleIframeLoad();
+            setLoadedSrc(effectiveSrc);
             if (inspectorEnabled) enableInspector();
             if (lineageEnabled) enableLineage();
             highlightLineage(lineageHighlightQueryUuid ?? null);
@@ -365,9 +401,22 @@ const AppIframePreview = forwardRef<AppIframePreviewHandle, Props>(
 
         return (
             <iframe
+                data-tour-scope="view:DataApp"
+                data-tour-look="1"
+                data-tour-after='[data-tour-anchor="app-row"][data-tour-value="Jaffle pulse"]'
+                data-tour-label="Read Jaffle pulse"
+                data-tour-docs="data-apps.mdx#choosing-a-template:li1"
                 ref={iframeRef}
                 src={effectiveSrc}
-                style={{ width: '100%', height: '100%', border: 'none' }}
+                style={{
+                    width: '100%',
+                    height: '100%',
+                    border: 'none',
+                    colorScheme,
+                    // Keep the host surface visible until the app applies its theme.
+                    visibility:
+                        loadedSrc === effectiveSrc ? 'visible' : 'hidden',
+                }}
                 title="App preview"
                 sandbox="allow-scripts allow-modals allow-downloads allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"
                 allow=""

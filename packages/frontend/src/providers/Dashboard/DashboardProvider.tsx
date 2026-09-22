@@ -18,6 +18,7 @@ import {
     normalizeDateZoomConfig,
     normalizeGranularityParam,
     stripOverridesForLockedFiltersOnTab,
+    type AdditionalMetric,
     type ChartZoomableField,
     type Dashboard,
     type DashboardFilterableField,
@@ -27,6 +28,7 @@ import {
     type DateZoomConfig,
     type FilterableDimension,
     type InteractivityOptions,
+    type LanguageMap,
     type Metric,
     type ParameterDefinitions,
     type ParametersValuesMap,
@@ -80,6 +82,7 @@ import {
 } from './dashboardParametersUrl';
 import DashboardTileStatusProvider from './DashboardTileStatusProvider';
 import { getActiveTabForTabs } from './getActiveTabForTabs';
+import { applyParameterLabelOverrides } from './parameterLabelOverrides';
 import useDashboardContext from './useDashboardContext';
 import useDashboardTileStatusContext from './useDashboardTileStatusContext';
 
@@ -100,6 +103,11 @@ type DashboardProviderProps = React.PropsWithChildren<{
     dashboardCommentsCheck?: ReturnType<typeof useDashboardCommentsCheck>;
     defaultInvalidateCache?: boolean;
     sdkFilters?: SdkFilter[];
+    parameterLabelOverrides?: LanguageMap['parameters'];
+    // Interactive dashboard page only. The /minimal render used for exports
+    // and scheduled deliveries must leave this off so a viewer's unpublished
+    // draft never reaches a delivered image, PDF or spreadsheet.
+    includeUnpublishedDraft?: boolean;
 }>;
 
 const DashboardProviderInner: React.FC<DashboardProviderProps> = ({
@@ -112,6 +120,8 @@ const DashboardProviderInner: React.FC<DashboardProviderProps> = ({
     embedToken,
     dashboardCommentsCheck,
     defaultInvalidateCache,
+    includeUnpublishedDraft = false,
+    parameterLabelOverrides,
     children,
 }) => {
     const { search, pathname } = useLocation();
@@ -156,6 +166,7 @@ const DashboardProviderInner: React.FC<DashboardProviderProps> = ({
     } = useDashboardQuery({
         uuidOrSlug: dashboardIdentifier,
         projectUuid,
+        includeUnpublishedDraft,
         useQueryOptions: {
             select: (d) => {
                 if (schedulerDashboardFilters) {
@@ -214,6 +225,11 @@ const DashboardProviderInner: React.FC<DashboardProviderProps> = ({
 
     const [dashboardTiles, setDashboardTiles] = useState<Dashboard['tiles']>();
     const [haveTilesChanged, setHaveTilesChanged] = useState<boolean>(false);
+    const [dashboardCustomMetrics, setDashboardCustomMetrics] = useState<
+        AdditionalMetric[]
+    >([]);
+    const [haveCustomMetricsChanged, setHaveCustomMetricsChanged] =
+        useState<boolean>(false);
     const [haveTabsChanged, setHaveTabsChanged] = useState<boolean>(false);
     const [dashboardTabs, setDashboardTabsInternal] = useState<
         Dashboard['tabs']
@@ -287,6 +303,15 @@ const DashboardProviderInner: React.FC<DashboardProviderProps> = ({
 
     const [parameterDefinitions, setParameterDefinitions] =
         useState<ParameterDefinitions>({});
+
+    const translatedParameterDefinitions = useMemo(
+        () =>
+            applyParameterLabelOverrides(
+                parameterDefinitions,
+                parameterLabelOverrides,
+            ),
+        [parameterDefinitions, parameterLabelOverrides],
+    );
 
     const addParameterDefinitions = useCallback(
         (parameters: ParameterDefinitions) => {
@@ -462,6 +487,13 @@ const DashboardProviderInner: React.FC<DashboardProviderProps> = ({
         currentDashboardConfig?.dateZoomGranularities,
         defaultStandardGranularities,
     ]);
+
+    // Seed the staged custom-metrics registry from config; keep user edits
+    // until save/cancel resets the changed flag.
+    useEffect(() => {
+        if (haveCustomMetricsChanged) return;
+        setDashboardCustomMetrics(currentDashboardConfig?.customMetrics ?? []);
+    }, [currentDashboardConfig?.customMetrics, haveCustomMetricsChanged]);
 
     // Sync default date zoom granularity from dashboard config
     useEffect(() => {
@@ -757,9 +789,13 @@ const DashboardProviderInner: React.FC<DashboardProviderProps> = ({
         return getMissingRequiredParameters(
             Array.from(dashboardParameterReferences),
             dashboardParameterValues,
-            parameterDefinitions,
+            translatedParameterDefinitions,
         );
-    }, [dashboardParameterReferences, parameters, parameterDefinitions]);
+    }, [
+        dashboardParameterReferences,
+        parameters,
+        translatedParameterDefinitions,
+    ]);
 
     const [tilesWithDateZoomApplied, setTilesWithDateZoomApplied] =
         useState<Set<string>>();
@@ -838,7 +874,9 @@ const DashboardProviderInner: React.FC<DashboardProviderProps> = ({
         addSavedFilterOverride,
         removeSavedFilterOverride,
         resetSavedFilterOverrides,
-    } = useSavedDashboardFiltersOverrides();
+    } = useSavedDashboardFiltersOverrides(
+        (dashboard ?? embedDashboard)?.filters,
+    );
 
     // Stable key that only changes when the chart-tile mapping changes,
     // not when tiles are repositioned/resized (x/y/w/h changes).
@@ -1789,6 +1827,7 @@ const DashboardProviderInner: React.FC<DashboardProviderProps> = ({
 
     const value = {
         projectUuid,
+        includeUnpublishedDraft,
         isDashboardLoading,
         dashboard: dashboard || embedDashboard,
         setEmbedDashboard,
@@ -1797,6 +1836,10 @@ const DashboardProviderInner: React.FC<DashboardProviderProps> = ({
         setDashboardTiles,
         haveTilesChanged,
         setHaveTilesChanged,
+        dashboardCustomMetrics,
+        setDashboardCustomMetrics,
+        haveCustomMetricsChanged,
+        setHaveCustomMetricsChanged,
         haveTabsChanged,
         setHaveTabsChanged,
         dashboardTabs,
@@ -1858,7 +1901,7 @@ const DashboardProviderInner: React.FC<DashboardProviderProps> = ({
         parameterValues,
         selectedParametersCount,
         setParameter,
-        parameterDefinitions,
+        parameterDefinitions: translatedParameterDefinitions,
         clearAllParameters,
         dashboardParameterReferences,
         addParameterReferences,

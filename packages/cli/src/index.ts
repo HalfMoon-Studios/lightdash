@@ -7,7 +7,6 @@ import {
     ValidationTarget,
 } from '@lightdash/common';
 import { InvalidArgumentError, Option, program, type Command } from 'commander';
-import { validate } from 'uuid';
 import {
     DEFAULT_DBT_PROFILES_DIR as defaultProfilesDir,
     DEFAULT_DBT_PROJECT_DIR as defaultProjectDir,
@@ -16,6 +15,7 @@ import {
 } from './env';
 import { getDiagnosticsHint } from './error';
 import GlobalState from './globalState';
+import { appsBuildHandler } from './handlers/apps/build';
 import { createAppHandler } from './handlers/apps/createApp';
 import { appsPreviewHandler } from './handlers/apps/preview';
 import {
@@ -55,8 +55,9 @@ import { setWarehouseHandler } from './handlers/setWarehouse';
 import { slugUpdateHandler } from './handlers/slugUpdate';
 import { sqlHandler } from './handlers/sql';
 import { registerUpgradeCheckCommand } from './handlers/upgradeCheck';
-import { validateHandler } from './handlers/validate';
+import { validateHandler, VALIDATION_SEVERITIES } from './handlers/validate';
 import { warehouseCatalogHandler } from './handlers/warehouseCatalog';
+import { parseRefsArgument } from './refsArgument';
 import * as styles from './styles';
 // Trigger CLI tests
 // Suppress AWS SDK V2 warning, imported by snowflake SDK
@@ -103,10 +104,8 @@ function parseProjectArgument(value: string | undefined): string | undefined {
         throw new InvalidArgumentError('No project argument provided.');
     }
 
-    const isValidUuid = validate(value);
-
-    if (!isValidUuid) {
-        throw new InvalidArgumentError('Not a valid project UUID.');
+    if (value.trim() === '') {
+        throw new InvalidArgumentError('Not a valid project UUID or slug.');
     }
 
     return value;
@@ -253,8 +252,8 @@ ${styles.bold('Examples:')}
     .option('--token <token>', 'Login with an API access token', undefined)
     .addOption(
         new Option(
-            '--project <project uuid>',
-            'Select a project by UUID after login',
+            '--project <project uuid or slug>',
+            'Select a project by UUID or slug after login',
         )
             .argParser(parseProjectArgument)
             .conflicts('skipProjectSelection'),
@@ -741,7 +740,7 @@ program
     )
     .option(
         '--no-warehouse-credentials',
-        'Create preview without warehouse credentials. Copies credentials from upstream project.',
+        'Create preview without warehouse credentials (copied from the upstream project). When updating an existing preview, keep the credentials it already has.',
     )
     .option('-y, --assume-yes', 'assume yes to prompts', false)
     .option('--no-batched-deploy', 'Use the legacy single-request deploy')
@@ -839,38 +838,64 @@ const downloadCommand = program
     .option(
         '-c, --charts <charts...>',
         'specify chart slugs, uuids, or urls to download',
+        parseRefsArgument,
         [],
     )
     .option(
         '-d, --dashboards <dashboards...>',
         'specify dashboard slugs, uuids or urls to download',
+        parseRefsArgument,
         [],
     )
-    .option('--agents <slugs...>', 'specify AI agent slugs to download', [])
+    .option(
+        '--agents <slugs...>',
+        'specify AI agent slugs to download',
+        parseRefsArgument,
+        [],
+    )
     .option(
         '--include-agents',
         "include all of the project's AI agents (enterprise)",
         false,
     )
-    .option('--alerts <slugs...>', 'specify alert slugs to download', [])
+    .option(
+        '--alerts <slugs...>',
+        'specify alert slugs to download',
+        parseRefsArgument,
+        [],
+    )
     .option(
         '--virtual-views <slugs...>',
         'specify virtual view slugs to download',
+        parseRefsArgument,
         [],
     )
     .option(
         '--google-sheets <slugs...>',
         'specify Google Sheets sync slugs to download',
+        parseRefsArgument,
         [],
     )
     .option(
         '--scheduled-deliveries <slugs...>',
         'specify scheduled delivery slugs to download',
+        parseRefsArgument,
         [],
+    )
+    .option(
+        '--homepages <names...>',
+        'specify exact homepage names to download',
+        [],
+    )
+    .option(
+        '--include-homepages',
+        'include all published homepages (enterprise)',
+        false,
     )
     .option(
         '--external-connections <slugs...>',
         'specify external connection slugs to download (enterprise)',
+        parseRefsArgument,
         [],
     )
     .option(
@@ -899,8 +924,8 @@ const downloadCommand = program
         false,
     )
     .option(
-        '--project <project uuid>',
-        'specify a project UUID to download',
+        '--project <project uuid or slug>',
+        'specify a project (UUID or slug) to download from',
         parseProjectArgument,
         undefined,
     )
@@ -945,6 +970,7 @@ const downloadCommand = program
     .option(
         '--apps <appReferences...>',
         'Download only the specified data apps, by slug, app URL, or UUID (enterprise). Works for apps not added to a space.',
+        parseRefsArgument,
     )
     .option(
         '--include-apps',
@@ -964,6 +990,7 @@ const downloadCommand = program
     .option(
         '--chart-types <chartTypeReferences...>',
         'Download only the specified custom chart types, by slug, URL, or UUID (enterprise).',
+        parseRefsArgument,
     )
     .option(
         '--include-chart-types',
@@ -995,33 +1022,60 @@ const uploadCommand = program
     .option(
         '-c, --charts <charts...>',
         'specify chart slugs to force upload',
+        parseRefsArgument,
         [],
     )
     .option(
         '-d, --dashboards <dashboards...>',
         'specify dashboard slugs to force upload',
+        parseRefsArgument,
         [],
     )
-    .option('--agents <slugs...>', 'specify AI agent slugs to upload', [])
-    .option('--alerts <slugs...>', 'specify alert slugs to upload', [])
+    .option(
+        '--agents <slugs...>',
+        'specify AI agent slugs to upload',
+        parseRefsArgument,
+        [],
+    )
+    .option(
+        '--alerts <slugs...>',
+        'specify alert slugs to upload',
+        parseRefsArgument,
+        [],
+    )
     .option(
         '--virtual-views <slugs...>',
         'specify virtual view slugs to upload',
+        parseRefsArgument,
         [],
     )
     .option(
         '--google-sheets <slugs...>',
         'specify Google Sheets sync slugs to upload',
+        parseRefsArgument,
         [],
     )
     .option(
         '--scheduled-deliveries <slugs...>',
         'specify scheduled delivery slugs to upload',
+        parseRefsArgument,
         [],
+    )
+    .option(
+        '--homepages <names...>',
+        'specify exact homepage names to upload',
+        [],
+    )
+    .option('--skip-homepages', 'skip uploading homepages', false)
+    .option(
+        '--publish',
+        'publish uploaded homepages and apply their audience assignments',
+        false,
     )
     .option(
         '--external-connections <slugs...>',
         'specify external connection slugs to upload (enterprise)',
+        parseRefsArgument,
         [],
     )
     .option(
@@ -1035,8 +1089,8 @@ const uploadCommand = program
         undefined,
     )
     .option(
-        '--project <project uuid>',
-        'specify a project UUID to upload',
+        '--project <project uuid or slug>',
+        'specify a project (UUID or slug) to upload to',
         parseProjectArgument,
         undefined,
     )
@@ -1091,6 +1145,7 @@ const uploadCommand = program
     .option(
         '--apps <appReferences...>',
         'Upload only the specified data apps, by slug (the app folder name), app URL, or UUID (enterprise). URL and UUID refs are resolved against the target project.',
+        parseRefsArgument,
     )
     .option(
         '--include-apps',
@@ -1105,6 +1160,7 @@ const uploadCommand = program
     .option(
         '--chart-types <chartTypeReferences...>',
         'Upload only the specified custom chart types, by slug (the chart type folder name), URL, or UUID (enterprise). URL and UUID refs are resolved against the target project.',
+        parseRefsArgument,
     )
     .option(
         '--include-chart-types',
@@ -1148,7 +1204,12 @@ const appsProgram = program
     .description('Work with data apps (enterprise)');
 appsProgram
     .command('create <name>')
-    .description('Creates a new data app locally')
+    .description('Creates a new data app or custom chart type locally')
+    .option(
+        '--chart-type',
+        'Create a custom chart type (a reusable visualization the explorer chart type picker offers) instead of a data app',
+        false,
+    )
     .option('--description <text>', 'Set the app description', '')
     .option('--slug <slug>', 'Override the app slug')
     .option(
@@ -1156,7 +1217,7 @@ appsProgram
         'Specify the Lightdash content root (default: ./lightdash)',
     )
     .option(
-        '--project <project uuid>',
+        '--project <project uuid or slug>',
         'Specify the project the app will use',
         parseProjectArgument,
         undefined,
@@ -1165,12 +1226,16 @@ appsProgram
     .option('--verbose', undefined, false)
     .addHelpText(
         'after',
-        `\n${styles.bold('Example:')}\n  ${styles.title(
+        `\n${styles.bold('Examples:')}\n  ${styles.title(
             '⚡',
         )}️lightdash ${styles.bold(
             'apps create "Revenue explorer"',
         )} ${styles.secondary(
             '-- creates ./lightdash/apps/revenue-explorer',
+        )}\n  ${styles.title('⚡')}️lightdash ${styles.bold(
+            'apps create "Radial gauge" --chart-type',
+        )} ${styles.secondary(
+            '-- creates a custom chart type at ./lightdash/chart-types/radial-gauge',
         )}\n`,
     )
     .action(createAppHandler);
@@ -1180,8 +1245,8 @@ appsProgram
         'Preview a downloaded data app locally against a real Lightdash instance, authenticated as you. Your credential stays in the CLI, behind a local proxy limited to data-app SDK routes.',
     )
     .option(
-        '--project <project uuid>',
-        'preview against a specific project (default: the projectUuid in lightdash-app.yml)',
+        '--project <project uuid or slug>',
+        'preview against a specific project by UUID or slug (default: the projectUuid in lightdash-app.yml)',
     )
     .option('--url <url>', 'Lightdash server URL (default: your login config)')
     .option(
@@ -1202,7 +1267,7 @@ appsProgram
 appsProgram
     .command('validate [paths...]')
     .description(
-        'Validate data app source, manifests, dependencies, and semantic-layer references locally.',
+        'Validate data app and custom chart type source, manifests, dependencies, and semantic-layer references locally.',
     )
     .option(
         '--live',
@@ -1221,13 +1286,24 @@ appsProgram
     )
     .option('--verbose', undefined, false)
     .action(appsValidateHandler);
+appsProgram
+    .command('build [path]')
+    .description(
+        'Build a data app or custom chart type with the same Vite production build as Lightdash Cloud, and keep the output.',
+    )
+    .option(
+        '--out-dir <dir>',
+        'Directory to write the built dist output to. Relative paths resolve against the current working directory (default: <path>/dist)',
+    )
+    .option('--verbose', undefined, false)
+    .action(appsBuildHandler);
 
 program
     .command('deploy')
     .description('Compiles and deploys a Lightdash project')
     .option(
-        '--project <project uuid>',
-        'Project UUID to deploy to. Overrides the default project configured via `lightdash config set-project`',
+        '--project <project uuid or slug>',
+        'Project UUID or slug to deploy to. Overrides the default project configured via `lightdash config set-project`',
     )
     .option(
         '--project-dir <path>',
@@ -1371,8 +1447,8 @@ program
     .command('validate')
     .description('Validates a project')
     .option(
-        '--project <project uuid>',
-        'Project UUID to validate, if not provided, the last preview will be used',
+        '--project <project uuid or slug>',
+        'Project UUID or slug to validate, if not provided, the last preview will be used',
     )
     .option('--verbose', undefined, false)
     .option(
@@ -1432,10 +1508,19 @@ program
             .argParser(parseDisableTimestampConversionOption)
             .hideHelp(),
     )
-    .option(
-        '--show-chart-configuration-warnings',
-        'Show chart configuration warnings (e.g., unused dimensions). These are hidden by default.',
-        false,
+    .addOption(
+        new Option(
+            '--severity <level>',
+            'Minimum issue level that fails the command. "error" (default) only fails on errors. "warning" shows chart configuration warnings and treats them as errors.',
+        )
+            .choices([...VALIDATION_SEVERITIES])
+            .default('error'),
+    )
+    .addOption(
+        new Option(
+            '--show-chart-configuration-warnings',
+            '(deprecated) Alias for --severity warning. Shows chart configuration warnings and treats them as errors.',
+        ),
     )
     .addOption(
         new Option('--only <elems...>', 'Specify project elements to validate')
@@ -1549,8 +1634,8 @@ program
     .description('Rename models and fields on Lightdash content')
     .option('--verbose', undefined, false)
     .option(
-        '-p, --project <project uuid>',
-        'specify a project UUID to rename',
+        '-p, --project <project uuid or slug>',
+        'specify a project (UUID or slug) to rename in',
         parseProjectArgument,
         undefined,
     )
@@ -1570,11 +1655,18 @@ program
 
 program
     .command('slug-update')
-    .description('Rename a chart slug and update its local references')
+    .description(
+        'Rename a chart or dashboard slug and update its local references',
+    )
+    .addOption(
+        new Option('--type <resource-type>', 'content type to rename')
+            .choices(['chart', 'dashboard'])
+            .default('chart'),
+    )
     .option('--verbose', 'show verbose output', false)
     .option(
-        '--project <project uuid>',
-        'specify a project UUID',
+        '--project <project uuid or slug>',
+        'specify a project by UUID or slug',
         parseProjectArgument,
         undefined,
     )
@@ -1585,7 +1677,7 @@ program
     )
     .option(
         '--dry-run',
-        'preview the chart rename and local file changes without making changes',
+        'preview the rename and local file changes without making changes',
         false,
     )
     .requiredOption('--from <slug>', 'current content slug')
@@ -1763,8 +1855,8 @@ program
     )
     .option('--all', 'Audit every dashboard in the target project', false)
     .option(
-        '--project <projectUuid>',
-        'Project UUID (defaults to LIGHTDASH_PROJECT_UUID env or config)',
+        '--project <project uuid or slug>',
+        'Project UUID or slug (defaults to LIGHTDASH_PROJECT_UUID env or config)',
     )
     .option(
         '--json',
@@ -1907,8 +1999,8 @@ program
         undefined,
     )
     .option(
-        '--project <uuid>',
-        'Lightdash project UUID to update (defaults to currently selected project)',
+        '--project <project uuid or slug>',
+        'Lightdash project UUID or slug to update (defaults to currently selected project)',
         undefined,
     )
     .option(
@@ -1928,8 +2020,8 @@ program
     .argument('<chart>', 'Chart UUID or slug')
     .requiredOption('-o, --output <file>', 'Output file path for the PNG image')
     .option(
-        '--project <uuid>',
-        'Lightdash project UUID (defaults to the currently selected project)',
+        '--project <project uuid or slug>',
+        'Lightdash project UUID or slug (defaults to the currently selected project)',
     )
     .option('--verbose', 'Show detailed output', false)
     .action(exportChartImageHandler);
@@ -2071,7 +2163,9 @@ const successHandler = () => {
         process.exit(0);
     }
     console.error(`Done 🕶`);
-    process.exit(0);
+    // Handlers report partial failures (e.g. some uploads failed) via
+    // process.exitCode; an unconditional exit(0) would wipe it.
+    process.exit(process.exitCode ?? 0);
 };
 
 program.parseAsync().then(successHandler).catch(errorHandler);

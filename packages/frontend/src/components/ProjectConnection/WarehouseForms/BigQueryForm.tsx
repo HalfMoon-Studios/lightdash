@@ -9,6 +9,7 @@ import {
     Autocomplete,
     Badge,
     Button,
+    Checkbox,
     FileInput,
     Group,
     Image,
@@ -191,12 +192,7 @@ export const BigQuerySchemaInput: FC<{
                         {option.value}
                     </Text>
                     {option.value === recommendedDataset ? (
-                        <Badge
-                            size="xs"
-                            color="green"
-                            variant="light"
-                            radius="sm"
-                        >
+                        <Badge size="xs" color="green">
                             Recommended · largest
                         </Badge>
                     ) : null}
@@ -569,8 +565,6 @@ const BigQueryForm: FC<{
                                                     <Badge
                                                         size="xs"
                                                         color="green"
-                                                        variant="light"
-                                                        radius="sm"
                                                     >
                                                         Recommended · largest
                                                     </Badge>
@@ -783,6 +777,28 @@ const BigQueryForm: FC<{
                                     disabled={disabled}
                                     defaultChecked={
                                         BigQueryDefaultValues.requireUserCredentials
+                                    }
+                                />
+                                <Checkbox
+                                    name="warehouse.allowUserCredentials"
+                                    {...form.getInputProps(
+                                        'warehouse.allowUserCredentials',
+                                        { type: 'checkbox' },
+                                    )}
+                                    label="Use personal credentials when available"
+                                    description="Signed-in users with personal BigQuery credentials use them instead of the project connection. Other users use the project connection."
+                                    checked={
+                                        !!form.values.warehouse
+                                            .requireUserCredentials ||
+                                        (form.values.warehouse.type ===
+                                            WarehouseTypes.BIGQUERY &&
+                                            !!form.values.warehouse
+                                                .allowUserCredentials)
+                                    }
+                                    disabled={
+                                        disabled ||
+                                        !!form.values.warehouse
+                                            .requireUserCredentials
                                     }
                                 />
 

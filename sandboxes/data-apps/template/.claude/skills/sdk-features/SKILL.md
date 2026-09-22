@@ -21,6 +21,7 @@ Users describe features by what they see in the Lightdash editor. Translate:
 | thumbnails / screenshots / scheduled deliveries | `screenshot` | required — see below |
 | drill down, click into a chart | `drill-down` | app code opt-in |
 | drill into a viz data point (reusable visualization) | `viz-drill-down` | app code opt-in |
+| "ask the AI", one-line takeaway, explain this row | `ai-prompt` | app code opt-in |
 | "share this view", URL that restores state | `url-state` | app code opt-in |
 | Google Sheets export | `gsheet-export` | app code opt-in |
 | "delivery has all tabs", full data in scheduled deliveries | `delivery-render` | app code opt-in |
@@ -28,7 +29,9 @@ Users describe features by what they see in the Lightdash editor. Translate:
 | runs inside a dashboard tile | `viz-context` | required — see below |
 | reusable chart/table with pivoted results | `viz-pivoted-results` | required — see below |
 | "view underlying data", raw rows behind a point (viz only) | `viz-underlying-data` | app code opt-in |
+| Lightdash-owned "View underlying data" dialog (viz only) | `viz-host-underlying-data` | app code opt-in |
 | light/dark mode, "matches my Lightdash theme" | `follow-host-theme` | CSS tokens — see below |
+| "executive summary", "what changed", anomaly callouts, "AI insight", "Analyse this view" | `ai-insights` | app code opt-in |
 
 ## Automatic (zero wiring — active on any current-SDK bundle)
 
@@ -114,16 +117,30 @@ order, `sortBy` describes result ordering, `totalColumnCount` exposes truncation
 - `external-fetch`: `client.externalFetch(alias, opts)` calls an external
   connection linked to this app. The connection must already be linked by the
   host; you cannot add one from app code.
+- `ai-insights`: wire the shipped components in `src/components/insights/`
+  (`InsightsSummary`, `InsightMarker` / `insightCellProps`,
+  `InvestigateMenuItem`, `InvestigationCard`) rather than writing your own:
+  summary block at the top, markers on every query-bound chart (as both `dot`
+  and `activeDot`), Investigate in every point menu, the card under the chart.
+  A short ask ("add AI analysis") gets the whole set. They sit on
+  `useInsights()` / `useInsights(result)` and render nothing when the host has
+  no analysis. Full contract in `/app/references/ai-analysis.md`.
+- `ai-prompt`: `useAiPrompt()` returns `{ available, ask, loading, text, error }`;
+  `ask({ prompt, sources: [{ result, label }], focus?: { row } })` sends an
+  author-written question over loaded `useLightdash` results and resolves to
+  plain text. `result` is the object `useLightdash` returns (keep a reference
+  to it even when destructuring), never a rebuilt `{ data, columns }`. Hide the control when `available` is false; trigger from a user
+  action. Full contract in `/app/references/ai-analysis.md`.
 - `delivery-render`: `useDeliveryRender()` is `true` during scheduled-delivery
   and delivery-preview capture renders. Gate tab/slide DATA mounting on it so
   every tab's queries execute during capture while only the active tab stays
   visible — never mount all tabs unconditionally (interactive loads must stay
   lazy).
-- `viz-underlying-data` (vizs only): keep the untransformed `sourceRow` on each
-  interactive datum, gate a data-point action menu on
-  `useVizContext().underlyingData.enabled`, render
-  `underlyingData.get({ row, metric })` in a themed dialog, and wire its
-  Download button to `underlyingData.download`. Full contract in the
+- `viz-underlying-data` and `viz-host-underlying-data` (vizs only): keep the
+  untransformed `sourceRow` on each interactive datum, gate a data-point action menu on
+  `useVizContext().underlyingData.enabled`, and call
+  `underlyingData.open({ row, metric })`. Lightdash renders the dialog and
+  owns its table, loading, error, and download controls. Full contract in the
   `reusable-visualization` skill.
 
 ## After a template upgrade
@@ -132,3 +149,7 @@ An upgrade rebuilds the app on the current SDK, which turns on the automatic
 capabilities but does NOT add wiring — that is a deliberate rail. When you
 offer newly available features, offer wiring-required ones too (their registry
 entries carry a `wiring` note); implement only when the user asks.
+
+Existing published visualization bundles are not rewritten by this registry.
+Bundles built before `viz-host-underlying-data` keep their iframe-owned
+`get`/`download` dialog until the user explicitly upgrades that feature.

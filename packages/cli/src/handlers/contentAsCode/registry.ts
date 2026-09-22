@@ -6,12 +6,14 @@ import {
 import { CUSTOM_ROLE_CODE_RESOURCE } from '../organizationContent/customRoles';
 import { GROUP_CODE_RESOURCE } from '../organizationContent/groups';
 import { THEME_CODE_RESOURCE } from '../organizationContent/themes';
+import { USER_ATTRIBUTE_CODE_RESOURCE } from '../organizationContent/userAttributes';
 import { USER_CODE_RESOURCE } from '../organizationContent/users';
 import {
     AI_AGENT_CODE_RESOURCE,
     ALERT_CODE_RESOURCE,
     EXTERNAL_CONNECTION_CODE_RESOURCE,
     GOOGLE_SHEETS_CODE_RESOURCE,
+    HOMEPAGE_CODE_RESOURCE,
     SCHEDULED_DELIVERY_CODE_RESOURCE,
     VIRTUAL_VIEW_CODE_RESOURCE,
 } from './projectResources';
@@ -26,6 +28,7 @@ export const ORGANIZATION_CODE_RESOURCES: readonly CodeResourceRegistration[] =
         CUSTOM_ROLE_CODE_RESOURCE,
         USER_CODE_RESOURCE,
         GROUP_CODE_RESOURCE,
+        USER_ATTRIBUTE_CODE_RESOURCE,
         THEME_CODE_RESOURCE,
     ];
 
@@ -53,6 +56,7 @@ export const PROJECT_CODE_RESOURCES: readonly CodeResourceRegistration[] = [
     ALERT_CODE_RESOURCE,
     GOOGLE_SHEETS_CODE_RESOURCE,
     EXTERNAL_CONNECTION_CODE_RESOURCE,
+    HOMEPAGE_CODE_RESOURCE,
 ];
 
 export const assertCodeResourceDependencyOrder = (

@@ -26,7 +26,6 @@ import {
 import { Fragment, useCallback, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { CHART_TYPES_WITHOUT_IMAGE_EXPORT } from '../../../../../components/common/ChartDownload/chartDownloadUtils';
-import CodeBlock from '../../../../../components/common/CodeBlock/CodeBlock';
 import MantineIcon from '../../../../../components/common/MantineIcon';
 import MantineModal from '../../../../../components/common/MantineModal';
 import { SaveToSpaceOrDashboard } from '../../../../../components/common/modal/ChartCreateModal/SaveToSpaceOrDashboard';
@@ -39,13 +38,16 @@ import {
     serializeMergeState,
 } from '../../../../../features/mergeQuery/context/mergeUrlState';
 import useToaster from '../../../../../hooks/toaster/useToaster';
+import { useContentAuthoringEnabled } from '../../../../../hooks/useContentAuthoringEnabled';
 import { readDataAppVizUuid } from '../../../../../hooks/useDataAppVizVisualizationConfig';
 import useCreateInAnySpaceAccess from '../../../../../hooks/user/useCreateInAnySpaceAccess';
 import { useCreateShareMutation } from '../../../../../hooks/useShare';
+import { useAbilityContext } from '../../../../../providers/Ability/useAbilityContext';
 import useApp from '../../../../../providers/App/useApp';
 import useTracking from '../../../../../providers/Tracking/useTracking';
 import { EventName } from '../../../../../types/Events';
 import { getOpenInExploreUrl } from '../../../../../utils/getOpenInExploreUrl';
+import { getEmbedExploreSearch } from '../../../embed/embedNavigation';
 import { isEmbedAiAgentRoute } from '../../hooks/aiAgentRouting';
 import { useAddChartToDashboard } from '../../hooks/useAddChartToDashboard';
 import { useSetArtifactVersionVerified } from '../../hooks/useAiAgentArtifacts';
@@ -65,6 +67,7 @@ import {
 } from '../../utils/aiSavedChartData';
 import {
     canonicalizeAiMerge,
+    toMergeUrlState,
     remapFieldIdsDeep,
 } from '../../utils/canonicalizeAiMerge';
 import { AiChartDownloadModal } from './AiChartDownloadModal';
@@ -73,6 +76,7 @@ import {
     AiChartImageExportModal,
 } from './AiChartImageExport';
 import { AiScheduleDeliveryModal } from './AiScheduleDeliveryModal';
+import { AiSqlModal } from './AiSqlModal';
 
 type Props = {
     projectUuid: string;
@@ -103,8 +107,10 @@ export const AiChartQuickOptions = ({
     artifactData,
     merge,
 }: Props) => {
+    const authoringEnabled = useContentAuthoringEnabled();
     const { track } = useTracking();
     const { user } = useApp();
+    const ability = useAbilityContext();
     const { content, writeActions, embedToken } = useEmbed();
     const isEmbed = isEmbedAiAgentRoute();
     const location = useLocation();
@@ -216,6 +222,7 @@ export const AiChartQuickOptions = ({
         projectUuid,
         readDataAppVizUuid(customChartTypeConfig),
         customChartTypeRenderTarget,
+        customChartTypeConfig?.dataAppVizVersion,
     );
 
     const savedData = useMemo(
@@ -338,7 +345,7 @@ export const AiChartQuickOptions = ({
         if (merge) {
             if (!canonicalMerge || !projectUuid) return undefined;
             const { fieldIdByAiFieldId } = canonicalMerge;
-            const [primary, additional] = canonicalMerge.mergeQuery.sources;
+            const [primary] = canonicalMerge.mergeQuery.sources;
             const url = getOpenInExploreUrl({
                 metricQuery: primary.metricQuery,
                 projectUuid,
@@ -351,28 +358,7 @@ export const AiChartQuickOptions = ({
             const search = new URLSearchParams(url.search);
             search.set(
                 MERGE_URL_PARAM,
-                serializeMergeState({
-                    focus: { kind: 'source', sourceId: primary.id },
-                    additionalSources: [
-                        {
-                            id: additional.id,
-                            exploreName: additional.metricQuery.exploreName,
-                            dimensions: additional.metricQuery.dimensions,
-                            metrics: additional.metricQuery.metrics,
-                            filters: additional.metricQuery.filters,
-                            additionalMetrics:
-                                additional.metricQuery.additionalMetrics,
-                            customDimensions:
-                                additional.metricQuery.customDimensions,
-                        },
-                    ],
-                    joinParts: canonicalMerge.mergeQuery.joinKey.map(
-                        (part) => ({
-                            fieldIdBySourceId: part.fieldIdBySourceId,
-                        }),
-                    ),
-                    joinType: canonicalMerge.mergeQuery.joinType,
-                }),
+                serializeMergeState(toMergeUrlState(canonicalMerge)),
             );
             return { pathname: url.pathname, search: search.toString() };
         }
@@ -414,7 +400,10 @@ export const AiChartQuickOptions = ({
                     pathname: `/embed/${projectUuid}/explore/${encodeURIComponent(
                         metricQuery.exploreName,
                     )}`,
-                    search: openInExploreUrl.search,
+                    search: getEmbedExploreSearch(
+                        openInExploreUrl.search,
+                        `${location.pathname}${location.search}`,
+                    ),
                 },
                 {
                     state: {
@@ -497,7 +486,8 @@ export const AiChartQuickOptions = ({
     const hasSaveActions =
         !message.savedQueryUuid && (!merge || !!canonicalMerge);
     const canExploreFromEmbed =
-        content?.type === 'aiAgent' && content.canExplore === true;
+        content?.type === 'aiAgent' &&
+        (content.canExplore === true || ability.can('view', 'EmbedExplore'));
     // The embedded explorer has not been exercised with merge state, so merge
     // artifacts only offer the explore action in the full app.
     const hasExploreAction = merge
@@ -525,7 +515,6 @@ export const AiChartQuickOptions = ({
                 >
                     <ActionIcon
                         size="sm"
-                        variant="subtle"
                         color={isVerified ? 'green' : 'ldGray.6'}
                         onClick={handleVerifyToggle}
                     >
@@ -543,7 +532,7 @@ export const AiChartQuickOptions = ({
             {hasQuickActions && (
                 <Menu withArrow position="bottom-end">
                     <Menu.Target>
-                        <ActionIcon size="sm" variant="subtle" color="ldGray.9">
+                        <ActionIcon size="sm" color="ldGray.9">
                             <MantineIcon icon={IconDots} size="lg" />
                         </ActionIcon>
                     </Menu.Target>
@@ -595,6 +584,11 @@ export const AiChartQuickOptions = ({
                             <>
                                 {quickSaveDashboard && (
                                     <Menu.Item
+                                        display={
+                                            authoringEnabled
+                                                ? undefined
+                                                : 'none'
+                                        }
                                         onClick={() =>
                                             void handleSaveToCurrentDashboard()
                                         }
@@ -614,6 +608,11 @@ export const AiChartQuickOptions = ({
                                 )}
                                 {canSaveChart && (
                                     <Menu.Item
+                                        display={
+                                            authoringEnabled
+                                                ? undefined
+                                                : 'none'
+                                        }
                                         onClick={() => open()}
                                         disabled={isDisabled || !savedData}
                                         leftSection={
@@ -632,6 +631,7 @@ export const AiChartQuickOptions = ({
 
                         {hasExploreAction && (
                             <Menu.Item
+                                display={authoringEnabled ? undefined : 'none'}
                                 leftSection={
                                     <MantineIcon icon={IconExternalLink} />
                                 }
@@ -669,7 +669,7 @@ export const AiChartQuickOptions = ({
                 </Menu>
             )}
             <MantineModal
-                opened={opened}
+                opened={opened && authoringEnabled}
                 onClose={close}
                 title="Save chart"
                 icon={IconChartBar}
@@ -715,19 +715,11 @@ export const AiChartQuickOptions = ({
                 onClose={closeExportImageModal}
             />
             {!!compiledSql && (
-                <MantineModal
+                <AiSqlModal
                     opened={sqlModalOpened}
                     onClose={closeSqlModal}
-                    title="SQL"
-                    icon={IconEye}
-                    size="xl"
-                >
-                    <CodeBlock
-                        code={compiledSql}
-                        language="sql"
-                        withLineNumbers
-                    />
-                </MantineModal>
+                    sql={compiledSql}
+                />
             )}
             <MantineModal
                 opened={verifyModalOpened}

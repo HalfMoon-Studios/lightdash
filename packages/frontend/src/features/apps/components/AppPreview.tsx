@@ -1,4 +1,8 @@
-import { type DataAppVizContext } from '@lightdash/common';
+import {
+    type DataAppInsightAction,
+    type DataAppInsightsPayload,
+    type DataAppVizContext,
+} from '@lightdash/common';
 import { Group, Loader, Text } from '@mantine/core';
 import { forwardRef } from 'react';
 import AppIframePreview, {
@@ -36,9 +40,14 @@ export type AppPreviewProps = {
     lineageHighlightQueryUuid?: string | null;
     onLineageCancelled?: () => void;
     dataAppVizContext?: DataAppVizContext;
+    dataAppVizMode?: boolean;
     onSdkManifest?: (manifest: SdkManifest) => void;
     /** Whether the app may mirror its own state into the page URL. */
     urlStateSync?: boolean;
+    /** The host's AI analysis of the current view, pushed into the app. */
+    insights?: DataAppInsightsPayload | null;
+    onInsightAction?: (action: DataAppInsightAction) => void;
+    onMountedQueriesChange?: (queryUuids: string[]) => void;
 };
 
 const AppPreview = forwardRef<AppIframePreviewHandle, AppPreviewProps>(
@@ -62,8 +71,12 @@ const AppPreview = forwardRef<AppIframePreviewHandle, AppPreviewProps>(
             lineageHighlightQueryUuid,
             onLineageCancelled,
             dataAppVizContext,
+            dataAppVizMode,
             onSdkManifest,
             urlStateSync = true,
+            insights,
+            onInsightAction,
+            onMountedQueriesChange,
         },
         ref,
     ) => {
@@ -127,8 +140,12 @@ const AppPreview = forwardRef<AppIframePreviewHandle, AppPreviewProps>(
                 onLineageCancelled={onLineageCancelled}
                 capabilities={{ gsheetExport: true }}
                 dataAppVizContext={dataAppVizContext}
+                dataAppVizMode={dataAppVizMode}
                 urlStateSync={urlStateSync}
                 onSdkManifest={onSdkManifest}
+                insights={insights}
+                onInsightAction={onInsightAction}
+                onMountedQueriesChange={onMountedQueriesChange}
             />
         );
     },

@@ -1,4 +1,5 @@
 import {
+    assertUnreachable,
     type Notification,
     NotificationResourceType,
     ValidationErrorType,
@@ -7,9 +8,11 @@ import { Button, getDefaultZIndex, Indicator, Menu } from '@mantine/core';
 import { IconBell } from '@tabler/icons-react';
 import { Fragment, type FC, useMemo } from 'react';
 import { useAiAgentOrgPermission } from '../../../ee/features/aiCopilot/hooks/useAiAgentPermission';
+import { useContentReviewAvailability } from '../../../ee/features/contentReview/hooks/useContentReviewAvailability';
 import { useDashboardCommentsCheck } from '../../../features/comments';
 import {
     AiReviewNotifications,
+    ContentReviewNotifications,
     DashboardCommentsNotifications,
     useGetNotifications,
 } from '../../../features/notifications';
@@ -20,12 +23,15 @@ import {
 } from '../../../hooks/validation/useValidation';
 import useApp from '../../../providers/App/useApp';
 import MantineIcon from '../../common/MantineIcon';
+import { useNavBarMenuProps } from '../NavBarPortalContext';
 import classes from './NotificationsMenu.module.css';
 import { ValidationErrorNotification } from './ValidationErrorNotification';
 
-export const NotificationsMenu: FC<{ projectUuid: string }> = ({
-    projectUuid,
-}) => {
+export const NotificationsMenu: FC<{
+    projectUuid: string;
+    withLabel?: boolean;
+}> = ({ projectUuid, withLabel = false }) => {
+    const menuProps = useNavBarMenuProps();
     const { user } = useApp();
 
     // Validator notifications
@@ -56,17 +62,30 @@ export const NotificationsMenu: FC<{ projectUuid: string }> = ({
     );
     const hasAiReviewNotifications =
         aiReviewNotifications && aiReviewNotifications.length > 0;
+    const { isAvailable: canViewContentReviews } =
+        useContentReviewAvailability();
+    const { data: contentReviewNotifications } = useGetNotifications(
+        NotificationResourceType.ContentReview,
+        canViewContentReviews,
+    );
+    const hasContentReviewNotifications =
+        contentReviewNotifications && contentReviewNotifications.length > 0;
     const notifications = useMemo<Notification[]>(
         () =>
             [
                 ...(dashboardCommentsNotifications ?? []),
                 ...(aiReviewNotifications ?? []),
+                ...(contentReviewNotifications ?? []),
             ].sort(
                 (a, b) =>
                     new Date(b.createdAt).getTime() -
                     new Date(a.createdAt).getTime(),
             ),
-        [aiReviewNotifications, dashboardCommentsNotifications],
+        [
+            aiReviewNotifications,
+            contentReviewNotifications,
+            dashboardCommentsNotifications,
+        ],
     );
 
     const showNotificationBadge = () => {
@@ -93,23 +112,54 @@ export const NotificationsMenu: FC<{ projectUuid: string }> = ({
             if (hasUnreadAiReviews) return true;
         }
 
+        if (canViewContentReviews) {
+            const hasUnreadContentReviews = contentReviewNotifications?.some(
+                (n) => !n.viewed,
+            );
+            if (hasUnreadContentReviews) return true;
+        }
+
         return false;
+    };
+
+    const renderNotification = (notification: Notification) => {
+        switch (notification.resourceType) {
+            case NotificationResourceType.DashboardComments:
+                return (
+                    <DashboardCommentsNotifications
+                        notifications={[notification]}
+                        projectUuid={projectUuid}
+                    />
+                );
+            case NotificationResourceType.AiReview:
+                return <AiReviewNotifications notifications={[notification]} />;
+            case NotificationResourceType.ContentReview:
+                return (
+                    <ContentReviewNotifications
+                        notifications={[notification]}
+                    />
+                );
+            default:
+                return assertUnreachable(
+                    notification,
+                    'Unknown notification type',
+                );
+        }
     };
 
     const shouldDisplayMenu =
         canViewDashboardComments ||
         canUserManageValidations ||
-        canViewAiReviews;
+        canViewAiReviews ||
+        canViewContentReviews;
 
     return shouldDisplayMenu ? (
         <Menu
-            withArrow
-            shadow="lg"
             position="bottom-end"
             arrowOffset={16}
             offset={-2}
             zIndex={getDefaultZIndex('max')}
-            portalProps={{ target: '#navbar-header' }}
+            {...menuProps}
         >
             <Menu.Target>
                 <Button
@@ -128,9 +178,13 @@ export const NotificationsMenu: FC<{ projectUuid: string }> = ({
                     >
                         <MantineIcon icon={IconBell} />
                     </Indicator>
+                    {withLabel && 'Notifications'}
                 </Button>
             </Menu.Target>
-            <Menu.Dropdown maw="400px" className={classes.dropdown}>
+            <Menu.Dropdown
+                maw="min(400px, calc(100vw - 24px))"
+                className={classes.dropdown}
+            >
                 {hasValidationNotifications && (
                     <ValidationErrorNotification
                         projectUuid={projectUuid}
@@ -141,24 +195,15 @@ export const NotificationsMenu: FC<{ projectUuid: string }> = ({
                     <>
                         {notifications.map((notification) => (
                             <Fragment key={notification.notificationId}>
-                                {notification.resourceType ===
-                                NotificationResourceType.DashboardComments ? (
-                                    <DashboardCommentsNotifications
-                                        notifications={[notification]}
-                                        projectUuid={projectUuid}
-                                    />
-                                ) : (
-                                    <AiReviewNotifications
-                                        notifications={[notification]}
-                                    />
-                                )}
+                                {renderNotification(notification)}
                             </Fragment>
                         ))}
                     </>
                 )}
                 {!hasValidationNotifications &&
                     !hasDashboardCommentsNotifications &&
-                    !hasAiReviewNotifications && (
+                    !hasAiReviewNotifications &&
+                    !hasContentReviewNotifications && (
                         <Menu.Item fz="sm">No notifications</Menu.Item>
                     )}
             </Menu.Dropdown>

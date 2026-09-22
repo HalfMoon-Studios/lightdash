@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import { MergeJoinType } from '../../../../types/mergeQuery';
+import assertUnreachable from '../../../../utils/assertUnreachable';
 import {
     customMetricsSchema,
     customMetricsSchemaTransformed,
 } from '../customMetrics';
+import { type ToolDescriptionContext } from '../defineTool';
 import { getFieldIdSchema } from '../fieldId';
 import { filtersSchemaTransformed, filtersSchemaV2 } from '../filters';
 import { baseOutputMetadataSchema } from '../outputMetadata';
@@ -15,14 +17,15 @@ import {
 import { createToolSchema } from '../toolSchemaBuilder';
 import visualizationMetadataSchema from '../visualizationMetadata';
 import {
-    buildMcpQueryRunResponseDescription,
     buildMcpVisualizationFollowUpInstruction,
-    MCP_QUERY_COMMON_NOTES,
+    MCP_ARTIFACT_INTEGRATION_NOTE,
+    MCP_QUERY_ERROR_NOTE,
+    MCP_QUERY_RESULT_USAGE_NOTE,
 } from './toolMcpQueryResultDescription';
 import { mcpAsyncQueryUuidSchema } from './toolQueryResultSchemas';
 
 // Query configuration schema - what data to fetch
-const queryConfigBaseSchema = z.object({
+export const queryConfigBaseSchema = z.object({
     exploreName: z
         .string()
         .describe(
@@ -85,7 +88,7 @@ const queryConfigSchemaV4 = queryConfigSchemaV2.extend({
     tableCalculations: formulaTableCalcsSchema,
 });
 
-const mergeSourceQueryConfigSchema = queryConfigSchemaV2
+export const mergeSourceQueryConfigSchema = queryConfigSchemaV2
     .omit({
         limit: true,
         parameters: true,
@@ -95,7 +98,7 @@ const mergeSourceQueryConfigSchema = queryConfigSchemaV2
         'A second semantic-layer query. The primary query limit and parameter values apply to the whole merge.',
     );
 
-const mergeConfigSchema = z
+export const mergeConfigSchema = z
     .object({
         primarySourceId: z
             .string()
@@ -137,7 +140,7 @@ const mergeConfigSchema = z
                 }),
             )
             .min(1),
-        joinType: z.nativeEnum(MergeJoinType),
+        joinType: z.enum(MergeJoinType),
     })
     .nullable()
     .describe(
@@ -207,13 +210,15 @@ const chartConfigBuiltinSchema = z.object({
     yAxisLabel: z.string().describe('A helpful label to explain the y-axis'),
     secondaryYAxisMetric: z
         .string()
-        .nullable()
+        .nullish()
+        .default(null)
         .describe(
             '(Optional) A single metric field ID to display on a secondary (right) y-axis. Must NOT be included in yAxisMetrics. Use when one metric has a very different scale than others (e.g., percentage vs count).',
         ),
     secondaryYAxisLabel: z
         .string()
-        .nullable()
+        .nullish()
+        .default(null)
         .describe('A helpful label for the secondary y-axis'),
 });
 
@@ -232,9 +237,20 @@ const chartConfigCustomChartTypeSchema = z.object({
             'Slug of the custom chart type to render this answer through. Must be a slug from availableCustomChartTypes or findCustomChartTypes.',
         ),
     fieldMapping: z
-        .record(z.string(), getFieldIdSchema({ additionalDescription: null }))
+        .record(
+            z.string(),
+            z.union([
+                getFieldIdSchema({ additionalDescription: null }),
+                z
+                    .array(getFieldIdSchema({ additionalDescription: null }))
+                    .refine(
+                        (ids) => new Set(ids).size === ids.length,
+                        'field ids must be unique',
+                    ),
+            ]),
+        )
         .describe(
-            "Binds the custom chart type's field slots to this query's fields: slot name (from the type's schema) → a field id selected in queryConfig. Every required slot must be bound.",
+            "Binds each custom chart type slot to this query's fields: a field id for a single slot, or ordered unique field ids for a slot declared multiple. Every required slot must be bound.",
         ),
     options: z
         .record(z.string(), customChartTypeOptionValueSchema)
@@ -249,7 +265,7 @@ const chartConfigCustomChartTypeSchema = z.object({
 // persisted tool args alike: builtin viz config | custom chart type slug.
 // Server-derived custom chart type data (dataAppVizUuid) never lives inside
 // chartConfig; it sits beside the verbatim tool args in the artifact envelope.
-const chartConfigSchema = z
+export const chartConfigSchema = z
     .union([chartConfigBuiltinSchema, chartConfigCustomChartTypeSchema])
     .nullable();
 
@@ -271,29 +287,46 @@ export const isCustomChartTypeSlugChartConfig = (
 ): chartConfig is ToolRunQueryCustomChartTypeConfig =>
     !!chartConfig && 'customChartTypeSlug' in chartConfig;
 
-export const TOOL_RUN_QUERY_DESCRIPTION = `Execute a metric query.
+// The MCP lead paragraph carries the keywords lexical tool search ranks on;
+// the agent runtime has its own prompt and different sibling tool names.
+const MCP_RUN_QUERY_LEAD = `Run a governed metric query through the Lightdash semantic layer. Choose an explore and its metrics and dimensions (from grep_fields / get_metadata), add filters, sorts and a limit, and get consistent, centrally defined results. This is the preferred way to answer data questions and to reproduce a saved chart's query — prefer it over raw SQL whenever the fields exist in a modeled explore. For running queries, follow the polling instructions in the response.`;
 
-If any selected field is marked "requires parameters" in field discovery or metadata, set the right values in queryConfig.parameters — an unset parameter silently resolves to its default, which can make the query return data that does not match the question.
+const RUN_QUERY_PARAMETER_GUIDANCE = `If any selected field is marked "requires parameters" in field discovery or metadata, set the right values in queryConfig.parameters — an unset parameter silently resolves to its default, which can make the query return data that does not match the question.`;
+
+export const TOOL_RUN_QUERY_DESCRIPTION = ({
+    runtime,
+}: ToolDescriptionContext): string => {
+    switch (runtime) {
+        case 'agent':
+            return `Execute a metric query.
+
+${RUN_QUERY_PARAMETER_GUIDANCE}
+
+The tool handles execution and chart artifacts. It returns a result summary and CSV data when data access is enabled. For empty results, follow the returned guidance. Correct validation or execution errors before retrying.`;
+        case 'mcp':
+            return `${MCP_RUN_QUERY_LEAD}
+
+${RUN_QUERY_PARAMETER_GUIDANCE}
+
+If the user mentions any time period, add an explicit date filter; never use sort + limit instead. Use inThePast for relative windows. Date fields from joined tables work identically in filters.
+
+Before authoring table calculations, read the \`table-calculations\` skill. Use type \`formula\`.
+
+Add a customMetrics entry only after grep_fields / get_metadata confirm no existing metric fits.
 
 This tool returns metric query data only. ${buildMcpVisualizationFollowUpInstruction(
-    'run_metric_query',
-)}
+                'run_metric_query',
+            )}
 
-${buildMcpQueryRunResponseDescription({
-    contentDescription:
-        'bare CSV text. CSV headers are display labels, not stable field IDs',
-    completedResultShape: `    result: {
-      status: "done",
-      queryUuid: string,
-      rows: Array<Record<string, unknown>>,
-      fields: Record<string, unknown>,
-      exploreUrl: string | null
-    }`,
-})}
+${MCP_QUERY_RESULT_USAGE_NOTE}
+${MCP_QUERY_ERROR_NOTE}
 
-Notes:
-${MCP_QUERY_COMMON_NOTES}
+${MCP_ARTIFACT_INTEGRATION_NOTE}
 `;
+        default:
+            return assertUnreachable(runtime, 'Unknown query tool runtime');
+    }
+};
 
 // Kept only for parsing historical persisted tool args.
 export const toolRunQueryArgsSchemaV1 = createToolSchema()
@@ -387,7 +420,7 @@ export const toolRunQueryArgsSchemaV2RejectingMerge = z.preprocess(
             raw.mergeConfig !== undefined
         ) {
             ctx.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: 'custom',
                 path: ['mergeConfig'],
                 message: 'Merge queries are not enabled for this organization.',
             });
@@ -443,13 +476,22 @@ const runQueryInternalSchemaV3 = runQueryInternalSchemaV2.extend({
     mergeConfig: mergeConfigInternalSchema.nullable().default(null),
 });
 
+// Zod 4 types every `z.coerce` input as unknown, so `.pipe` cannot see that the
+// already-parsed output satisfies the internal schema; assert the input type.
 export const toolRunQueryArgsSchemaV2Transformed =
-    toolRunQueryArgsSchemaV2.pipe(runQueryInternalSchemaV2);
+    toolRunQueryArgsSchemaV2.pipe(
+        runQueryInternalSchemaV2 as z.ZodType<
+            z.output<typeof runQueryInternalSchemaV2>,
+            z.output<typeof toolRunQueryArgsSchemaV2>
+        >,
+    );
 
-export const toolRunQueryArgsSchemaTransformed: z.ZodPipeline<
-    typeof toolRunQueryArgsSchemaV3,
-    typeof runQueryInternalSchemaV3
-> = toolRunQueryArgsSchemaV3.pipe(runQueryInternalSchemaV3);
+export const toolRunQueryArgsSchemaTransformed = toolRunQueryArgsSchemaV3.pipe(
+    runQueryInternalSchemaV3 as z.ZodType<
+        z.output<typeof runQueryInternalSchemaV3>,
+        z.output<typeof toolRunQueryArgsSchemaV3>
+    >,
+);
 
 export type ToolRunQueryArgsTransformed = z.infer<
     typeof toolRunQueryArgsSchemaTransformed
@@ -493,7 +535,10 @@ export const migrateRunQueryArgsV1ToV2 = (
     },
 });
 
-// Single entry point for re-parsing a persisted artifact of either version.
+// Existing persisted filter formats have one shared connector across every
+// category, so they cannot represent dimensions using AND while metrics use
+// OR. Keep this parser unchanged for existing records; the wider persistence
+// boundary handles the per-category filter-expression format separately.
 export const parsePersistedRunQueryArgs = (
     raw: unknown,
 ): ToolRunQueryArgsTransformed | null => {
@@ -516,22 +561,20 @@ export const parsePersistedRunQueryArgs = (
         : null;
 };
 
-export const TOOL_RENDER_CHART_DESCRIPTION = `Render a chart for a completed query result in MCP App-capable clients.
+export const TOOL_RENDER_CHART_DESCRIPTION = `Render a completed run_metric_query result in Lightdash's built-in chart app in MCP App-capable clients.
 
-Use this after a query tool or get_query_result returns done and the user wants a visual chart. This tool does not start, poll, or rerun the query. If the query is still running, call get_query_result first. Pass the exact queryUuid that run_metric_query (or get_query_result) returned for this query in the current conversation — it is included in that tool's response as a \`queryUuid: <id>\` text block. Never invent, guess, or reuse a queryUuid from a different query or session; an unknown id fails with "not found". Lightdash loads the completed metric query from query history.
+Use when the user wants a visual. If the query is running, call get_query_result first. This tool does not start, poll or rerun queries.
+Pass the exact queryUuid returned for this query by run_metric_query or get_query_result (also available in the \`queryUuid: <id>\` text block). Never invent an ID or reuse one from another query or session. SQL Runner/run_sql results are not supported.
 
-Current support: completed run_metric_query results. SQL Runner/run_sql results are not supported by render_chart. Other query result types are rejected until their chart rendering path is implemented.
+Supported types: table, bar, horizontal_bar, line, scatter, pie, funnel.
+- For time series: use \`line\` with \`xAxisType: 'time'\`.
+- For categorical comparisons: use \`bar\` or \`horizontal_bar\`.
+- For single values or detailed data: use \`table\`.
+- Always provide axis labels.
 
-Response shape (MCP CallToolResult):
-- content: [{ type: "text", text: string }] — short render status message.
-- structuredContent: {
-    result: {
-      status: "done",
-      queryUuid: string,
-      exploreUrl: string | null,
-      echartsOption: Record<string, unknown> | null // lightweight placeholder; full chart payload is app metadata
-    }
-  }`;
+The full chart payload is app metadata; structuredContent contains only a lightweight placeholder. Custom artifacts should build visuals from query data instead.
+
+${MCP_ARTIFACT_INTEGRATION_NOTE}`;
 
 export const toolRenderChartArgsSchema = createToolSchema()
     .extend({
@@ -573,6 +616,7 @@ export const toolRunQueryOutputSchema = z.object({
     result: z.string(),
     metadata: baseOutputMetadataSchema.extend({
         chartImageUrl: z.string().nullish(),
+        queryCacheHit: z.boolean().optional(),
     }),
 });
 

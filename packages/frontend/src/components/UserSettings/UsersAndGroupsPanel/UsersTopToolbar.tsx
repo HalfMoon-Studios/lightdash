@@ -26,23 +26,20 @@ export const UsersTopToolbar: FC<UsersTopToolbarProps> = memo(
                 wrap="nowrap"
                 {...props}
             >
-                <Group gap="xs" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
-                    <Tooltip
-                        withinPortal
-                        label="Search by name, email, or role"
-                    >
+                <Group gap="xs" wrap="nowrap" flex={1} miw={0}>
+                    <Tooltip label="Search by name, email, or role">
                         <TextInput
                             data-testid="org-users-search-input"
                             size="xs"
-                            radius="md"
                             type="search"
+                            aria-label="Search users by name, email, or role"
                             variant="default"
                             placeholder="Search users by name, email, or role"
                             value={search ?? ''}
                             leftSection={
                                 <MantineIcon
                                     size="md"
-                                    color="ldGray.6"
+                                    color="dimmed"
                                     icon={IconSearch}
                                 />
                             }
@@ -50,6 +47,7 @@ export const UsersTopToolbar: FC<UsersTopToolbarProps> = memo(
                             rightSection={
                                 search && (
                                     <ActionIcon
+                                        aria-label="Clear search"
                                         onClick={() => setSearch('')}
                                         variant="transparent"
                                         size="xs"
@@ -59,7 +57,8 @@ export const UsersTopToolbar: FC<UsersTopToolbarProps> = memo(
                                     </ActionIcon>
                                 )
                             }
-                            miw={350}
+                            miw={{ base: 0, sm: 350 }}
+                            w={{ base: '100%', sm: 'auto' }}
                             maw={400}
                         />
                     </Tooltip>

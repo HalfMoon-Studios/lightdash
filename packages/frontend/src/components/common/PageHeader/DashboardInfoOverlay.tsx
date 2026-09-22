@@ -16,12 +16,14 @@ import {
     IconEye,
     IconFolder,
     IconHash,
+    IconUser,
 } from '@tabler/icons-react';
 import { type FC } from 'react';
 import { Link } from 'react-router';
 import { useOptionalProjectRoute } from '../../../hooks/useProjectRoute';
 import { useTimeAgo } from '../../../hooks/useTimeAgo';
 import MantineIcon from '../MantineIcon';
+import ViewsCountPopover from '../ViewsCountPopover';
 import styles from './DashboardInfoOverlay.module.css';
 import InfoRow from './InfoRow';
 
@@ -42,7 +44,7 @@ const DashboardInfoOverlay: FC<DashboardInfoOverlayProps> = ({
     return (
         <Stack gap="sm" w={320} p="md" className={styles.dashboardInfoOverlay}>
             <Box>
-                <Text fz="sm" fw={600} c="ldGray.9" mb={4}>
+                <Text fz="sm" fw={600} mb={4}>
                     {dashboard.name}
                 </Text>
                 {dashboard.description && (
@@ -53,12 +55,26 @@ const DashboardInfoOverlay: FC<DashboardInfoOverlayProps> = ({
             </Box>
 
             <Stack gap={10}>
+                {dashboard.owner && (
+                    <InfoRow icon={IconUser} label="Owner">
+                        {`${dashboard.owner.firstName} ${dashboard.owner.lastName}`.trim() ||
+                            dashboard.owner.email}
+                    </InfoRow>
+                )}
+
                 <InfoRow icon={IconClock} label="Last modified">
                     {timeAgo}
                 </InfoRow>
 
                 <InfoRow icon={IconEye} label="Views">
-                    {(dashboard.views ?? 0).toLocaleString()}
+                    <ViewsCountPopover
+                        resourceType="dashboard"
+                        resourceUuid={dashboard.uuid}
+                        projectUuid={projectUuid}
+                        views={dashboard.views ?? 0}
+                    >
+                        {(dashboard.views ?? 0).toLocaleString()}
+                    </ViewsCountPopover>
                 </InfoRow>
 
                 {dashboard.spaceName && (
@@ -66,7 +82,7 @@ const DashboardInfoOverlay: FC<DashboardInfoOverlayProps> = ({
                         <Anchor
                             component={Link}
                             to={`/projects/${projectUrlIdentifier}/spaces/${dashboard.spaceUuid}`}
-                            fz={12}
+                            fz="xs"
                             fw={500}
                         >
                             {dashboard.spaceName}
@@ -81,17 +97,12 @@ const DashboardInfoOverlay: FC<DashboardInfoOverlayProps> = ({
                         {({ copied, copy }) => (
                             <UnstyledButton onClick={copy}>
                                 <Group gap={6} wrap="nowrap">
-                                    <Text
-                                        fz={11}
-                                        fw={500}
-                                        c="ldGray.9"
-                                        ff="monospace"
-                                    >
+                                    <Text fz="xs" fw={500} ff="monospace">
                                         {dashboard.slug}
                                     </Text>
                                     <MantineIcon
                                         icon={copied ? IconCheck : IconCopy}
-                                        color="ldGray.6"
+                                        color="dimmed"
                                         size="sm"
                                     />
                                 </Group>

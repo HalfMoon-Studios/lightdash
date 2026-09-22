@@ -1,4 +1,4 @@
-import './sentry'; // Sentry has to be initialized before anything else
+import './tracing/bootstrap'; // Must run before modules that can load Knex
 import {
     AnyType,
     ApiError,
@@ -25,7 +25,7 @@ import expressSession from 'express-session';
 import expressStaticGzip from 'express-static-gzip';
 import helmet from 'helmet';
 import { produce } from 'immer';
-import knex, { Knex } from 'knex';
+import { Knex } from 'knex';
 import passport from 'passport';
 import refresh from 'passport-oauth2-refresh';
 import path from 'path';
@@ -45,6 +45,8 @@ import {
 } from './clients/ClientRepository';
 import { setGithubRateLimitObserver } from './clients/github/Github';
 import { SlackClient } from './clients/Slack/SlackClient';
+import { createStaticAssetsFallbackHandler } from './clients/StaticAssets/staticAssetsFallbackMiddleware';
+import { StaticAssetsS3Client } from './clients/StaticAssets/StaticAssetsS3Client';
 import { LightdashConfig } from './config/parseConfig';
 import {
     apiKeyPassportStrategy,
@@ -61,6 +63,7 @@ import {
 import { databricksPassportStrategy } from './controllers/authentication/strategies/databricksStrategy';
 import { slackPassportStrategy } from './controllers/authentication/strategies/slackStrategy';
 import { snowflakePassportStrategy } from './controllers/authentication/strategies/snowflakeStrategy';
+import { createDatabase } from './database/createDatabase';
 import { MigrationLeaseManager } from './database/migrationLease';
 import { errorHandler, scimErrorHandler } from './errors';
 import { buildExpressSessionOptions } from './expressSessionOptions';
@@ -79,6 +82,10 @@ import { ModelProviderMap, ModelRepository } from './models/ModelRepository';
 import PrometheusMetrics from './prometheus/PrometheusMetrics';
 import { apiV1Router } from './routers/apiV1Router';
 import { createAppPreviewRouter } from './routers/appPreviewRouter';
+import {
+    createAndroidAssetLinksHandler,
+    createAppleAppSiteAssociationHandler,
+} from './routers/mobileAppAssociation';
 import {
     oauthAuthorizationServerHandler,
     oauthProtectedResourceHandler,
@@ -119,6 +126,7 @@ const schedulerWorkerFactory = (context: {
     prometheusMetrics?: PrometheusMetrics;
 }) =>
     new SchedulerWorker({
+        usageDimensionsModel: context.models.getUsageDimensionsModel(),
         lightdashConfig: context.lightdashConfig,
         analytics: context.analytics,
         // SlackClient should initialize before UnfurlService and AiAgentService
@@ -128,6 +136,8 @@ const schedulerWorkerFactory = (context: {
         dashboardService: context.serviceRepository.getDashboardService(),
         deployService: context.serviceRepository.getDeployService(),
         projectService: context.serviceRepository.getProjectService(),
+        contentAsCodeWritebackService:
+            context.serviceRepository.getContentAsCodeWritebackService(),
         schedulerService: context.serviceRepository.getSchedulerService(),
         validationService: context.serviceRepository.getValidationService(),
         userService: context.serviceRepository.getUserService(),
@@ -141,7 +151,6 @@ const schedulerWorkerFactory = (context: {
         encryptionUtil: context.utils.getEncryptionUtil(),
         renameService: context.serviceRepository.getRenameService(),
         asyncQueryService: context.serviceRepository.getAsyncQueryService(),
-        featureFlagService: context.serviceRepository.getFeatureFlagService(),
         persistentDownloadFileService:
             context.serviceRepository.getPersistentDownloadFileService(),
         preAggregateModel: context.models.getPreAggregateModel(),
@@ -267,7 +276,7 @@ export default class App {
                 : undefined,
         });
         registerAiUsageTracker((event) => this.analytics.track(event));
-        this.database = knex(
+        this.database = createDatabase(
             this.environment === 'production'
                 ? args.knexConfig.production
                 : args.knexConfig.development,
@@ -569,11 +578,7 @@ export default class App {
                     ],
                     'img-src': ["'self'", 'data:', 'blob:', 'https://*'],
                     'frame-src': ["'self'", 'https://*'],
-                    'frame-ancestors': [
-                        "'self'",
-                        ...this.lightdashConfig.security.contentSecurityPolicy
-                            .frameAncestors,
-                    ],
+                    'frame-ancestors': ["'self'"] as string[],
                     'worker-src': [
                         "'self'",
                         'blob:',
@@ -633,12 +638,16 @@ export default class App {
             helmet.crossOriginResourcePolicy({ policy: 'cross-origin' }),
         );
 
+        const { frameAncestors } =
+            this.lightdashConfig.security.contentSecurityPolicy;
+        const embedFrameAncestors = [
+            "'self'",
+            ...(frameAncestors.length > 0 ? frameAncestors : ['https://*']),
+        ];
         const helmetConfigForEmbeds = produce(helmetConfig, (draft) => {
             // eslint-disable-next-line no-param-reassign
-            draft.contentSecurityPolicy.directives['frame-ancestors'] = [
-                "'self'",
-                'https://*',
-            ];
+            draft.contentSecurityPolicy.directives['frame-ancestors'] =
+                embedFrameAncestors;
         });
 
         expressApp.use('/embed/*', helmet(helmetConfigForEmbeds));
@@ -668,27 +677,12 @@ export default class App {
         // APPS_RUNTIME_ENABLED env var or the enable-data-apps feature flag.
         if (this.lightdashConfig.appRuntime.s3) {
             const analyticsModel = this.models.getAnalyticsModel();
-            // Frame-ancestors for the data-app preview iframe. Mirrors the
-            // `/embed/*` policy ('self' https://*) plus any explicit
-            // domains from `LIGHTDASH_IFRAME_EMBEDDING_DOMAINS` so SDK-
-            // hosted dashboards can render data-app tiles from customer
-            // origins (and local dev http origins like localhost:5173).
-            // Applied uniformly to session- and embed-minted tokens — the
-            // iframe's own CSP (`connect-src 'self'`, `script-src 'self'`)
-            // plus the sandbox attribute's opaque origin are the real
-            // protection; frame-ancestors is clickjacking defense-in-depth.
-            const previewFrameAncestors = [
-                "'self'",
-                'https://*',
-                ...this.lightdashConfig.security.contentSecurityPolicy
-                    .frameAncestors,
-            ];
             expressApp.use(
                 '/api/apps',
                 createAppPreviewRouter(
                     this.lightdashConfig.appRuntime,
                     this.lightdashConfig.lightdashSecrets,
-                    previewFrameAncestors,
+                    embedFrameAncestors,
                     (p) => {
                         void analyticsModel.addAppViewEvent(
                             p.appUuid,
@@ -837,6 +831,15 @@ export default class App {
             ),
         );
 
+        expressApp.get(
+            '/assets/*',
+            createStaticAssetsFallbackHandler(
+                new StaticAssetsS3Client({
+                    lightdashConfig: this.lightdashConfig,
+                }),
+            ),
+        );
+
         // Return 404 for missing assets (don't fall through index.html)
         // This ensures chunks are not serving the index.html file.
         expressApp.use('/assets/*', (req, res) => {
@@ -861,6 +864,25 @@ export default class App {
         expressApp.get(
             '/.well-known/oauth-protected-resource/api/v1/mcp',
             oauthProtectedResourceHandler,
+        );
+
+        const appleAppSiteAssociationHandler =
+            createAppleAppSiteAssociationHandler(
+                this.lightdashConfig.mobileAppAssociation,
+            );
+        expressApp.get(
+            '/.well-known/apple-app-site-association',
+            appleAppSiteAssociationHandler,
+        );
+        expressApp.get(
+            '/apple-app-site-association',
+            appleAppSiteAssociationHandler,
+        );
+        expressApp.get(
+            '/.well-known/assetlinks.json',
+            createAndroidAssetLinksHandler(
+                this.lightdashConfig.mobileAppAssociation,
+            ),
         );
 
         // OpenAI Apps domain verification: serves the portal-issued token so

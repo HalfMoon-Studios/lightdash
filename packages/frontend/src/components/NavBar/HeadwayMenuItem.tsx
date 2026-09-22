@@ -10,9 +10,10 @@ import classes from './HeadwayMenuItem.module.css';
 
 type Props = {
     projectUuid?: string;
+    withLabel?: boolean;
 };
 
-const HeadwayMenuItem: FC<Props> = ({ projectUuid }) => {
+const HeadwayMenuItem: FC<Props> = ({ projectUuid, withLabel = false }) => {
     const { track } = useTracking();
     const { user } = useApp();
     const isHeadwayloaded = useHeadway();
@@ -65,14 +66,16 @@ const HeadwayMenuItem: FC<Props> = ({ projectUuid }) => {
     if (!isHeadwayloaded || !projectUuid) return null;
 
     return (
-        <Tooltip label="What's new?" withinPortal>
+        <Tooltip label="What's new?">
             <Button
                 variant="default"
                 size="xs"
                 pos="relative"
                 id="headway-trigger"
+                aria-label="What's new?"
             >
                 <MantineIcon icon={IconNews} />
+                {withLabel && "What's new?"}
                 <Box
                     id="headway-badge"
                     pos="absolute"

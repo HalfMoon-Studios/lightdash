@@ -16,6 +16,7 @@ import {
     isExecuteAsyncSqlChartByUuidParams,
     isJwtUser,
     LightdashAppPreviewTokenHeader,
+    LightdashCustomSqlProvenanceChartUuidHeader,
     LightdashSignedDownloadHeader,
     PersistentDownloadFileAccessMode,
     QueryExecutionContext,
@@ -284,7 +285,7 @@ export class QueryController extends BaseController {
     }
 
     /**
-     * Validates and executes a merge on the compose engine as one asynchronous query request. Unlike Execute merge query, sources may reference existing query results by queryUuid; each referenced query is authorized with the same access checks as fetching its results. Requires the merge-on-compose feature flag.
+     * Validates and executes a merge on the compose engine as one asynchronous query request. Unlike Execute merge query, sources may reference existing query results by queryUuid; each referenced query is authorized with the same access checks as fetching its results.
      * @summary Execute compose merge query
      */
     @Middlewares([allowApiKeyAuthentication, isAuthenticated])
@@ -339,6 +340,9 @@ export class QueryController extends BaseController {
             typeof previewTokenHeader === 'string'
                 ? previewTokenHeader
                 : undefined;
+        const customSqlProvenanceChartUuid: UUID | undefined = req.header(
+            LightdashCustomSqlProvenanceChartUuidHeader,
+        );
 
         const metricQuery: MetricQuery = {
             exploreName: body.query.exploreName,
@@ -370,6 +374,7 @@ export class QueryController extends BaseController {
                 pivotConfiguration: body.pivotConfiguration,
                 dashboardFilters: body.dashboardFilters,
                 dataAppPreviewToken,
+                customSqlProvenanceChartUuid,
             });
 
         return {
@@ -497,6 +502,7 @@ export class QueryController extends BaseController {
                 context: context ?? QueryExecutionContext.API,
                 parameters: body.parameters,
                 pivotResults: body.pivotResults,
+                includeUnpublishedDraft: body.includeUnpublishedDraft,
             });
 
         return {

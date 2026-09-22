@@ -11,6 +11,7 @@ import {
     AiWritebackRunResult,
     AllChartsSearchResult,
     AnyType,
+    ApiExecuteAsyncMetricQueryResults,
     CacheMetadata,
     CatalogField,
     ChartAsCode,
@@ -19,6 +20,8 @@ import {
     CustomChartTypeLibrary,
     DashboardAsCode,
     DashboardSearchResult,
+    DataAppBuildTemplate,
+    DataAppSearchResult,
     DataAppVizSchema,
     DbtProjectType,
     Explore,
@@ -26,12 +29,15 @@ import {
     Filters,
     ItemsMap,
     KnexPaginateArgs,
+    McpDocumentAsCode,
+    McpDocumentEdit,
     MergeQuery,
     MetricQuery,
     ParameterDefinitions,
     ParametersValuesMap,
     PreviewDeploySetupResult,
     ProjectType,
+    ReadContentType,
     ResultColumns,
     SavedChart,
     SchedulerAndTargets,
@@ -49,9 +55,14 @@ import {
 import {
     AiAgentFindContentCoverageEvent,
     AiAgentResponseStreamed,
+    AiAgentStepCompletedEvent,
+    AiAgentToolCallCompletedEvent,
     AiAgentToolCallEvent,
+    AiAgentToolCallFailedEvent,
 } from '../../../../analytics/LightdashAnalytics';
 import { PostSlackFile } from '../../../../clients/Slack/SlackClient';
+import type { DataAppRead } from '../../AiAgentToolsService/dataAppRead';
+import type { DataAppBuildStatusSource } from '../../AppGenerateService/AppGenerateService';
 import { AiAgentSkill } from '../skills/types';
 
 type Pagination = KnexPaginateArgs & {
@@ -116,6 +127,7 @@ export type FindCustomChartTypesFn = (
 // not resolve to a schema-bearing custom chart type in this project.
 export type ResolveCustomChartTypeFn = (slug: string) => Promise<{
     dataAppVizUuid: string;
+    dataAppVizVersion: number;
     schema: DataAppVizSchema;
 } | null>;
 
@@ -227,10 +239,28 @@ export type FindContentSpaceResult = {
     verification: null;
 };
 
+export type FindContentDataAppResult = DataAppSearchResult & {
+    contentType: 'data_app';
+    space: FindContentSpaceMetadata | null;
+    verification: null;
+};
+
 export type FindContentResult =
     | FindContentChartResult
     | FindContentDashboardResult
-    | FindContentSpaceResult;
+    | FindContentSpaceResult
+    | FindContentDataAppResult
+    | {
+          contentType: 'document';
+          uuid: string;
+          name: string;
+          slug: string;
+          href: string;
+          description: string | null;
+          search_rank: number;
+          space: FindContentSpaceMetadata | null;
+          verification: null;
+      };
 
 export type FindContentFn = (args: {
     searchQuery: ToolFindContentArgs['searchQueries'][number];
@@ -246,6 +276,13 @@ export type ListContentFn = (args: {
 }) => Promise<{
     spaceSlug: string | null;
     items: Array<
+        | {
+              contentType: 'document';
+              uuid: string;
+              name: string;
+              slug: string;
+              href: string;
+          }
         | {
               contentType: 'chart' | 'dashboard' | 'data_app';
               name: string;
@@ -289,10 +326,23 @@ export type GetDashboardChartsFn = (args: {
     };
 }>;
 
-export type ReadContentFn = (args: {
-    slug: string;
-    type: 'dashboard' | 'chart';
-}) => Promise<
+export type DocumentContentResult = {
+    type: 'document';
+    content: McpDocumentAsCode;
+    uuid: string;
+    href: string;
+    versionUuid: string;
+};
+
+export type ReadContentFn = (
+    args:
+        | {
+              slug: string;
+              type: ReadContentType | 'document';
+          }
+        | { type: 'document'; documentUuid: string },
+) => Promise<
+    | DocumentContentResult
     | {
           type: 'dashboard';
           content: DashboardAsCode;
@@ -303,17 +353,27 @@ export type ReadContentFn = (args: {
           content: ChartAsCode;
           href: string;
       }
+    | {
+          type: 'data_app';
+          content: DataAppRead;
+          href: string;
+      }
 >;
 
 export type ResolveUrlFn = (args: {
     url: string;
 }) => Promise<{ isShareLink: true; url: string } | { isShareLink: false }>;
 
-export type EditContentFn = (args: {
-    slug: string;
-    type: 'dashboard' | 'chart';
-    patch: unknown;
-}) => Promise<
+export type EditContentFn = (
+    args:
+        | {
+              slug: string;
+              type: 'dashboard' | 'chart';
+              patch: unknown;
+          }
+        | { slug: string; type: 'document'; documentEdit: McpDocumentEdit },
+) => Promise<
+    | DocumentContentResult
     | {
           type: 'dashboard';
           content: DashboardAsCode;
@@ -346,7 +406,10 @@ type CreateContentArgs =
           content: ChartAsCode;
       };
 
-export type CreateContentFn = (args: CreateContentArgs) => Promise<
+export type CreateContentFn = (
+    args: CreateContentArgs | { type: 'document'; content: McpDocumentAsCode },
+) => Promise<
+    | DocumentContentResult
     | {
           type: 'dashboard';
           content: DashboardAsCode;
@@ -399,6 +462,7 @@ export type RunAsyncQueryFn = (
     metricQuery: AiMetricQueryWithFilters,
     additionalMetrics?: AdditionalMetric[],
     parameters?: ParametersValuesMap,
+    abortSignal?: AbortSignal,
 ) => Promise<{
     queryUuid: string;
     rows: Record<string, AnyType>[];
@@ -421,7 +485,18 @@ export type RunSavedChartQueryFn = (args: {
     chartUuid: string;
     dashboardSlug: string | null;
     limit: number | null;
+    onQueryPrepared?: (
+        execution: Pick<
+            ApiExecuteAsyncMetricQueryResults,
+            'metricQuery' | 'usedParametersValues' | 'resolvedTimezone'
+        >,
+    ) => void;
 }) => Promise<{
+    queryUuid: string;
+    execution: Pick<
+        ApiExecuteAsyncMetricQueryResults,
+        'metricQuery' | 'usedParametersValues' | 'resolvedTimezone'
+    >;
     rows: Record<string, AnyType>[];
     cacheMetadata: CacheMetadata;
     fields: ItemsMap;
@@ -430,6 +505,10 @@ export type RunSavedChartQueryFn = (args: {
 export type GetSavedChartFn = (chartUuidOrSlug: string) => Promise<SavedChart>;
 
 export type SendFileFn = (args: PostSlackFile) => Promise<string | undefined>;
+
+export type DeferSlackVisualizationFn = (
+    input: import('../../../database/entities/aiSlackArtifactDeliveries').SlackArtifactRenderInput,
+) => Promise<boolean>;
 
 // Renders a custom chart type artifact version to a PNG buffer via the
 // headless browser, as the requesting user.
@@ -504,7 +583,10 @@ export type ConsumePromptSteersFn = (args: {
 export type TrackEventFn = (
     event:
         | AiAgentResponseStreamed
+        | AiAgentStepCompletedEvent
         | AiAgentToolCallEvent
+        | AiAgentToolCallCompletedEvent
+        | AiAgentToolCallFailedEvent
         | AiAgentFindContentCoverageEvent,
 ) => void;
 
@@ -628,6 +710,49 @@ export type EditDbtProjectFn = (args: {
 }) => Promise<{
     aiWritebackRunUuid: string;
 }>;
+
+// Starts a personal data app build; the worker patches the tool result
+// (keyed by toolCallId) when the build ends.
+export type GenerateDataAppFn = (args: {
+    /** Fixes the app's name and slug at creation; never changes after. */
+    name: string;
+    prompt: string;
+    template: DataAppBuildTemplate | null;
+    dashboardSlug: string | null;
+    chartSlugs: string[] | null;
+    themeSlug: string | null;
+    /** Agent tool call the build outcome is patched onto; null over MCP. */
+    toolCallId: string | null;
+}) => Promise<{ appUuid: string; slug: string; version: number }>;
+
+export type DataAppThemeSummary = {
+    slug: string;
+    name: string;
+    isDefault: boolean;
+    description: string | null;
+};
+
+// Themes of the agent's organization, for matching a theme named in prose.
+export type ListDataAppThemesFn = () => Promise<DataAppThemeSummary[]>;
+
+// Starts a build that appends a version to an existing data app; the worker
+// patches the tool result (keyed by toolCallId) when the build ends.
+export type IterateDataAppFn = (args: {
+    appSlug: string;
+    prompt: string;
+    dashboardSlug: string | null;
+    chartSlugs: string[] | null;
+    themeSlug: string | null;
+    /** Agent tool call the build outcome is patched onto; null over MCP. */
+    toolCallId: string | null;
+}) => Promise<{ appUuid: string; slug: string; version: number }>;
+
+// Reports on a build an external agent started; MCP-only, since the AI agent
+// gets its outcome patched onto the tool result instead of polling.
+export type GetDataAppBuildStatusFn = (args: {
+    appSlug: string;
+    version?: number;
+}) => Promise<DataAppBuildStatusSource>;
 
 // Applies a structured project-context entry to lightdash.project_context.yml
 // via the deterministic GitHub-API merge (no sandbox) and opens/updates a PR.

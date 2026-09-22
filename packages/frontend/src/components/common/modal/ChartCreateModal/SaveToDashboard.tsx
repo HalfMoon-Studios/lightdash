@@ -7,7 +7,8 @@ import {
     type DashboardTile,
 } from '@lightdash/common';
 import { Button, Group, Stack, Text, Textarea, TextInput } from '@mantine/core';
-import { useForm, zodResolver } from '@mantine/form';
+import { useForm } from '@mantine/form';
+import { zod4Resolver as zodResolver } from 'mantine-form-zod-resolver';
 import { useCallback, useEffect, useState, type FC } from 'react';
 import { useNavigate } from 'react-router';
 import { v4 as uuid4 } from 'uuid';
@@ -20,6 +21,10 @@ import useDashboardStorage from '../../../../hooks/dashboard/useDashboardStorage
 import useToaster from '../../../../hooks/toaster/useToaster';
 import { useOptionalProjectRoute } from '../../../../hooks/useProjectRoute';
 import { useCreateMutation } from '../../../../hooks/useSavedQuery';
+import {
+    useIsModalHosted,
+    useModalHostedChartSaved,
+} from '../../../../providers/Explorer/useIsModalHosted';
 import classes from './ChartCreateModal.module.css';
 import { DEFAULT_CHART_METADATA, type ChartMetadata } from './types';
 
@@ -37,7 +42,7 @@ type Props = {
 type SaveToDashboardFormValues = { name: string; description: string };
 
 const validationSchema = z.object({
-    name: z.string().nonempty(),
+    name: z.string().min(1, 'Name is required'),
     description: z.string(),
 });
 
@@ -88,6 +93,8 @@ export const SaveToDashboard: FC<Props> = ({
 
     const { showToastSuccess } = useToaster();
     const navigate = useNavigate();
+    const isModalHosted = useIsModalHosted();
+    const onModalHostChartSaved = useModalHostedChartSaved();
 
     const { mutateAsync: createChart } = useCreateMutation({
         redirectOnSuccess: false,
@@ -130,6 +137,16 @@ export const SaveToDashboard: FC<Props> = ({
                 },
                 ...getDefaultChartTileSize(savedData.chartConfig?.type),
             };
+            // Modal-hosted: delegate to host, skip dashboard storage and navigation.
+            if (isModalHosted) {
+                onModalHostChartSaved?.(chart);
+                showToastSuccess({
+                    title: `Success! ${values.name} was added to ${dashboardName}`,
+                });
+                onClose();
+                return;
+            }
+
             const unsavedDashboardTiles =
                 getUnsavedDashboardTiles(dashboardUuid);
             const existingTiles =
@@ -167,6 +184,9 @@ export const SaveToDashboard: FC<Props> = ({
             dashboardName,
             selectedDashboard?.tiles,
             selectedDashboard?.slug,
+            isModalHosted,
+            onModalHostChartSaved,
+            onClose,
         ],
     );
     return (
@@ -194,7 +214,7 @@ export const SaveToDashboard: FC<Props> = ({
                 </Stack>
                 <Stack gap={4}>
                     <Text fw={500}>Saving to "{dashboardName}" dashboard</Text>
-                    <Text fw={400} c="ldGray.6" fz="xs">
+                    <Text fw={400} c="dimmed" fz="xs">
                         This chart will be saved exclusively to the dashboard "
                         {dashboardName}", keeping your space clutter-free.
                     </Text>

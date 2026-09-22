@@ -1,4 +1,3 @@
-import { NotFoundError, type SpaceMemberRole } from '@lightdash/common';
 import { type Knex } from 'knex';
 import {
     AppGroupAccessTableName,
@@ -9,319 +8,19 @@ import { GroupMembershipTableName } from '../database/entities/groupMemberships'
 import { OrganizationMembershipsTableName } from '../database/entities/organizationMemberships';
 import { OrganizationTableName } from '../database/entities/organizations';
 import { ProjectTableName } from '../database/entities/projects';
+import { SpaceTableName } from '../database/entities/spaces';
 import { UserTableName } from '../database/entities/users';
 import {
-    assertCanGrantDirectAccess,
-    assertCanResetDirectAccess,
-    assertCanRevokeDirectAccess,
     getActiveGrantedGroupPredicate,
     getActiveProjectMemberPredicate,
     groupDirectAccessRows,
-    validateDirectAccessGroup,
-    validateDirectAccessUser,
+    hasDirectAccessGrants,
     type DirectAccess,
-    type DirectAccessModel,
-    type DirectAccessModelActorRoleResolver,
-    type DirectAccessMutationContext,
-    type DirectAccessMutationResult,
-    type DirectAccessResetResult,
     type DirectAccessRow,
 } from './directAccessModelUtils';
 
-export type AppDirectAccess = DirectAccess;
-
-export class AppAccessModel implements DirectAccessModel {
+export class AppAccessModel {
     constructor(private readonly database: Knex) {}
-
-    private static async getMutationContext(
-        trx: Knex,
-        resourceUuid: string,
-        expectedOrganizationUuid: string,
-    ): Promise<DirectAccessMutationContext> {
-        const context = await trx(AppsTableName)
-            .innerJoin(
-                ProjectTableName,
-                `${ProjectTableName}.project_uuid`,
-                `${AppsTableName}.project_uuid`,
-            )
-            .innerJoin(
-                OrganizationTableName,
-                `${OrganizationTableName}.organization_id`,
-                `${ProjectTableName}.organization_id`,
-            )
-            .where(`${AppsTableName}.app_id`, resourceUuid)
-            .whereNull(`${AppsTableName}.deleted_at`)
-            .where(
-                `${OrganizationTableName}.organization_uuid`,
-                expectedOrganizationUuid,
-            )
-            .select<DirectAccessMutationContext>({
-                organizationId: `${OrganizationTableName}.organization_id`,
-                organizationUuid: `${OrganizationTableName}.organization_uuid`,
-                projectId: `${ProjectTableName}.project_id`,
-                projectUuid: `${ProjectTableName}.project_uuid`,
-            })
-            .forUpdate(AppsTableName)
-            .first();
-        if (context === undefined) {
-            throw new NotFoundError('Direct access target not found');
-        }
-        return context;
-    }
-
-    async upsertUserAccess(input: {
-        resourceUuid: string;
-        userUuid: string;
-        role: SpaceMemberRole;
-        actorRole: SpaceMemberRole | undefined;
-        actorRoleResolver: DirectAccessModelActorRoleResolver;
-        organizationUuid: string;
-        grantedByUserUuid: string;
-    }): Promise<DirectAccessMutationResult> {
-        assertCanGrantDirectAccess(input.actorRole, input.role);
-        return this.database.transaction(async (trx) => {
-            const context = await AppAccessModel.getMutationContext(
-                trx,
-                input.resourceUuid,
-                input.organizationUuid,
-            );
-            const actorRole = await input.actorRoleResolver({
-                transaction: trx,
-                context,
-            });
-            assertCanGrantDirectAccess(actorRole, input.role);
-            if (
-                !(await validateDirectAccessUser(trx, context, input.userUuid))
-            ) {
-                throw new NotFoundError('Direct access target not found');
-            }
-            const existing = await trx(AppUserAccessTableName)
-                .where({
-                    app_uuid: input.resourceUuid,
-                    user_uuid: input.userUuid,
-                })
-                .first<{ space_role: SpaceMemberRole }>('space_role')
-                .forUpdate();
-            assertCanRevokeDirectAccess({
-                actorRole,
-                existingRole: existing?.space_role,
-                isSelfRevoke: input.grantedByUserUuid === input.userUuid,
-            });
-            await trx(AppUserAccessTableName)
-                .insert({
-                    app_uuid: input.resourceUuid,
-                    user_uuid: input.userUuid,
-                    space_role: input.role,
-                    granted_by_user_uuid: input.grantedByUserUuid,
-                })
-                .onConflict(['app_uuid', 'user_uuid'])
-                .merge({
-                    space_role: input.role,
-                    granted_by_user_uuid: input.grantedByUserUuid,
-                    updated_at: trx.fn.now(),
-                });
-            return {
-                ...context,
-                beforeRole: existing?.space_role ?? null,
-                afterRole: input.role,
-            };
-        });
-    }
-
-    async upsertGroupAccess(input: {
-        resourceUuid: string;
-        groupUuid: string;
-        role: SpaceMemberRole;
-        actorRole: SpaceMemberRole | undefined;
-        actorRoleResolver: DirectAccessModelActorRoleResolver;
-        organizationUuid: string;
-        grantedByUserUuid: string;
-    }): Promise<DirectAccessMutationResult> {
-        assertCanGrantDirectAccess(input.actorRole, input.role);
-        return this.database.transaction(async (trx) => {
-            const context = await AppAccessModel.getMutationContext(
-                trx,
-                input.resourceUuid,
-                input.organizationUuid,
-            );
-            const actorRole = await input.actorRoleResolver({
-                transaction: trx,
-                context,
-            });
-            assertCanGrantDirectAccess(actorRole, input.role);
-            if (
-                !(await validateDirectAccessGroup(
-                    trx,
-                    context,
-                    input.groupUuid,
-                ))
-            ) {
-                throw new NotFoundError('Direct access target not found');
-            }
-            const existing = await trx(AppGroupAccessTableName)
-                .where({
-                    app_uuid: input.resourceUuid,
-                    group_uuid: input.groupUuid,
-                })
-                .first<{ space_role: SpaceMemberRole }>('space_role')
-                .forUpdate();
-            assertCanRevokeDirectAccess({
-                actorRole,
-                existingRole: existing?.space_role,
-                isSelfRevoke: false,
-            });
-            await trx(AppGroupAccessTableName)
-                .insert({
-                    app_uuid: input.resourceUuid,
-                    group_uuid: input.groupUuid,
-                    space_role: input.role,
-                    granted_by_user_uuid: input.grantedByUserUuid,
-                })
-                .onConflict(['app_uuid', 'group_uuid'])
-                .merge({
-                    space_role: input.role,
-                    granted_by_user_uuid: input.grantedByUserUuid,
-                    updated_at: trx.fn.now(),
-                });
-            return {
-                ...context,
-                beforeRole: existing?.space_role ?? null,
-                afterRole: input.role,
-            };
-        });
-    }
-
-    async revokeUserAccess(input: {
-        resourceUuid: string;
-        userUuid: string;
-        actorRole: SpaceMemberRole | undefined;
-        actorRoleResolver: DirectAccessModelActorRoleResolver;
-        organizationUuid: string;
-        actorUserUuid: string;
-    }): Promise<DirectAccessMutationResult> {
-        const isSelfRevoke = input.actorUserUuid === input.userUuid;
-        assertCanRevokeDirectAccess({
-            actorRole: input.actorRole,
-            isSelfRevoke,
-        });
-        return this.database.transaction(async (trx) => {
-            const context = await AppAccessModel.getMutationContext(
-                trx,
-                input.resourceUuid,
-                input.organizationUuid,
-            );
-            const actorRole = await input.actorRoleResolver({
-                transaction: trx,
-                context,
-            });
-            const existing = await trx(AppUserAccessTableName)
-                .where({
-                    app_uuid: input.resourceUuid,
-                    user_uuid: input.userUuid,
-                })
-                .first<{ space_role: SpaceMemberRole }>('space_role')
-                .forUpdate();
-            if (existing === undefined) {
-                throw new NotFoundError('Direct access target not found');
-            }
-            assertCanRevokeDirectAccess({
-                actorRole,
-                existingRole: existing.space_role,
-                isSelfRevoke,
-            });
-            await trx(AppUserAccessTableName)
-                .where({
-                    app_uuid: input.resourceUuid,
-                    user_uuid: input.userUuid,
-                })
-                .delete();
-            return {
-                ...context,
-                beforeRole: existing.space_role,
-                afterRole: null,
-            };
-        });
-    }
-
-    async revokeGroupAccess(input: {
-        resourceUuid: string;
-        groupUuid: string;
-        actorRole: SpaceMemberRole | undefined;
-        actorRoleResolver: DirectAccessModelActorRoleResolver;
-        organizationUuid: string;
-    }): Promise<DirectAccessMutationResult> {
-        assertCanRevokeDirectAccess({
-            actorRole: input.actorRole,
-            isSelfRevoke: false,
-        });
-        return this.database.transaction(async (trx) => {
-            const context = await AppAccessModel.getMutationContext(
-                trx,
-                input.resourceUuid,
-                input.organizationUuid,
-            );
-            const actorRole = await input.actorRoleResolver({
-                transaction: trx,
-                context,
-            });
-            const existing = await trx(AppGroupAccessTableName)
-                .where({
-                    app_uuid: input.resourceUuid,
-                    group_uuid: input.groupUuid,
-                })
-                .first<{ space_role: SpaceMemberRole }>('space_role')
-                .forUpdate();
-            if (existing === undefined) {
-                throw new NotFoundError('Direct access target not found');
-            }
-            assertCanRevokeDirectAccess({
-                actorRole,
-                existingRole: existing.space_role,
-                isSelfRevoke: false,
-            });
-            await trx(AppGroupAccessTableName)
-                .where({
-                    app_uuid: input.resourceUuid,
-                    group_uuid: input.groupUuid,
-                })
-                .delete();
-            return {
-                ...context,
-                beforeRole: existing.space_role,
-                afterRole: null,
-            };
-        });
-    }
-
-    async resetAccess(input: {
-        resourceUuid: string;
-        actorRole: SpaceMemberRole | undefined;
-        actorRoleResolver: DirectAccessModelActorRoleResolver;
-        organizationUuid: string;
-    }): Promise<DirectAccessResetResult> {
-        assertCanResetDirectAccess(input.actorRole);
-        return this.database.transaction(async (trx) => {
-            const context = await AppAccessModel.getMutationContext(
-                trx,
-                input.resourceUuid,
-                input.organizationUuid,
-            );
-            const actorRole = await input.actorRoleResolver({
-                transaction: trx,
-                context,
-            });
-            assertCanResetDirectAccess(actorRole);
-            const [revokedUsers, revokedGroups] = await Promise.all([
-                trx(AppUserAccessTableName)
-                    .where('app_uuid', input.resourceUuid)
-                    .delete(),
-                trx(AppGroupAccessTableName)
-                    .where('app_uuid', input.resourceUuid)
-                    .delete(),
-            ]);
-            return { ...context, revokedUsers, revokedGroups };
-        });
-    }
 
     async getUserAccess(
         appUuids: string[],
@@ -329,21 +28,60 @@ export class AppAccessModel implements DirectAccessModel {
         {
             trx = this.database,
             organizationUuid,
+            includeDeleted = false,
         }: {
             trx?: Knex;
             organizationUuid: string;
+            includeDeleted?: boolean;
         },
-    ): Promise<Record<string, AppDirectAccess>> {
+    ): Promise<Record<string, DirectAccess>> {
         const uniqueAppUuids = [...new Set(appUuids)];
         if (uniqueAppUuids.length === 0) {
             return {};
         }
+        const hasGrants = await hasDirectAccessGrants({
+            trx,
+            userTable: AppUserAccessTableName,
+            groupTable: AppGroupAccessTableName,
+            resourceColumn: 'app_uuid',
+            resourceUuids: uniqueAppUuids,
+            userUuid,
+        });
+        if (!hasGrants) {
+            return {};
+        }
+
+        const joinAppProject = (join: Knex.JoinClause) => {
+            join.on(
+                `${ProjectTableName}.project_uuid`,
+                `${AppsTableName}.project_uuid`,
+            );
+        };
+        const joinAppSpace = (join: Knex.JoinClause) => {
+            join.on(
+                `${SpaceTableName}.space_uuid`,
+                `${AppsTableName}.space_uuid`,
+            ).andOn(
+                `${SpaceTableName}.project_id`,
+                `${ProjectTableName}.project_id`,
+            );
+        };
+        const whereAppLocationIsActive = (query: Knex.QueryBuilder) => {
+            void query
+                .whereNull(`${AppsTableName}.space_uuid`)
+                .orWhere((spaceApp) => {
+                    void spaceApp
+                        .whereNotNull(`${SpaceTableName}.space_uuid`)
+                        .whereNull(`${SpaceTableName}.deleted_at`);
+                });
+        };
 
         const rows: DirectAccessRow[] = await trx(AppUserAccessTableName)
             .select({
                 resourceUuid: `${AppUserAccessTableName}.app_uuid`,
                 organizationUuid: `${OrganizationTableName}.organization_uuid`,
                 projectUuid: `${ProjectTableName}.project_uuid`,
+                spaceUuid: `${AppsTableName}.space_uuid`,
                 role: `${AppUserAccessTableName}.space_role`,
                 groupUuid: trx.raw('NULL'),
             })
@@ -352,11 +90,8 @@ export class AppAccessModel implements DirectAccessModel {
                 `${AppsTableName}.app_id`,
                 `${AppUserAccessTableName}.app_uuid`,
             )
-            .innerJoin(
-                ProjectTableName,
-                `${ProjectTableName}.project_uuid`,
-                `${AppsTableName}.project_uuid`,
-            )
+            .innerJoin(ProjectTableName, joinAppProject)
+            .leftJoin(SpaceTableName, joinAppSpace)
             .innerJoin(
                 UserTableName,
                 `${UserTableName}.user_uuid`,
@@ -379,20 +114,29 @@ export class AppAccessModel implements DirectAccessModel {
                 `${OrganizationTableName}.organization_id`,
                 `${ProjectTableName}.organization_id`,
             )
-            .whereIn(`${AppUserAccessTableName}.app_uuid`, uniqueAppUuids)
+            .whereRaw('?? = ANY(?::uuid[])', [
+                `${AppUserAccessTableName}.app_uuid`,
+                uniqueAppUuids,
+            ])
             .where(`${AppUserAccessTableName}.user_uuid`, userUuid)
             .where(
                 `${OrganizationTableName}.organization_uuid`,
                 organizationUuid,
             )
             .where(getActiveProjectMemberPredicate(trx))
-            .whereNull(`${AppsTableName}.deleted_at`)
+            .modify((query) => {
+                if (!includeDeleted) {
+                    void query.whereNull(`${AppsTableName}.deleted_at`);
+                }
+            })
+            .where(whereAppLocationIsActive)
             .unionAll(
                 trx(AppGroupAccessTableName)
                     .select({
                         resourceUuid: `${AppGroupAccessTableName}.app_uuid`,
                         organizationUuid: `${OrganizationTableName}.organization_uuid`,
                         projectUuid: `${ProjectTableName}.project_uuid`,
+                        spaceUuid: `${AppsTableName}.space_uuid`,
                         role: `${AppGroupAccessTableName}.space_role`,
                         groupUuid: `${AppGroupAccessTableName}.group_uuid`,
                     })
@@ -401,11 +145,8 @@ export class AppAccessModel implements DirectAccessModel {
                         `${AppsTableName}.app_id`,
                         `${AppGroupAccessTableName}.app_uuid`,
                     )
-                    .innerJoin(
-                        ProjectTableName,
-                        `${ProjectTableName}.project_uuid`,
-                        `${AppsTableName}.project_uuid`,
-                    )
+                    .innerJoin(ProjectTableName, joinAppProject)
+                    .leftJoin(SpaceTableName, joinAppSpace)
                     .innerJoin(
                         OrganizationTableName,
                         `${OrganizationTableName}.organization_id`,
@@ -433,10 +174,10 @@ export class AppAccessModel implements DirectAccessModel {
                             );
                         },
                     )
-                    .whereIn(
+                    .whereRaw('?? = ANY(?::uuid[])', [
                         `${AppGroupAccessTableName}.app_uuid`,
                         uniqueAppUuids,
-                    )
+                    ])
                     .where(`${UserTableName}.user_uuid`, userUuid)
                     .where(
                         `${OrganizationTableName}.organization_uuid`,
@@ -453,7 +194,12 @@ export class AppAccessModel implements DirectAccessModel {
                             AppGroupAccessTableName,
                         ),
                     )
-                    .whereNull(`${AppsTableName}.deleted_at`),
+                    .modify((query) => {
+                        if (!includeDeleted) {
+                            void query.whereNull(`${AppsTableName}.deleted_at`);
+                        }
+                    })
+                    .where(whereAppLocationIsActive),
             );
 
         return groupDirectAccessRows(rows);

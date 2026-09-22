@@ -9,7 +9,7 @@ import {
     type MergeQueryError,
     type ParametersValuesMap,
     type SavedChartDAO,
-    type SavedMergeQuery,
+    type SavedMergeDefinition,
 } from '@lightdash/common';
 import {
     useCallback,
@@ -46,7 +46,7 @@ import { restoreSavedMerge } from './restoreSavedMerge';
  */
 export const MergeProvider: FC<
     PropsWithChildren<{
-        savedMerge?: SavedMergeQuery | null;
+        savedMerge?: SavedMergeDefinition | null;
         /** View mode: show the merge, allow nothing, keep the URL clean. */
         readOnly?: boolean;
     }>
@@ -61,6 +61,12 @@ export const MergeProvider: FC<
             parseMergeState(searchParams.get(MERGE_URL_PARAM)) ??
             (savedMerge ? restoreSavedMerge(savedMerge) : null),
     );
+    // A restored merge the rules refuse never runs, so nothing may wait on it.
+    const [restoredRunRefused, setRestoredRunRefused] = useState(false);
+    const refuseRestoredRun = useCallback(
+        () => setRestoredRunRefused(true),
+        [],
+    );
 
     const [focus, setFocus] = useState<MergeFocus>(
         restored?.focus ?? {
@@ -71,6 +77,8 @@ export const MergeProvider: FC<
     const [additionalSources, setAdditionalSources] = useState(
         restored?.additionalSources ?? [],
     );
+    // Fixed by the saved chart so its merged column ids hold; never edited
+    const primarySourceName = restored?.primarySourceName ?? null;
     const [joinParts, setJoinParts] = useState<MergeJoinPart[]>(
         restored?.joinParts ?? [
             {
@@ -84,6 +92,9 @@ export const MergeProvider: FC<
     const [joinType, setJoinType] = useState<MergeJoinType>(
         restored?.joinType ?? MergeJoinType.FULL,
     );
+    const [repeatValuesSourceIds, setRepeatValuesSourceIds] = useState<
+        string[]
+    >(restored?.repeatValuesSourceIds ?? []);
     const isMerging = additionalSources.length > 0;
     const activeRun = useRef(0);
     const lastRun = useRef<{
@@ -101,6 +112,10 @@ export const MergeProvider: FC<
         unpivotedError: ApiError | null;
         parameterReferences: string[];
         fieldOrigins: ApiCompiledMergeQueryResults['fieldOrigins'];
+        /** Internal: the merge behind `started`; gates `mergeResults`. Null until a run succeeds. */
+        ranMergeQuery: MergeQuery | null;
+        /** Public: the merge last submitted, whether it ran or was refused. */
+        lastRunMergeQuery: MergeQuery | null;
     }>({
         isRunning: false,
         errors: [],
@@ -111,6 +126,8 @@ export const MergeProvider: FC<
         unpivotedError: null,
         parameterReferences: [],
         fieldOrigins: {},
+        ranMergeQuery: null,
+        lastRunMergeQuery: null,
     });
 
     const addSource = useCallback(
@@ -155,6 +172,9 @@ export const MergeProvider: FC<
                 return { fieldIdBySourceId };
             }),
         );
+        // Repeating was a relationship between two sources; with one gone the
+        // other's flag has nothing to repeat across.
+        setRepeatValuesSourceIds([]);
         setRunState({
             isRunning: false,
             errors: [],
@@ -165,6 +185,8 @@ export const MergeProvider: FC<
             unpivotedError: null,
             parameterReferences: [],
             fieldOrigins: {},
+            ranMergeQuery: null,
+            lastRunMergeQuery: null,
         });
     }, []);
 
@@ -257,6 +279,19 @@ export const MergeProvider: FC<
         [],
     );
 
+    const setRepeatValues = useCallback(
+        (sourceId: string, repeatValues: boolean) => {
+            setRepeatValuesSourceIds((current) =>
+                repeatValues
+                    ? current.includes(sourceId)
+                        ? current
+                        : [...current, sourceId]
+                    : current.filter((id) => id !== sourceId),
+            );
+        },
+        [],
+    );
+
     const setSourceFilters = useCallback(
         (sourceId: string, filters: Filters) => {
             setAdditionalSources((current) =>
@@ -283,9 +318,11 @@ export const MergeProvider: FC<
                         MERGE_URL_PARAM,
                         serializeMergeState({
                             focus,
+                            primarySourceName,
                             additionalSources,
                             joinParts,
                             joinType,
+                            repeatValuesSourceIds,
                         }),
                     );
                 } else {
@@ -300,8 +337,10 @@ export const MergeProvider: FC<
         isMerging,
         focus,
         additionalSources,
+        primarySourceName,
         joinParts,
         joinType,
+        repeatValuesSourceIds,
         setSearchParams,
     ]);
 
@@ -332,6 +371,8 @@ export const MergeProvider: FC<
                 unpivotedError: null,
                 parameterReferences: current.parameterReferences,
                 fieldOrigins: current.fieldOrigins,
+                ranMergeQuery: null,
+                lastRunMergeQuery: mergeQuery,
             }));
             executeMergeQuery(projectUuid, mergeQuery, parameters, savedChart)
                 .then(async (result) => {
@@ -347,6 +388,8 @@ export const MergeProvider: FC<
                             unpivotedError: null,
                             parameterReferences: result.parameterReferences,
                             fieldOrigins: result.fieldOrigins,
+                            ranMergeQuery: null,
+                            lastRunMergeQuery: mergeQuery,
                         });
                     } else {
                         const pivotConfiguration = savedChart
@@ -377,6 +420,8 @@ export const MergeProvider: FC<
                                     parameterReferences:
                                         result.parameterReferences,
                                     fieldOrigins: result.fieldOrigins,
+                                    ranMergeQuery: mergeQuery,
+                                    lastRunMergeQuery: mergeQuery,
                                 });
                                 return;
                             }
@@ -393,6 +438,8 @@ export const MergeProvider: FC<
                                 unpivotedError: null,
                                 parameterReferences: result.parameterReferences,
                                 fieldOrigins: result.fieldOrigins,
+                                ranMergeQuery: mergeQuery,
+                                lastRunMergeQuery: mergeQuery,
                             });
                             return;
                         }
@@ -406,6 +453,8 @@ export const MergeProvider: FC<
                             unpivotedError: null,
                             parameterReferences: result.parameterReferences,
                             fieldOrigins: result.fieldOrigins,
+                            ranMergeQuery: mergeQuery,
+                            lastRunMergeQuery: mergeQuery,
                         });
                     }
                 })
@@ -421,6 +470,8 @@ export const MergeProvider: FC<
                         unpivotedError: null,
                         parameterReferences: current.parameterReferences,
                         fieldOrigins: current.fieldOrigins,
+                        ranMergeQuery: null,
+                        lastRunMergeQuery: mergeQuery,
                     }));
                 });
         },
@@ -459,9 +510,10 @@ export const MergeProvider: FC<
 
     const mergeResults = useMemo(
         () =>
-            started
+            started && runState.ranMergeQuery
                 ? {
                       queryUuid: started.queryUuid,
+                      mergeQuery: runState.ranMergeQuery,
                       fields: started.fields,
                       metricQuery: started.metricQuery,
                       // The metric query lists dimensions before metrics; the
@@ -485,6 +537,7 @@ export const MergeProvider: FC<
             results,
             unpivotedResults,
             runState.fieldOrigins,
+            runState.ranMergeQuery,
         ],
     );
 
@@ -492,7 +545,8 @@ export const MergeProvider: FC<
         () => ({
             isMerging,
             readOnly,
-            wasRestored: restored !== null,
+            wasRestored: restored !== null && !restoredRunRefused,
+            refuseRestoredRun,
             run,
             getDownloadQueryUuid,
             isRunning: runState.isRunning,
@@ -502,10 +556,19 @@ export const MergeProvider: FC<
             unpivotedRunError: runState.unpivotedError,
             parameterReferences: runState.parameterReferences,
             mergeResults,
+            replacesQuery:
+                (restored !== null && !restoredRunRefused) ||
+                runState.isRunning ||
+                runState.started !== null ||
+                runState.error !== null ||
+                runState.errors.length > 0,
+            lastRunMergeQuery: runState.lastRunMergeQuery,
             focus,
             additionalSources,
+            primarySourceName,
             joinParts,
             joinType,
+            repeatValuesSourceIds,
             addSource,
             removeSource,
             setFocus,
@@ -515,25 +578,32 @@ export const MergeProvider: FC<
             addJoinPart,
             removeJoinPart,
             setJoinType,
+            setRepeatValues,
             setSourceFilters,
         }),
         [
             isMerging,
             readOnly,
             restored,
+            restoredRunRefused,
+            refuseRestoredRun,
             run,
             getDownloadQueryUuid,
             runState.isRunning,
+            runState.started,
             runState.errors,
             runState.error,
             runState.unpivotedErrors,
             runState.unpivotedError,
             runState.parameterReferences,
             mergeResults,
+            runState.lastRunMergeQuery,
             focus,
             additionalSources,
+            primarySourceName,
             joinParts,
             joinType,
+            repeatValuesSourceIds,
             addSource,
             removeSource,
             setSourceExplore,
@@ -541,6 +611,7 @@ export const MergeProvider: FC<
             setJoinField,
             addJoinPart,
             removeJoinPart,
+            setRepeatValues,
             setSourceFilters,
         ],
     );

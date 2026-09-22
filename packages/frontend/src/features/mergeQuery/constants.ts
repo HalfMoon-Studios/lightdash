@@ -1,10 +1,15 @@
-import { MergeJoinType } from '@lightdash/common';
+import {
+    MergeJoinType,
+    MERGE_PRIMARY_SOURCE_ID as PRIMARY_SOURCE_ID,
+    MERGE_ADDITIONAL_SOURCE_ID as DEFAULT_ADDITIONAL_SOURCE_ID,
+} from '@lightdash/common';
+export {
+    MERGE_PRIMARY_SOURCE_ID as PRIMARY_SOURCE_ID,
+    MERGE_ADDITIONAL_SOURCE_ID as DEFAULT_ADDITIONAL_SOURCE_ID,
+} from '@lightdash/common';
 import { type MergeEditorSource, type MergeJoinPart } from './context/context';
 
-export const PRIMARY_SOURCE_ID = 'a';
-export const DEFAULT_ADDITIONAL_SOURCE_ID = 'b';
 export const MAX_MERGE_SOURCES = 2;
-export const JOIN_KEY = 'join_key';
 
 export const emptyMergeSource = (id: string): MergeEditorSource => ({
     id,
@@ -19,8 +24,10 @@ export const EMPTY_MERGE = {
     isMerging: false,
     readOnly: false,
     wasRestored: false,
+    replacesQuery: false,
     focus: { kind: 'source' as const, sourceId: PRIMARY_SOURCE_ID },
     additionalSources: [] as MergeEditorSource[],
+    primarySourceName: null,
     joinParts: [
         {
             fieldIdBySourceId: {
@@ -30,6 +37,7 @@ export const EMPTY_MERGE = {
         },
     ] as MergeJoinPart[],
     joinType: MergeJoinType.FULL,
+    repeatValuesSourceIds: [] as string[],
     addSource: () => {},
     removeSource: () => {},
     setFocus: () => {},
@@ -39,5 +47,6 @@ export const EMPTY_MERGE = {
     addJoinPart: () => {},
     removeJoinPart: () => {},
     setJoinType: () => {},
+    setRepeatValues: () => {},
     setSourceFilters: () => {},
 };

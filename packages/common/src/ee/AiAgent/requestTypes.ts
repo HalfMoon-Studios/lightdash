@@ -77,6 +77,31 @@ export type AiPromptTokenUsage = {
 /** Write shape: both figures are required so a writer can't omit the compaction input. */
 export type AiPromptTokenUsageUpdate = Required<AiPromptTokenUsage>;
 
+/** Wall-clock timing of one model run, stamped by the agent loop. ISO strings. */
+export type AiPromptResponseStageTiming = {
+    /** Request start through context, catalog and tool preparation. */
+    preparationMs: number;
+    /** Main model inference. Null when the provider hid the split. */
+    providerMs: number | null;
+    /** Exact union of completed query-tool spans. */
+    queryMs: number;
+    /** Exact union of completed non-query/non-render tool spans. */
+    apiMs: number;
+    /** Exact union of chart, dashboard, app and export tool spans. */
+    renderMs: number;
+    /** Query tools whose execution returned a result-cache hit. */
+    queryCacheHits: number;
+};
+
+export type AiPromptResponseTiming = {
+    startedAt: string;
+    /** First chunk the model produced (text, reasoning, or tool input). Null when nothing streamed. */
+    firstTokenAt: string | null;
+    finishedAt: string;
+    /** Stage spans may overlap when the SDK runs tools concurrently. */
+    stages?: AiPromptResponseStageTiming;
+};
+
 /**
  * Every origin an ai_thread can be created from. Canonical source for the
  * DB column type and the admin/list filters — add new origins here.
@@ -86,6 +111,7 @@ export const AI_THREAD_CREATED_FROM = [
     'web_app',
     'evals',
     'scheduler',
+    'data_app',
 ] as const;
 export type AiThreadCreatedFrom = (typeof AI_THREAD_CREATED_FROM)[number];
 
@@ -98,6 +124,7 @@ export const AI_WEB_APP_THREAD_CREATED_FROM = [
     'web_app',
     'evals',
     'scheduler',
+    'data_app',
 ] as const satisfies readonly AiThreadCreatedFrom[];
 export type AiWebAppThreadCreatedFrom =
     (typeof AI_WEB_APP_THREAD_CREATED_FROM)[number];
@@ -143,6 +170,8 @@ export type AiPrompt = {
     agentUuid: string | null;
     promptUuid: string;
     threadUuid: string;
+    /** Where the thread started; a data-app thread stays read-only for life. */
+    threadCreatedFrom: AiThreadCreatedFrom;
     createdByUserUuid: string;
     prompt: string;
     createdAt: Date;
@@ -234,6 +263,38 @@ export type AiPromptContextItemInput =
           // The preview project where a semantic-layer fix can be tested.
           type: 'preview_environment';
           previewProjectUuid: string;
+      }
+    | {
+          // An element reference picked from a data app preview: the app and
+          // version it was picked from plus the element's tag, visible text,
+          // and source location (`path:line`, empty when unavailable).
+          type: 'data_app_element';
+          appUuid: string;
+          version: number;
+          tag: string;
+          text: string;
+          loc: string;
+      }
+    | {
+          // A thread restore: the new version and the ready one it copies.
+          // System-only, never user-attached.
+          type: 'data_app_restore';
+          appUuid: string;
+          version: number;
+          restoredFromVersion: number;
+      }
+    | {
+          // A data app the user pinned; the server snapshots its name and
+          // latest ready version number at attach time.
+          type: 'data_app';
+          appUuid: string;
+          appSlug?: string | null;
+      }
+    | {
+          // The organization theme picked in the composer for a data app
+          // build; the server snapshots its name at attach time.
+          type: 'design';
+          designUuid: string;
       };
 
 export type AiPromptContextInput = AiPromptContextItemInput[];
@@ -323,6 +384,40 @@ export type AiPromptContextItem =
           previewThreadUuid: string | null;
           status: AiAgentReviewRemediationStatus | null;
           projectName: string | null;
+      }
+    | {
+          type: 'data_app_element';
+          appUuid: string;
+          version: number;
+          tag: string;
+          text: string;
+          loc: string;
+          appSlug: string | null;
+          displayName: string | null;
+      }
+    | {
+          type: 'data_app_restore';
+          appUuid: string;
+          version: number;
+          restoredFromVersion: number;
+          appSlug: string | null;
+          displayName: string | null;
+      }
+    | {
+          type: 'data_app';
+          appUuid: string;
+          appSlug: string | null;
+          displayName: string | null;
+          pinnedVersion: number | null;
+          // Personal apps have no space; space-restricted agents cannot read them.
+          isPersonal: boolean;
+      }
+    | {
+          type: 'design';
+          designUuid: string;
+          // Null when the theme was deleted after it was pinned.
+          designSlug: string | null;
+          displayName: string | null;
       };
 
 export type AiPromptContext = AiPromptContextItem[];
@@ -343,6 +438,7 @@ export type UpdateSlackResponse = {
     errorMessage?: string;
     humanScore?: number | null;
     tokenUsage?: AiPromptTokenUsageUpdate | null;
+    responseTiming?: AiPromptResponseTiming;
 };
 
 export type UpdateWebAppResponse = {
@@ -351,6 +447,7 @@ export type UpdateWebAppResponse = {
     errorMessage?: string;
     humanScore?: number | null;
     tokenUsage?: AiPromptTokenUsageUpdate | null;
+    responseTiming?: AiPromptResponseTiming;
 };
 
 export type UpdateSlackResponseTs = {

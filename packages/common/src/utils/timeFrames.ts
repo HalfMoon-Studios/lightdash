@@ -155,17 +155,6 @@ const postgresLikeCastToInstant = (sql: string) => `(${sql})::timestamptz`;
 const clickhouseCastToInstant = (sql: string) => `toTimeZone(${sql}, 'UTC')`;
 const identityCastToInstant = (sql: string) => sql;
 
-// Adapters whose castToInstant genuinely rebases a naive column at the SQL
-// level. Identity adapters keep filter columns bare; ClickHouse has no naive
-// type (its castToInstant only relabels an instant) so its filters stay bare.
-export const naiveTimestampRebaseAdapters: ReadonlySet<SupportedDbtAdapter> =
-    new Set([
-        SupportedDbtAdapter.BIGQUERY,
-        SupportedDbtAdapter.POSTGRES,
-        SupportedDbtAdapter.REDSHIFT,
-        SupportedDbtAdapter.DUCKDB,
-    ]);
-
 const bigqueryCastNaiveToInstant = (sql: string, z: string) =>
     `TIMESTAMP(${sql}, '${z}')`;
 // 3-arg CONVERT_TIMEZONE reads the NTZ wall clock in z and returns the UTC
@@ -738,6 +727,41 @@ const postgresConfig: WarehouseConfig = {
     },
 };
 
+const duckdbConfig: WarehouseConfig = {
+    ...postgresConfig,
+    getSqlForDatePartName: (
+        timeFrame: TimeFrames,
+        originalSql: string,
+        _type,
+        timezone,
+        sourceTimezone,
+        timestampDomain,
+    ) => {
+        const sql = timezone
+            ? getExtractInputTzSql(
+                  SupportedDbtAdapter.DUCKDB,
+                  originalSql,
+                  timezone,
+                  sourceTimezone,
+                  timestampDomain,
+              )
+            : originalSql;
+        const timeFrameExpressions: Record<TimeFrames, string | null> = {
+            ...nullTimeFrameMap,
+            [TimeFrames.DAY_OF_WEEK_NAME]: `strftime(${sql}, '%A')`,
+            [TimeFrames.MONTH_NAME]: `strftime(${sql}, '%B')`,
+            [TimeFrames.QUARTER_NAME]: `'Q' || quarter(${sql})`,
+        };
+        const formatExpression = timeFrameExpressions[timeFrame];
+        if (!formatExpression) {
+            throw new ParseError(
+                `Cannot recognise format expression for ${timeFrame}`,
+            );
+        }
+        return formatExpression;
+    },
+};
+
 const databricksConfig: WarehouseConfig = {
     getSqlForTruncatedDateAsDateInTimezone: null,
     getSqlForTruncatedDate: (timeFrame, originalSql, _, startOfWeek) => {
@@ -1006,7 +1030,7 @@ const warehouseConfigs: Record<SupportedDbtAdapter, WarehouseConfig> = {
     [SupportedDbtAdapter.SNOWFLAKE]: snowflakeConfig,
     [SupportedDbtAdapter.REDSHIFT]: postgresConfig,
     [SupportedDbtAdapter.POSTGRES]: postgresConfig,
-    [SupportedDbtAdapter.DUCKDB]: postgresConfig,
+    [SupportedDbtAdapter.DUCKDB]: duckdbConfig,
     [SupportedDbtAdapter.DATABRICKS]: databricksConfig,
     [SupportedDbtAdapter.SPARK]: databricksConfig, // Spark uses same SQL dialect as Databricks
     [SupportedDbtAdapter.TRINO]: trinoConfig,

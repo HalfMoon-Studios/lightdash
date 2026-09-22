@@ -4,6 +4,7 @@ import {
     ContentAsCodeType,
     DashboardAsCode,
     LightdashError,
+    PromotionAction,
     SpaceAsCodeAction,
     SpaceMemberRole,
     type AnyType,
@@ -35,6 +36,7 @@ import {
     uploadHandler,
     type DownloadHandlerOptions,
 } from './download';
+import { logUploadChanges } from './spacesAsCode';
 
 vi.mock('../analytics/analytics', () => ({
     LightdashAnalytics: {
@@ -86,17 +88,79 @@ const {
     readAiAgentFiles,
     readSpaceFiles,
     readSpaceNames,
+    reportOpenDraftsForUpload,
     sanitizeChartForDownload,
     shouldFallBackToEmbeddedSpaces,
     shouldDownloadAiAgents,
     summarizeUploadChanges,
     upsertAiAgents,
     upsertExternalConnections,
+    upsertResources,
     upsertSpaces,
     upsertVirtualViews,
     validateSpaceIdentity,
     writeSpaceFiles,
 } = testHelpers;
+
+describe('reportOpenDraftsForUpload', () => {
+    beforeEach(() => {
+        vi.mocked(lightdashApi).mockReset();
+        vi.spyOn(GlobalState, 'log').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('stays quiet when the project has no open drafts', async () => {
+        vi.mocked(lightdashApi).mockResolvedValueOnce({
+            openDraftCount: 0,
+        } as never);
+
+        await reportOpenDraftsForUpload('project-uuid');
+
+        expect(lightdashApi).toHaveBeenCalledWith({
+            method: 'GET',
+            url: '/api/v1/projects/project-uuid/code/upload-advisory',
+            body: undefined,
+        });
+        expect(GlobalState.log).not.toHaveBeenCalled();
+    });
+
+    it('warns without blocking when the project has multiple open drafts', async () => {
+        vi.mocked(lightdashApi).mockResolvedValueOnce({
+            openDraftCount: 3,
+        } as never);
+
+        await expect(
+            reportOpenDraftsForUpload('project-uuid'),
+        ).resolves.toBeUndefined();
+
+        expect(GlobalState.log).toHaveBeenCalledWith(
+            expect.stringContaining('3 open content drafts'),
+        );
+        expect(GlobalState.log).toHaveBeenCalledWith(
+            expect.stringContaining('Upload will continue'),
+        );
+    });
+
+    it('warns without blocking when the draft count cannot be loaded', async () => {
+        vi.mocked(lightdashApi).mockRejectedValueOnce(
+            new Error('draft table unavailable'),
+        );
+
+        await expect(
+            reportOpenDraftsForUpload('project-uuid'),
+        ).resolves.toBeUndefined();
+
+        expect(GlobalState.log).toHaveBeenCalledWith(
+            expect.stringContaining('Could not check for open content drafts'),
+        );
+        expect(GlobalState.log).toHaveBeenCalledWith(
+            expect.stringContaining('Upload will continue'),
+        );
+    });
+});
 
 const makeDownloadHandlerOptions = (
     overrides: Partial<DownloadHandlerOptions> = {},
@@ -158,6 +222,13 @@ const makeContentFilterOptions = (
 });
 
 describe('hasContentFilters', () => {
+    it('treats explicit homepage names as a filtered download and upload', () => {
+        expect(
+            hasContentFilters(
+                makeContentFilterOptions({ homepages: ['Team homepage'] }),
+            ),
+        ).toBe(true);
+    });
     it('treats explicit apps as a filtered download and upload', () => {
         expect(
             hasContentFilters(
@@ -367,6 +438,92 @@ const makeChart = (series: Series[]): ChartAsCode =>
         },
         dashboardSlug: undefined,
     }) as ChartAsCode;
+
+const writeFolderChart = async (baseDir: string, slug: string) => {
+    const yaml = `contentType: chart\nname: ${slug}\nslug: ${slug}\nspaceSlug: test-space\ntableName: orders\nversion: 1\n`;
+    await fs.writeFile(path.join(baseDir, 'charts', `${slug}.yml`), yaml);
+};
+
+describe('upload summary counts', () => {
+    let tmpDir: string;
+
+    beforeEach(async () => {
+        vi.mocked(lightdashApi).mockReset();
+        vi.spyOn(GlobalState, 'log').mockImplementation(() => undefined);
+        vi.spyOn(GlobalState, 'debug').mockImplementation(() => undefined);
+        tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'download-test-'));
+        await fs.mkdir(path.join(tmpDir, 'charts'));
+        await fs.mkdir(path.join(tmpDir, 'dashboards'));
+    });
+
+    afterEach(async () => {
+        vi.restoreAllMocks();
+        await fs.rm(tmpDir, { recursive: true, force: true });
+    });
+
+    it('counts only the uploaded type, not the spaces and tiles echoed by the API', async () => {
+        await writeFolderChart(tmpDir, 'chart-a');
+        await writeFolderChart(tmpDir, 'chart-b');
+        await writeFolderDashboard(tmpDir, 'dash', ['chart-a', 'chart-b']);
+        const noChanges = { action: PromotionAction.NO_CHANGES };
+        vi.mocked(lightdashApi).mockImplementation(async ({ url }) =>
+            url.includes('/code/charts/')
+                ? ({
+                      charts: [{ action: PromotionAction.UPDATE }],
+                      spaces: [noChanges],
+                      dashboards: [],
+                  } as never)
+                : ({
+                      dashboards: [{ action: PromotionAction.UPDATE }],
+                      charts: [noChanges, noChanges],
+                      spaces: [noChanges],
+                  } as never),
+        );
+        const summarySpy = vi
+            .spyOn(console, 'info')
+            .mockImplementation(() => undefined);
+
+        const changes: Record<string, number> = {};
+        const chartsResult = await upsertResources<ChartAsCode>(
+            'charts',
+            'project-uuid',
+            changes,
+            false,
+            [],
+            true,
+            tmpDir,
+        );
+        const afterCharts = { ...chartsResult.changes };
+        expect(summarizeUploadChanges({}, afterCharts).detail).toBe(
+            '2 updated',
+        );
+
+        const dashboardsResult = await upsertResources<DashboardAsCode>(
+            'dashboards',
+            'project-uuid',
+            changes,
+            false,
+            [],
+            true,
+            tmpDir,
+        );
+        expect(
+            summarizeUploadChanges(afterCharts, dashboardsResult.changes)
+                .detail,
+        ).toBe('1 updated');
+        expect(lightdashApi).toHaveBeenCalledTimes(3);
+        expect(dashboardsResult.changes).toEqual({
+            'charts updated': 2,
+            'dashboards updated': 1,
+        });
+
+        logUploadChanges(dashboardsResult.changes);
+        expect(summarySpy.mock.calls.map(([message]) => message)).toEqual([
+            'Total charts updated: 2 ',
+            'Total dashboards updated: 1 ',
+        ]);
+    });
+});
 
 describe('getDashboardChartSlugs', () => {
     let tmpDir: string;
@@ -1336,7 +1493,6 @@ describe('downloadHandler analytics', () => {
                     skipVirtualViews: true,
                     skipExternalConnections: true,
                     path: tmpDir,
-                    project: 'project-uuid',
                 }),
             );
 
@@ -1395,7 +1551,10 @@ describe('downloadHandler failures', () => {
                     missingSlugs: [],
                 } as never;
             }
-            if (url.includes('/code/aiAgents')) {
+            if (
+                url.includes('/code/aiAgents') ||
+                url.includes('/code/homepages')
+            ) {
                 throw unavailableError;
             }
             if (url.includes('/code/alerts')) {
@@ -1422,7 +1581,6 @@ describe('downloadHandler failures', () => {
                     makeDownloadHandlerOptions({
                         includeAll: true,
                         path: tmpDir,
-                        project: 'project-uuid',
                     }),
                 ),
             ).resolves.toBeUndefined();
@@ -1469,7 +1627,6 @@ describe('downloadHandler failures', () => {
             downloadHandler(
                 makeDownloadHandlerOptions({
                     agents: ['sales-agent'],
-                    project: 'project-uuid',
                 }),
             ),
         ).rejects.toBe(unavailableError);
@@ -1492,11 +1649,7 @@ describe('uploadHandler failures', () => {
         );
 
         await expect(
-            uploadHandler(
-                makeDownloadHandlerOptions({
-                    project: 'project-uuid',
-                }),
-            ),
+            uploadHandler(makeDownloadHandlerOptions({})),
         ).rejects.toBe(fatalError);
     });
 });
@@ -2475,5 +2628,39 @@ version: 99
             'Total spaces dependency skipped: 1 ',
         ]);
         summarySpy.mockRestore();
+    });
+});
+
+describe('parseContentFilters', () => {
+    const { parseContentFilters } = testHelpers;
+
+    it('passes slugs and uuids through untouched', () => {
+        expect(
+            parseContentFilters([
+                'sales-overview',
+                '00000000-0000-0000-0000-000000000001',
+            ]),
+        ).toBe('?ids=sales-overview&ids=00000000-0000-0000-0000-000000000001');
+    });
+
+    it('extracts uuids from legacy app urls', () => {
+        expect(
+            parseContentFilters([
+                'https://app.lightdash.cloud/projects/00000000-0000-0000-0000-0000000000aa/dashboards/00000000-0000-0000-0000-000000000001/view',
+                'https://app.lightdash.cloud/projects/00000000-0000-0000-0000-0000000000aa/saved/00000000-0000-0000-0000-000000000002',
+            ]),
+        ).toBe(
+            '?ids=00000000-0000-0000-0000-000000000001&ids=00000000-0000-0000-0000-000000000002',
+        );
+    });
+
+    it('extracts slugs from app urls that use project and content slugs', () => {
+        expect(
+            parseContentFilters([
+                'https://app.lightdash.cloud/projects/jaffle-shop/dashboards/daily-sales/view',
+                'https://app.lightdash.cloud/projects/jaffle-shop/saved/monthly-revenue/view?tab=1',
+                'https://app.lightdash.cloud/projects/jaffle-shop/dashboards/sales-overview/view/tabs/some-tab',
+            ]),
+        ).toBe('?ids=daily-sales&ids=monthly-revenue&ids=sales-overview');
     });
 });
